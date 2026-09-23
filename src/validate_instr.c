@@ -721,9 +721,191 @@ static turbowasm_status turbowasm_validate_call_indirect(
     return turbowasm_stack_push_results(stack, type);
 }
 
+
+static bool turbowasm_memory0_exists(
+    const turbowasm_validation_context *context) {
+    return context != NULL && context->memory_count != 0u;
+}
+
+static turbowasm_status turbowasm_validate_memarg(
+    turbowasm_reader *body,
+    uint32_t maximum_alignment) {
+    uint32_t alignment;
+    uint32_t offset;
+
+    if (!turbowasm_reader_uleb32(body, &alignment) ||
+        !turbowasm_reader_uleb32(body, &offset))
+        return TURBOWASM_MALFORMED_MODULE;
+    (void)offset;
+
+    return alignment <= maximum_alignment
+        ? TURBOWASM_OK
+        : TURBOWASM_MALFORMED_MODULE;
+}
+
+static turbowasm_status turbowasm_validate_load(
+    turbowasm_reader *body,
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_context *context,
+    uint8_t result_type,
+    uint32_t maximum_alignment) {
+    turbowasm_status status;
+
+    if (!turbowasm_memory0_exists(context))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    status = turbowasm_validate_memarg(body, maximum_alignment);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = turbowasm_stack_pop(stack, TW_I32);
+    if (status != TURBOWASM_OK)
+        return status;
+    return turbowasm_stack_push(stack, result_type);
+}
+
+static turbowasm_status turbowasm_validate_store(
+    turbowasm_reader *body,
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_context *context,
+    uint8_t value_type,
+    uint32_t maximum_alignment) {
+    turbowasm_status status;
+
+    if (!turbowasm_memory0_exists(context))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    status = turbowasm_validate_memarg(body, maximum_alignment);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = turbowasm_stack_pop(stack, value_type);
+    if (status != TURBOWASM_OK)
+        return status;
+    return turbowasm_stack_pop(stack, TW_I32);
+}
+
+static turbowasm_status turbowasm_validate_memory_size_or_grow(
+    turbowasm_reader *body,
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_context *context,
+    bool grow) {
+    uint8_t reserved;
+    turbowasm_status status;
+
+    if (!turbowasm_memory0_exists(context))
+        return TURBOWASM_MALFORMED_MODULE;
+    if (!turbowasm_reader_u8(body, &reserved))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    /* Baseline memory32 encoding has a single reserved memory index byte.
+     * Multi-memory and memory64 are intentionally not admitted in this slice. */
+    if (reserved != 0x00u)
+        return TURBOWASM_UNSUPPORTED;
+
+    if (grow) {
+        status = turbowasm_stack_pop(stack, TW_I32);
+        if (status != TURBOWASM_OK)
+            return status;
+    }
+    return turbowasm_stack_push(stack, TW_I32);
+}
+
+static turbowasm_status turbowasm_validate_conversion(
+    turbowasm_type_stack *stack,
+    uint8_t input_type,
+    uint8_t output_type) {
+    return turbowasm_stack_unary(stack, input_type, output_type);
+}
+
+static void turbowasm_control_label_types(
+    const turbowasm_control_frame *target,
+    const uint8_t **out_types,
+    uint32_t *out_count) {
+    if (target->kind == TURBOWASM_CTRL_LOOP) {
+        *out_types = target->start_types;
+        *out_count = target->start_count;
+    } else {
+        *out_types = target->end_types;
+        *out_count = target->end_count;
+    }
+}
+
+static turbowasm_status turbowasm_validate_br_table(
+    turbowasm_reader *body,
+    turbowasm_type_stack *stack,
+    const turbowasm_control_stack *controls) {
+    uint32_t count;
+    uint32_t index;
+    const uint8_t *label_types = NULL;
+    uint32_t label_count = 0u;
+    turbowasm_status status;
+
+    if (!turbowasm_reader_uleb32(body, &count))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    for (index = 0u; index < count; ++index) {
+        uint32_t depth;
+        const turbowasm_control_frame *target;
+        const uint8_t *types;
+        uint32_t type_count;
+
+        if (!turbowasm_reader_uleb32(body, &depth))
+            return TURBOWASM_MALFORMED_MODULE;
+        target = turbowasm_control_target(controls, depth);
+        if (target == NULL)
+            return TURBOWASM_MALFORMED_MODULE;
+        turbowasm_control_label_types(target, &types, &type_count);
+
+        if (label_types == NULL) {
+            label_types = types;
+            label_count = type_count;
+        } else if (!turbowasm_types_equal(
+                       label_types, label_count,
+                       types, type_count)) {
+            return TURBOWASM_MALFORMED_MODULE;
+        }
+    }
+
+    {
+        uint32_t default_depth;
+        const turbowasm_control_frame *target;
+        const uint8_t *types;
+        uint32_t type_count;
+
+        if (!turbowasm_reader_uleb32(body, &default_depth))
+            return TURBOWASM_MALFORMED_MODULE;
+        target = turbowasm_control_target(controls, default_depth);
+        if (target == NULL)
+            return TURBOWASM_MALFORMED_MODULE;
+        turbowasm_control_label_types(target, &types, &type_count);
+
+        if (label_types == NULL) {
+            label_types = types;
+            label_count = type_count;
+        } else if (!turbowasm_types_equal(
+                       label_types, label_count,
+                       types, type_count)) {
+            return TURBOWASM_MALFORMED_MODULE;
+        }
+    }
+
+    status = turbowasm_stack_pop(stack, TW_I32);
+    if (status != TURBOWASM_OK)
+        return status;
+    status = turbowasm_stack_pop_types(
+        stack, label_types, label_count);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    turbowasm_control_mark_unreachable(stack);
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status turbowasm_validate_simd(
     turbowasm_reader *body,
-    turbowasm_type_stack *stack) {
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_context *context) {
     uint32_t subopcode;
     turbowasm_status status;
 
@@ -731,6 +913,12 @@ static turbowasm_status turbowasm_validate_simd(
         return TURBOWASM_MALFORMED_MODULE;
 
     switch (subopcode) {
+        case 0x00u: /* v128.load */
+            return turbowasm_validate_load(
+                body, stack, context, TW_V128, 4u);
+        case 0x0bu: /* v128.store */
+            return turbowasm_validate_store(
+                body, stack, context, TW_V128, 4u);
         case 0x0cu: {
             turbowasm_reader bytes;
             if (!turbowasm_reader_slice(body, 16u, &bytes))
