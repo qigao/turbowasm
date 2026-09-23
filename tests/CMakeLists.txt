@@ -221,3 +221,16 @@ set_target_properties(turbowasm_simd_instance_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_simd_instance_test
          COMMAND turbowasm_simd_instance_test)
+
+add_executable(turbowasm_simd_exec_table_test
+  simd_exec_table_test.c)
+target_link_libraries(turbowasm_simd_exec_table_test
+  PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_simd_exec_table_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_simd_exec_table_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_simd_exec_table_test
+         COMMAND turbowasm_simd_exec_table_test)
