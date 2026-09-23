@@ -282,6 +282,9 @@ static turbowasm_status turbowasm_validate_section_payload(
                 section, summary, context);
         case TURBOWASM_SECTION_EXPORT:
             return turbowasm_validate_export_section(section, summary);
+        case TURBOWASM_SECTION_START:
+            return turbowasm_validate_start_section(
+                section, summary, context);
         case TURBOWASM_SECTION_DATA_COUNT:
             return turbowasm_validate_data_count_section(section, summary);
         case TURBOWASM_SECTION_CODE:
