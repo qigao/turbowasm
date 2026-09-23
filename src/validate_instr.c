@@ -392,6 +392,12 @@ static turbowasm_status turbowasm_read_block_signature(
             ++count;
         }
 
+        /* A block type index is s33.  On the fifth byte only the
+         * low four payload bits may be set for a non-negative typeidx;
+         * bit 32 is the sign bit and the remaining payload bits are unused. */
+        if (count == 5u && (byte & 0x70u) != 0u)
+            return TURBOWASM_MALFORMED_MODULE;
+
         if ((byte & 0x40u) != 0u && shift < 64u)
             value |= UINT64_MAX << shift;
         signed_value = (int64_t)value;
