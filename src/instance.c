@@ -1273,6 +1273,219 @@ static turbowasm_status turbowasm_exec_memory_size_or_grow(
     return turbowasm_stack_push(stack, out);
 }
 
+static turbowasm_status turbowasm_exec_simd(
+    turbowasm_instance_impl *instance,
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    turbowasm_trap *trap) {
+    uint32_t subopcode;
+    turbowasm_status status;
+
+    if (instance == NULL || reader == NULL ||
+        stack == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_uleb32(reader, &subopcode))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    switch (subopcode) {
+        case 0x00u: { /* v128.load */
+            uint32_t offset;
+            turbowasm_value address;
+            turbowasm_value out = {0};
+            uint8_t *source;
+
+            status = turbowasm_exec_read_memarg(reader, &offset);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &address);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            status = turbowasm_instance_memory_bounds(
+                instance, 0u,
+                (uint32_t)address.as.i32,
+                offset, 16u, &source);
+            if (status == TURBOWASM_TRAPPED) {
+                *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+                return TURBOWASM_TRAPPED;
+            }
+            if (status != TURBOWASM_OK)
+                return status;
+
+            out.kind = TURBOWASM_VALUE_V128;
+            out.as.v128.shape = TURBOWASM_V128_RAW;
+            salts_simd_v128_load(&out.as.v128.bits, source);
+            return turbowasm_stack_push(stack, out);
+        }
+
+        case 0x0bu: { /* v128.store */
+            uint32_t offset;
+            turbowasm_value value;
+            turbowasm_value address;
+            uint8_t *destination;
+
+            status = turbowasm_exec_read_memarg(reader, &offset);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &value);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &address);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            status = turbowasm_instance_memory_bounds(
+                instance, 0u,
+                (uint32_t)address.as.i32,
+                offset, 16u, &destination);
+            if (status == TURBOWASM_TRAPPED) {
+                *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+                return TURBOWASM_TRAPPED;
+            }
+            if (status != TURBOWASM_OK)
+                return status;
+
+            salts_simd_v128_store(
+                destination, &value.as.v128.bits);
+            return TURBOWASM_OK;
+        }
+
+        case 0x0cu: { /* v128.const */
+            turbowasm_reader bytes;
+            turbowasm_value out = {0};
+
+            if (!turbowasm_reader_slice(reader, 16u, &bytes))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            out.kind = TURBOWASM_VALUE_V128;
+            out.as.v128.shape = TURBOWASM_V128_RAW;
+            salts_simd_v128_load(
+                &out.as.v128.bits, bytes.cursor);
+            return turbowasm_stack_push(stack, out);
+        }
+
+        case 0x11u: { /* i32x4.splat */
+            turbowasm_value scalar;
+            turbowasm_value out = {0};
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &scalar);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            out.kind = TURBOWASM_VALUE_V128;
+            out.as.v128.shape = TURBOWASM_V128_I32X4;
+            salts_simd_i32x4_splat(
+                &out.as.v128.bits, scalar.as.i32);
+            return turbowasm_stack_push(stack, out);
+        }
+
+        case 0xaeu: /* i32x4.add */
+        case 0xb1u: /* i32x4.sub */
+        case 0xb5u: /* i32x4.mul */
+        case 0x37u: /* i32x4.eq */
+        case 0xe4u: /* f32x4.add */
+        case 0xe6u: { /* f32x4.mul */
+            turbowasm_value right;
+            turbowasm_value left;
+            turbowasm_value out = {0};
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &right);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &left);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            out.kind = TURBOWASM_VALUE_V128;
+            switch (subopcode) {
+                case 0xaeu:
+                    salts_simd_i32x4_add(
+                        &out.as.v128.bits,
+                        &left.as.v128.bits,
+                        &right.as.v128.bits);
+                    out.as.v128.shape = TURBOWASM_V128_I32X4;
+                    break;
+                case 0xb1u:
+                    salts_simd_i32x4_sub(
+                        &out.as.v128.bits,
+                        &left.as.v128.bits,
+                        &right.as.v128.bits);
+                    out.as.v128.shape = TURBOWASM_V128_I32X4;
+                    break;
+                case 0xb5u:
+                    salts_simd_i32x4_mul(
+                        &out.as.v128.bits,
+                        &left.as.v128.bits,
+                        &right.as.v128.bits);
+                    out.as.v128.shape = TURBOWASM_V128_I32X4;
+                    break;
+                case 0x37u:
+                    salts_simd_i32x4_eq(
+                        &out.as.v128.bits,
+                        &left.as.v128.bits,
+                        &right.as.v128.bits);
+                    out.as.v128.shape = TURBOWASM_V128_B32X4;
+                    break;
+                case 0xe4u:
+                    salts_simd_f32x4_add(
+                        &out.as.v128.bits,
+                        &left.as.v128.bits,
+                        &right.as.v128.bits);
+                    out.as.v128.shape = TURBOWASM_V128_F32X4;
+                    break;
+                case 0xe6u:
+                    salts_simd_f32x4_mul(
+                        &out.as.v128.bits,
+                        &left.as.v128.bits,
+                        &right.as.v128.bits);
+                    out.as.v128.shape = TURBOWASM_V128_F32X4;
+                    break;
+                default:
+                    return TURBOWASM_UNSUPPORTED;
+            }
+            return turbowasm_stack_push(stack, out);
+        }
+
+        case 0x52u: { /* v128.bitselect */
+            turbowasm_value mask;
+            turbowasm_value when_unset;
+            turbowasm_value when_set;
+            turbowasm_value out = {0};
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &mask);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &when_unset);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &when_set);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            out.kind = TURBOWASM_VALUE_V128;
+            out.as.v128.shape = TURBOWASM_V128_RAW;
+            salts_simd_v128_bitselect(
+                &out.as.v128.bits,
+                &when_set.as.v128.bits,
+                &when_unset.as.v128.bits,
+                &mask.as.v128.bits);
+            return turbowasm_stack_push(stack, out);
+        }
+
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+}
+
 static turbowasm_status turbowasm_exec_function(
     turbowasm_instance_impl *instance,
     uint32_t function_index,
@@ -1748,6 +1961,13 @@ static turbowasm_status turbowasm_exec_function(
                 status = turbowasm_exec_f64_binary(
                     opcode, &stack);
                 if (status != TURBOWASM_OK) goto done;
+                break;
+
+            case 0xfdu:
+                status = turbowasm_exec_simd(
+                    instance, &reader, &stack, trap);
+                if (status != TURBOWASM_OK)
+                    goto done;
                 break;
 
             default:
