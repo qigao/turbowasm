@@ -25,9 +25,10 @@ const cmeta_vector_desc *turbowasm_v128_descriptor(turbowasm_v128_shape shape) {
 turbowasm_status turbowasm_v128_load(turbowasm_v128 *out,
                                      turbowasm_v128_shape shape,
                                      const void *bytes) {
-    if (out == NULL || bytes == NULL || shape == TURBOWASM_V128_RAW)
+    if (out == NULL || bytes == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (turbowasm_v128_descriptor(shape) == NULL)
+    if (shape != TURBOWASM_V128_RAW &&
+        turbowasm_v128_descriptor(shape) == NULL)
         return TURBOWASM_UNSUPPORTED;
     salts_simd_v128_load(&out->bits, bytes);
     out->shape = shape;
@@ -36,7 +37,9 @@ turbowasm_status turbowasm_v128_load(turbowasm_v128 *out,
 
 turbowasm_status turbowasm_v128_store(void *bytes,
                                       const turbowasm_v128 *value) {
-    if (bytes == NULL || value == NULL ||
+    if (bytes == NULL || value == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (value->shape != TURBOWASM_V128_RAW &&
         turbowasm_v128_descriptor(value->shape) == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     salts_simd_v128_store(bytes, &value->bits);
