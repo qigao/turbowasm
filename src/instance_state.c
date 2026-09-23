@@ -320,6 +320,40 @@ static turbowasm_status turbowasm_allocate_tables(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status turbowasm_allocate_segment_lifecycle(
+    turbowasm_instance_impl *instance,
+    const turbowasm_validation_context *context) {
+    uint32_t index;
+
+    instance->data_segment_count = context->data_segment_count;
+    if (context->data_segment_count != 0u) {
+        instance->data_segment_dropped = (uint8_t *)calloc(
+            (size_t)context->data_segment_count, 1u);
+        if (instance->data_segment_dropped == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+        for (index = 0u; index < context->data_segment_count; ++index) {
+            if (context->data_segments[index].mode !=
+                TURBOWASM_VALIDATION_SEGMENT_PASSIVE)
+                instance->data_segment_dropped[index] = 1u;
+        }
+    }
+
+    instance->element_segment_count = context->element_segment_count;
+    if (context->element_segment_count != 0u) {
+        instance->element_segment_dropped = (uint8_t *)calloc(
+            (size_t)context->element_segment_count, 1u);
+        if (instance->element_segment_dropped == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+        for (index = 0u; index < context->element_segment_count; ++index) {
+            if (context->element_segments[index].mode !=
+                TURBOWASM_VALIDATION_SEGMENT_PASSIVE)
+                instance->element_segment_dropped[index] = 1u;
+        }
+    }
+
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status turbowasm_apply_data_segments(
     turbowasm_instance_impl *instance,
     const turbowasm_validation_context *context) {
@@ -356,6 +390,24 @@ static turbowasm_status turbowasm_apply_data_segments(
     }
 
     return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_element_item_value(
+    const turbowasm_validation_element_item *item,
+    turbowasm_instance_table_entry *out) {
+    if (item == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memset(out, 0, sizeof(*out));
+    if (item->kind ==
+        TURBOWASM_VALIDATION_ELEMENT_FUNCTION_INDEX) {
+        out->is_null = false;
+        out->function_index = item->function_index;
+        return TURBOWASM_OK;
+    }
+
+    return turbowasm_eval_funcref_expr(
+        &item->expression, out);
 }
 
 static turbowasm_status turbowasm_apply_element_segments(
@@ -396,21 +448,12 @@ static turbowasm_status turbowasm_apply_element_segments(
         for (item_index = 0u;
              item_index < segment->item_count;
              ++item_index) {
-            const turbowasm_validation_element_item *item =
-                &segment->items[item_index];
             turbowasm_instance_table_entry value;
 
-            memset(&value, 0, sizeof(value));
-            if (item->kind ==
-                TURBOWASM_VALIDATION_ELEMENT_FUNCTION_INDEX) {
-                value.is_null = false;
-                value.function_index = item->function_index;
-            } else {
-                status = turbowasm_eval_funcref_expr(
-                    &item->expression, &value);
-                if (status != TURBOWASM_OK)
-                    return status;
-            }
+            status = turbowasm_element_item_value(
+                &segment->items[item_index], &value);
+            if (status != TURBOWASM_OK)
+                return status;
             table->entries[offset + item_index] = value;
         }
     }
@@ -437,6 +480,11 @@ turbowasm_status turbowasm_instance_state_init(
         goto fail;
 
     status = turbowasm_allocate_tables(
+        instance, &module->validation);
+    if (status != TURBOWASM_OK)
+        goto fail;
+
+    status = turbowasm_allocate_segment_lifecycle(
         instance, &module->validation);
     if (status != TURBOWASM_OK)
         goto fail;
@@ -480,6 +528,14 @@ void turbowasm_instance_state_destroy(
     free(instance->tables);
     instance->tables = NULL;
     instance->table_count = 0u;
+
+    free(instance->data_segment_dropped);
+    instance->data_segment_dropped = NULL;
+    instance->data_segment_count = 0u;
+
+    free(instance->element_segment_dropped);
+    instance->element_segment_dropped = NULL;
+    instance->element_segment_count = 0u;
 }
 
 turbowasm_status turbowasm_instance_global_get(
@@ -688,5 +744,339 @@ turbowasm_status turbowasm_instance_table_set_value(
         value.as.funcref.is_null
             ? UINT32_MAX
             : value.as.funcref.function_index;
+    return TURBOWASM_OK;
+}
+
+static bool turbowasm_range_fits(
+    uint32_t offset,
+    uint32_t length,
+    uint64_t size) {
+    return (uint64_t)offset <= size &&
+           (uint64_t)length <= size - (uint64_t)offset;
+}
+
+turbowasm_status turbowasm_instance_memory_init(
+    turbowasm_instance_impl *instance,
+    uint32_t data_index,
+    uint32_t memory_index,
+    uint32_t destination,
+    uint32_t source,
+    uint32_t length) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_data_segment *segment;
+    uint64_t source_size;
+    uint8_t *destination_bytes;
+    turbowasm_status status;
+
+    if (instance == NULL ||
+        data_index >= instance->data_segment_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL ||
+        data_index >= module->validation.data_segment_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    segment = &module->validation.data_segments[data_index];
+    source_size = instance->data_segment_dropped[data_index]
+        ? 0u
+        : segment->data_size;
+
+    if (!turbowasm_range_fits(source, length, source_size))
+        return TURBOWASM_TRAPPED;
+
+    status = turbowasm_instance_memory_bounds(
+        instance, memory_index,
+        destination, 0u, length,
+        &destination_bytes);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (length != 0u)
+        memcpy(destination_bytes, segment->data + source, length);
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_data_drop(
+    turbowasm_instance_impl *instance,
+    uint32_t data_index) {
+    if (instance == NULL ||
+        data_index >= instance->data_segment_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+    instance->data_segment_dropped[data_index] = 1u;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_memory_copy(
+    turbowasm_instance_impl *instance,
+    uint32_t destination_memory,
+    uint32_t source_memory,
+    uint32_t destination,
+    uint32_t source,
+    uint32_t length) {
+    uint8_t *destination_bytes;
+    uint8_t *source_bytes;
+    turbowasm_status status;
+
+    status = turbowasm_instance_memory_bounds(
+        instance, destination_memory,
+        destination, 0u, length,
+        &destination_bytes);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = turbowasm_instance_memory_bounds(
+        instance, source_memory,
+        source, 0u, length,
+        &source_bytes);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (length != 0u)
+        memmove(destination_bytes, source_bytes, length);
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_memory_fill(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t destination,
+    uint8_t value,
+    uint32_t length) {
+    uint8_t *destination_bytes;
+    turbowasm_status status =
+        turbowasm_instance_memory_bounds(
+            instance, memory_index,
+            destination, 0u, length,
+            &destination_bytes);
+
+    if (status != TURBOWASM_OK)
+        return status;
+    if (length != 0u)
+        memset(destination_bytes, value, length);
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_table_init(
+    turbowasm_instance_impl *instance,
+    uint32_t element_index,
+    uint32_t table_index,
+    uint32_t destination,
+    uint32_t source,
+    uint32_t length) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_element_segment *segment;
+    turbowasm_instance_table *table;
+    turbowasm_instance_table_entry *values = NULL;
+    uint64_t source_size;
+    uint32_t index;
+    turbowasm_status status = TURBOWASM_OK;
+
+    if (instance == NULL ||
+        element_index >= instance->element_segment_count ||
+        table_index >= instance->table_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL ||
+        element_index >= module->validation.element_segment_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    segment = &module->validation.element_segments[element_index];
+    table = &instance->tables[table_index];
+    if (segment->reference_type != table->reference_type)
+        return TURBOWASM_TYPE_MISMATCH;
+    if (table->reference_type != 0x70u)
+        return TURBOWASM_UNSUPPORTED;
+
+    source_size = instance->element_segment_dropped[element_index]
+        ? 0u
+        : segment->item_count;
+
+    if (!turbowasm_range_fits(source, length, source_size) ||
+        !turbowasm_range_fits(destination, length, table->size))
+        return TURBOWASM_TRAPPED;
+
+    if (length != 0u) {
+        if ((uint64_t)length * sizeof(*values) >
+            (uint64_t)SIZE_MAX)
+            return TURBOWASM_OUT_OF_MEMORY;
+        values = (turbowasm_instance_table_entry *)calloc(
+            (size_t)length, sizeof(*values));
+        if (values == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+
+        for (index = 0u; index < length; ++index) {
+            status = turbowasm_element_item_value(
+                &segment->items[source + index],
+                &values[index]);
+            if (status != TURBOWASM_OK)
+                goto done;
+        }
+
+        memcpy(&table->entries[destination],
+               values,
+               (size_t)length * sizeof(*values));
+    }
+
+done:
+    free(values);
+    return status;
+}
+
+turbowasm_status turbowasm_instance_element_drop(
+    turbowasm_instance_impl *instance,
+    uint32_t element_index) {
+    if (instance == NULL ||
+        element_index >= instance->element_segment_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+    instance->element_segment_dropped[element_index] = 1u;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_table_copy(
+    turbowasm_instance_impl *instance,
+    uint32_t destination_table,
+    uint32_t source_table,
+    uint32_t destination,
+    uint32_t source,
+    uint32_t length) {
+    turbowasm_instance_table *destination_object;
+    turbowasm_instance_table *source_object;
+
+    if (instance == NULL ||
+        destination_table >= instance->table_count ||
+        source_table >= instance->table_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    destination_object = &instance->tables[destination_table];
+    source_object = &instance->tables[source_table];
+    if (destination_object->reference_type !=
+        source_object->reference_type)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    if (!turbowasm_range_fits(
+            destination, length, destination_object->size) ||
+        !turbowasm_range_fits(
+            source, length, source_object->size))
+        return TURBOWASM_TRAPPED;
+
+    if (length != 0u)
+        memmove(&destination_object->entries[destination],
+                &source_object->entries[source],
+                (size_t)length *
+                    sizeof(*destination_object->entries));
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_table_grow(
+    turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    turbowasm_value initial,
+    uint32_t delta,
+    uint32_t *out_previous_size) {
+    turbowasm_instance_table *table;
+    turbowasm_instance_table_entry entry;
+    const turbowasm_module_impl *module;
+    uint64_t next_size;
+    turbowasm_instance_table_entry *grown;
+    uint32_t index;
+
+    if (instance == NULL || out_previous_size == NULL ||
+        table_index >= instance->table_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    table = &instance->tables[table_index];
+    *out_previous_size = table->size;
+
+    if (table->reference_type != 0x70u)
+        return TURBOWASM_UNSUPPORTED;
+    if (initial.kind != TURBOWASM_VALUE_FUNCREF)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    entry.is_null = initial.as.funcref.is_null;
+    entry.function_index = initial.as.funcref.is_null
+        ? UINT32_MAX
+        : initial.as.funcref.function_index;
+
+    if (!entry.is_null) {
+        module = turbowasm_module_impl_get(instance->module);
+        if (module == NULL ||
+            entry.function_index >= module->validation.function_count)
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    next_size = (uint64_t)table->size + delta;
+    if (next_size > UINT32_MAX ||
+        (table->has_maximum && next_size > table->maximum) ||
+        next_size * sizeof(*grown) > (uint64_t)SIZE_MAX) {
+        *out_previous_size = UINT32_MAX;
+        return TURBOWASM_OK;
+    }
+
+    if (delta == 0u)
+        return TURBOWASM_OK;
+
+    grown = (turbowasm_instance_table_entry *)realloc(
+        table->entries, (size_t)next_size * sizeof(*grown));
+    if (grown == NULL) {
+        *out_previous_size = UINT32_MAX;
+        return TURBOWASM_OK;
+    }
+
+    table->entries = grown;
+    for (index = table->size; index < (uint32_t)next_size; ++index)
+        table->entries[index] = entry;
+    table->size = (uint32_t)next_size;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_table_size(
+    const turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    uint32_t *out_size) {
+    if (instance == NULL || out_size == NULL ||
+        table_index >= instance->table_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+    *out_size = instance->tables[table_index].size;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_table_fill(
+    turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    uint32_t destination,
+    turbowasm_value value,
+    uint32_t length) {
+    turbowasm_instance_table *table;
+    turbowasm_instance_table_entry entry;
+    const turbowasm_module_impl *module;
+    uint32_t index;
+
+    if (instance == NULL || table_index >= instance->table_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    table = &instance->tables[table_index];
+    if (table->reference_type != 0x70u)
+        return TURBOWASM_UNSUPPORTED;
+    if (value.kind != TURBOWASM_VALUE_FUNCREF)
+        return TURBOWASM_TYPE_MISMATCH;
+    if (!turbowasm_range_fits(destination, length, table->size))
+        return TURBOWASM_TRAPPED;
+
+    entry.is_null = value.as.funcref.is_null;
+    entry.function_index = value.as.funcref.is_null
+        ? UINT32_MAX
+        : value.as.funcref.function_index;
+
+    if (!entry.is_null) {
+        module = turbowasm_module_impl_get(instance->module);
+        if (module == NULL ||
+            entry.function_index >= module->validation.function_count)
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    for (index = 0u; index < length; ++index)
+        table->entries[destination + index] = entry;
     return TURBOWASM_OK;
 }
