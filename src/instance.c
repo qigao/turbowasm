@@ -1882,6 +1882,200 @@ static turbowasm_status turbowasm_exec_simd_memory(
     return turbowasm_stack_push(stack, out);
 }
 
+static bool turbowasm_simd_exec_is_lane_special(
+    turbowasm_simd_exec_kind kind) {
+    return kind == TURBOWASM_SIMD_EXEC_LANE_EXTRACT ||
+           kind == TURBOWASM_SIMD_EXEC_LANE_REPLACE ||
+           kind == TURBOWASM_SIMD_EXEC_SHUFFLE ||
+           kind == TURBOWASM_SIMD_EXEC_SWIZZLE;
+}
+
+static turbowasm_status turbowasm_exec_simd_lane_special(
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    const turbowasm_simd_exec_descriptor *descriptor) {
+    turbowasm_value left;
+    turbowasm_value right;
+    turbowasm_value scalar_value;
+    turbowasm_value out = {0};
+    salts_simd_scalar scalar = {0};
+    uint8_t lane;
+    turbowasm_status status;
+    bool supported;
+
+    if (reader == NULL || stack == NULL || descriptor == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (descriptor->kind == TURBOWASM_SIMD_EXEC_SHUFFLE) {
+        uint8_t lanes[16];
+        size_t index;
+
+        for (index = 0u; index < 16u; ++index) {
+            if (!turbowasm_reader_u8(reader, &lanes[index]))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (lanes[index] >= 32u)
+                return TURBOWASM_MALFORMED_MODULE;
+        }
+
+        status = turbowasm_stack_pop_kind(
+            stack, TURBOWASM_VALUE_V128, &right);
+        if (status != TURBOWASM_OK)
+            return status;
+        status = turbowasm_stack_pop_kind(
+            stack, TURBOWASM_VALUE_V128, &left);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        out.kind = TURBOWASM_VALUE_V128;
+        out.as.v128.shape = descriptor->result_shape;
+        if (!salts_simd_shuffle_bytes(
+                &out.as.v128.bits,
+                &left.as.v128.bits,
+                &right.as.v128.bits,
+                lanes))
+            return TURBOWASM_UNSUPPORTED;
+        return turbowasm_stack_push(stack, out);
+    }
+
+    if (descriptor->kind == TURBOWASM_SIMD_EXEC_SWIZZLE) {
+        status = turbowasm_stack_pop_kind(
+            stack, TURBOWASM_VALUE_V128, &right);
+        if (status != TURBOWASM_OK)
+            return status;
+        status = turbowasm_stack_pop_kind(
+            stack, TURBOWASM_VALUE_V128, &left);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        out.kind = TURBOWASM_VALUE_V128;
+        out.as.v128.shape = descriptor->result_shape;
+        if (!salts_simd_swizzle_bytes(
+                &out.as.v128.bits,
+                &left.as.v128.bits,
+                &right.as.v128.bits))
+            return TURBOWASM_UNSUPPORTED;
+        return turbowasm_stack_push(stack, out);
+    }
+
+    if (!turbowasm_reader_u8(reader, &lane))
+        return TURBOWASM_MALFORMED_MODULE;
+    if (descriptor->vector_desc == NULL ||
+        lane >= descriptor->vector_desc->lane_count)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (descriptor->kind == TURBOWASM_SIMD_EXEC_LANE_EXTRACT) {
+        status = turbowasm_stack_pop_kind(
+            stack, TURBOWASM_VALUE_V128, &left);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        supported = salts_simd_extract_lane(
+            descriptor->vector_desc,
+            &left.as.v128.bits,
+            lane, &scalar);
+        if (!supported)
+            return TURBOWASM_UNSUPPORTED;
+
+        switch (descriptor->vector_desc->lane_kind) {
+            case CMETA_VECTOR_I8:
+                out.kind = TURBOWASM_VALUE_I32;
+                out.as.i32 = (int32_t)scalar.i8;
+                break;
+            case CMETA_VECTOR_U8:
+                out.kind = TURBOWASM_VALUE_I32;
+                out.as.i32 = (int32_t)scalar.u8;
+                break;
+            case CMETA_VECTOR_I16:
+                out.kind = TURBOWASM_VALUE_I32;
+                out.as.i32 = (int32_t)scalar.i16;
+                break;
+            case CMETA_VECTOR_U16:
+                out.kind = TURBOWASM_VALUE_I32;
+                out.as.i32 = (int32_t)scalar.u16;
+                break;
+            case CMETA_VECTOR_I32:
+                out.kind = TURBOWASM_VALUE_I32;
+                out.as.i32 = scalar.i32;
+                break;
+            case CMETA_VECTOR_I64:
+                out.kind = TURBOWASM_VALUE_I64;
+                out.as.i64 = scalar.i64;
+                break;
+            case CMETA_VECTOR_F32:
+                out.kind = TURBOWASM_VALUE_F32;
+                out.as.f32 = scalar.f32;
+                break;
+            case CMETA_VECTOR_F64:
+                out.kind = TURBOWASM_VALUE_F64;
+                out.as.f64 = scalar.f64;
+                break;
+            default:
+                return TURBOWASM_UNSUPPORTED;
+        }
+        return turbowasm_stack_push(stack, out);
+    }
+
+    if (descriptor->kind != TURBOWASM_SIMD_EXEC_LANE_REPLACE)
+        return TURBOWASM_UNSUPPORTED;
+
+    switch (descriptor->vector_desc->lane_kind) {
+        case CMETA_VECTOR_I8:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &scalar_value);
+            if (status != TURBOWASM_OK) return status;
+            scalar.i8 = (int8_t)scalar_value.as.i32;
+            break;
+        case CMETA_VECTOR_I16:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &scalar_value);
+            if (status != TURBOWASM_OK) return status;
+            scalar.i16 = (int16_t)scalar_value.as.i32;
+            break;
+        case CMETA_VECTOR_I32:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &scalar_value);
+            if (status != TURBOWASM_OK) return status;
+            scalar.i32 = scalar_value.as.i32;
+            break;
+        case CMETA_VECTOR_I64:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I64, &scalar_value);
+            if (status != TURBOWASM_OK) return status;
+            scalar.i64 = scalar_value.as.i64;
+            break;
+        case CMETA_VECTOR_F32:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_F32, &scalar_value);
+            if (status != TURBOWASM_OK) return status;
+            scalar.f32 = scalar_value.as.f32;
+            break;
+        case CMETA_VECTOR_F64:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_F64, &scalar_value);
+            if (status != TURBOWASM_OK) return status;
+            scalar.f64 = scalar_value.as.f64;
+            break;
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_V128, &left);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    out.kind = TURBOWASM_VALUE_V128;
+    out.as.v128.shape = descriptor->result_shape;
+    supported = salts_simd_replace_lane(
+        descriptor->vector_desc,
+        &out.as.v128.bits,
+        &left.as.v128.bits,
+        lane, scalar);
+    if (!supported)
+        return TURBOWASM_UNSUPPORTED;
+    return turbowasm_stack_push(stack, out);
+}
+
 static turbowasm_status turbowasm_exec_simd(
     turbowasm_instance_impl *instance,
     turbowasm_reader *reader,
@@ -1984,6 +2178,9 @@ static turbowasm_status turbowasm_exec_simd(
             if (turbowasm_simd_exec_is_memory(descriptor->kind))
                 return turbowasm_exec_simd_memory(
                     instance, reader, stack, trap, descriptor);
+            if (turbowasm_simd_exec_is_lane_special(descriptor->kind))
+                return turbowasm_exec_simd_lane_special(
+                    reader, stack, descriptor);
             return turbowasm_exec_simd_generic(
                 descriptor, stack);
         }
