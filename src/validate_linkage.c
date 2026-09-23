@@ -112,7 +112,8 @@ static turbowasm_status turbowasm_read_name(
 
 static turbowasm_status turbowasm_read_limits(
     turbowasm_reader *reader,
-    uint32_t maximum_bound) {
+    uint32_t maximum_bound,
+    turbowasm_ir_limits *out) {
     uint8_t flags;
     uint32_t minimum;
     uint32_t maximum = 0u;
@@ -136,24 +137,47 @@ static turbowasm_status turbowasm_read_limits(
             return TURBOWASM_MALFORMED_MODULE;
     }
 
+    if (out != NULL) {
+        out->minimum = minimum;
+        out->maximum = maximum;
+        out->has_maximum = flags == 0x01u;
+    }
     return TURBOWASM_OK;
 }
 
 static turbowasm_status turbowasm_read_table_type(
-    turbowasm_reader *reader) {
+    turbowasm_reader *reader,
+    turbowasm_ir_table *out) {
     uint8_t reference_type;
+    turbowasm_ir_limits limits = {0};
+    turbowasm_status status;
 
     if (!turbowasm_reader_u8(reader, &reference_type))
         return TURBOWASM_MALFORMED_MODULE;
     if (reference_type != 0x70u && reference_type != 0x6fu)
         return TURBOWASM_UNSUPPORTED;
 
-    return turbowasm_read_limits(reader, UINT32_MAX);
+    status = turbowasm_read_limits(reader, UINT32_MAX, &limits);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (out != NULL) {
+        out->reference_type = reference_type;
+        out->limits = limits;
+    }
+    return TURBOWASM_OK;
 }
 
 static turbowasm_status turbowasm_read_memory_type(
-    turbowasm_reader *reader) {
-    return turbowasm_read_limits(reader, UINT32_C(65536));
+    turbowasm_reader *reader,
+    turbowasm_ir_memory *out) {
+    turbowasm_ir_limits limits = {0};
+    turbowasm_status status =
+        turbowasm_read_limits(reader, UINT32_C(65536), &limits);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (out != NULL)
+        out->limits = limits;
+    return TURBOWASM_OK;
 }
 
 static bool turbowasm_global_valtype_supported(uint8_t type) {
@@ -172,7 +196,8 @@ static bool turbowasm_global_valtype_supported(uint8_t type) {
 }
 
 static turbowasm_status turbowasm_read_global_type(
-    turbowasm_reader *reader) {
+    turbowasm_reader *reader,
+    turbowasm_ir_global *out) {
     uint8_t value_type;
     uint8_t mutability;
 
@@ -184,6 +209,10 @@ static turbowasm_status turbowasm_read_global_type(
         return TURBOWASM_MALFORMED_MODULE;
     if (mutability > 1u)
         return TURBOWASM_MALFORMED_MODULE;
+    if (out != NULL) {
+        out->value_type = value_type;
+        out->mutable_value = mutability != 0u;
+    }
     return TURBOWASM_OK;
 }
 
@@ -197,11 +226,12 @@ static bool turbowasm_index_in_total(
 
 turbowasm_status turbowasm_validate_import_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_module_ir *ir) {
     uint32_t count;
     uint32_t index;
 
-    if (section == NULL || summary == NULL)
+    if (section == NULL || summary == NULL || ir == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(section, &count))
         return TURBOWASM_MALFORMED_MODULE;
@@ -224,23 +254,41 @@ turbowasm_status turbowasm_validate_import_section(
                     return TURBOWASM_MALFORMED_MODULE;
                 if (type_index >= summary->type_count)
                     return TURBOWASM_MALFORMED_MODULE;
+                if (!turbowasm_module_ir_append_function(
+                        ir, (turbowasm_ir_function){type_index, true}))
+                    return TURBOWASM_OUT_OF_MEMORY;
                 ++summary->imported_function_count;
                 break;
-            case 0x01u:
-                status = turbowasm_read_table_type(section);
+            case 0x01u: {
+                turbowasm_ir_table table = {0};
+                status = turbowasm_read_table_type(section, &table);
                 if (status != TURBOWASM_OK) return status;
+                table.imported = true;
+                if (!turbowasm_module_ir_append_table(ir, table))
+                    return TURBOWASM_OUT_OF_MEMORY;
                 ++summary->imported_table_count;
                 break;
-            case 0x02u:
-                status = turbowasm_read_memory_type(section);
+            }
+            case 0x02u: {
+                turbowasm_ir_memory memory = {0};
+                status = turbowasm_read_memory_type(section, &memory);
                 if (status != TURBOWASM_OK) return status;
+                memory.imported = true;
+                if (!turbowasm_module_ir_append_memory(ir, memory))
+                    return TURBOWASM_OUT_OF_MEMORY;
                 ++summary->imported_memory_count;
                 break;
-            case 0x03u:
-                status = turbowasm_read_global_type(section);
+            }
+            case 0x03u: {
+                turbowasm_ir_global global = {0};
+                status = turbowasm_read_global_type(section, &global);
                 if (status != TURBOWASM_OK) return status;
+                global.imported = true;
+                if (!turbowasm_module_ir_append_global(ir, global))
+                    return TURBOWASM_OUT_OF_MEMORY;
                 ++summary->imported_global_count;
                 break;
+            }
             default:
                 return TURBOWASM_UNSUPPORTED;
         }
@@ -253,7 +301,8 @@ turbowasm_status turbowasm_validate_import_section(
 
 turbowasm_status turbowasm_validate_table_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_module_ir *ir) {
     uint32_t count;
     uint32_t index;
 
@@ -263,8 +312,11 @@ turbowasm_status turbowasm_validate_table_section(
         return TURBOWASM_MALFORMED_MODULE;
 
     for (index = 0u; index < count; ++index) {
-        turbowasm_status status = turbowasm_read_table_type(section);
+        turbowasm_ir_table table = {0};
+        turbowasm_status status = turbowasm_read_table_type(section, &table);
         if (status != TURBOWASM_OK) return status;
+        if (!turbowasm_module_ir_append_table(ir, table))
+            return TURBOWASM_OUT_OF_MEMORY;
     }
 
     if (turbowasm_reader_remaining(section) != 0u)
@@ -275,7 +327,8 @@ turbowasm_status turbowasm_validate_table_section(
 
 turbowasm_status turbowasm_validate_memory_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_module_ir *ir) {
     uint32_t count;
     uint32_t index;
 
@@ -285,8 +338,11 @@ turbowasm_status turbowasm_validate_memory_section(
         return TURBOWASM_MALFORMED_MODULE;
 
     for (index = 0u; index < count; ++index) {
-        turbowasm_status status = turbowasm_read_memory_type(section);
+        turbowasm_ir_memory memory = {0};
+        turbowasm_status status = turbowasm_read_memory_type(section, &memory);
         if (status != TURBOWASM_OK) return status;
+        if (!turbowasm_module_ir_append_memory(ir, memory))
+            return TURBOWASM_OUT_OF_MEMORY;
     }
 
     if (turbowasm_reader_remaining(section) != 0u)
@@ -393,7 +449,8 @@ done:
 
 turbowasm_status turbowasm_validate_start_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    const turbowasm_module_ir *ir) {
     uint32_t function_index;
 
     if (section == NULL || summary == NULL)
@@ -401,10 +458,17 @@ turbowasm_status turbowasm_validate_start_section(
     if (!turbowasm_reader_uleb32(section, &function_index) ||
         turbowasm_reader_remaining(section) != 0u)
         return TURBOWASM_MALFORMED_MODULE;
-    if (!turbowasm_index_in_total(
-            function_index, summary->imported_function_count,
-            summary->function_count))
+    if (ir == NULL || function_index >= ir->function_count)
         return TURBOWASM_MALFORMED_MODULE;
+    {
+        uint32_t type_index = ir->functions[function_index].type_index;
+        const turbowasm_ir_func_type *type;
+        if (type_index >= ir->type_count)
+            return TURBOWASM_MALFORMED_MODULE;
+        type = &ir->types[type_index];
+        if (type->param_count != 0u || type->result_count != 0u)
+            return TURBOWASM_MALFORMED_MODULE;
+    }
 
     summary->has_start = true;
     summary->start_function_index = function_index;
