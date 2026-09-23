@@ -111,3 +111,14 @@ set_target_properties(turbowasm_code_metadata_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_code_metadata_test
          COMMAND turbowasm_code_metadata_test)
+
+add_executable(turbowasm_interpreter_scalar_test
+  interpreter_scalar_test.c)
+target_link_libraries(turbowasm_interpreter_scalar_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_interpreter_scalar_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_interpreter_scalar_test
+         COMMAND turbowasm_interpreter_scalar_test)
