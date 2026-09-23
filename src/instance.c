@@ -55,6 +55,7 @@ static turbowasm_value_kind turbowasm_kind_from_valtype(uint8_t type) {
         case 0x7du: return TURBOWASM_VALUE_F32;
         case 0x7cu: return TURBOWASM_VALUE_F64;
         case 0x7bu: return TURBOWASM_VALUE_V128;
+        case 0x70u: return TURBOWASM_VALUE_FUNCREF;
         default: return (turbowasm_value_kind)0;
     }
 }
@@ -78,8 +79,12 @@ static bool turbowasm_zero_value(uint8_t type, turbowasm_value *out) {
 
     memset(out, 0, sizeof(*out));
     out->kind = kind;
-    if (kind == TURBOWASM_VALUE_V128)
+    if (kind == TURBOWASM_VALUE_V128) {
         out->as.v128.shape = TURBOWASM_V128_RAW;
+    } else if (kind == TURBOWASM_VALUE_FUNCREF) {
+        out->as.funcref.is_null = true;
+        out->as.funcref.function_index = UINT32_MAX;
+    }
     return true;
 }
 
@@ -1628,6 +1633,62 @@ static turbowasm_status turbowasm_exec_function(
                 break;
             }
 
+            case 0x25u: /* table.get */
+            case 0x26u: { /* table.set */
+                uint32_t table_index;
+                turbowasm_value element_index;
+                turbowasm_value value;
+
+                if (!turbowasm_reader_uleb32(
+                        &reader, &table_index)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                if (opcode == 0x25u) {
+                    status = turbowasm_stack_pop_kind(
+                        &stack, TURBOWASM_VALUE_I32,
+                        &element_index);
+                    if (status != TURBOWASM_OK)
+                        goto done;
+                    status = turbowasm_instance_table_get_value(
+                        instance, table_index,
+                        (uint32_t)element_index.as.i32,
+                        &value);
+                    if (status == TURBOWASM_TRAPPED) {
+                        *trap = TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS;
+                        status = TURBOWASM_TRAPPED;
+                        goto done;
+                    }
+                    if (status != TURBOWASM_OK)
+                        goto done;
+                    status = turbowasm_stack_push(&stack, value);
+                } else {
+                    status = turbowasm_stack_pop_kind(
+                        &stack, TURBOWASM_VALUE_FUNCREF, &value);
+                    if (status != TURBOWASM_OK)
+                        goto done;
+                    status = turbowasm_stack_pop_kind(
+                        &stack, TURBOWASM_VALUE_I32,
+                        &element_index);
+                    if (status != TURBOWASM_OK)
+                        goto done;
+                    status = turbowasm_instance_table_set_value(
+                        instance, table_index,
+                        (uint32_t)element_index.as.i32,
+                        value);
+                    if (status == TURBOWASM_TRAPPED) {
+                        *trap = TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS;
+                        status = TURBOWASM_TRAPPED;
+                        goto done;
+                    }
+                }
+
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
+
             case 0x28u: case 0x29u:
             case 0x2au: case 0x2bu:
             case 0x2cu: case 0x2du:
@@ -1749,6 +1810,67 @@ static turbowasm_status turbowasm_exec_function(
                     opcode, &stack);
                 if (status != TURBOWASM_OK) goto done;
                 break;
+
+            case 0xd0u: { /* ref.null */
+                uint8_t reference_type;
+                turbowasm_value out = {0};
+
+                if (!turbowasm_reader_u8(
+                        &reader, &reference_type)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+                if (reference_type != 0x70u) {
+                    status = TURBOWASM_UNSUPPORTED;
+                    goto done;
+                }
+
+                out.kind = TURBOWASM_VALUE_FUNCREF;
+                out.as.funcref.is_null = true;
+                out.as.funcref.function_index = UINT32_MAX;
+                status = turbowasm_stack_push(&stack, out);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
+
+            case 0xd1u: { /* ref.is_null */
+                turbowasm_value reference;
+                turbowasm_value out = {0};
+
+                status = turbowasm_stack_pop_kind(
+                    &stack, TURBOWASM_VALUE_FUNCREF,
+                    &reference);
+                if (status != TURBOWASM_OK)
+                    goto done;
+
+                out.kind = TURBOWASM_VALUE_I32;
+                out.as.i32 = reference.as.funcref.is_null ? 1 : 0;
+                status = turbowasm_stack_push(&stack, out);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
+
+            case 0xd2u: { /* ref.func */
+                uint32_t function_ref;
+                turbowasm_value out = {0};
+
+                if (!turbowasm_reader_uleb32(
+                        &reader, &function_ref) ||
+                    function_ref >= context->function_count) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                out.kind = TURBOWASM_VALUE_FUNCREF;
+                out.as.funcref.is_null = false;
+                out.as.funcref.function_index = function_ref;
+                status = turbowasm_stack_push(&stack, out);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
 
             default:
                 status = TURBOWASM_UNSUPPORTED;
