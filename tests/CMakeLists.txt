@@ -98,3 +98,16 @@ set_target_properties(turbowasm_bulk_validation_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_bulk_validation_test
          COMMAND turbowasm_bulk_validation_test)
+
+add_executable(turbowasm_code_metadata_test
+  code_metadata_test.c)
+target_link_libraries(turbowasm_code_metadata_test
+  PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_code_metadata_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_code_metadata_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_code_metadata_test
+         COMMAND turbowasm_code_metadata_test)
