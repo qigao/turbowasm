@@ -487,6 +487,7 @@ static turbowasm_status turbowasm_exec_function(
     uint32_t index;
     turbowasm_status status = TURBOWASM_OK;
     bool finished = false;
+    bool returned = false;
 
     if (module == NULL || result_count == NULL || trap == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -557,7 +558,10 @@ static turbowasm_status turbowasm_exec_function(
             case 0x01u: /* nop */
                 break;
             case 0x0bu: /* end */
+                finished = true;
+                break;
             case 0x0fu: /* return */
+                returned = true;
                 finished = true;
                 break;
             case 0x10u: /* call */
@@ -706,7 +710,8 @@ static turbowasm_status turbowasm_exec_function(
         goto done;
     }
 
-    if (stack.size != type->result_count) {
+    if ((!returned && stack.size != type->result_count) ||
+        (returned && stack.size < type->result_count)) {
         status = TURBOWASM_MALFORMED_MODULE;
         goto done;
     }
