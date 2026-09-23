@@ -54,6 +54,9 @@ typedef struct turbowasm_validation_context {
 
     uint8_t *declared_refs;
     uint32_t declared_ref_count;
+
+    bool has_data_count;
+    uint32_t data_count;
 } turbowasm_validation_context;
 
 void turbowasm_validation_context_destroy(
