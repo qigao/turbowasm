@@ -44,6 +44,12 @@ typedef struct turbowasm_instance_impl {
 
     turbowasm_instance_table *tables;
     uint32_t table_count;
+
+    uint8_t *data_segment_dropped;
+    uint32_t data_segment_count;
+
+    uint8_t *element_segment_dropped;
+    uint32_t element_segment_count;
 } turbowasm_instance_impl;
 
 turbowasm_status turbowasm_instance_state_init(
@@ -99,5 +105,71 @@ turbowasm_status turbowasm_instance_table_set_value(
     uint32_t table_index,
     uint32_t element_index,
     turbowasm_value value);
+
+turbowasm_status turbowasm_instance_memory_init(
+    turbowasm_instance_impl *instance,
+    uint32_t data_index,
+    uint32_t memory_index,
+    uint32_t destination,
+    uint32_t source,
+    uint32_t length);
+
+turbowasm_status turbowasm_instance_data_drop(
+    turbowasm_instance_impl *instance,
+    uint32_t data_index);
+
+turbowasm_status turbowasm_instance_memory_copy(
+    turbowasm_instance_impl *instance,
+    uint32_t destination_memory,
+    uint32_t source_memory,
+    uint32_t destination,
+    uint32_t source,
+    uint32_t length);
+
+turbowasm_status turbowasm_instance_memory_fill(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t destination,
+    uint8_t value,
+    uint32_t length);
+
+turbowasm_status turbowasm_instance_table_init(
+    turbowasm_instance_impl *instance,
+    uint32_t element_index,
+    uint32_t table_index,
+    uint32_t destination,
+    uint32_t source,
+    uint32_t length);
+
+turbowasm_status turbowasm_instance_element_drop(
+    turbowasm_instance_impl *instance,
+    uint32_t element_index);
+
+turbowasm_status turbowasm_instance_table_copy(
+    turbowasm_instance_impl *instance,
+    uint32_t destination_table,
+    uint32_t source_table,
+    uint32_t destination,
+    uint32_t source,
+    uint32_t length);
+
+turbowasm_status turbowasm_instance_table_grow(
+    turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    turbowasm_value initial,
+    uint32_t delta,
+    uint32_t *out_previous_size);
+
+turbowasm_status turbowasm_instance_table_size(
+    const turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    uint32_t *out_size);
+
+turbowasm_status turbowasm_instance_table_fill(
+    turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    uint32_t destination,
+    turbowasm_value value,
+    uint32_t length);
 
 #endif /* TURBOWASM_INSTANCE_INTERNAL_H */
