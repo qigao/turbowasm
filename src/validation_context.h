@@ -51,6 +51,10 @@ typedef struct turbowasm_validation_context {
     turbowasm_validation_memory *memories;
     uint32_t memory_count;
     uint32_t memory_capacity;
+
+    uint32_t *declared_function_refs;
+    uint32_t declared_function_ref_count;
+    uint32_t declared_function_ref_capacity;
 } turbowasm_validation_context;
 
 void turbowasm_validation_context_destroy(
@@ -105,5 +109,13 @@ const turbowasm_validation_global *
 turbowasm_validation_context_global(
     const turbowasm_validation_context *context,
     uint32_t global_index);
+
+bool turbowasm_validation_context_declare_function_ref(
+    turbowasm_validation_context *context,
+    uint32_t function_index);
+
+bool turbowasm_validation_context_function_ref_declared(
+    const turbowasm_validation_context *context,
+    uint32_t function_index);
 
 #endif /* TURBOWASM_VALIDATION_CONTEXT_H */
