@@ -36,6 +36,7 @@ add_library(turbowasm
   src/validation_context.c
   src/validate.c
   src/validate_data.c
+  src/validate_element.c
   src/validate_linkage.c)
 
 add_library(TurboWasm::Runtime ALIAS turbowasm)
