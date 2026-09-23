@@ -747,6 +747,7 @@ turbowasm_status turbowasm_validate_function_body(
     uint32_t function_index) {
     const turbowasm_validation_func_type *function_type;
     turbowasm_type_stack stack = {0};
+    turbowasm_control_stack controls = {0};
     uint8_t *locals = NULL;
     uint32_t local_count = 0u;
     turbowasm_status result;
@@ -764,6 +765,13 @@ turbowasm_status turbowasm_validate_function_body(
     if (result != TURBOWASM_OK)
         goto done;
 
+    result = turbowasm_control_push(
+        &stack, &controls, TURBOWASM_CTRL_FUNCTION,
+        NULL, 0u,
+        function_type->results, function_type->result_count);
+    if (result != TURBOWASM_OK)
+        goto done;
+
     while (turbowasm_reader_remaining(body) != 0u) {
         uint8_t opcode;
 
@@ -774,26 +782,81 @@ turbowasm_status turbowasm_validate_function_body(
 
         switch (opcode) {
             case 0x00u: /* unreachable */
-                stack.size = 0u;
-                stack.unreachable = true;
+                turbowasm_control_mark_unreachable(&stack);
                 break;
             case 0x01u: /* nop */
                 break;
+            case 0x02u: /* block */
+            case 0x03u: /* loop */
+            case 0x04u: { /* if */
+                turbowasm_block_signature signature;
+                turbowasm_control_kind kind =
+                    opcode == 0x02u ? TURBOWASM_CTRL_BLOCK :
+                    opcode == 0x03u ? TURBOWASM_CTRL_LOOP :
+                                      TURBOWASM_CTRL_IF;
+
+                if (opcode == 0x04u) {
+                    result = turbowasm_stack_pop(&stack, TW_I32);
+                    if (result != TURBOWASM_OK)
+                        goto done;
+                }
+
+                result = turbowasm_read_block_signature(
+                    body, context, &signature);
+                if (result != TURBOWASM_OK)
+                    goto done;
+
+                result = turbowasm_control_push(
+                    &stack, &controls, kind,
+                    signature.start_types, signature.start_count,
+                    signature.end_types, signature.end_count);
+                if (result != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
+            case 0x05u: /* else */
+                result = turbowasm_control_else(&stack, &controls);
+                if (result != TURBOWASM_OK)
+                    goto done;
+                break;
             case 0x0bu: /* end */
-                if (turbowasm_reader_remaining(body) != 0u) {
+                if (controls.size == 1u) {
+                    if (turbowasm_reader_remaining(body) != 0u) {
+                        result = TURBOWASM_MALFORMED_MODULE;
+                        goto done;
+                    }
+                    result = turbowasm_validate_result_stack(
+                        &stack, function_type);
+                    goto done;
+                }
+                result = turbowasm_control_end(&stack, &controls);
+                if (result != TURBOWASM_OK)
+                    goto done;
+                break;
+            case 0x0cu: /* br */
+            case 0x0du: { /* br_if */
+                uint32_t depth;
+                if (!turbowasm_reader_uleb32(body, &depth)) {
                     result = TURBOWASM_MALFORMED_MODULE;
                     goto done;
                 }
-                result = turbowasm_validate_result_stack(
-                    &stack, function_type);
-                goto done;
+                if (opcode == 0x0du) {
+                    result = turbowasm_stack_pop(&stack, TW_I32);
+                    if (result != TURBOWASM_OK)
+                        goto done;
+                }
+                result = turbowasm_control_branch(
+                    &stack, &controls, depth, opcode == 0x0du);
+                if (result != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
             case 0x0fu: /* return */
                 result = turbowasm_pop_results(
                     &stack, function_type);
                 if (result != TURBOWASM_OK)
                     goto done;
-                stack.size = 0u;
-                stack.unreachable = true;
+                turbowasm_control_mark_unreachable(&stack);
                 break;
             case 0x10u: /* call */
                 result = turbowasm_validate_call(
@@ -1055,14 +1118,6 @@ turbowasm_status turbowasm_validate_function_body(
                 result = turbowasm_validate_simd(body, &stack);
                 if (result != TURBOWASM_OK) goto done;
                 break;
-            case 0x02u: /* block */
-            case 0x03u: /* loop */
-            case 0x04u: /* if */
-            case 0x05u: /* else */
-            case 0x0cu: /* br */
-            case 0x0du: /* br_if */
-                result = TURBOWASM_UNSUPPORTED;
-                goto done;
             default:
                 result = TURBOWASM_UNSUPPORTED;
                 goto done;
@@ -1074,5 +1129,6 @@ turbowasm_status turbowasm_validate_function_body(
 done:
     free(locals);
     free(stack.values);
+    turbowasm_control_stack_destroy(&controls);
     return result;
 }
