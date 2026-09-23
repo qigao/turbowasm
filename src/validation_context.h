@@ -12,6 +12,20 @@ typedef struct turbowasm_validation_func_type {
     uint32_t result_count;
 } turbowasm_validation_func_type;
 
+typedef enum turbowasm_validation_control_kind {
+    TURBOWASM_VALIDATION_CONTROL_BLOCK = 1,
+    TURBOWASM_VALIDATION_CONTROL_LOOP,
+    TURBOWASM_VALIDATION_CONTROL_IF
+} turbowasm_validation_control_kind;
+
+typedef struct turbowasm_validation_control {
+    turbowasm_validation_control_kind kind;
+    uint32_t opcode_offset;
+    uint32_t body_offset;
+    uint32_t else_offset;
+    uint32_t end_offset;
+} turbowasm_validation_control;
+
 typedef struct turbowasm_validation_function {
     uint32_t type_index;
     bool imported;
@@ -21,6 +35,10 @@ typedef struct turbowasm_validation_function {
 
     const uint8_t *code;
     uint32_t code_size;
+
+    turbowasm_validation_control *controls;
+    uint32_t control_count;
+    uint32_t control_capacity;
 } turbowasm_validation_function;
 
 typedef struct turbowasm_validation_global {
@@ -117,6 +135,21 @@ const turbowasm_validation_function *
 turbowasm_validation_context_function(
     const turbowasm_validation_context *context,
     uint32_t function_index);
+
+bool turbowasm_validation_function_append_control(
+    turbowasm_validation_function *function,
+    turbowasm_validation_control control,
+    uint32_t *out_index);
+
+turbowasm_validation_control *
+turbowasm_validation_function_control_mut(
+    turbowasm_validation_function *function,
+    uint32_t index);
+
+const turbowasm_validation_control *
+turbowasm_validation_function_control_at(
+    const turbowasm_validation_function *function,
+    uint32_t opcode_offset);
 
 const turbowasm_validation_func_type *
 turbowasm_validation_context_function_type(

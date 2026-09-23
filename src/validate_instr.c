@@ -42,6 +42,7 @@ typedef struct turbowasm_control_frame {
     uint32_t start_count;
     uint8_t *end_types;
     uint32_t end_count;
+    uint32_t annotation_index;
 } turbowasm_control_frame;
 
 typedef struct turbowasm_control_stack {
@@ -426,7 +427,8 @@ static turbowasm_status turbowasm_control_push(
     const uint8_t *start_types,
     uint32_t start_count,
     const uint8_t *end_types,
-    uint32_t end_count) {
+    uint32_t end_count,
+    uint32_t annotation_index) {
     turbowasm_control_frame frame = {0};
     turbowasm_control_frame *stored;
     turbowasm_status status;
@@ -463,6 +465,7 @@ static turbowasm_status turbowasm_control_push(
     frame.parent_unreachable = stack->unreachable;
     frame.start_count = start_count;
     frame.end_count = end_count;
+    frame.annotation_index = annotation_index;
 
     stored = &controls->frames[controls->size++];
     *stored = frame;
@@ -1037,6 +1040,7 @@ turbowasm_status turbowasm_validate_function_body(
     turbowasm_validation_context *context,
     uint32_t function_index) {
     const turbowasm_validation_func_type *function_type;
+    turbowasm_validation_function *function_metadata;
     turbowasm_type_stack stack = {0};
     turbowasm_control_stack controls = {0};
     uint8_t *locals = NULL;
@@ -1050,7 +1054,10 @@ turbowasm_status turbowasm_validate_function_body(
 
     function_type = turbowasm_validation_context_function_type(
         context, function_index);
-    if (function_type == NULL || !function_type->defined)
+    function_metadata = turbowasm_validation_context_function_mut(
+        context, function_index);
+    if (function_type == NULL || !function_type->defined ||
+        function_metadata == NULL || function_metadata->imported)
         return TURBOWASM_MALFORMED_MODULE;
 
     result = turbowasm_read_locals(
@@ -1068,7 +1075,8 @@ turbowasm_status turbowasm_validate_function_body(
     result = turbowasm_control_push(
         &stack, &controls, TURBOWASM_CTRL_FUNCTION,
         NULL, 0u,
-        function_type->results, function_type->result_count);
+        function_type->results, function_type->result_count,
+        UINT32_MAX);
     if (result != TURBOWASM_OK)
         goto done;
 
@@ -1094,6 +1102,26 @@ turbowasm_status turbowasm_validate_function_body(
                     opcode == 0x02u ? TURBOWASM_CTRL_BLOCK :
                     opcode == 0x03u ? TURBOWASM_CTRL_LOOP :
                                       TURBOWASM_CTRL_IF;
+                turbowasm_validation_control annotation = {0};
+                uint32_t annotation_index;
+
+                if (code_start == NULL ||
+                    body->cursor <= code_start ||
+                    (size_t)(body->cursor - code_start - 1u) > UINT32_MAX) {
+                    result = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                annotation.kind =
+                    opcode == 0x02u
+                        ? TURBOWASM_VALIDATION_CONTROL_BLOCK
+                        : opcode == 0x03u
+                            ? TURBOWASM_VALIDATION_CONTROL_LOOP
+                            : TURBOWASM_VALIDATION_CONTROL_IF;
+                annotation.opcode_offset =
+                    (uint32_t)(body->cursor - code_start - 1u);
+                annotation.else_offset = UINT32_MAX;
+                annotation.end_offset = UINT32_MAX;
 
                 if (opcode == 0x04u) {
                     result = turbowasm_stack_pop(&stack, TW_I32);
@@ -1106,19 +1134,61 @@ turbowasm_status turbowasm_validate_function_body(
                 if (result != TURBOWASM_OK)
                     goto done;
 
+                if ((size_t)(body->cursor - code_start) > UINT32_MAX) {
+                    result = TURBOWASM_OUT_OF_MEMORY;
+                    goto done;
+                }
+                annotation.body_offset =
+                    (uint32_t)(body->cursor - code_start);
+
+                if (!turbowasm_validation_function_append_control(
+                        function_metadata,
+                        annotation,
+                        &annotation_index)) {
+                    result = TURBOWASM_OUT_OF_MEMORY;
+                    goto done;
+                }
+
                 result = turbowasm_control_push(
                     &stack, &controls, kind,
                     signature.start_types, signature.start_count,
-                    signature.end_types, signature.end_count);
+                    signature.end_types, signature.end_count,
+                    annotation_index);
                 if (result != TURBOWASM_OK)
                     goto done;
                 break;
             }
-            case 0x05u: /* else */
+            case 0x05u: { /* else */
+                turbowasm_control_frame *frame =
+                    turbowasm_control_top(&controls);
+                uint32_t annotation_index;
+                turbowasm_validation_control *annotation;
+
+                if (frame == NULL ||
+                    frame->annotation_index == UINT32_MAX) {
+                    result = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+                annotation_index = frame->annotation_index;
+
                 result = turbowasm_control_else(&stack, &controls);
                 if (result != TURBOWASM_OK)
                     goto done;
+
+                annotation =
+                    turbowasm_validation_function_control_mut(
+                        function_metadata, annotation_index);
+                if (annotation == NULL ||
+                    annotation->else_offset != UINT32_MAX ||
+                    code_start == NULL ||
+                    (size_t)(body->cursor - code_start - 1u) > UINT32_MAX) {
+                    result = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+                annotation->else_offset =
+                    (uint32_t)(body->cursor - code_start - 1u);
                 break;
+            }
             case 0x0bu: /* end */
                 if (controls.size == 1u) {
                     if (turbowasm_reader_remaining(body) != 0u) {
@@ -1128,10 +1198,37 @@ turbowasm_status turbowasm_validate_function_body(
                     result = turbowasm_validate_result_stack(
                         &stack, function_type);
                     goto done;
+                } else {
+                    turbowasm_control_frame *frame =
+                        turbowasm_control_top(&controls);
+                    uint32_t annotation_index;
+                    turbowasm_validation_control *annotation;
+
+                    if (frame == NULL ||
+                        frame->annotation_index == UINT32_MAX) {
+                        result = TURBOWASM_MALFORMED_MODULE;
+                        goto done;
+                    }
+                    annotation_index = frame->annotation_index;
+
+                    result = turbowasm_control_end(&stack, &controls);
+                    if (result != TURBOWASM_OK)
+                        goto done;
+
+                    annotation =
+                        turbowasm_validation_function_control_mut(
+                            function_metadata, annotation_index);
+                    if (annotation == NULL ||
+                        annotation->end_offset != UINT32_MAX ||
+                        code_start == NULL ||
+                        (size_t)(body->cursor - code_start - 1u) >
+                            UINT32_MAX) {
+                        result = TURBOWASM_MALFORMED_MODULE;
+                        goto done;
+                    }
+                    annotation->end_offset =
+                        (uint32_t)(body->cursor - code_start - 1u);
                 }
-                result = turbowasm_control_end(&stack, &controls);
-                if (result != TURBOWASM_OK)
-                    goto done;
                 break;
             case 0x0cu: /* br */
             case 0x0du: { /* br_if */

@@ -122,3 +122,14 @@ set_target_properties(turbowasm_instance_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_instance_test
          COMMAND turbowasm_instance_test)
+
+add_executable(turbowasm_structured_instance_test
+  structured_instance_test.c)
+target_link_libraries(turbowasm_structured_instance_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_structured_instance_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_structured_instance_test
+         COMMAND turbowasm_structured_instance_test)
