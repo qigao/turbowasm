@@ -70,3 +70,75 @@ bool turbowasm_reader_slice(turbowasm_reader *reader,
     reader->cursor += size;
     return true;
 }
+
+bool turbowasm_reader_sleb32(turbowasm_reader *reader, int32_t *out) {
+    uint64_t value = 0u;
+    unsigned shift = 0u;
+    unsigned count;
+
+    if (reader == NULL || out == NULL) return false;
+
+    for (count = 0u; count < 5u; ++count) {
+        uint8_t byte;
+        uint8_t payload;
+
+        if (!turbowasm_reader_u8(reader, &byte))
+            return false;
+        payload = (uint8_t)(byte & 0x7fu);
+
+        if (count == 4u) {
+            const uint8_t unused = (uint8_t)(payload & 0x70u);
+            if (unused != 0x00u && unused != 0x70u)
+                return false;
+        }
+
+        value |= (uint64_t)payload << shift;
+
+        if ((byte & 0x80u) == 0u) {
+            if (count < 4u && (byte & 0x40u) != 0u)
+                value |= UINT64_MAX << (shift + 7u);
+            *out = (int32_t)(uint32_t)value;
+            return true;
+        }
+
+        shift += 7u;
+    }
+
+    return false;
+}
+
+bool turbowasm_reader_sleb64(turbowasm_reader *reader, int64_t *out) {
+    uint64_t value = 0u;
+    unsigned shift = 0u;
+    unsigned count;
+
+    if (reader == NULL || out == NULL) return false;
+
+    for (count = 0u; count < 10u; ++count) {
+        uint8_t byte;
+        uint8_t payload;
+
+        if (!turbowasm_reader_u8(reader, &byte))
+            return false;
+        payload = (uint8_t)(byte & 0x7fu);
+
+        if (count == 9u) {
+            const uint8_t unused = (uint8_t)(payload & 0x7eu);
+            if (unused != 0x00u && unused != 0x7eu)
+                return false;
+        }
+
+        value |= (uint64_t)payload << shift;
+
+        if ((byte & 0x80u) == 0u) {
+            if (count < 9u && (byte & 0x40u) != 0u)
+                value |= UINT64_MAX << (shift + 7u);
+            *out = (int64_t)value;
+            return true;
+        }
+
+        shift += 7u;
+    }
+
+    return false;
+}
