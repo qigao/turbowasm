@@ -187,19 +187,26 @@ turbowasm_status turbowasm_validate_global_section(
     for (index = 0u; index < count; ++index) {
         turbowasm_global_type type;
         uint8_t expression_type;
+        const uint8_t *initializer_start;
+        size_t initializer_size;
         turbowasm_status status = turbowasm_read_global_type(
             section, &type);
 
         if (status != TURBOWASM_OK)
             return status;
+        initializer_start = section->cursor;
         status = turbowasm_validate_const_expr(
             section, context, &expression_type);
         if (status != TURBOWASM_OK)
             return status;
+        initializer_size = (size_t)(section->cursor - initializer_start);
+        if (initializer_size > UINT32_MAX)
+            return TURBOWASM_OUT_OF_MEMORY;
         if (expression_type != type.value_type)
             return TURBOWASM_MALFORMED_MODULE;
         if (!turbowasm_validation_context_append_global(
-                context, type.value_type, type.is_mutable, false))
+                context, type.value_type, type.is_mutable, false,
+                initializer_start, (uint32_t)initializer_size))
             return TURBOWASM_OUT_OF_MEMORY;
     }
 
