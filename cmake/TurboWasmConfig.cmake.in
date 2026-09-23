@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Salts 1.3.0 CONFIG)
+
+include("${CMAKE_CURRENT_LIST_DIR}/TurboWasmTargets.cmake")
+
+check_required_components(TurboWasm)
