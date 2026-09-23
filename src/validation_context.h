@@ -45,15 +45,26 @@ typedef struct turbowasm_validation_global {
     uint8_t value_type;
     bool mutable_value;
     bool imported;
+
+    const uint8_t *initializer;
+    uint32_t initializer_size;
 } turbowasm_validation_global;
+
+typedef struct turbowasm_validation_limits {
+    uint32_t minimum;
+    uint32_t maximum;
+    bool has_maximum;
+} turbowasm_validation_limits;
 
 typedef struct turbowasm_validation_table {
     uint8_t reference_type;
     bool imported;
+    turbowasm_validation_limits limits;
 } turbowasm_validation_table;
 
 typedef struct turbowasm_validation_memory {
     bool imported;
+    turbowasm_validation_limits limits;
 } turbowasm_validation_memory;
 
 typedef struct turbowasm_validation_context {
@@ -115,15 +126,19 @@ bool turbowasm_validation_context_append_global(
     turbowasm_validation_context *context,
     uint8_t value_type,
     bool mutable_value,
-    bool imported);
+    bool imported,
+    const uint8_t *initializer,
+    uint32_t initializer_size);
 
 bool turbowasm_validation_context_append_table(
     turbowasm_validation_context *context,
     uint8_t reference_type,
+    turbowasm_validation_limits limits,
     bool imported);
 
 bool turbowasm_validation_context_append_memory(
     turbowasm_validation_context *context,
+    turbowasm_validation_limits limits,
     bool imported);
 
 turbowasm_validation_function *

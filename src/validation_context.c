@@ -178,7 +178,9 @@ bool turbowasm_validation_context_append_global(
     turbowasm_validation_context *context,
     uint8_t value_type,
     bool mutable_value,
-    bool imported) {
+    bool imported,
+    const uint8_t *initializer,
+    uint32_t initializer_size) {
     uint32_t required;
 
     if (context == NULL || context->global_count == UINT32_MAX)
@@ -195,6 +197,9 @@ bool turbowasm_validation_context_append_global(
     context->globals[context->global_count].value_type = value_type;
     context->globals[context->global_count].mutable_value = mutable_value;
     context->globals[context->global_count].imported = imported;
+    context->globals[context->global_count].initializer = initializer;
+    context->globals[context->global_count].initializer_size =
+        initializer_size;
     ++context->global_count;
     return true;
 }
@@ -202,6 +207,7 @@ bool turbowasm_validation_context_append_global(
 bool turbowasm_validation_context_append_table(
     turbowasm_validation_context *context,
     uint8_t reference_type,
+    turbowasm_validation_limits limits,
     bool imported) {
     uint32_t required;
 
@@ -218,12 +224,14 @@ bool turbowasm_validation_context_append_table(
 
     context->tables[context->table_count].reference_type = reference_type;
     context->tables[context->table_count].imported = imported;
+    context->tables[context->table_count].limits = limits;
     ++context->table_count;
     return true;
 }
 
 bool turbowasm_validation_context_append_memory(
     turbowasm_validation_context *context,
+    turbowasm_validation_limits limits,
     bool imported) {
     uint32_t required;
 
@@ -239,6 +247,7 @@ bool turbowasm_validation_context_append_memory(
         return false;
 
     context->memories[context->memory_count].imported = imported;
+    context->memories[context->memory_count].limits = limits;
     ++context->memory_count;
     return true;
 }

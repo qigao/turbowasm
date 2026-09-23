@@ -121,7 +121,8 @@ static turbowasm_status turbowasm_read_name(
 
 static turbowasm_status turbowasm_read_limits(
     turbowasm_reader *reader,
-    uint32_t maximum_bound) {
+    uint32_t maximum_bound,
+    turbowasm_validation_limits *out) {
     uint8_t flags;
     uint32_t minimum;
     uint32_t maximum = 0u;
@@ -145,12 +146,18 @@ static turbowasm_status turbowasm_read_limits(
             return TURBOWASM_MALFORMED_MODULE;
     }
 
+    if (out != NULL) {
+        out->minimum = minimum;
+        out->maximum = maximum;
+        out->has_maximum = flags == 0x01u;
+    }
     return TURBOWASM_OK;
 }
 
 static turbowasm_status turbowasm_read_table_type(
     turbowasm_reader *reader,
-    uint8_t *out_reference_type) {
+    uint8_t *out_reference_type,
+    turbowasm_validation_limits *out_limits) {
     uint8_t reference_type;
 
     if (!turbowasm_reader_u8(reader, &reference_type))
@@ -160,12 +167,15 @@ static turbowasm_status turbowasm_read_table_type(
 
     if (out_reference_type != NULL)
         *out_reference_type = reference_type;
-    return turbowasm_read_limits(reader, UINT32_MAX);
+    return turbowasm_read_limits(
+        reader, UINT32_MAX, out_limits);
 }
 
 static turbowasm_status turbowasm_read_memory_type(
-    turbowasm_reader *reader) {
-    return turbowasm_read_limits(reader, UINT32_C(65536));
+    turbowasm_reader *reader,
+    turbowasm_validation_limits *out_limits) {
+    return turbowasm_read_limits(
+        reader, UINT32_C(65536), out_limits);
 }
 
 static bool turbowasm_global_valtype_supported(uint8_t type) {
@@ -250,23 +260,27 @@ turbowasm_status turbowasm_validate_import_section(
                 break;
             case 0x01u: {
                 uint8_t reference_type;
+                turbowasm_validation_limits limits = {0};
                 status = turbowasm_read_table_type(
-                    section, &reference_type);
+                    section, &reference_type, &limits);
                 if (status != TURBOWASM_OK) return status;
                 if (!turbowasm_validation_context_append_table(
-                        context, reference_type, true))
+                        context, reference_type, limits, true))
                     return TURBOWASM_OUT_OF_MEMORY;
                 ++summary->imported_table_count;
                 break;
             }
-            case 0x02u:
-                status = turbowasm_read_memory_type(section);
+            case 0x02u: {
+                turbowasm_validation_limits limits = {0};
+                status = turbowasm_read_memory_type(
+                    section, &limits);
                 if (status != TURBOWASM_OK) return status;
                 if (!turbowasm_validation_context_append_memory(
-                        context, true))
+                        context, limits, true))
                     return TURBOWASM_OUT_OF_MEMORY;
                 ++summary->imported_memory_count;
                 break;
+            }
             case 0x03u: {
                 uint8_t value_type;
                 bool mutable_value;
@@ -274,7 +288,8 @@ turbowasm_status turbowasm_validate_import_section(
                     section, &value_type, &mutable_value);
                 if (status != TURBOWASM_OK) return status;
                 if (!turbowasm_validation_context_append_global(
-                        context, value_type, mutable_value, true))
+                        context, value_type, mutable_value, true,
+                        NULL, 0u))
                     return TURBOWASM_OUT_OF_MEMORY;
                 ++summary->imported_global_count;
                 break;
@@ -303,11 +318,12 @@ turbowasm_status turbowasm_validate_table_section(
 
     for (index = 0u; index < count; ++index) {
         uint8_t reference_type;
+        turbowasm_validation_limits limits = {0};
         turbowasm_status status = turbowasm_read_table_type(
-            section, &reference_type);
+            section, &reference_type, &limits);
         if (status != TURBOWASM_OK) return status;
         if (!turbowasm_validation_context_append_table(
-                context, reference_type, false))
+                context, reference_type, limits, false))
             return TURBOWASM_OUT_OF_MEMORY;
     }
 
@@ -330,10 +346,12 @@ turbowasm_status turbowasm_validate_memory_section(
         return TURBOWASM_MALFORMED_MODULE;
 
     for (index = 0u; index < count; ++index) {
-        turbowasm_status status = turbowasm_read_memory_type(section);
+        turbowasm_validation_limits limits = {0};
+        turbowasm_status status = turbowasm_read_memory_type(
+            section, &limits);
         if (status != TURBOWASM_OK) return status;
         if (!turbowasm_validation_context_append_memory(
-                context, false))
+                context, limits, false))
             return TURBOWASM_OUT_OF_MEMORY;
     }
 
