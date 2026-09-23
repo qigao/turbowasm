@@ -14,6 +14,7 @@ static turbowasm_value_kind turbowasm_state_kind_from_valtype(
         case 0x7du: return TURBOWASM_VALUE_F32;
         case 0x7cu: return TURBOWASM_VALUE_F64;
         case 0x7bu: return TURBOWASM_VALUE_V128;
+        case 0x70u: return TURBOWASM_VALUE_FUNCREF;
         default: return (turbowasm_value_kind)0;
     }
 }
@@ -89,11 +90,24 @@ static turbowasm_status turbowasm_eval_value_expr(
         case 0x23u:
             /* Imported immutable global.get needs host binding. */
             return TURBOWASM_UNSUPPORTED;
-        case 0xd0u:
+        case 0xd0u: {
+            uint8_t reference_type;
+            if (!turbowasm_reader_u8(&reader, &reference_type))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (reference_type != 0x70u)
+                return TURBOWASM_UNSUPPORTED;
+            out->kind = TURBOWASM_VALUE_FUNCREF;
+            out->as.funcref.is_null = true;
+            out->as.funcref.function_index = UINT32_MAX;
+            break;
+        }
         case 0xd2u:
-            /* Reference globals are deferred until reference values become
-             * part of the public/runtime value model. */
-            return TURBOWASM_UNSUPPORTED;
+            out->kind = TURBOWASM_VALUE_FUNCREF;
+            out->as.funcref.is_null = false;
+            if (!turbowasm_reader_uleb32(
+                    &reader, &out->as.funcref.function_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            break;
         default:
             return TURBOWASM_UNSUPPORTED;
     }
@@ -612,5 +626,67 @@ turbowasm_status turbowasm_instance_table_lookup(
     if (element_index >= instance->tables[table_index].size)
         return TURBOWASM_TRAPPED;
     *out = instance->tables[table_index].entries[element_index];
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_table_get_value(
+    const turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    uint32_t element_index,
+    turbowasm_value *out) {
+    turbowasm_instance_table_entry entry;
+    turbowasm_status status;
+
+    if (instance == NULL || out == NULL ||
+        table_index >= instance->table_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (instance->tables[table_index].reference_type != 0x70u)
+        return TURBOWASM_UNSUPPORTED;
+
+    status = turbowasm_instance_table_lookup(
+        instance, table_index, element_index, &entry);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    memset(out, 0, sizeof(*out));
+    out->kind = TURBOWASM_VALUE_FUNCREF;
+    out->as.funcref.is_null = entry.is_null;
+    out->as.funcref.function_index = entry.function_index;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_table_set_value(
+    turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    uint32_t element_index,
+    turbowasm_value value) {
+    turbowasm_instance_table *table;
+    const turbowasm_module_impl *module;
+
+    if (instance == NULL || table_index >= instance->table_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    table = &instance->tables[table_index];
+    if (table->reference_type != 0x70u)
+        return TURBOWASM_UNSUPPORTED;
+    if (value.kind != TURBOWASM_VALUE_FUNCREF)
+        return TURBOWASM_TYPE_MISMATCH;
+    if (element_index >= table->size)
+        return TURBOWASM_TRAPPED;
+
+    if (!value.as.funcref.is_null) {
+        module = turbowasm_module_impl_get(instance->module);
+        if (module == NULL ||
+            value.as.funcref.function_index >=
+                module->validation.function_count)
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    table->entries[element_index].is_null =
+        value.as.funcref.is_null;
+    table->entries[element_index].function_index =
+        value.as.funcref.is_null
+            ? UINT32_MAX
+            : value.as.funcref.function_index;
     return TURBOWASM_OK;
 }
