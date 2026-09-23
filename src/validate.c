@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 enum {
     TURBOWASM_SECTION_CUSTOM = 0u,
@@ -55,25 +57,29 @@ static bool turbowasm_valtype_supported(uint8_t type) {
     }
 }
 
-static turbowasm_status turbowasm_read_valtype(turbowasm_reader *reader) {
+static turbowasm_status turbowasm_read_valtype(
+    turbowasm_reader *reader,
+    uint8_t *out_type) {
     uint8_t type;
+
     if (!turbowasm_reader_u8(reader, &type))
         return TURBOWASM_MALFORMED_MODULE;
-    return turbowasm_valtype_supported(type)
-        ? TURBOWASM_OK
-        : TURBOWASM_UNSUPPORTED;
+    if (!turbowasm_valtype_supported(type))
+        return TURBOWASM_UNSUPPORTED;
+    if (out_type != NULL)
+        *out_type = type;
+    return TURBOWASM_OK;
 }
 
-static turbowasm_status turbowasm_read_valtype_vector(
-    turbowasm_reader *reader) {
-    uint32_t count;
+static turbowasm_status turbowasm_read_valtypes(
+    turbowasm_reader *reader,
+    uint8_t *values,
+    uint32_t count) {
     uint32_t index;
-    turbowasm_status status;
 
-    if (!turbowasm_reader_uleb32(reader, &count))
-        return TURBOWASM_MALFORMED_MODULE;
     for (index = 0u; index < count; ++index) {
-        status = turbowasm_read_valtype(reader);
+        turbowasm_status status =
+            turbowasm_read_valtype(reader, &values[index]);
         if (status != TURBOWASM_OK)
             return status;
     }
@@ -82,24 +88,67 @@ static turbowasm_status turbowasm_read_valtype_vector(
 
 static turbowasm_status turbowasm_validate_type_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_validation_context *context) {
     uint32_t count;
     uint32_t index;
-    uint8_t form;
-    turbowasm_status status;
 
     if (!turbowasm_reader_uleb32(section, &count))
         return TURBOWASM_MALFORMED_MODULE;
+    if (!turbowasm_validation_context_allocate_types(context, count))
+        return TURBOWASM_OUT_OF_MEMORY;
 
     for (index = 0u; index < count; ++index) {
+        uint8_t form;
+        uint8_t *params = NULL;
+        uint32_t param_count;
+        uint32_t result_count;
+        turbowasm_validation_func_type *type;
+        turbowasm_status status;
+
         if (!turbowasm_reader_u8(section, &form))
             return TURBOWASM_MALFORMED_MODULE;
         if (form != 0x60u)
             return TURBOWASM_UNSUPPORTED;
-        status = turbowasm_read_valtype_vector(section);
-        if (status != TURBOWASM_OK)
+
+        if (!turbowasm_reader_uleb32(section, &param_count))
+            return TURBOWASM_MALFORMED_MODULE;
+        if (param_count != 0u) {
+            params = (uint8_t *)malloc((size_t)param_count);
+            if (params == NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+        }
+
+        status = turbowasm_read_valtypes(
+            section, params, param_count);
+        if (status != TURBOWASM_OK) {
+            free(params);
             return status;
-        status = turbowasm_read_valtype_vector(section);
+        }
+
+        if (!turbowasm_reader_uleb32(section, &result_count)) {
+            free(params);
+            return TURBOWASM_MALFORMED_MODULE;
+        }
+
+        if (!turbowasm_validation_context_define_type(
+                context, index, param_count, result_count)) {
+            free(params);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
+
+        type = turbowasm_validation_context_type_mut(context, index);
+        if (type == NULL) {
+            free(params);
+            return TURBOWASM_MALFORMED_MODULE;
+        }
+
+        if (param_count != 0u)
+            memcpy(type->params, params, (size_t)param_count);
+        free(params);
+
+        status = turbowasm_read_valtypes(
+            section, type->results, result_count);
         if (status != TURBOWASM_OK)
             return status;
     }
@@ -112,7 +161,8 @@ static turbowasm_status turbowasm_validate_type_section(
 
 static turbowasm_status turbowasm_validate_function_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_validation_context *context) {
     uint32_t count;
     uint32_t index;
     uint32_t type_index;
@@ -125,6 +175,9 @@ static turbowasm_status turbowasm_validate_function_section(
             return TURBOWASM_MALFORMED_MODULE;
         if (type_index >= summary->type_count)
             return TURBOWASM_MALFORMED_MODULE;
+        if (!turbowasm_validation_context_append_function(
+                context, type_index, false))
+            return TURBOWASM_OUT_OF_MEMORY;
     }
 
     if (turbowasm_reader_remaining(section) != 0u)
@@ -147,7 +200,7 @@ static turbowasm_status turbowasm_validate_local_decls(
         if (!turbowasm_reader_uleb32(body, &local_count))
             return TURBOWASM_MALFORMED_MODULE;
         (void)local_count;
-        status = turbowasm_read_valtype(body);
+        status = turbowasm_read_valtype(body, NULL);
         if (status != TURBOWASM_OK)
             return status;
     }
@@ -206,20 +259,27 @@ static turbowasm_status turbowasm_validate_code_section(
 static turbowasm_status turbowasm_validate_section_payload(
     uint8_t id,
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_validation_context *context) {
     switch (id) {
         case TURBOWASM_SECTION_TYPE:
-            return turbowasm_validate_type_section(section, summary);
+            return turbowasm_validate_type_section(
+                section, summary, context);
         case TURBOWASM_SECTION_IMPORT:
-            return turbowasm_validate_import_section(section, summary);
+            return turbowasm_validate_import_section(
+                section, summary, context);
         case TURBOWASM_SECTION_FUNCTION:
-            return turbowasm_validate_function_section(section, summary);
+            return turbowasm_validate_function_section(
+                section, summary, context);
         case TURBOWASM_SECTION_TABLE:
-            return turbowasm_validate_table_section(section, summary);
+            return turbowasm_validate_table_section(
+                section, summary, context);
         case TURBOWASM_SECTION_MEMORY:
-            return turbowasm_validate_memory_section(section, summary);
+            return turbowasm_validate_memory_section(
+                section, summary, context);
         case TURBOWASM_SECTION_GLOBAL:
-            return turbowasm_validate_global_section(section, summary);
+            return turbowasm_validate_global_section(
+                section, summary, context);
         case TURBOWASM_SECTION_EXPORT:
             return turbowasm_validate_export_section(section, summary);
         case TURBOWASM_SECTION_DATA_COUNT:
@@ -227,7 +287,8 @@ static turbowasm_status turbowasm_validate_section_payload(
         case TURBOWASM_SECTION_CODE:
             return turbowasm_validate_code_section(section, summary);
         case TURBOWASM_SECTION_DATA:
-            return turbowasm_validate_data_section(section, summary);
+            return turbowasm_validate_data_section(
+                section, summary, context);
         default:
             /* A bounded payload is not the same as a validated payload.
              * Standard sections without a semantic validator fail closed until
@@ -239,11 +300,12 @@ static turbowasm_status turbowasm_validate_section_payload(
 
 turbowasm_status turbowasm_validate_sections(
     turbowasm_reader *reader,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_validation_context *context) {
     uint32_t seen = 0u;
     unsigned last_rank = 0u;
 
-    if (reader == NULL || summary == NULL)
+    if (reader == NULL || summary == NULL || context == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     while (turbowasm_reader_remaining(reader) != 0u) {
@@ -275,7 +337,8 @@ turbowasm_status turbowasm_validate_sections(
         last_rank = rank;
         summary->standard_section_mask = seen;
 
-        status = turbowasm_validate_section_payload(id, &section, summary);
+        status = turbowasm_validate_section_payload(
+            id, &section, summary, context);
         if (status != TURBOWASM_OK)
             return status;
         if (turbowasm_reader_remaining(&section) != 0u)
