@@ -202,6 +202,7 @@ bool turbowasm_validation_context_append_global(
 bool turbowasm_validation_context_append_table(
     turbowasm_validation_context *context,
     uint8_t reference_type,
+    turbowasm_validation_limits limits,
     bool imported) {
     uint32_t required;
 
@@ -218,12 +219,14 @@ bool turbowasm_validation_context_append_table(
 
     context->tables[context->table_count].reference_type = reference_type;
     context->tables[context->table_count].imported = imported;
+    context->tables[context->table_count].limits = limits;
     ++context->table_count;
     return true;
 }
 
 bool turbowasm_validation_context_append_memory(
     turbowasm_validation_context *context,
+    turbowasm_validation_limits limits,
     bool imported) {
     uint32_t required;
 
@@ -239,6 +242,7 @@ bool turbowasm_validation_context_append_memory(
         return false;
 
     context->memories[context->memory_count].imported = imported;
+    context->memories[context->memory_count].limits = limits;
     ++context->memory_count;
     return true;
 }
