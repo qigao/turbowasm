@@ -178,7 +178,7 @@ static void test_data_count_nonzero_requires_data(void) {
     assert(module.impl == NULL);
 }
 
-static void test_start_remains_unsupported_until_signature_validation(void) {
+static void test_start_imported_empty_function(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
         TYPE_SECTION_EMPTY_FN,
@@ -190,9 +190,63 @@ static void test_start_remains_unsupported_until_signature_validation(void) {
         0x08, 0x01, 0x00
     };
     turbowasm_module module = {0};
+    turbowasm_module_summary summary = {0};
 
-    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_UNSUPPORTED);
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_module_summary_get(&module, &summary));
+    assert(summary.has_start);
+    assert(summary.start_function_index == 0u);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_start_rejects_parameter_function(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x05,
+        0x01, 0x60, 0x01, 0x7f, 0x00,
+        0x02, 0x07,
+        0x01,
+        0x01, 0x6d,
+        0x01, 0x66,
+        0x00, 0x00,
+        0x08, 0x01, 0x00
+    };
+    turbowasm_module module = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_MALFORMED_MODULE);
     assert(module.impl == NULL);
+}
+
+static void test_start_rejects_result_function(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7f,
+        0x02, 0x07,
+        0x01,
+        0x01, 0x6d,
+        0x01, 0x66,
+        0x00, 0x00,
+        0x08, 0x01, 0x00
+    };
+    turbowasm_module module = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
+static void test_start_local_empty_function(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        TYPE_SECTION_EMPTY_FN,
+        0x03, 0x02, 0x01, 0x00,
+        0x08, 0x01, 0x00,
+        0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b
+    };
+    turbowasm_module module = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    turbowasm_module_destroy(&module);
 }
 
 int main(void) {
@@ -206,6 +260,9 @@ int main(void) {
     test_export_index_out_of_range();
     test_data_count_zero_without_data();
     test_data_count_nonzero_requires_data();
-    test_start_remains_unsupported_until_signature_validation();
+    test_start_imported_empty_function();
+    test_start_rejects_parameter_function();
+    test_start_rejects_result_function();
+    test_start_local_empty_function();
     return 0;
 }
