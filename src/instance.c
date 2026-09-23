@@ -1733,6 +1733,155 @@ static turbowasm_status turbowasm_exec_simd_generic(
     return turbowasm_stack_push(stack, out);
 }
 
+static bool turbowasm_simd_exec_is_memory(
+    turbowasm_simd_exec_kind kind) {
+    return kind == TURBOWASM_SIMD_EXEC_MEMORY_EXTEND ||
+           kind == TURBOWASM_SIMD_EXEC_MEMORY_SPLAT ||
+           kind == TURBOWASM_SIMD_EXEC_MEMORY_ZERO ||
+           kind == TURBOWASM_SIMD_EXEC_MEMORY_LOAD_LANE ||
+           kind == TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE;
+}
+
+static turbowasm_status turbowasm_exec_simd_memory(
+    turbowasm_instance_impl *instance,
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    turbowasm_trap *trap,
+    const turbowasm_simd_exec_descriptor *descriptor) {
+    uint32_t offset;
+    uint8_t lane = 0u;
+    turbowasm_value address;
+    turbowasm_value vector_value;
+    turbowasm_value out = {0};
+    salts_simd_scalar scalar = {0};
+    uint8_t *memory;
+    turbowasm_status status;
+    bool supported;
+
+    if (instance == NULL || reader == NULL ||
+        stack == NULL || trap == NULL || descriptor == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = turbowasm_exec_read_memarg(reader, &offset);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_LOAD_LANE ||
+        descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE) {
+        if (!turbowasm_reader_u8(reader, &lane))
+            return TURBOWASM_MALFORMED_MODULE;
+        if (descriptor->vector_desc == NULL ||
+            lane >= descriptor->vector_desc->lane_count)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        status = turbowasm_stack_pop_kind(
+            stack, TURBOWASM_VALUE_V128, &vector_value);
+        if (status != TURBOWASM_OK)
+            return status;
+    }
+
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_I32, &address);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = turbowasm_instance_memory_bounds(
+        instance, 0u,
+        (uint32_t)address.as.i32,
+        offset, descriptor->memory_width,
+        &memory);
+    if (status == TURBOWASM_TRAPPED) {
+        *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        return TURBOWASM_TRAPPED;
+    }
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE) {
+        supported = salts_simd_extract_lane(
+            descriptor->vector_desc,
+            &vector_value.as.v128.bits,
+            lane, &scalar);
+        if (!supported)
+            return TURBOWASM_UNSUPPORTED;
+
+        switch (descriptor->memory_width) {
+            case 1u:
+                memory[0] = scalar.u8;
+                return TURBOWASM_OK;
+            case 2u:
+                turbowasm_write_u16_le(memory, scalar.u16);
+                return TURBOWASM_OK;
+            case 4u:
+                turbowasm_write_u32_le(memory, scalar.u32);
+                return TURBOWASM_OK;
+            case 8u:
+                turbowasm_write_u64_le(memory, scalar.u64);
+                return TURBOWASM_OK;
+            default:
+                return TURBOWASM_MALFORMED_MODULE;
+        }
+    }
+
+    out.kind = TURBOWASM_VALUE_V128;
+    out.as.v128.shape = descriptor->result_shape;
+
+    switch (descriptor->kind) {
+        case TURBOWASM_SIMD_EXEC_MEMORY_EXTEND:
+            supported = salts_simd_load_extend(
+                descriptor->vector_desc,
+                &out.as.v128.bits,
+                memory);
+            break;
+
+        case TURBOWASM_SIMD_EXEC_MEMORY_SPLAT:
+            supported = salts_simd_load_splat(
+                descriptor->vector_desc,
+                &out.as.v128.bits,
+                memory);
+            break;
+
+        case TURBOWASM_SIMD_EXEC_MEMORY_ZERO:
+            supported = salts_simd_load_zero(
+                (uint16_t)(descriptor->memory_width * 8u),
+                &out.as.v128.bits,
+                memory);
+            break;
+
+        case TURBOWASM_SIMD_EXEC_MEMORY_LOAD_LANE:
+            switch (descriptor->memory_width) {
+                case 1u:
+                    scalar.u8 = memory[0];
+                    break;
+                case 2u:
+                    scalar.u16 = turbowasm_read_u16_le(memory);
+                    break;
+                case 4u:
+                    scalar.u32 = turbowasm_read_u32_le_bytes(memory);
+                    break;
+                case 8u:
+                    scalar.u64 = turbowasm_read_u64_le_bytes(memory);
+                    break;
+                default:
+                    return TURBOWASM_MALFORMED_MODULE;
+            }
+
+            supported = salts_simd_replace_lane(
+                descriptor->vector_desc,
+                &out.as.v128.bits,
+                &vector_value.as.v128.bits,
+                lane, scalar);
+            break;
+
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+
+    if (!supported)
+        return TURBOWASM_UNSUPPORTED;
+    return turbowasm_stack_push(stack, out);
+}
+
 static turbowasm_status turbowasm_exec_simd(
     turbowasm_instance_impl *instance,
     turbowasm_reader *reader,
@@ -1832,6 +1981,9 @@ static turbowasm_status turbowasm_exec_simd(
                 turbowasm_simd_exec_descriptor_find(subopcode);
             if (descriptor == NULL)
                 return TURBOWASM_UNSUPPORTED;
+            if (turbowasm_simd_exec_is_memory(descriptor->kind))
+                return turbowasm_exec_simd_memory(
+                    instance, reader, stack, trap, descriptor);
             return turbowasm_exec_simd_generic(
                 descriptor, stack);
         }
