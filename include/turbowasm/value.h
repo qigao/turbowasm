@@ -6,6 +6,7 @@
 #include <cmeta/vector.h>
 #include <salts/simd.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -17,7 +18,8 @@ typedef enum turbowasm_value_kind {
     TURBOWASM_VALUE_I64 = 0x7e,
     TURBOWASM_VALUE_F32 = 0x7d,
     TURBOWASM_VALUE_F64 = 0x7c,
-    TURBOWASM_VALUE_V128 = 0x7b
+    TURBOWASM_VALUE_V128 = 0x7b,
+    TURBOWASM_VALUE_FUNCREF = 0x70
 } turbowasm_value_kind;
 
 /* Wasm binary typing stops at v128.  The validated TurboWasm IR may refine the
@@ -46,6 +48,11 @@ typedef struct turbowasm_v128 {
     turbowasm_v128_shape shape;
 } turbowasm_v128;
 
+typedef struct turbowasm_funcref {
+    bool is_null;
+    uint32_t function_index;
+} turbowasm_funcref;
+
 typedef struct turbowasm_value {
     turbowasm_value_kind kind;
     union {
@@ -54,6 +61,7 @@ typedef struct turbowasm_value {
         float f32;
         double f64;
         turbowasm_v128 v128;
+        turbowasm_funcref funcref;
     } as;
 } turbowasm_value;
 
