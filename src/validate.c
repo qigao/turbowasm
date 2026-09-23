@@ -213,10 +213,11 @@ static turbowasm_status turbowasm_validate_section_payload(
         case TURBOWASM_SECTION_CODE:
             return turbowasm_validate_code_section(section, summary);
         default:
-            /* Other standard sections are framed and ordered here, then receive
-             * semantic validators in subsequent #3 slices. */
-            section->cursor = section->end;
-            return TURBOWASM_OK;
+            /* A bounded payload is not the same as a validated payload.
+             * Standard sections without a semantic validator fail closed until
+             * their #3 slice is implemented. */
+            (void)section;
+            return TURBOWASM_UNSUPPORTED;
     }
 }
 
