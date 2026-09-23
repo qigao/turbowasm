@@ -130,6 +130,8 @@ static const turbowasm_simd_descriptor descriptors[] = {
     MSL(0x5bu, 3u, 2u),
     ML(0x5cu, 2u),
     ML(0x5du, 3u),
+    D(0x5eu, TURBOWASM_SIMD_V128_UNARY),
+    D(0x5fu, TURBOWASM_SIMD_V128_UNARY),
 
     /* Common integer/floating arithmetic already accepted by the validator. */
     D(0x60u, TURBOWASM_SIMD_V128_UNARY),
