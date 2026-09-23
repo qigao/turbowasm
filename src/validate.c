@@ -1,5 +1,6 @@
 #include "validate.h"
 #include "validate_data.h"
+#include "validate_element.h"
 #include "validate_linkage.h"
 
 #include <stdbool.h>
@@ -281,9 +282,13 @@ static turbowasm_status turbowasm_validate_section_payload(
             return turbowasm_validate_global_section(
                 section, summary, context);
         case TURBOWASM_SECTION_EXPORT:
-            return turbowasm_validate_export_section(section, summary);
+            return turbowasm_validate_export_section(
+                section, summary, context);
         case TURBOWASM_SECTION_START:
             return turbowasm_validate_start_section(
+                section, summary, context);
+        case TURBOWASM_SECTION_ELEMENT:
+            return turbowasm_validate_element_section(
                 section, summary, context);
         case TURBOWASM_SECTION_DATA_COUNT:
             return turbowasm_validate_data_count_section(section, summary);

@@ -21,7 +21,8 @@ turbowasm_status turbowasm_validate_memory_section(
     turbowasm_validation_context *context);
 turbowasm_status turbowasm_validate_export_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary);
+    turbowasm_module_summary *summary,
+    turbowasm_validation_context *context);
 turbowasm_status turbowasm_validate_start_section(
     turbowasm_reader *section,
     turbowasm_module_summary *summary,

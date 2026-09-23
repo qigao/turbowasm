@@ -371,13 +371,14 @@ static bool turbowasm_export_index_valid(
 
 turbowasm_status turbowasm_validate_export_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_validation_context *context) {
     uint32_t count;
     uint32_t index;
     turbowasm_name_span *names = NULL;
     turbowasm_status result = TURBOWASM_OK;
 
-    if (section == NULL || summary == NULL)
+    if (section == NULL || summary == NULL || context == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(section, &count))
         return TURBOWASM_MALFORMED_MODULE;
@@ -424,6 +425,12 @@ turbowasm_status turbowasm_validate_export_section(
         }
         if (!turbowasm_export_index_valid(kind, item_index, summary)) {
             result = TURBOWASM_MALFORMED_MODULE;
+            goto done;
+        }
+        if (kind == 0x00u &&
+            !turbowasm_validation_context_declare_function_ref(
+                context, item_index)) {
+            result = TURBOWASM_OUT_OF_MEMORY;
             goto done;
         }
     }

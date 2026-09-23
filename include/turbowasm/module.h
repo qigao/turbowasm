@@ -35,6 +35,7 @@ typedef struct turbowasm_module_summary {
     uint32_t code_count;
 
     uint32_t export_count;
+    uint32_t element_count;
     bool has_start;
     uint32_t start_function_index;
     bool has_data_count;
