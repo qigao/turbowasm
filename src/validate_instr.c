@@ -13,7 +13,8 @@ enum {
     TW_F64 = 0x7c,
     TW_V128 = 0x7b,
     TW_FUNCREF = 0x70,
-    TW_EXTERNREF = 0x6f
+    TW_EXTERNREF = 0x6f,
+    TW_ANY = 0xff
 };
 
 typedef struct turbowasm_type_stack {
@@ -79,7 +80,7 @@ static turbowasm_status turbowasm_stack_pop_any(
         if (!stack->unreachable)
             return TURBOWASM_MALFORMED_MODULE;
         if (out_type != NULL)
-            *out_type = TW_I32;
+            *out_type = TW_ANY;
         return TURBOWASM_OK;
     }
 
@@ -97,7 +98,7 @@ static turbowasm_status turbowasm_stack_pop(
         stack, &actual);
     if (status != TURBOWASM_OK)
         return status;
-    if (stack->unreachable && stack->size == 0u)
+    if (actual == TW_ANY)
         return TURBOWASM_OK;
     return actual == expected
         ? TURBOWASM_OK
@@ -157,7 +158,7 @@ static turbowasm_status turbowasm_stack_pop_params(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status turbowasm_validate_result_stack(
+static turbowasm_status turbowasm_pop_results(
     turbowasm_type_stack *stack,
     const turbowasm_validation_func_type *type) {
     uint32_t index = type->result_count;
@@ -170,7 +171,15 @@ static turbowasm_status turbowasm_validate_result_stack(
         if (status != TURBOWASM_OK)
             return status;
     }
+    return TURBOWASM_OK;
+}
 
+static turbowasm_status turbowasm_validate_result_stack(
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_func_type *type) {
+    turbowasm_status status = turbowasm_pop_results(stack, type);
+    if (status != TURBOWASM_OK)
+        return status;
     return stack->size == 0u
         ? TURBOWASM_OK
         : TURBOWASM_MALFORMED_MODULE;
@@ -375,7 +384,7 @@ turbowasm_status turbowasm_validate_function_body(
                     &stack, function_type);
                 goto done;
             case 0x0fu: /* return */
-                result = turbowasm_validate_result_stack(
+                result = turbowasm_pop_results(
                     &stack, function_type);
                 if (result != TURBOWASM_OK)
                     goto done;
@@ -408,7 +417,14 @@ turbowasm_status turbowasm_validate_function_body(
                 if (result != TURBOWASM_OK) goto done;
                 result = turbowasm_stack_pop_any(&stack, &left);
                 if (result != TURBOWASM_OK) goto done;
-                if (!stack.unreachable && left != right) {
+                if (left != TW_ANY && right != TW_ANY &&
+                    left != right) {
+                    result = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+                if (left == TW_ANY)
+                    left = right == TW_ANY ? TW_I32 : right;
+                if (left == TW_FUNCREF || left == TW_EXTERNREF) {
                     result = TURBOWASM_MALFORMED_MODULE;
                     goto done;
                 }
@@ -608,7 +624,7 @@ turbowasm_status turbowasm_validate_function_body(
                 uint8_t type;
                 result = turbowasm_stack_pop_any(&stack, &type);
                 if (result != TURBOWASM_OK) goto done;
-                if (!stack.unreachable &&
+                if (type != TW_ANY &&
                     type != TW_FUNCREF && type != TW_EXTERNREF) {
                     result = TURBOWASM_MALFORMED_MODULE;
                     goto done;
