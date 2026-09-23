@@ -101,8 +101,7 @@ bool turbowasm_validation_context_define_type(
         return false;
 
     type = &context->types[index];
-    if (type->params != NULL || type->results != NULL ||
-        type->param_count != 0u || type->result_count != 0u)
+    if (type->defined)
         return false;
 
     if (param_count != 0u) {
@@ -122,6 +121,7 @@ bool turbowasm_validation_context_define_type(
 
     type->param_count = param_count;
     type->result_count = result_count;
+    type->defined = true;
     return true;
 }
 
