@@ -1,5 +1,6 @@
 #include <turbowasm/instance.h>
 
+#include "instance_internal.h"
 #include "module_internal.h"
 #include "reader.h"
 
@@ -12,10 +13,6 @@
 enum {
     TURBOWASM_EXEC_MAX_CALL_DEPTH = 256u
 };
-
-typedef struct turbowasm_instance_impl {
-    const turbowasm_module *module;
-} turbowasm_instance_impl;
 
 typedef struct turbowasm_value_stack {
     turbowasm_value *values;
@@ -580,7 +577,7 @@ static uint64_t turbowasm_rotr64(uint64_t value, uint64_t shift) {
 }
 
 static turbowasm_status turbowasm_exec_function(
-    const turbowasm_module_impl *module,
+    turbowasm_instance_impl *instance,
     uint32_t function_index,
     const turbowasm_value *arguments,
     size_t argument_count,
@@ -591,18 +588,25 @@ static turbowasm_status turbowasm_exec_function(
     uint32_t depth);
 
 static turbowasm_status turbowasm_exec_direct_call(
-    const turbowasm_module_impl *module,
+    turbowasm_instance_impl *instance,
     turbowasm_reader *reader,
     turbowasm_value_stack *stack,
     turbowasm_trap *trap,
     uint32_t depth) {
     uint32_t function_index;
+    const turbowasm_module_impl *module;
     const turbowasm_validation_func_type *type;
     turbowasm_value *arguments = NULL;
     turbowasm_value *results = NULL;
     size_t result_count = 0u;
     uint32_t index;
     turbowasm_status status;
+
+    if (instance == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
 
     if (!turbowasm_reader_uleb32(reader, &function_index))
         return TURBOWASM_MALFORMED_MODULE;
@@ -637,7 +641,7 @@ static turbowasm_status turbowasm_exec_direct_call(
     }
 
     status = turbowasm_exec_function(
-        module,
+        instance,
         function_index,
         arguments,
         type->param_count,
@@ -873,7 +877,7 @@ static turbowasm_status turbowasm_exec_f64_binary(
 }
 
 static turbowasm_status turbowasm_exec_function(
-    const turbowasm_module_impl *module,
+    turbowasm_instance_impl *instance,
     uint32_t function_index,
     const turbowasm_value *arguments,
     size_t argument_count,
@@ -882,6 +886,7 @@ static turbowasm_status turbowasm_exec_function(
     size_t *result_count,
     turbowasm_trap *trap,
     uint32_t depth) {
+    const turbowasm_module_impl *module;
     const turbowasm_validation_context *context;
     const turbowasm_validation_function *function;
     const turbowasm_validation_func_type *type;
@@ -894,7 +899,11 @@ static turbowasm_status turbowasm_exec_function(
     bool finished = false;
     bool returned = false;
 
-    if (module == NULL || result_count == NULL || trap == NULL)
+    if (instance == NULL || result_count == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (depth >= TURBOWASM_EXEC_MAX_CALL_DEPTH) {
         *trap = TURBOWASM_TRAP_CALL_STACK_EXHAUSTED;
@@ -1143,7 +1152,7 @@ static turbowasm_status turbowasm_exec_function(
                 break;
             case 0x10u: /* call */
                 status = turbowasm_exec_direct_call(
-                    module, &reader, &stack, trap, depth);
+                    instance, &reader, &stack, trap, depth);
                 if (status != TURBOWASM_OK)
                     goto done;
                 break;
@@ -1329,14 +1338,31 @@ turbowasm_status turbowasm_instance_create(
         return TURBOWASM_OUT_OF_MEMORY;
 
     impl->module = module;
+    {
+        const turbowasm_module_impl *module_impl =
+            turbowasm_module_impl_get(module);
+        turbowasm_status status;
+        if (module_impl == NULL) {
+            free(impl);
+            return TURBOWASM_INVALID_ARGUMENT;
+        }
+        status = turbowasm_instance_state_init(impl, module_impl);
+        if (status != TURBOWASM_OK) {
+            free(impl);
+            return status;
+        }
+    }
     instance->impl = impl;
     return TURBOWASM_OK;
 }
 
 void turbowasm_instance_destroy(turbowasm_instance *instance) {
-    if (instance == NULL)
+    turbowasm_instance_impl *impl;
+    if (instance == NULL || instance->impl == NULL)
         return;
-    free(instance->impl);
+    impl = (turbowasm_instance_impl *)instance->impl;
+    turbowasm_instance_state_destroy(impl);
+    free(impl);
     instance->impl = NULL;
 }
 
@@ -1359,8 +1385,7 @@ turbowasm_status turbowasm_instance_invoke(
     size_t result_capacity,
     size_t *result_count,
     turbowasm_trap *trap) {
-    const turbowasm_instance_impl *impl;
-    const turbowasm_module_impl *module;
+    turbowasm_instance_impl *impl;
 
     if (instance == NULL || instance->impl == NULL ||
         result_count == NULL || trap == NULL)
@@ -1369,13 +1394,10 @@ turbowasm_status turbowasm_instance_invoke(
     *result_count = 0u;
     *trap = TURBOWASM_TRAP_NONE;
 
-    impl = (const turbowasm_instance_impl *)instance->impl;
-    module = turbowasm_module_impl_get(impl->module);
-    if (module == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
+    impl = (turbowasm_instance_impl *)instance->impl;
 
     return turbowasm_exec_function(
-        module,
+        impl,
         function_index,
         arguments,
         argument_count,
