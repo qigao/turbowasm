@@ -7,6 +7,27 @@
 #include <stdint.h>
 #include <string.h>
 
+
+static void test_raw_v128_roundtrip(void) {
+    static const uint8_t expected[16] = {
+        0x00, 0x11, 0x22, 0x33,
+        0x44, 0x55, 0x66, 0x77,
+        0x88, 0x99, 0xaa, 0xbb,
+        0xcc, 0xdd, 0xee, 0xff
+    };
+    uint8_t actual[16] = {0};
+    turbowasm_v128 value = {0};
+
+    assert(turbowasm_v128_load(
+               &value, TURBOWASM_V128_RAW,
+               expected) == TURBOWASM_OK);
+    assert(value.shape == TURBOWASM_V128_RAW);
+    assert(turbowasm_v128_descriptor(value.shape) == NULL);
+    assert(turbowasm_v128_store(
+               actual, &value) == TURBOWASM_OK);
+    assert(memcmp(actual, expected, sizeof(actual)) == 0);
+}
+
 static void test_i32x4_add(void) {
     const int32_t left_lanes[4] = {1, 2, 3, 4};
     const int32_t right_lanes[4] = {4, 3, 2, 1};
@@ -89,6 +110,7 @@ static void test_shape_mismatch_rejected(void) {
 }
 
 int main(void) {
+    test_raw_v128_roundtrip();
     test_i32x4_add();
     test_i32x4_eq_mask();
     test_f32x4_mul();
