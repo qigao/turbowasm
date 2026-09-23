@@ -38,3 +38,12 @@ set_target_properties(turbowasm_linkage_validation_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_linkage_validation_test
          COMMAND turbowasm_linkage_validation_test)
+
+add_executable(turbowasm_data_validation_test data_validation_test.c)
+target_link_libraries(turbowasm_data_validation_test PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_data_validation_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_data_validation_test
+         COMMAND turbowasm_data_validation_test)
