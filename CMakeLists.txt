@@ -32,7 +32,8 @@ add_library(turbowasm
   src/reader.c
   src/simd.c
   src/status.c
-  src/value.c)
+  src/value.c
+  src/validate.c)
 
 add_library(TurboWasm::Runtime ALIAS turbowasm)
 
