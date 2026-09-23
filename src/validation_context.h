@@ -45,6 +45,9 @@ typedef struct turbowasm_validation_global {
     uint8_t value_type;
     bool mutable_value;
     bool imported;
+
+    const uint8_t *initializer;
+    uint32_t initializer_size;
 } turbowasm_validation_global;
 
 typedef struct turbowasm_validation_limits {
@@ -123,7 +126,9 @@ bool turbowasm_validation_context_append_global(
     turbowasm_validation_context *context,
     uint8_t value_type,
     bool mutable_value,
-    bool imported);
+    bool imported,
+    const uint8_t *initializer,
+    uint32_t initializer_size);
 
 bool turbowasm_validation_context_append_table(
     turbowasm_validation_context *context,
