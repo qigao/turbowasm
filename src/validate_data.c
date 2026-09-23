@@ -216,28 +216,52 @@ turbowasm_status turbowasm_validate_global_section(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status turbowasm_skip_byte_vector(
-    turbowasm_reader *reader) {
+static turbowasm_status turbowasm_read_byte_vector(
+    turbowasm_reader *reader,
+    const uint8_t **out_bytes,
+    uint32_t *out_size) {
     uint32_t size;
     turbowasm_reader bytes;
 
+    if (out_bytes == NULL || out_size == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(reader, &size) ||
         !turbowasm_reader_slice(reader, size, &bytes))
         return TURBOWASM_MALFORMED_MODULE;
+
+    *out_bytes = bytes.cursor;
+    *out_size = size;
     return TURBOWASM_OK;
 }
 
 static turbowasm_status turbowasm_read_i32_offset_expr(
     turbowasm_reader *reader,
-    turbowasm_validation_context *context) {
+    turbowasm_validation_context *context,
+    turbowasm_validation_expr_span *out) {
+    const uint8_t *start;
+    size_t size;
     uint8_t type;
-    turbowasm_status status = turbowasm_validate_const_expr(
+    turbowasm_status status;
+
+    if (reader == NULL || context == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    start = reader->cursor;
+    status = turbowasm_validate_const_expr(
         reader, context, &type);
     if (status != TURBOWASM_OK)
         return status;
-    return type == TURBOWASM_VAL_I32
-        ? TURBOWASM_OK
-        : TURBOWASM_MALFORMED_MODULE;
+    if (type != TURBOWASM_VAL_I32)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    size = (size_t)(reader->cursor - start);
+    if (size > UINT32_MAX)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    out->bytes = start;
+    out->size = (uint32_t)size;
+    out->result_type = type;
+    return TURBOWASM_OK;
 }
 
 turbowasm_status turbowasm_validate_data_section(
@@ -254,6 +278,7 @@ turbowasm_status turbowasm_validate_data_section(
 
     for (index = 0u; index < count; ++index) {
         uint32_t mode;
+        turbowasm_validation_data_segment segment = {0};
         turbowasm_status status;
 
         if (!turbowasm_reader_uleb32(section, &mode))
@@ -261,34 +286,41 @@ turbowasm_status turbowasm_validate_data_section(
 
         switch (mode) {
             case 0u:
+                segment.mode = TURBOWASM_VALIDATION_SEGMENT_ACTIVE;
+                segment.memory_index = 0u;
                 if (!turbowasm_memory_index_valid(0u, context))
                     return TURBOWASM_MALFORMED_MODULE;
                 status = turbowasm_read_i32_offset_expr(
-                    section, context);
+                    section, context, &segment.offset);
                 if (status != TURBOWASM_OK) return status;
                 break;
             case 1u:
+                segment.mode = TURBOWASM_VALIDATION_SEGMENT_PASSIVE;
                 break;
-            case 2u: {
-                uint32_t memory_index;
+            case 2u:
+                segment.mode = TURBOWASM_VALIDATION_SEGMENT_ACTIVE;
                 if (!turbowasm_reader_uleb32(
-                        section, &memory_index))
+                        section, &segment.memory_index))
                     return TURBOWASM_MALFORMED_MODULE;
                 if (!turbowasm_memory_index_valid(
-                        memory_index, context))
+                        segment.memory_index, context))
                     return TURBOWASM_MALFORMED_MODULE;
                 status = turbowasm_read_i32_offset_expr(
-                    section, context);
+                    section, context, &segment.offset);
                 if (status != TURBOWASM_OK) return status;
                 break;
-            }
             default:
                 return TURBOWASM_UNSUPPORTED;
         }
 
-        status = turbowasm_skip_byte_vector(section);
+        status = turbowasm_read_byte_vector(
+            section, &segment.data, &segment.data_size);
         if (status != TURBOWASM_OK)
             return status;
+
+        if (!turbowasm_validation_context_append_data_segment(
+                context, segment))
+            return TURBOWASM_OUT_OF_MEMORY;
     }
 
     if (turbowasm_reader_remaining(section) != 0u)
