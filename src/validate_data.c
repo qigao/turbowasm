@@ -1,0 +1,284 @@
+#include "validate_data.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+enum {
+    TURBOWASM_VAL_I32 = 0x7f,
+    TURBOWASM_VAL_I64 = 0x7e,
+    TURBOWASM_VAL_F32 = 0x7d,
+    TURBOWASM_VAL_F64 = 0x7c,
+    TURBOWASM_VAL_V128 = 0x7b,
+    TURBOWASM_VAL_FUNCREF = 0x70,
+    TURBOWASM_VAL_EXTERNREF = 0x6f
+};
+
+typedef struct turbowasm_global_type {
+    uint8_t value_type;
+    bool is_mutable;
+} turbowasm_global_type;
+
+static bool turbowasm_const_valtype_supported(uint8_t type) {
+    switch (type) {
+        case TURBOWASM_VAL_I32:
+        case TURBOWASM_VAL_I64:
+        case TURBOWASM_VAL_F32:
+        case TURBOWASM_VAL_F64:
+        case TURBOWASM_VAL_V128:
+        case TURBOWASM_VAL_FUNCREF:
+        case TURBOWASM_VAL_EXTERNREF:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static turbowasm_status turbowasm_read_global_type(
+    turbowasm_reader *reader,
+    turbowasm_global_type *out) {
+    uint8_t value_type;
+    uint8_t mutability;
+
+    if (reader == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_u8(reader, &value_type))
+        return TURBOWASM_MALFORMED_MODULE;
+    if (!turbowasm_const_valtype_supported(value_type))
+        return TURBOWASM_UNSUPPORTED;
+    if (!turbowasm_reader_u8(reader, &mutability))
+        return TURBOWASM_MALFORMED_MODULE;
+    if (mutability > 1u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    out->value_type = value_type;
+    out->is_mutable = mutability != 0u;
+    return TURBOWASM_OK;
+}
+
+static bool turbowasm_function_index_valid(
+    uint32_t index,
+    const turbowasm_module_summary *summary) {
+    const uint64_t total =
+        (uint64_t)summary->imported_function_count +
+        (uint64_t)summary->function_count;
+    return (uint64_t)index < total;
+}
+
+static bool turbowasm_memory_index_valid(
+    uint32_t index,
+    const turbowasm_module_summary *summary) {
+    const uint64_t total =
+        (uint64_t)summary->imported_memory_count +
+        (uint64_t)summary->memory_count;
+    return (uint64_t)index < total;
+}
+
+static turbowasm_status turbowasm_read_const_expr(
+    turbowasm_reader *reader,
+    const turbowasm_module_summary *summary,
+    uint8_t *out_type) {
+    uint8_t opcode;
+    uint8_t end;
+    turbowasm_status status = TURBOWASM_OK;
+
+    if (reader == NULL || summary == NULL || out_type == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_u8(reader, &opcode))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    switch (opcode) {
+        case 0x41u: {
+            int32_t value;
+            if (!turbowasm_reader_sleb32(reader, &value))
+                return TURBOWASM_MALFORMED_MODULE;
+            (void)value;
+            *out_type = TURBOWASM_VAL_I32;
+            break;
+        }
+        case 0x42u: {
+            int64_t value;
+            if (!turbowasm_reader_sleb64(reader, &value))
+                return TURBOWASM_MALFORMED_MODULE;
+            (void)value;
+            *out_type = TURBOWASM_VAL_I64;
+            break;
+        }
+        case 0x43u: {
+            turbowasm_reader bytes;
+            if (!turbowasm_reader_slice(reader, 4u, &bytes))
+                return TURBOWASM_MALFORMED_MODULE;
+            *out_type = TURBOWASM_VAL_F32;
+            break;
+        }
+        case 0x44u: {
+            turbowasm_reader bytes;
+            if (!turbowasm_reader_slice(reader, 8u, &bytes))
+                return TURBOWASM_MALFORMED_MODULE;
+            *out_type = TURBOWASM_VAL_F64;
+            break;
+        }
+        case 0xd0u: {
+            uint8_t reference_type;
+            if (!turbowasm_reader_u8(reader, &reference_type))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (reference_type != TURBOWASM_VAL_FUNCREF &&
+                reference_type != TURBOWASM_VAL_EXTERNREF)
+                return TURBOWASM_UNSUPPORTED;
+            *out_type = reference_type;
+            break;
+        }
+        case 0xd2u: {
+            uint32_t function_index;
+            if (!turbowasm_reader_uleb32(reader, &function_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (!turbowasm_function_index_valid(function_index, summary))
+                return TURBOWASM_MALFORMED_MODULE;
+            *out_type = TURBOWASM_VAL_FUNCREF;
+            break;
+        }
+        case 0xfdu: {
+            uint32_t subopcode;
+            turbowasm_reader bytes;
+            if (!turbowasm_reader_uleb32(reader, &subopcode))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (subopcode != 0x0cu)
+                return TURBOWASM_UNSUPPORTED;
+            if (!turbowasm_reader_slice(reader, 16u, &bytes))
+                return TURBOWASM_MALFORMED_MODULE;
+            *out_type = TURBOWASM_VAL_V128;
+            break;
+        }
+        case 0x23u:
+            /* Imported immutable global.get needs retained global type metadata.
+             * Fail closed until that IR exists. */
+            return TURBOWASM_UNSUPPORTED;
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+
+    if (!turbowasm_reader_u8(reader, &end))
+        return TURBOWASM_MALFORMED_MODULE;
+    if (end != 0x0bu)
+        status = TURBOWASM_UNSUPPORTED;
+
+    return status;
+}
+
+turbowasm_status turbowasm_validate_global_section(
+    turbowasm_reader *section,
+    turbowasm_module_summary *summary) {
+    uint32_t count;
+    uint32_t index;
+
+    if (section == NULL || summary == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_uleb32(section, &count))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    for (index = 0u; index < count; ++index) {
+        turbowasm_global_type type;
+        uint8_t expression_type;
+        turbowasm_status status = turbowasm_read_global_type(
+            section, &type);
+
+        if (status != TURBOWASM_OK)
+            return status;
+        status = turbowasm_read_const_expr(
+            section, summary, &expression_type);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (expression_type != type.value_type)
+            return TURBOWASM_MALFORMED_MODULE;
+    }
+
+    if (turbowasm_reader_remaining(section) != 0u)
+        return TURBOWASM_MALFORMED_MODULE;
+    summary->global_count = count;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_skip_byte_vector(
+    turbowasm_reader *reader) {
+    uint32_t size;
+    turbowasm_reader bytes;
+
+    if (!turbowasm_reader_uleb32(reader, &size) ||
+        !turbowasm_reader_slice(reader, size, &bytes))
+        return TURBOWASM_MALFORMED_MODULE;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_read_i32_offset_expr(
+    turbowasm_reader *reader,
+    const turbowasm_module_summary *summary) {
+    uint8_t type;
+    turbowasm_status status = turbowasm_read_const_expr(
+        reader, summary, &type);
+    if (status != TURBOWASM_OK)
+        return status;
+    return type == TURBOWASM_VAL_I32
+        ? TURBOWASM_OK
+        : TURBOWASM_MALFORMED_MODULE;
+}
+
+turbowasm_status turbowasm_validate_data_section(
+    turbowasm_reader *section,
+    turbowasm_module_summary *summary) {
+    uint32_t count;
+    uint32_t index;
+
+    if (section == NULL || summary == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_uleb32(section, &count))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    for (index = 0u; index < count; ++index) {
+        uint32_t mode;
+        turbowasm_status status;
+
+        if (!turbowasm_reader_uleb32(section, &mode))
+            return TURBOWASM_MALFORMED_MODULE;
+
+        switch (mode) {
+            case 0u:
+                if (!turbowasm_memory_index_valid(0u, summary))
+                    return TURBOWASM_MALFORMED_MODULE;
+                status = turbowasm_read_i32_offset_expr(
+                    section, summary);
+                if (status != TURBOWASM_OK) return status;
+                break;
+            case 1u:
+                break;
+            case 2u: {
+                uint32_t memory_index;
+                if (!turbowasm_reader_uleb32(
+                        section, &memory_index))
+                    return TURBOWASM_MALFORMED_MODULE;
+                if (!turbowasm_memory_index_valid(
+                        memory_index, summary))
+                    return TURBOWASM_MALFORMED_MODULE;
+                status = turbowasm_read_i32_offset_expr(
+                    section, summary);
+                if (status != TURBOWASM_OK) return status;
+                break;
+            }
+            default:
+                return TURBOWASM_UNSUPPORTED;
+        }
+
+        status = turbowasm_skip_byte_vector(section);
+        if (status != TURBOWASM_OK)
+            return status;
+    }
+
+    if (turbowasm_reader_remaining(section) != 0u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    summary->data_segment_count = count;
+    if (summary->has_data_count &&
+        summary->data_count != summary->data_segment_count)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    return TURBOWASM_OK;
+}

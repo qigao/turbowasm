@@ -39,6 +39,7 @@ typedef struct turbowasm_module_summary {
     uint32_t start_function_index;
     bool has_data_count;
     uint32_t data_count;
+    uint32_t data_segment_count;
 } turbowasm_module_summary;
 
 turbowasm_status turbowasm_module_load_borrowed(turbowasm_module *module,
