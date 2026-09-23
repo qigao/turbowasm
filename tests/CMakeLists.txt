@@ -21,3 +21,11 @@ set_target_properties(turbowasm_header_cpp_test PROPERTIES
   CXX_STANDARD_REQUIRED ON
   CXX_EXTENSIONS OFF)
 add_test(NAME turbowasm_header_cpp_test COMMAND turbowasm_header_cpp_test)
+
+add_executable(turbowasm_validation_test validation_test.c)
+target_link_libraries(turbowasm_validation_test PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_validation_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_validation_test COMMAND turbowasm_validation_test)
