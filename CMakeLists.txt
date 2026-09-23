@@ -29,6 +29,7 @@ endif()
 
 add_library(turbowasm
   src/module.c
+  src/module_ir.c
   src/reader.c
   src/simd.c
   src/status.c
