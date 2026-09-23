@@ -224,6 +224,75 @@ static void test_wrong_argument_type_rejected(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_result_capacity_checked_before_execution(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7f,
+
+        0x03, 0x02, 0x01, 0x00,
+
+        0x0a, 0x06,
+        0x01, 0x04,
+        0x00, 0x41, 0x01, 0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(load_module(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+
+    assert(turbowasm_instance_invoke(
+               &instance, 0u,
+               NULL, 0u,
+               NULL, 0u,
+               &result_count,
+               &trap) == TURBOWASM_INVALID_ARGUMENT);
+    assert(result_count == 0u);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_imported_function_execution_fails_closed(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        0x01, 0x04,
+        0x01, 0x60, 0x00, 0x00,
+
+        0x02, 0x07,
+        0x01,
+        0x01, 0x6d,
+        0x01, 0x66,
+        0x00, 0x00
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(load_module(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+
+    assert(turbowasm_instance_invoke(
+               &instance, 0u,
+               NULL, 0u,
+               NULL, 0u,
+               &result_count,
+               &trap) == TURBOWASM_UNSUPPORTED);
+    assert(result_count == 0u);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 static void test_unreachable_trap(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -344,6 +413,8 @@ int main(void) {
     test_nested_local_direct_call();
     test_return_discards_lower_temporaries();
     test_wrong_argument_type_rejected();
+    test_result_capacity_checked_before_execution();
+    test_imported_function_execution_fails_closed();
     test_unreachable_trap();
     test_integer_divide_by_zero_trap();
     test_two_instances_share_immutable_module();
