@@ -220,6 +220,24 @@ static void test_nested_unreachable_is_polymorphic(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_block_typeidx_s33_overflow_rejected(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        TYPE_EMPTY,
+        FUNCTION_TYPE0,
+        0x0a, 0x0a, 0x01, 0x08,
+        0x00,
+        0x02, 0x80, 0x80, 0x80, 0x80, 0x10,
+        0x0b
+    };
+    turbowasm_module module = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) ==
+           TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
 static void test_invalid_branch_depth(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -248,6 +266,7 @@ int main(void) {
     test_typeidx_block_params_and_results();
     test_block_floor_prevents_underflow();
     test_nested_unreachable_is_polymorphic();
+    test_block_typeidx_s33_overflow_rejected();
     test_invalid_branch_depth();
     return 0;
 }
