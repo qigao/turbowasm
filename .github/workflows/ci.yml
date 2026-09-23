@@ -1,0 +1,95 @@
+name: TurboWasm CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout TurboWasm
+        uses: actions/checkout@v4
+
+      - name: Checkout Salts master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: master
+          path: deps/salts
+          persist-credentials: false
+
+      - name: Restore Salts build dependencies
+        uses: ./deps/salts/.github/actions/setup-re2c-tools
+
+      - name: Build and install Salts master
+        shell: bash
+        run: |
+          set -euxo pipefail
+          salts_root="$RUNNER_TEMP/salts-sdk"
+          vcpkg_installed="$GITHUB_WORKSPACE/build/salts-vcpkg"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          cmake -S deps/salts -B build/salts -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_INSTALLED_DIR="$vcpkg_installed" \
+            -DVCPKG_OVERLAY_PORTS="$VCPKG_OVERLAY_PORTS" \
+            -DCMAKE_INSTALL_PREFIX="$salts_root" \
+            -DENABLE_TESTS=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=OFF
+          cmake --build build/salts -j2
+          cmake --install build/salts
+          test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
+          grep -q "Salts::SIMD" "$salts_root/lib/cmake/Salts/SaltsTargets.cmake"
+
+      - name: Record Salts master provenance
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git -C deps/salts rev-parse HEAD
+          test "$(git -C deps/salts branch --show-current)" = "master"
+
+      - name: Configure TurboWasm
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/turbowasm -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/turbowasm-sdk" \
+            -DTURBOWASM_BUILD_TESTS=ON \
+            -DTURBOWASM_BUILD_TOOLS=ON
+
+      - name: Build and test TurboWasm
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/turbowasm -j2
+          ctest --test-dir build/turbowasm --no-tests=error --output-on-failure
+
+      - name: Install TurboWasm
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --install build/turbowasm
+          test -f "$RUNNER_TEMP/turbowasm-sdk/lib/cmake/TurboWasm/TurboWasmConfig.cmake"
+
+      - name: Qualify installed package consumer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S tests/installed_consumer -B build/installed-consumer -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/turbowasm-sdk;$SALTS_ROOT"
+          cmake --build build/installed-consumer -j2
+          ctest --test-dir build/installed-consumer \
+            --no-tests=error --output-on-failure
