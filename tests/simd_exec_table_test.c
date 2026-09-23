@@ -13,8 +13,8 @@ static void test_execution_table_is_validation_subset(void) {
     size_t index;
     size_t other;
 
-    /* Generic arithmetic/compare + complete SIMD memory variants. */
-    assert(count == 108u);
+    /* 90 generic arithmetic/compare + 20 SIMD memory variants. */
+    assert(count == 110u);
 
     for (index = 0u; index < count; ++index) {
         const turbowasm_simd_exec_descriptor *descriptor =
