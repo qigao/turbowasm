@@ -105,15 +105,55 @@ static void test_global_type_mismatch(void) {
     assert(module.impl == NULL);
 }
 
-static void test_global_get_remains_unsupported(void) {
+static void test_global_get_imported_immutable(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
+        0x02, 0x08,
+        0x01,
+        0x01, 0x6d,
+        0x01, 0x67,
+        0x03, 0x7f, 0x00,
+        0x06, 0x06,
+        0x01, 0x7f, 0x00, 0x23, 0x00, 0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_module_summary summary = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_module_summary_get(&module, &summary));
+    assert(summary.imported_global_count == 1u);
+    assert(summary.global_count == 1u);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_global_get_rejects_imported_mutable(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x02, 0x08,
+        0x01,
+        0x01, 0x6d,
+        0x01, 0x67,
+        0x03, 0x7f, 0x01,
         0x06, 0x06,
         0x01, 0x7f, 0x00, 0x23, 0x00, 0x0b
     };
     turbowasm_module module = {0};
 
-    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_UNSUPPORTED);
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
+static void test_global_get_rejects_local_global(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x06, 0x0b,
+        0x02,
+        0x7f, 0x00, 0x41, 0x00, 0x0b,
+        0x7f, 0x00, 0x23, 0x00, 0x0b
+    };
+    turbowasm_module module = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_MALFORMED_MODULE);
     assert(module.impl == NULL);
 }
 
@@ -228,7 +268,9 @@ int main(void) {
     test_v128_global();
     test_ref_func_global();
     test_global_type_mismatch();
-    test_global_get_remains_unsupported();
+    test_global_get_imported_immutable();
+    test_global_get_rejects_imported_mutable();
+    test_global_get_rejects_local_global();
     test_extended_const_remains_unsupported();
     test_sleb32_overflow_rejected();
     test_active_data_with_count();

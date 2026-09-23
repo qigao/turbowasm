@@ -1,6 +1,7 @@
 #include <turbowasm/module.h>
 
 #include "reader.h"
+#include "validation_context.h"
 #include "validate.h"
 
 #include <stdlib.h>
@@ -14,6 +15,7 @@ typedef struct turbowasm_module_impl {
     const uint8_t *bytes;
     size_t size;
     turbowasm_module_summary summary;
+    turbowasm_validation_context validation;
 } turbowasm_module_impl;
 
 turbowasm_status turbowasm_module_load_borrowed(turbowasm_module *module,
@@ -24,6 +26,7 @@ turbowasm_status turbowasm_module_load_borrowed(turbowasm_module *module,
     uint32_t version;
     turbowasm_module_impl *impl;
     turbowasm_module_summary summary = {0};
+    turbowasm_validation_context validation = {0};
     turbowasm_status status;
 
     if (module == NULL || bytes == NULL || module->impl != NULL)
@@ -36,24 +39,32 @@ turbowasm_status turbowasm_module_load_borrowed(turbowasm_module *module,
     if (magic != TURBOWASM_MAGIC || version != TURBOWASM_BINARY_VERSION)
         return TURBOWASM_MALFORMED_MODULE;
 
-    status = turbowasm_validate_sections(&reader, &summary);
-    if (status != TURBOWASM_OK)
+    status = turbowasm_validate_sections(&reader, &summary, &validation);
+    if (status != TURBOWASM_OK) {
+        turbowasm_validation_context_destroy(&validation);
         return status;
+    }
 
     impl = (turbowasm_module_impl *)calloc(1u, sizeof(*impl));
-    if (impl == NULL)
+    if (impl == NULL) {
+        turbowasm_validation_context_destroy(&validation);
         return TURBOWASM_OUT_OF_MEMORY;
+    }
 
     impl->bytes = bytes;
     impl->size = size;
     impl->summary = summary;
+    impl->validation = validation;
     module->impl = impl;
     return TURBOWASM_OK;
 }
 
 void turbowasm_module_destroy(turbowasm_module *module) {
-    if (module == NULL) return;
-    free(module->impl);
+    turbowasm_module_impl *impl;
+    if (module == NULL || module->impl == NULL) return;
+    impl = (turbowasm_module_impl *)module->impl;
+    turbowasm_validation_context_destroy(&impl->validation);
+    free(impl);
     module->impl = NULL;
 }
 
