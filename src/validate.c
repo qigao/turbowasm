@@ -1,6 +1,7 @@
 #include "validate.h"
 #include "validate_data.h"
 #include "validate_element.h"
+#include "validate_instr.h"
 #include "validate_linkage.h"
 
 #include <stdbool.h>
@@ -187,64 +188,33 @@ static turbowasm_status turbowasm_validate_function_section(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status turbowasm_validate_local_decls(
-    turbowasm_reader *body) {
-    uint32_t group_count;
-    uint32_t group_index;
-    uint32_t local_count;
-    turbowasm_status status;
-
-    if (!turbowasm_reader_uleb32(body, &group_count))
-        return TURBOWASM_MALFORMED_MODULE;
-
-    for (group_index = 0u; group_index < group_count; ++group_index) {
-        if (!turbowasm_reader_uleb32(body, &local_count))
-            return TURBOWASM_MALFORMED_MODULE;
-        (void)local_count;
-        status = turbowasm_read_valtype(body, NULL);
-        if (status != TURBOWASM_OK)
-            return status;
-    }
-    return TURBOWASM_OK;
-}
-
-static turbowasm_status turbowasm_validate_code_body(
-    turbowasm_reader *body) {
-    turbowasm_status status = turbowasm_validate_local_decls(body);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    if (turbowasm_reader_remaining(body) == 0u)
-        return TURBOWASM_MALFORMED_MODULE;
-
-    /* Full instruction/control-stack validation is the next phase. For this
-     * framing slice, require the function expression to terminate with END. */
-    if (body->end[-1] != 0x0bu)
-        return TURBOWASM_MALFORMED_MODULE;
-
-    body->cursor = body->end;
-    return TURBOWASM_OK;
-}
-
 static turbowasm_status turbowasm_validate_code_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    const turbowasm_validation_context *context) {
     uint32_t count;
     uint32_t index;
-    uint32_t body_size;
-    turbowasm_reader body;
-    turbowasm_status status;
 
+    if (section == NULL || summary == NULL || context == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(section, &count))
         return TURBOWASM_MALFORMED_MODULE;
     if (count != summary->function_count)
         return TURBOWASM_MALFORMED_MODULE;
 
     for (index = 0u; index < count; ++index) {
+        uint32_t body_size;
+        uint32_t function_index =
+            summary->imported_function_count + index;
+        turbowasm_reader body;
+        turbowasm_status status;
+
         if (!turbowasm_reader_uleb32(section, &body_size) ||
             !turbowasm_reader_slice(section, body_size, &body))
             return TURBOWASM_MALFORMED_MODULE;
-        status = turbowasm_validate_code_body(&body);
+
+        status = turbowasm_validate_function_body(
+            &body, context, function_index);
         if (status != TURBOWASM_OK)
             return status;
         if (turbowasm_reader_remaining(&body) != 0u)
@@ -293,7 +263,8 @@ static turbowasm_status turbowasm_validate_section_payload(
         case TURBOWASM_SECTION_DATA_COUNT:
             return turbowasm_validate_data_count_section(section, summary);
         case TURBOWASM_SECTION_CODE:
-            return turbowasm_validate_code_section(section, summary);
+            return turbowasm_validate_code_section(
+                section, summary, context);
         case TURBOWASM_SECTION_DATA:
             return turbowasm_validate_data_section(
                 section, summary, context);
