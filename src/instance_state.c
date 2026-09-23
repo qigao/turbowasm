@@ -564,16 +564,20 @@ turbowasm_status turbowasm_instance_memory_grow(
     *out_previous_pages = memory->pages;
 
     next_pages = (uint64_t)memory->pages + delta_pages;
-    if (next_pages > UINT32_MAX ||
+    if (next_pages > UINT32_C(65536) ||
         (memory->has_maximum &&
-         next_pages > memory->maximum_pages))
-        return TURBOWASM_TRAPPED;
+         next_pages > memory->maximum_pages)) {
+        *out_previous_pages = UINT32_MAX;
+        return TURBOWASM_OK;
+    }
 
     next_bytes = next_pages * TURBOWASM_WASM_PAGE_SIZE;
     previous_bytes =
         (uint64_t)memory->pages * TURBOWASM_WASM_PAGE_SIZE;
-    if (next_bytes > (uint64_t)SIZE_MAX)
-        return TURBOWASM_TRAPPED;
+    if (next_bytes > (uint64_t)SIZE_MAX) {
+        *out_previous_pages = UINT32_MAX;
+        return TURBOWASM_OK;
+    }
 
     if (next_bytes == 0u) {
         memory->pages = (uint32_t)next_pages;
@@ -582,8 +586,10 @@ turbowasm_status turbowasm_instance_memory_grow(
 
     grown = (uint8_t *)realloc(
         memory->data, (size_t)next_bytes);
-    if (grown == NULL)
-        return TURBOWASM_TRAPPED;
+    if (grown == NULL) {
+        *out_previous_pages = UINT32_MAX;
+        return TURBOWASM_OK;
+    }
 
     if (next_bytes > previous_bytes)
         memset(grown + (size_t)previous_bytes,
