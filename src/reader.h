@@ -17,5 +17,8 @@ size_t turbowasm_reader_remaining(const turbowasm_reader *reader);
 bool turbowasm_reader_u8(turbowasm_reader *reader, uint8_t *out);
 bool turbowasm_reader_u32le(turbowasm_reader *reader, uint32_t *out);
 bool turbowasm_reader_uleb32(turbowasm_reader *reader, uint32_t *out);
+bool turbowasm_reader_slice(turbowasm_reader *reader,
+                            size_t size,
+                            turbowasm_reader *out);
 
 #endif /* TURBOWASM_READER_H */

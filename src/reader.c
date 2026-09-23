@@ -58,3 +58,15 @@ bool turbowasm_reader_uleb32(turbowasm_reader *reader, uint32_t *out) {
     *out = value;
     return true;
 }
+
+bool turbowasm_reader_slice(turbowasm_reader *reader,
+                            size_t size,
+                            turbowasm_reader *out) {
+    if (reader == NULL || out == NULL ||
+        turbowasm_reader_remaining(reader) < size)
+        return false;
+    out->cursor = reader->cursor;
+    out->end = reader->cursor + size;
+    reader->cursor += size;
+    return true;
+}
