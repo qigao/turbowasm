@@ -177,3 +177,14 @@ set_target_properties(turbowasm_reference_table_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_reference_table_test
          COMMAND turbowasm_reference_table_test)
+
+add_executable(turbowasm_bulk_runtime_test
+  bulk_runtime_test.c)
+target_link_libraries(turbowasm_bulk_runtime_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_bulk_runtime_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_bulk_runtime_test
+         COMMAND turbowasm_bulk_runtime_test)

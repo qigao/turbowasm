@@ -1278,6 +1278,296 @@ static turbowasm_status turbowasm_exec_memory_size_or_grow(
     return turbowasm_stack_push(stack, out);
 }
 
+static turbowasm_status turbowasm_exec_bulk_trap(
+    turbowasm_status status,
+    turbowasm_trap *trap,
+    turbowasm_trap trap_kind) {
+    if (status == TURBOWASM_TRAPPED) {
+        *trap = trap_kind;
+        return TURBOWASM_TRAPPED;
+    }
+    return status;
+}
+
+static turbowasm_status turbowasm_exec_fc(
+    turbowasm_instance_impl *instance,
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    turbowasm_trap *trap) {
+    uint32_t subopcode;
+    turbowasm_status status;
+
+    if (!turbowasm_reader_uleb32(reader, &subopcode))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    switch (subopcode) {
+        case 8u: { /* memory.init */
+            uint32_t data_index;
+            uint8_t memory_index;
+            turbowasm_value length;
+            turbowasm_value source;
+            turbowasm_value destination;
+
+            if (!turbowasm_reader_uleb32(reader, &data_index) ||
+                !turbowasm_reader_u8(reader, &memory_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (memory_index != 0u)
+                return TURBOWASM_UNSUPPORTED;
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &length);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &source);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &destination);
+            if (status != TURBOWASM_OK) return status;
+
+            status = turbowasm_instance_memory_init(
+                instance, data_index, 0u,
+                (uint32_t)destination.as.i32,
+                (uint32_t)source.as.i32,
+                (uint32_t)length.as.i32);
+            return turbowasm_exec_bulk_trap(
+                status, trap,
+                TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS);
+        }
+
+        case 9u: { /* data.drop */
+            uint32_t data_index;
+            if (!turbowasm_reader_uleb32(reader, &data_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            return turbowasm_instance_data_drop(
+                instance, data_index);
+        }
+
+        case 10u: { /* memory.copy */
+            uint8_t destination_memory;
+            uint8_t source_memory;
+            turbowasm_value length;
+            turbowasm_value source;
+            turbowasm_value destination;
+
+            if (!turbowasm_reader_u8(
+                    reader, &destination_memory) ||
+                !turbowasm_reader_u8(
+                    reader, &source_memory))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (destination_memory != 0u ||
+                source_memory != 0u)
+                return TURBOWASM_UNSUPPORTED;
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &length);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &source);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &destination);
+            if (status != TURBOWASM_OK) return status;
+
+            status = turbowasm_instance_memory_copy(
+                instance, 0u, 0u,
+                (uint32_t)destination.as.i32,
+                (uint32_t)source.as.i32,
+                (uint32_t)length.as.i32);
+            return turbowasm_exec_bulk_trap(
+                status, trap,
+                TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS);
+        }
+
+        case 11u: { /* memory.fill */
+            uint8_t memory_index;
+            turbowasm_value length;
+            turbowasm_value value;
+            turbowasm_value destination;
+
+            if (!turbowasm_reader_u8(reader, &memory_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (memory_index != 0u)
+                return TURBOWASM_UNSUPPORTED;
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &length);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &value);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &destination);
+            if (status != TURBOWASM_OK) return status;
+
+            status = turbowasm_instance_memory_fill(
+                instance, 0u,
+                (uint32_t)destination.as.i32,
+                (uint8_t)value.as.i32,
+                (uint32_t)length.as.i32);
+            return turbowasm_exec_bulk_trap(
+                status, trap,
+                TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS);
+        }
+
+        case 12u: { /* table.init */
+            uint32_t element_index;
+            uint32_t table_index;
+            turbowasm_value length;
+            turbowasm_value source;
+            turbowasm_value destination;
+
+            if (!turbowasm_reader_uleb32(
+                    reader, &element_index) ||
+                !turbowasm_reader_uleb32(
+                    reader, &table_index))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &length);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &source);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &destination);
+            if (status != TURBOWASM_OK) return status;
+
+            status = turbowasm_instance_table_init(
+                instance, element_index, table_index,
+                (uint32_t)destination.as.i32,
+                (uint32_t)source.as.i32,
+                (uint32_t)length.as.i32);
+            return turbowasm_exec_bulk_trap(
+                status, trap,
+                TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS);
+        }
+
+        case 13u: { /* elem.drop */
+            uint32_t element_index;
+            if (!turbowasm_reader_uleb32(
+                    reader, &element_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            return turbowasm_instance_element_drop(
+                instance, element_index);
+        }
+
+        case 14u: { /* table.copy */
+            uint32_t destination_table;
+            uint32_t source_table;
+            turbowasm_value length;
+            turbowasm_value source;
+            turbowasm_value destination;
+
+            if (!turbowasm_reader_uleb32(
+                    reader, &destination_table) ||
+                !turbowasm_reader_uleb32(
+                    reader, &source_table))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &length);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &source);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &destination);
+            if (status != TURBOWASM_OK) return status;
+
+            status = turbowasm_instance_table_copy(
+                instance,
+                destination_table, source_table,
+                (uint32_t)destination.as.i32,
+                (uint32_t)source.as.i32,
+                (uint32_t)length.as.i32);
+            return turbowasm_exec_bulk_trap(
+                status, trap,
+                TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS);
+        }
+
+        case 15u: { /* table.grow */
+            uint32_t table_index;
+            uint32_t previous_size;
+            turbowasm_value delta;
+            turbowasm_value initial;
+            turbowasm_value result = {0};
+
+            if (!turbowasm_reader_uleb32(
+                    reader, &table_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &delta);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_FUNCREF, &initial);
+            if (status != TURBOWASM_OK) return status;
+
+            status = turbowasm_instance_table_grow(
+                instance, table_index, initial,
+                (uint32_t)delta.as.i32,
+                &previous_size);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            result.kind = TURBOWASM_VALUE_I32;
+            result.as.i32 = previous_size == UINT32_MAX
+                ? -1
+                : (int32_t)previous_size;
+            return turbowasm_stack_push(stack, result);
+        }
+
+        case 16u: { /* table.size */
+            uint32_t table_index;
+            uint32_t size;
+            turbowasm_value result = {0};
+
+            if (!turbowasm_reader_uleb32(
+                    reader, &table_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            status = turbowasm_instance_table_size(
+                instance, table_index, &size);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            result.kind = TURBOWASM_VALUE_I32;
+            result.as.i32 = (int32_t)size;
+            return turbowasm_stack_push(stack, result);
+        }
+
+        case 17u: { /* table.fill */
+            uint32_t table_index;
+            turbowasm_value length;
+            turbowasm_value value;
+            turbowasm_value destination;
+
+            if (!turbowasm_reader_uleb32(
+                    reader, &table_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &length);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_FUNCREF, &value);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &destination);
+            if (status != TURBOWASM_OK) return status;
+
+            status = turbowasm_instance_table_fill(
+                instance, table_index,
+                (uint32_t)destination.as.i32,
+                value,
+                (uint32_t)length.as.i32);
+            return turbowasm_exec_bulk_trap(
+                status, trap,
+                TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS);
+        }
+
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+}
+
 static turbowasm_status turbowasm_exec_function(
     turbowasm_instance_impl *instance,
     uint32_t function_index,
@@ -1871,6 +2161,13 @@ static turbowasm_status turbowasm_exec_function(
                     goto done;
                 break;
             }
+
+            case 0xfcu:
+                status = turbowasm_exec_fc(
+                    instance, &reader, &stack, trap);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
 
             default:
                 status = TURBOWASM_UNSUPPORTED;
