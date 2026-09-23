@@ -1,0 +1,259 @@
+#include "simd_exec_table.h"
+
+#define SP(opcode_, desc_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_SPLAT, &(desc_), 0u, (shape_) }
+
+#define UN(opcode_, desc_, op_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_UNARY, &(desc_), \
+      (uint8_t)(op_), (shape_) }
+
+#define BIN(opcode_, desc_, op_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_BINARY, &(desc_), \
+      (uint8_t)(op_), (shape_) }
+
+#define CMP(opcode_, desc_, op_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_COMPARE, &(desc_), \
+      (uint8_t)(op_), (shape_) }
+
+#define SH(opcode_, desc_, op_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_SHIFT, &(desc_), \
+      (uint8_t)(op_), (shape_) }
+
+#define SEL(opcode_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_SELECT, &cmeta_vector_i8x16, \
+      0u, TURBOWASM_V128_RAW }
+
+/*
+ * This is intentionally an execution-capability table, not another
+ * validation table. Every opcode here must also exist in
+ * validate_simd_table.c. Missing entries remain fail-closed at execution.
+ *
+ * CMeta owns vector semantics; Salts owns portable execution. TurboWasm owns
+ * only the Wasm-opcode mapping.
+ */
+static const turbowasm_simd_exec_descriptor descriptors[] = {
+    /* splat */
+    SP(0x0fu, cmeta_vector_i8x16, TURBOWASM_V128_I8X16),
+    SP(0x10u, cmeta_vector_i16x8, TURBOWASM_V128_I16X8),
+    SP(0x11u, cmeta_vector_i32x4, TURBOWASM_V128_I32X4),
+    SP(0x12u, cmeta_vector_i64x2, TURBOWASM_V128_I64X2),
+    SP(0x13u, cmeta_vector_f32x4, TURBOWASM_V128_F32X4),
+    SP(0x14u, cmeta_vector_f64x2, TURBOWASM_V128_F64X2),
+
+    /* comparisons: i8x16 */
+    CMP(0x23u, cmeta_vector_i8x16, SALTS_SIMD_COMPARE_EQ,
+        TURBOWASM_V128_B8X16),
+    CMP(0x24u, cmeta_vector_i8x16, SALTS_SIMD_COMPARE_NE,
+        TURBOWASM_V128_B8X16),
+    CMP(0x25u, cmeta_vector_i8x16, SALTS_SIMD_COMPARE_LT,
+        TURBOWASM_V128_B8X16),
+    CMP(0x26u, cmeta_vector_u8x16, SALTS_SIMD_COMPARE_LT,
+        TURBOWASM_V128_B8X16),
+    CMP(0x27u, cmeta_vector_i8x16, SALTS_SIMD_COMPARE_GT,
+        TURBOWASM_V128_B8X16),
+    CMP(0x28u, cmeta_vector_u8x16, SALTS_SIMD_COMPARE_GT,
+        TURBOWASM_V128_B8X16),
+    CMP(0x29u, cmeta_vector_i8x16, SALTS_SIMD_COMPARE_LE,
+        TURBOWASM_V128_B8X16),
+    CMP(0x2au, cmeta_vector_u8x16, SALTS_SIMD_COMPARE_LE,
+        TURBOWASM_V128_B8X16),
+    CMP(0x2bu, cmeta_vector_i8x16, SALTS_SIMD_COMPARE_GE,
+        TURBOWASM_V128_B8X16),
+    CMP(0x2cu, cmeta_vector_u8x16, SALTS_SIMD_COMPARE_GE,
+        TURBOWASM_V128_B8X16),
+
+    /* comparisons: i16x8 */
+    CMP(0x2du, cmeta_vector_i16x8, SALTS_SIMD_COMPARE_EQ,
+        TURBOWASM_V128_B16X8),
+    CMP(0x2eu, cmeta_vector_i16x8, SALTS_SIMD_COMPARE_NE,
+        TURBOWASM_V128_B16X8),
+    CMP(0x2fu, cmeta_vector_i16x8, SALTS_SIMD_COMPARE_LT,
+        TURBOWASM_V128_B16X8),
+    CMP(0x30u, cmeta_vector_u16x8, SALTS_SIMD_COMPARE_LT,
+        TURBOWASM_V128_B16X8),
+    CMP(0x31u, cmeta_vector_i16x8, SALTS_SIMD_COMPARE_GT,
+        TURBOWASM_V128_B16X8),
+    CMP(0x32u, cmeta_vector_u16x8, SALTS_SIMD_COMPARE_GT,
+        TURBOWASM_V128_B16X8),
+    CMP(0x33u, cmeta_vector_i16x8, SALTS_SIMD_COMPARE_LE,
+        TURBOWASM_V128_B16X8),
+    CMP(0x34u, cmeta_vector_u16x8, SALTS_SIMD_COMPARE_LE,
+        TURBOWASM_V128_B16X8),
+    CMP(0x35u, cmeta_vector_i16x8, SALTS_SIMD_COMPARE_GE,
+        TURBOWASM_V128_B16X8),
+    CMP(0x36u, cmeta_vector_u16x8, SALTS_SIMD_COMPARE_GE,
+        TURBOWASM_V128_B16X8),
+
+    /* comparisons: i32x4 */
+    CMP(0x37u, cmeta_vector_i32x4, SALTS_SIMD_COMPARE_EQ,
+        TURBOWASM_V128_B32X4),
+    CMP(0x38u, cmeta_vector_i32x4, SALTS_SIMD_COMPARE_NE,
+        TURBOWASM_V128_B32X4),
+    CMP(0x39u, cmeta_vector_i32x4, SALTS_SIMD_COMPARE_LT,
+        TURBOWASM_V128_B32X4),
+    CMP(0x3au, cmeta_vector_u32x4, SALTS_SIMD_COMPARE_LT,
+        TURBOWASM_V128_B32X4),
+    CMP(0x3bu, cmeta_vector_i32x4, SALTS_SIMD_COMPARE_GT,
+        TURBOWASM_V128_B32X4),
+    CMP(0x3cu, cmeta_vector_u32x4, SALTS_SIMD_COMPARE_GT,
+        TURBOWASM_V128_B32X4),
+    CMP(0x3du, cmeta_vector_i32x4, SALTS_SIMD_COMPARE_LE,
+        TURBOWASM_V128_B32X4),
+    CMP(0x3eu, cmeta_vector_u32x4, SALTS_SIMD_COMPARE_LE,
+        TURBOWASM_V128_B32X4),
+    CMP(0x3fu, cmeta_vector_i32x4, SALTS_SIMD_COMPARE_GE,
+        TURBOWASM_V128_B32X4),
+    CMP(0x40u, cmeta_vector_u32x4, SALTS_SIMD_COMPARE_GE,
+        TURBOWASM_V128_B32X4),
+
+    /* comparisons: floating point */
+    CMP(0x41u, cmeta_vector_f32x4, SALTS_SIMD_COMPARE_EQ,
+        TURBOWASM_V128_B32X4),
+    CMP(0x42u, cmeta_vector_f32x4, SALTS_SIMD_COMPARE_NE,
+        TURBOWASM_V128_B32X4),
+    CMP(0x43u, cmeta_vector_f32x4, SALTS_SIMD_COMPARE_LT,
+        TURBOWASM_V128_B32X4),
+    CMP(0x44u, cmeta_vector_f32x4, SALTS_SIMD_COMPARE_GT,
+        TURBOWASM_V128_B32X4),
+    CMP(0x45u, cmeta_vector_f32x4, SALTS_SIMD_COMPARE_LE,
+        TURBOWASM_V128_B32X4),
+    CMP(0x46u, cmeta_vector_f32x4, SALTS_SIMD_COMPARE_GE,
+        TURBOWASM_V128_B32X4),
+    CMP(0x47u, cmeta_vector_f64x2, SALTS_SIMD_COMPARE_EQ,
+        TURBOWASM_V128_B64X2),
+    CMP(0x48u, cmeta_vector_f64x2, SALTS_SIMD_COMPARE_NE,
+        TURBOWASM_V128_B64X2),
+    CMP(0x49u, cmeta_vector_f64x2, SALTS_SIMD_COMPARE_LT,
+        TURBOWASM_V128_B64X2),
+    CMP(0x4au, cmeta_vector_f64x2, SALTS_SIMD_COMPARE_GT,
+        TURBOWASM_V128_B64X2),
+    CMP(0x4bu, cmeta_vector_f64x2, SALTS_SIMD_COMPARE_LE,
+        TURBOWASM_V128_B64X2),
+    CMP(0x4cu, cmeta_vector_f64x2, SALTS_SIMD_COMPARE_GE,
+        TURBOWASM_V128_B64X2),
+
+    /* raw bitwise/select */
+    UN(0x4du, cmeta_vector_i8x16, SALTS_SIMD_UNARY_NOT,
+       TURBOWASM_V128_RAW),
+    BIN(0x4eu, cmeta_vector_i8x16, SALTS_SIMD_BINARY_AND,
+        TURBOWASM_V128_RAW),
+    BIN(0x50u, cmeta_vector_i8x16, SALTS_SIMD_BINARY_OR,
+        TURBOWASM_V128_RAW),
+    BIN(0x51u, cmeta_vector_i8x16, SALTS_SIMD_BINARY_XOR,
+        TURBOWASM_V128_RAW),
+    SEL(0x52u),
+
+    /* integer shifts and wrapping arithmetic */
+    SH(0x6bu, cmeta_vector_i8x16, SALTS_SIMD_SHIFT_LEFT,
+       TURBOWASM_V128_I8X16),
+    SH(0x6cu, cmeta_vector_i8x16, SALTS_SIMD_SHIFT_RIGHT,
+       TURBOWASM_V128_I8X16),
+    SH(0x6du, cmeta_vector_u8x16, SALTS_SIMD_SHIFT_RIGHT,
+       TURBOWASM_V128_U8X16),
+    BIN(0x6eu, cmeta_vector_i8x16, SALTS_SIMD_BINARY_ADD,
+        TURBOWASM_V128_I8X16),
+    BIN(0x71u, cmeta_vector_i8x16, SALTS_SIMD_BINARY_SUB,
+        TURBOWASM_V128_I8X16),
+
+    SH(0x8bu, cmeta_vector_i16x8, SALTS_SIMD_SHIFT_LEFT,
+       TURBOWASM_V128_I16X8),
+    SH(0x8cu, cmeta_vector_i16x8, SALTS_SIMD_SHIFT_RIGHT,
+       TURBOWASM_V128_I16X8),
+    SH(0x8du, cmeta_vector_u16x8, SALTS_SIMD_SHIFT_RIGHT,
+       TURBOWASM_V128_U16X8),
+    BIN(0x8eu, cmeta_vector_i16x8, SALTS_SIMD_BINARY_ADD,
+        TURBOWASM_V128_I16X8),
+    BIN(0x91u, cmeta_vector_i16x8, SALTS_SIMD_BINARY_SUB,
+        TURBOWASM_V128_I16X8),
+    BIN(0x95u, cmeta_vector_i16x8, SALTS_SIMD_BINARY_MUL,
+        TURBOWASM_V128_I16X8),
+
+    SH(0xabu, cmeta_vector_i32x4, SALTS_SIMD_SHIFT_LEFT,
+       TURBOWASM_V128_I32X4),
+    SH(0xacu, cmeta_vector_i32x4, SALTS_SIMD_SHIFT_RIGHT,
+       TURBOWASM_V128_I32X4),
+    SH(0xadu, cmeta_vector_u32x4, SALTS_SIMD_SHIFT_RIGHT,
+       TURBOWASM_V128_U32X4),
+    BIN(0xaeu, cmeta_vector_i32x4, SALTS_SIMD_BINARY_ADD,
+        TURBOWASM_V128_I32X4),
+    BIN(0xb1u, cmeta_vector_i32x4, SALTS_SIMD_BINARY_SUB,
+        TURBOWASM_V128_I32X4),
+    BIN(0xb5u, cmeta_vector_i32x4, SALTS_SIMD_BINARY_MUL,
+        TURBOWASM_V128_I32X4),
+
+    SH(0xcbu, cmeta_vector_i64x2, SALTS_SIMD_SHIFT_LEFT,
+       TURBOWASM_V128_I64X2),
+    SH(0xccu, cmeta_vector_i64x2, SALTS_SIMD_SHIFT_RIGHT,
+       TURBOWASM_V128_I64X2),
+    SH(0xcdu, cmeta_vector_u64x2, SALTS_SIMD_SHIFT_RIGHT,
+       TURBOWASM_V128_U64X2),
+    BIN(0xceu, cmeta_vector_i64x2, SALTS_SIMD_BINARY_ADD,
+        TURBOWASM_V128_I64X2),
+    BIN(0xd1u, cmeta_vector_i64x2, SALTS_SIMD_BINARY_SUB,
+        TURBOWASM_V128_I64X2),
+    BIN(0xd5u, cmeta_vector_i64x2, SALTS_SIMD_BINARY_MUL,
+        TURBOWASM_V128_I64X2),
+
+    CMP(0xd6u, cmeta_vector_i64x2, SALTS_SIMD_COMPARE_EQ,
+        TURBOWASM_V128_B64X2),
+    CMP(0xd7u, cmeta_vector_i64x2, SALTS_SIMD_COMPARE_NE,
+        TURBOWASM_V128_B64X2),
+    CMP(0xd8u, cmeta_vector_i64x2, SALTS_SIMD_COMPARE_LT,
+        TURBOWASM_V128_B64X2),
+    CMP(0xd9u, cmeta_vector_i64x2, SALTS_SIMD_COMPARE_GT,
+        TURBOWASM_V128_B64X2),
+    CMP(0xdau, cmeta_vector_i64x2, SALTS_SIMD_COMPARE_LE,
+        TURBOWASM_V128_B64X2),
+    CMP(0xdbu, cmeta_vector_i64x2, SALTS_SIMD_COMPARE_GE,
+        TURBOWASM_V128_B64X2),
+
+    /* floating-point arithmetic */
+    BIN(0xe4u, cmeta_vector_f32x4, SALTS_SIMD_BINARY_ADD,
+        TURBOWASM_V128_F32X4),
+    BIN(0xe5u, cmeta_vector_f32x4, SALTS_SIMD_BINARY_SUB,
+        TURBOWASM_V128_F32X4),
+    BIN(0xe6u, cmeta_vector_f32x4, SALTS_SIMD_BINARY_MUL,
+        TURBOWASM_V128_F32X4),
+    BIN(0xe7u, cmeta_vector_f32x4, SALTS_SIMD_BINARY_DIV,
+        TURBOWASM_V128_F32X4),
+
+    BIN(0xf0u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_ADD,
+        TURBOWASM_V128_F64X2),
+    BIN(0xf1u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_SUB,
+        TURBOWASM_V128_F64X2),
+    BIN(0xf2u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_MUL,
+        TURBOWASM_V128_F64X2),
+    BIN(0xf3u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_DIV,
+        TURBOWASM_V128_F64X2)
+};
+
+#undef SEL
+#undef SH
+#undef CMP
+#undef BIN
+#undef UN
+#undef SP
+
+const turbowasm_simd_exec_descriptor *
+turbowasm_simd_exec_descriptor_find(uint32_t opcode) {
+    size_t index;
+
+    for (index = 0u;
+         index < sizeof(descriptors) / sizeof(descriptors[0]);
+         ++index) {
+        if (descriptors[index].opcode == opcode)
+            return &descriptors[index];
+    }
+    return NULL;
+}
+
+size_t turbowasm_simd_exec_descriptor_count(void) {
+    return sizeof(descriptors) / sizeof(descriptors[0]);
+}
+
+const turbowasm_simd_exec_descriptor *
+turbowasm_simd_exec_descriptor_at(size_t index) {
+    if (index >= turbowasm_simd_exec_descriptor_count())
+        return NULL;
+    return &descriptors[index];
+}
