@@ -288,7 +288,8 @@ turbowasm_status turbowasm_validate_import_section(
                     section, &value_type, &mutable_value);
                 if (status != TURBOWASM_OK) return status;
                 if (!turbowasm_validation_context_append_global(
-                        context, value_type, mutable_value, true))
+                        context, value_type, mutable_value, true,
+                        NULL, 0u))
                     return TURBOWASM_OUT_OF_MEMORY;
                 ++summary->imported_global_count;
                 break;
