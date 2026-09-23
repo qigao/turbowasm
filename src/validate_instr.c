@@ -1034,13 +1034,15 @@ static turbowasm_status turbowasm_validate_simd(
 
 turbowasm_status turbowasm_validate_function_body(
     turbowasm_reader *body,
-    const turbowasm_validation_context *context,
+    turbowasm_validation_context *context,
     uint32_t function_index) {
     const turbowasm_validation_func_type *function_type;
     turbowasm_type_stack stack = {0};
     turbowasm_control_stack controls = {0};
     uint8_t *locals = NULL;
     uint32_t local_count = 0u;
+    const uint8_t *code_start = NULL;
+    uint32_t code_size = 0u;
     turbowasm_status result;
 
     if (body == NULL || context == NULL)
@@ -1055,6 +1057,13 @@ turbowasm_status turbowasm_validate_function_body(
         body, function_type, &locals, &local_count);
     if (result != TURBOWASM_OK)
         goto done;
+
+    code_start = body->cursor;
+    if (turbowasm_reader_remaining(body) > UINT32_MAX) {
+        result = TURBOWASM_OUT_OF_MEMORY;
+        goto done;
+    }
+    code_size = (uint32_t)turbowasm_reader_remaining(body);
 
     result = turbowasm_control_push(
         &stack, &controls, TURBOWASM_CTRL_FUNCTION,
@@ -1628,6 +1637,23 @@ turbowasm_status turbowasm_validate_function_body(
     result = TURBOWASM_MALFORMED_MODULE;
 
 done:
+    if (result == TURBOWASM_OK) {
+        turbowasm_validation_function *function =
+            turbowasm_validation_context_function_mut(
+                context, function_index);
+
+        if (function == NULL || function->imported ||
+            function->local_types != NULL || function->code != NULL) {
+            result = TURBOWASM_MALFORMED_MODULE;
+        } else {
+            function->local_types = locals;
+            function->local_count = local_count;
+            function->code = code_start;
+            function->code_size = code_size;
+            locals = NULL;
+        }
+    }
+
     free(locals);
     free(stack.values);
     turbowasm_control_stack_destroy(&controls);
