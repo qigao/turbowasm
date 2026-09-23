@@ -902,6 +902,103 @@ static turbowasm_status turbowasm_validate_br_table(
     return TURBOWASM_OK;
 }
 
+
+static turbowasm_status turbowasm_stack_pop_i32_n(
+    turbowasm_type_stack *stack,
+    uint32_t count) {
+    while (count != 0u) {
+        turbowasm_status status =
+            turbowasm_stack_pop(stack, TW_I32);
+        if (status != TURBOWASM_OK)
+            return status;
+        --count;
+    }
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_read_reserved_zero(
+    turbowasm_reader *body) {
+    uint8_t reserved;
+
+    if (!turbowasm_reader_u8(body, &reserved))
+        return TURBOWASM_MALFORMED_MODULE;
+    return reserved == 0x00u
+        ? TURBOWASM_OK
+        : TURBOWASM_UNSUPPORTED;
+}
+
+static turbowasm_status turbowasm_validate_fc(
+    turbowasm_reader *body,
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_context *context) {
+    uint32_t subopcode;
+    turbowasm_status status;
+
+    if (!turbowasm_reader_uleb32(body, &subopcode))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    switch (subopcode) {
+        case 0u: case 1u: /* i32.trunc_sat_f32_* */
+            return turbowasm_validate_conversion(
+                stack, TW_F32, TW_I32);
+        case 2u: case 3u: /* i32.trunc_sat_f64_* */
+            return turbowasm_validate_conversion(
+                stack, TW_F64, TW_I32);
+        case 4u: case 5u: /* i64.trunc_sat_f32_* */
+            return turbowasm_validate_conversion(
+                stack, TW_F32, TW_I64);
+        case 6u: case 7u: /* i64.trunc_sat_f64_* */
+            return turbowasm_validate_conversion(
+                stack, TW_F64, TW_I64);
+
+        case 8u: { /* memory.init */
+            uint32_t data_index;
+            if (!turbowasm_reader_uleb32(body, &data_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            status = turbowasm_read_reserved_zero(body);
+            if (status != TURBOWASM_OK)
+                return status;
+            if (!turbowasm_memory0_exists(context) ||
+                !context->has_data_count ||
+                data_index >= context->data_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            return turbowasm_stack_pop_i32_n(stack, 3u);
+        }
+
+        case 9u: { /* data.drop */
+            uint32_t data_index;
+            if (!turbowasm_reader_uleb32(body, &data_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (!context->has_data_count ||
+                data_index >= context->data_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            return TURBOWASM_OK;
+        }
+
+        case 10u: /* memory.copy */
+            status = turbowasm_read_reserved_zero(body);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_read_reserved_zero(body);
+            if (status != TURBOWASM_OK)
+                return status;
+            if (!turbowasm_memory0_exists(context))
+                return TURBOWASM_MALFORMED_MODULE;
+            return turbowasm_stack_pop_i32_n(stack, 3u);
+
+        case 11u: /* memory.fill */
+            status = turbowasm_read_reserved_zero(body);
+            if (status != TURBOWASM_OK)
+                return status;
+            if (!turbowasm_memory0_exists(context))
+                return TURBOWASM_MALFORMED_MODULE;
+            return turbowasm_stack_pop_i32_n(stack, 3u);
+
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+}
+
 static turbowasm_status turbowasm_validate_simd(
     turbowasm_reader *body,
     turbowasm_type_stack *stack,
@@ -1461,6 +1558,19 @@ turbowasm_status turbowasm_validate_function_body(
                     &stack, TW_I64, TW_F64);
                 if (result != TURBOWASM_OK) goto done;
                 break;
+            case 0xc0u: /* i32.extend8_s */
+            case 0xc1u: /* i32.extend16_s */
+                result = turbowasm_stack_unary(
+                    &stack, TW_I32, TW_I32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xc2u: /* i64.extend8_s */
+            case 0xc3u: /* i64.extend16_s */
+            case 0xc4u: /* i64.extend32_s */
+                result = turbowasm_stack_unary(
+                    &stack, TW_I64, TW_I64);
+                if (result != TURBOWASM_OK) goto done;
+                break;
             case 0xd0u: { /* ref.null */
                 uint8_t type;
                 if (!turbowasm_reader_u8(body, &type) ||
@@ -1499,6 +1609,11 @@ turbowasm_status turbowasm_validate_function_body(
                 if (result != TURBOWASM_OK) goto done;
                 break;
             }
+            case 0xfcu:
+                result = turbowasm_validate_fc(
+                    body, &stack, context);
+                if (result != TURBOWASM_OK) goto done;
+                break;
             case 0xfdu:
                 result = turbowasm_validate_simd(
                     body, &stack, context);
