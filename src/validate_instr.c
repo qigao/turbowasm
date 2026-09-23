@@ -21,14 +21,140 @@ typedef struct turbowasm_type_stack {
     uint8_t *values;
     uint32_t size;
     uint32_t capacity;
+    uint32_t floor;
     bool unreachable;
 } turbowasm_type_stack;
+
+typedef enum turbowasm_control_kind {
+    TURBOWASM_CTRL_FUNCTION = 0,
+    TURBOWASM_CTRL_BLOCK,
+    TURBOWASM_CTRL_LOOP,
+    TURBOWASM_CTRL_IF
+} turbowasm_control_kind;
+
+typedef struct turbowasm_control_frame {
+    turbowasm_control_kind kind;
+    uint32_t height;
+    uint32_t parent_floor;
+    bool parent_unreachable;
+    bool else_seen;
+    uint8_t *start_types;
+    uint32_t start_count;
+    uint8_t *end_types;
+    uint32_t end_count;
+} turbowasm_control_frame;
+
+typedef struct turbowasm_control_stack {
+    turbowasm_control_frame *frames;
+    uint32_t size;
+    uint32_t capacity;
+} turbowasm_control_stack;
 
 static bool turbowasm_instr_valtype(uint8_t type) {
     return type == TW_I32 || type == TW_I64 ||
            type == TW_F32 || type == TW_F64 ||
            type == TW_V128 || type == TW_FUNCREF ||
            type == TW_EXTERNREF;
+}
+
+
+static bool turbowasm_types_equal(
+    const uint8_t *left,
+    uint32_t left_count,
+    const uint8_t *right,
+    uint32_t right_count) {
+    if (left_count != right_count)
+        return false;
+    if (left_count == 0u)
+        return true;
+    return memcmp(left, right, (size_t)left_count) == 0;
+}
+
+static bool turbowasm_control_reserve(
+    turbowasm_control_stack *controls,
+    uint32_t required) {
+    uint32_t next;
+    turbowasm_control_frame *grown;
+
+    if (required <= controls->capacity)
+        return true;
+
+    next = controls->capacity == 0u ? 8u : controls->capacity;
+    while (next < required) {
+        if (next > UINT32_MAX / 2u) {
+            next = required;
+            break;
+        }
+        next *= 2u;
+    }
+
+    if ((uint64_t)next * sizeof(*grown) > (uint64_t)SIZE_MAX)
+        return false;
+
+    grown = (turbowasm_control_frame *)realloc(
+        controls->frames, (size_t)next * sizeof(*grown));
+    if (grown == NULL)
+        return false;
+
+    memset(grown + controls->capacity, 0,
+           (size_t)(next - controls->capacity) * sizeof(*grown));
+    controls->frames = grown;
+    controls->capacity = next;
+    return true;
+}
+
+static bool turbowasm_copy_types(
+    const uint8_t *source,
+    uint32_t count,
+    uint8_t **out) {
+    uint8_t *copy = NULL;
+
+    if (out == NULL)
+        return false;
+    if (count != 0u) {
+        copy = (uint8_t *)malloc((size_t)count);
+        if (copy == NULL)
+            return false;
+        memcpy(copy, source, (size_t)count);
+    }
+    *out = copy;
+    return true;
+}
+
+static void turbowasm_control_frame_destroy(
+    turbowasm_control_frame *frame) {
+    if (frame == NULL)
+        return;
+    free(frame->start_types);
+    free(frame->end_types);
+    memset(frame, 0, sizeof(*frame));
+}
+
+static void turbowasm_control_stack_destroy(
+    turbowasm_control_stack *controls) {
+    uint32_t index;
+
+    if (controls == NULL)
+        return;
+    for (index = 0u; index < controls->size; ++index)
+        turbowasm_control_frame_destroy(&controls->frames[index]);
+    free(controls->frames);
+    memset(controls, 0, sizeof(*controls));
+}
+
+static turbowasm_control_frame *turbowasm_control_top(
+    turbowasm_control_stack *controls) {
+    if (controls == NULL || controls->size == 0u)
+        return NULL;
+    return &controls->frames[controls->size - 1u];
+}
+
+static const turbowasm_control_frame *turbowasm_control_target(
+    const turbowasm_control_stack *controls,
+    uint32_t depth) {
+    if (controls == NULL || depth >= controls->size)
+        return NULL;
+    return &controls->frames[controls->size - 1u - depth];
 }
 
 static bool turbowasm_stack_reserve(
@@ -76,7 +202,9 @@ static turbowasm_status turbowasm_stack_pop_any(
     uint8_t *out_type) {
     if (stack == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (stack->size == 0u) {
+    if (stack->size < stack->floor)
+        return TURBOWASM_MALFORMED_MODULE;
+    if (stack->size == stack->floor) {
         if (!stack->unreachable)
             return TURBOWASM_MALFORMED_MODULE;
         if (out_type != NULL)
