@@ -178,7 +178,9 @@ bool turbowasm_validation_context_append_global(
     turbowasm_validation_context *context,
     uint8_t value_type,
     bool mutable_value,
-    bool imported) {
+    bool imported,
+    const uint8_t *initializer,
+    uint32_t initializer_size) {
     uint32_t required;
 
     if (context == NULL || context->global_count == UINT32_MAX)
@@ -195,6 +197,9 @@ bool turbowasm_validation_context_append_global(
     context->globals[context->global_count].value_type = value_type;
     context->globals[context->global_count].mutable_value = mutable_value;
     context->globals[context->global_count].imported = imported;
+    context->globals[context->global_count].initializer = initializer;
+    context->globals[context->global_count].initializer_size =
+        initializer_size;
     ++context->global_count;
     return true;
 }
