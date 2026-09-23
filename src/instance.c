@@ -969,6 +969,310 @@ static turbowasm_status turbowasm_exec_f64_binary(
     return turbowasm_stack_push(stack, out);
 }
 
+static uint16_t turbowasm_read_u16_le(const uint8_t *p) {
+    return (uint16_t)p[0] |
+           (uint16_t)((uint16_t)p[1] << 8u);
+}
+
+static uint32_t turbowasm_read_u32_le_bytes(const uint8_t *p) {
+    return (uint32_t)p[0] |
+           ((uint32_t)p[1] << 8u) |
+           ((uint32_t)p[2] << 16u) |
+           ((uint32_t)p[3] << 24u);
+}
+
+static uint64_t turbowasm_read_u64_le_bytes(const uint8_t *p) {
+    uint64_t value = 0u;
+    uint32_t index;
+    for (index = 0u; index < 8u; ++index)
+        value |= (uint64_t)p[index] << (8u * index);
+    return value;
+}
+
+static void turbowasm_write_u16_le(uint8_t *p, uint16_t value) {
+    p[0] = (uint8_t)value;
+    p[1] = (uint8_t)(value >> 8u);
+}
+
+static void turbowasm_write_u32_le(uint8_t *p, uint32_t value) {
+    p[0] = (uint8_t)value;
+    p[1] = (uint8_t)(value >> 8u);
+    p[2] = (uint8_t)(value >> 16u);
+    p[3] = (uint8_t)(value >> 24u);
+}
+
+static void turbowasm_write_u64_le(uint8_t *p, uint64_t value) {
+    uint32_t index;
+    for (index = 0u; index < 8u; ++index)
+        p[index] = (uint8_t)(value >> (8u * index));
+}
+
+static turbowasm_status turbowasm_exec_read_memarg(
+    turbowasm_reader *reader,
+    uint32_t *out_offset) {
+    uint32_t alignment;
+    uint32_t offset;
+
+    if (!turbowasm_reader_uleb32(reader, &alignment) ||
+        !turbowasm_reader_uleb32(reader, &offset))
+        return TURBOWASM_MALFORMED_MODULE;
+    (void)alignment;
+    *out_offset = offset;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_exec_memory_load(
+    turbowasm_instance_impl *instance,
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    turbowasm_trap *trap,
+    uint8_t opcode) {
+    turbowasm_value address;
+    turbowasm_value out = {0};
+    uint32_t offset;
+    uint8_t *p;
+    size_t width;
+    turbowasm_status status;
+
+    status = turbowasm_exec_read_memarg(reader, &offset);
+    if (status != TURBOWASM_OK)
+        return status;
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_I32, &address);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    switch (opcode) {
+        case 0x28u: width = 4u; break;
+        case 0x29u: width = 8u; break;
+        case 0x2au: width = 4u; break;
+        case 0x2bu: width = 8u; break;
+        case 0x2cu: case 0x2du:
+        case 0x30u: case 0x31u: width = 1u; break;
+        case 0x2eu: case 0x2fu:
+        case 0x32u: case 0x33u: width = 2u; break;
+        case 0x34u: case 0x35u: width = 4u; break;
+        default: return TURBOWASM_UNSUPPORTED;
+    }
+
+    status = turbowasm_instance_memory_bounds(
+        instance, 0u, (uint32_t)address.as.i32,
+        offset, width, &p);
+    if (status == TURBOWASM_TRAPPED) {
+        *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        return TURBOWASM_TRAPPED;
+    }
+    if (status != TURBOWASM_OK)
+        return status;
+
+    switch (opcode) {
+        case 0x28u:
+            out.kind = TURBOWASM_VALUE_I32;
+            out.as.i32 = (int32_t)turbowasm_read_u32_le_bytes(p);
+            break;
+        case 0x29u:
+            out.kind = TURBOWASM_VALUE_I64;
+            out.as.i64 = (int64_t)turbowasm_read_u64_le_bytes(p);
+            break;
+        case 0x2au: {
+            uint32_t bits = turbowasm_read_u32_le_bytes(p);
+            out.kind = TURBOWASM_VALUE_F32;
+            memcpy(&out.as.f32, &bits, sizeof(bits));
+            break;
+        }
+        case 0x2bu: {
+            uint64_t bits = turbowasm_read_u64_le_bytes(p);
+            out.kind = TURBOWASM_VALUE_F64;
+            memcpy(&out.as.f64, &bits, sizeof(bits));
+            break;
+        }
+        case 0x2cu:
+            out.kind = TURBOWASM_VALUE_I32;
+            out.as.i32 = (int32_t)(int8_t)p[0];
+            break;
+        case 0x2du:
+            out.kind = TURBOWASM_VALUE_I32;
+            out.as.i32 = (int32_t)(uint8_t)p[0];
+            break;
+        case 0x2eu:
+            out.kind = TURBOWASM_VALUE_I32;
+            out.as.i32 = (int32_t)(int16_t)turbowasm_read_u16_le(p);
+            break;
+        case 0x2fu:
+            out.kind = TURBOWASM_VALUE_I32;
+            out.as.i32 = (int32_t)turbowasm_read_u16_le(p);
+            break;
+        case 0x30u:
+            out.kind = TURBOWASM_VALUE_I64;
+            out.as.i64 = (int64_t)(int8_t)p[0];
+            break;
+        case 0x31u:
+            out.kind = TURBOWASM_VALUE_I64;
+            out.as.i64 = (int64_t)(uint8_t)p[0];
+            break;
+        case 0x32u:
+            out.kind = TURBOWASM_VALUE_I64;
+            out.as.i64 = (int64_t)(int16_t)turbowasm_read_u16_le(p);
+            break;
+        case 0x33u:
+            out.kind = TURBOWASM_VALUE_I64;
+            out.as.i64 = (int64_t)turbowasm_read_u16_le(p);
+            break;
+        case 0x34u:
+            out.kind = TURBOWASM_VALUE_I64;
+            out.as.i64 =
+                (int64_t)(int32_t)turbowasm_read_u32_le_bytes(p);
+            break;
+        case 0x35u:
+            out.kind = TURBOWASM_VALUE_I64;
+            out.as.i64 =
+                (int64_t)(uint32_t)turbowasm_read_u32_le_bytes(p);
+            break;
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+
+    return turbowasm_stack_push(stack, out);
+}
+
+static turbowasm_status turbowasm_exec_memory_store(
+    turbowasm_instance_impl *instance,
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    turbowasm_trap *trap,
+    uint8_t opcode) {
+    turbowasm_value value;
+    turbowasm_value address;
+    turbowasm_value_kind expected;
+    uint32_t offset;
+    uint8_t *p;
+    size_t width;
+    turbowasm_status status;
+
+    status = turbowasm_exec_read_memarg(reader, &offset);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    switch (opcode) {
+        case 0x36u: expected = TURBOWASM_VALUE_I32; width = 4u; break;
+        case 0x37u: expected = TURBOWASM_VALUE_I64; width = 8u; break;
+        case 0x38u: expected = TURBOWASM_VALUE_F32; width = 4u; break;
+        case 0x39u: expected = TURBOWASM_VALUE_F64; width = 8u; break;
+        case 0x3au: case 0x3bu:
+            expected = TURBOWASM_VALUE_I32;
+            width = opcode == 0x3au ? 1u : 2u;
+            break;
+        case 0x3cu: case 0x3du: case 0x3eu:
+            expected = TURBOWASM_VALUE_I64;
+            width = opcode == 0x3cu ? 1u :
+                    opcode == 0x3du ? 2u : 4u;
+            break;
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+
+    status = turbowasm_stack_pop_kind(stack, expected, &value);
+    if (status != TURBOWASM_OK)
+        return status;
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_I32, &address);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = turbowasm_instance_memory_bounds(
+        instance, 0u, (uint32_t)address.as.i32,
+        offset, width, &p);
+    if (status == TURBOWASM_TRAPPED) {
+        *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        return TURBOWASM_TRAPPED;
+    }
+    if (status != TURBOWASM_OK)
+        return status;
+
+    switch (opcode) {
+        case 0x36u:
+            turbowasm_write_u32_le(p, (uint32_t)value.as.i32);
+            break;
+        case 0x37u:
+            turbowasm_write_u64_le(p, (uint64_t)value.as.i64);
+            break;
+        case 0x38u: {
+            uint32_t bits;
+            memcpy(&bits, &value.as.f32, sizeof(bits));
+            turbowasm_write_u32_le(p, bits);
+            break;
+        }
+        case 0x39u: {
+            uint64_t bits;
+            memcpy(&bits, &value.as.f64, sizeof(bits));
+            turbowasm_write_u64_le(p, bits);
+            break;
+        }
+        case 0x3au:
+            p[0] = (uint8_t)value.as.i32;
+            break;
+        case 0x3bu:
+            turbowasm_write_u16_le(p, (uint16_t)value.as.i32);
+            break;
+        case 0x3cu:
+            p[0] = (uint8_t)value.as.i64;
+            break;
+        case 0x3du:
+            turbowasm_write_u16_le(p, (uint16_t)value.as.i64);
+            break;
+        case 0x3eu:
+            turbowasm_write_u32_le(p, (uint32_t)value.as.i64);
+            break;
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_exec_memory_size_or_grow(
+    turbowasm_instance_impl *instance,
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    uint8_t opcode) {
+    uint8_t reserved;
+    uint32_t pages;
+    turbowasm_value out = {0};
+    turbowasm_status status;
+
+    if (!turbowasm_reader_u8(reader, &reserved))
+        return TURBOWASM_MALFORMED_MODULE;
+    if (reserved != 0u)
+        return TURBOWASM_UNSUPPORTED;
+
+    out.kind = TURBOWASM_VALUE_I32;
+
+    if (opcode == 0x3fu) {
+        status = turbowasm_instance_memory_size(
+            instance, 0u, &pages);
+        if (status != TURBOWASM_OK)
+            return status;
+        out.as.i32 = (int32_t)pages;
+    } else if (opcode == 0x40u) {
+        turbowasm_value delta;
+        status = turbowasm_stack_pop_kind(
+            stack, TURBOWASM_VALUE_I32, &delta);
+        if (status != TURBOWASM_OK)
+            return status;
+        status = turbowasm_instance_memory_grow(
+            instance, 0u, (uint32_t)delta.as.i32, &pages);
+        if (status != TURBOWASM_OK)
+            return status;
+        out.as.i32 = pages == UINT32_MAX
+            ? -1
+            : (int32_t)pages;
+    } else {
+        return TURBOWASM_UNSUPPORTED;
+    }
+
+    return turbowasm_stack_push(stack, out);
+}
+
 static turbowasm_status turbowasm_exec_function(
     turbowasm_instance_impl *instance,
     uint32_t function_index,
