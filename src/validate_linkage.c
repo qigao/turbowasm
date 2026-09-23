@@ -436,7 +436,7 @@ turbowasm_status turbowasm_validate_start_section(
     const turbowasm_validation_context *context) {
     uint32_t function_index;
 
-    if (section == NULL || summary == NULL)
+    if (section == NULL || summary == NULL || context == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(section, &function_index) ||
         turbowasm_reader_remaining(section) != 0u)
