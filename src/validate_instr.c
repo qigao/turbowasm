@@ -1018,6 +1018,12 @@ turbowasm_status turbowasm_validate_function_body(
                     goto done;
                 break;
             }
+            case 0x0eu: /* br_table */
+                result = turbowasm_validate_br_table(
+                    body, &stack, &controls);
+                if (result != TURBOWASM_OK)
+                    goto done;
+                break;
             case 0x0fu: /* return */
                 result = turbowasm_pop_results(
                     &stack, function_type);
@@ -1115,6 +1121,111 @@ turbowasm_status turbowasm_validate_function_body(
                 if (result != TURBOWASM_OK) goto done;
                 break;
             }
+            case 0x28u: /* i32.load */
+                result = turbowasm_validate_load(
+                    body, &stack, context, TW_I32, 2u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x29u: /* i64.load */
+                result = turbowasm_validate_load(
+                    body, &stack, context, TW_I64, 3u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x2au: /* f32.load */
+                result = turbowasm_validate_load(
+                    body, &stack, context, TW_F32, 2u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x2bu: /* f64.load */
+                result = turbowasm_validate_load(
+                    body, &stack, context, TW_F64, 3u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x2cu: case 0x2du: /* i32.load8_s/u */
+                result = turbowasm_validate_load(
+                    body, &stack, context, TW_I32, 0u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x2eu: case 0x2fu: /* i32.load16_s/u */
+                result = turbowasm_validate_load(
+                    body, &stack, context, TW_I32, 1u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x30u: case 0x31u: /* i64.load8_s/u */
+                result = turbowasm_validate_load(
+                    body, &stack, context, TW_I64, 0u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x32u: case 0x33u: /* i64.load16_s/u */
+                result = turbowasm_validate_load(
+                    body, &stack, context, TW_I64, 1u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x34u: case 0x35u: /* i64.load32_s/u */
+                result = turbowasm_validate_load(
+                    body, &stack, context, TW_I64, 2u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x36u: /* i32.store */
+                result = turbowasm_validate_store(
+                    body, &stack, context, TW_I32, 2u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x37u: /* i64.store */
+                result = turbowasm_validate_store(
+                    body, &stack, context, TW_I64, 3u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x38u: /* f32.store */
+                result = turbowasm_validate_store(
+                    body, &stack, context, TW_F32, 2u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x39u: /* f64.store */
+                result = turbowasm_validate_store(
+                    body, &stack, context, TW_F64, 3u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x3au: /* i32.store8 */
+                result = turbowasm_validate_store(
+                    body, &stack, context, TW_I32, 0u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x3bu: /* i32.store16 */
+                result = turbowasm_validate_store(
+                    body, &stack, context, TW_I32, 1u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x3cu: /* i64.store8 */
+                result = turbowasm_validate_store(
+                    body, &stack, context, TW_I64, 0u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x3du: /* i64.store16 */
+                result = turbowasm_validate_store(
+                    body, &stack, context, TW_I64, 1u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x3eu: /* i64.store32 */
+                result = turbowasm_validate_store(
+                    body, &stack, context, TW_I64, 2u);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x3fu: /* memory.size */
+                result = turbowasm_validate_memory_index_zero(
+                    body, context);
+                if (result != TURBOWASM_OK) goto done;
+                result = turbowasm_stack_push(&stack, TW_I32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0x40u: /* memory.grow */
+                result = turbowasm_validate_memory_index_zero(
+                    body, context);
+                if (result != TURBOWASM_OK) goto done;
+                result = turbowasm_stack_unary(
+                    &stack, TW_I32, TW_I32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
             case 0x41u: {
                 int32_t value;
                 if (!turbowasm_reader_sleb32(body, &value)) {
@@ -1241,6 +1352,97 @@ turbowasm_status turbowasm_validate_function_body(
             case 0xa3u: case 0xa4u: case 0xa5u: case 0xa6u:
                 result = turbowasm_stack_binary(
                     &stack, TW_F64, TW_F64);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xa7u: /* i32.wrap_i64 */
+                result = turbowasm_stack_convert(
+                    &stack, TW_I64, TW_I32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xa8u: case 0xa9u: /* i32.trunc_f32_s/u */
+                result = turbowasm_stack_convert(
+                    &stack, TW_F32, TW_I32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xaau: case 0xabu: /* i32.trunc_f64_s/u */
+                result = turbowasm_stack_convert(
+                    &stack, TW_F64, TW_I32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xacu: case 0xadu: /* i64.extend_i32_s/u */
+                result = turbowasm_stack_convert(
+                    &stack, TW_I32, TW_I64);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xaeu: case 0xafu: /* i64.trunc_f32_s/u */
+                result = turbowasm_stack_convert(
+                    &stack, TW_F32, TW_I64);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xb0u: case 0xb1u: /* i64.trunc_f64_s/u */
+                result = turbowasm_stack_convert(
+                    &stack, TW_F64, TW_I64);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xb2u: case 0xb3u: /* f32.convert_i32_s/u */
+                result = turbowasm_stack_convert(
+                    &stack, TW_I32, TW_F32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xb4u: case 0xb5u: /* f32.convert_i64_s/u */
+                result = turbowasm_stack_convert(
+                    &stack, TW_I64, TW_F32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xb6u: /* f32.demote_f64 */
+                result = turbowasm_stack_convert(
+                    &stack, TW_F64, TW_F32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xb7u: case 0xb8u: /* f64.convert_i32_s/u */
+                result = turbowasm_stack_convert(
+                    &stack, TW_I32, TW_F64);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xb9u: case 0xbau: /* f64.convert_i64_s/u */
+                result = turbowasm_stack_convert(
+                    &stack, TW_I64, TW_F64);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xbbu: /* f64.promote_f32 */
+                result = turbowasm_stack_convert(
+                    &stack, TW_F32, TW_F64);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xbcu: /* i32.reinterpret_f32 */
+                result = turbowasm_stack_convert(
+                    &stack, TW_F32, TW_I32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xbdu: /* i64.reinterpret_f64 */
+                result = turbowasm_stack_convert(
+                    &stack, TW_F64, TW_I64);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xbeu: /* f32.reinterpret_i32 */
+                result = turbowasm_stack_convert(
+                    &stack, TW_I32, TW_F32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xbfu: /* f64.reinterpret_i64 */
+                result = turbowasm_stack_convert(
+                    &stack, TW_I64, TW_F64);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xc0u: case 0xc1u: /* i32.extend8/16_s */
+                result = turbowasm_stack_unary(
+                    &stack, TW_I32, TW_I32);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xc2u: case 0xc3u: case 0xc4u:
+                /* i64.extend8/16/32_s */
+                result = turbowasm_stack_unary(
+                    &stack, TW_I64, TW_I64);
                 if (result != TURBOWASM_OK) goto done;
                 break;
             case 0xd0u: { /* ref.null */
