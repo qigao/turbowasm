@@ -150,6 +150,34 @@ static void test_demote_promote_descriptor_gap(void) {
     assert(load(bytes, sizeof(bytes)) == TURBOWASM_OK);
 }
 
+
+static void test_f64x2_ceil_floor_descriptor_gap(void) {
+    static const uint8_t ceil_bytes[] = {
+        WASM_HEADER,
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7b, 0x01, 0x7b,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x08, 0x01, 0x06,
+        0x00,
+        0x20, 0x00,
+        0xfd, 0x74,
+        0x0b
+    };
+    static const uint8_t floor_bytes[] = {
+        WASM_HEADER,
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7b, 0x01, 0x7b,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x08, 0x01, 0x06,
+        0x00,
+        0x20, 0x00,
+        0xfd, 0x75,
+        0x0b
+    };
+    assert(load(ceil_bytes, sizeof(ceil_bytes)) == TURBOWASM_OK);
+    assert(load(floor_bytes, sizeof(floor_bytes)) == TURBOWASM_OK);
+}
+
 static void test_simd_memory_requires_memory(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -172,6 +200,7 @@ int main(void) {
     test_lane_load_bounds();
     test_lane_store();
     test_demote_promote_descriptor_gap();
+    test_f64x2_ceil_floor_descriptor_gap();
     test_simd_memory_requires_memory();
     return 0;
 }
