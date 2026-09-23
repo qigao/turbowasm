@@ -335,6 +335,8 @@ turbowasm_status turbowasm_validate_export_section(
         return TURBOWASM_MALFORMED_MODULE;
 
     if (count != 0u) {
+        if ((size_t)count > SIZE_MAX / sizeof(*names))
+            return TURBOWASM_OUT_OF_MEMORY;
         names = (turbowasm_name_span *)calloc(
             (size_t)count, sizeof(*names));
         if (names == NULL)
