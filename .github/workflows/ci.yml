@@ -26,6 +26,13 @@ jobs:
           path: deps/salts
           persist-credentials: false
 
+      - name: Install native build tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y nasm ninja-build
+
       - name: Restore Salts build dependencies
         uses: ./deps/salts/.github/actions/setup-re2c-tools
 
