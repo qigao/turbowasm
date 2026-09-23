@@ -63,6 +63,7 @@ void turbowasm_validation_context_destroy(
     free(context->globals);
     free(context->tables);
     free(context->memories);
+    free(context->declared_function_refs);
     memset(context, 0, sizeof(*context));
 }
 
@@ -257,4 +258,78 @@ turbowasm_validation_context_global(
     if (context == NULL || global_index >= context->global_count)
         return NULL;
     return &context->globals[global_index];
+}
+
+static uint32_t turbowasm_validation_ref_lower_bound(
+    const turbowasm_validation_context *context,
+    uint32_t function_index,
+    bool *found) {
+    uint32_t low = 0u;
+    uint32_t high = context->declared_function_ref_count;
+
+    while (low < high) {
+        const uint32_t mid = low + (high - low) / 2u;
+        const uint32_t value = context->declared_function_refs[mid];
+        if (value < function_index)
+            low = mid + 1u;
+        else
+            high = mid;
+    }
+
+    if (found != NULL) {
+        *found = low < context->declared_function_ref_count &&
+                 context->declared_function_refs[low] == function_index;
+    }
+    return low;
+}
+
+bool turbowasm_validation_context_declare_function_ref(
+    turbowasm_validation_context *context,
+    uint32_t function_index) {
+    bool found = false;
+    uint32_t position;
+    uint32_t required;
+
+    if (context == NULL || function_index >= context->function_count)
+        return false;
+
+    position = turbowasm_validation_ref_lower_bound(
+        context, function_index, &found);
+    if (found)
+        return true;
+
+    if (context->declared_function_ref_count == UINT32_MAX)
+        return false;
+    required = context->declared_function_ref_count + 1u;
+
+    if (!turbowasm_validation_reserve(
+            (void **)&context->declared_function_refs,
+            &context->declared_function_ref_capacity,
+            required,
+            sizeof(*context->declared_function_refs)))
+        return false;
+
+    if (position < context->declared_function_ref_count) {
+        memmove(&context->declared_function_refs[position + 1u],
+                &context->declared_function_refs[position],
+                (size_t)(context->declared_function_ref_count - position) *
+                    sizeof(*context->declared_function_refs));
+    }
+
+    context->declared_function_refs[position] = function_index;
+    ++context->declared_function_ref_count;
+    return true;
+}
+
+bool turbowasm_validation_context_function_ref_declared(
+    const turbowasm_validation_context *context,
+    uint32_t function_index) {
+    bool found = false;
+
+    if (context == NULL || function_index >= context->function_count)
+        return false;
+
+    (void)turbowasm_validation_ref_lower_bound(
+        context, function_index, &found);
+    return found;
 }
