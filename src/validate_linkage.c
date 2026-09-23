@@ -306,7 +306,7 @@ turbowasm_status turbowasm_validate_table_section(
     uint32_t count;
     uint32_t index;
 
-    if (section == NULL || summary == NULL)
+    if (section == NULL || summary == NULL || ir == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(section, &count))
         return TURBOWASM_MALFORMED_MODULE;
@@ -332,7 +332,7 @@ turbowasm_status turbowasm_validate_memory_section(
     uint32_t count;
     uint32_t index;
 
-    if (section == NULL || summary == NULL)
+    if (section == NULL || summary == NULL || ir == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(section, &count))
         return TURBOWASM_MALFORMED_MODULE;
