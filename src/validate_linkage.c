@@ -475,10 +475,11 @@ turbowasm_status turbowasm_validate_start_section(
 
 turbowasm_status turbowasm_validate_data_count_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_validation_context *context) {
     uint32_t count;
 
-    if (section == NULL || summary == NULL)
+    if (section == NULL || summary == NULL || context == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(section, &count) ||
         turbowasm_reader_remaining(section) != 0u)
@@ -486,5 +487,7 @@ turbowasm_status turbowasm_validate_data_count_section(
 
     summary->has_data_count = true;
     summary->data_count = count;
+    context->has_data_count = true;
+    context->data_count = count;
     return TURBOWASM_OK;
 }
