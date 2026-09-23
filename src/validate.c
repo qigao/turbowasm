@@ -142,9 +142,9 @@ static turbowasm_status turbowasm_validate_local_decls(
         return TURBOWASM_MALFORMED_MODULE;
 
     for (group_index = 0u; group_index < group_count; ++group_index) {
-        if (!turbowasm_reader_uleb32(body, &local_count) ||
-            local_count == 0u)
+        if (!turbowasm_reader_uleb32(body, &local_count))
             return TURBOWASM_MALFORMED_MODULE;
+        (void)local_count;
         status = turbowasm_read_valtype(body);
         if (status != TURBOWASM_OK)
             return status;
