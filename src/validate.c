@@ -281,7 +281,8 @@ static turbowasm_status turbowasm_validate_section_payload(
             return turbowasm_validate_global_section(
                 section, summary, context);
         case TURBOWASM_SECTION_EXPORT:
-            return turbowasm_validate_export_section(section, summary);
+            return turbowasm_validate_export_section(
+                section, summary, context);
         case TURBOWASM_SECTION_START:
             return turbowasm_validate_start_section(
                 section, summary, context);
