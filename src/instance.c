@@ -357,23 +357,42 @@ static turbowasm_status turbowasm_exec_push_call_from_stack(
 }
 
 static turbowasm_status turbowasm_exec_finish_frame(
-    turbowasm_exec_context *context) {
+    turbowasm_exec_context *context,
+    bool explicit_return) {
     turbowasm_exec_frame *frame = turbowasm_exec_top_frame(context);
+    uint32_t result_count;
+    uint32_t result_source;
     uint32_t index;
 
     if (frame == NULL)
         return TURBOWASM_MALFORMED_MODULE;
 
-    if (context->values.size !=
-        frame->value_base + frame->type->result_count)
+    result_count = frame->type->result_count;
+    if (context->values.size < frame->value_base + result_count)
         return TURBOWASM_MALFORMED_MODULE;
 
-    for (index = 0u; index < frame->type->result_count; ++index) {
+    if (!explicit_return &&
+        context->values.size != frame->value_base + result_count)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    result_source = context->values.size - result_count;
+    if (result_source < frame->value_base)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    for (index = 0u; index < result_count; ++index) {
         if (!turbowasm_value_matches_type(
-                &context->values.values[frame->value_base + index],
+                &context->values.values[result_source + index],
                 frame->type->results[index]))
             return TURBOWASM_MALFORMED_MODULE;
     }
+
+    if (explicit_return && result_count != 0u) {
+        memmove(&context->values.values[frame->value_base],
+                &context->values.values[result_source],
+                (size_t)result_count *
+                    sizeof(*context->values.values));
+    }
+    context->values.size = frame->value_base + result_count;
 
     turbowasm_exec_frame_destroy(frame);
     --context->frames.size;
@@ -527,10 +546,10 @@ static turbowasm_status turbowasm_exec_step(
         case 0x0bu: /* end */
             if (turbowasm_reader_remaining(&reader) != 0u)
                 return TURBOWASM_UNSUPPORTED;
-            return turbowasm_exec_finish_frame(context);
+            return turbowasm_exec_finish_frame(context, false);
 
         case 0x0fu: /* return */
-            return turbowasm_exec_finish_frame(context);
+            return turbowasm_exec_finish_frame(context, true);
 
         case 0x10u: { /* call */
             uint32_t callee;
