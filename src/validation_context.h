@@ -15,6 +15,12 @@ typedef struct turbowasm_validation_func_type {
 typedef struct turbowasm_validation_function {
     uint32_t type_index;
     bool imported;
+
+    uint8_t *local_types;
+    uint32_t local_count;
+
+    const uint8_t *code;
+    uint32_t code_size;
 } turbowasm_validation_function;
 
 typedef struct turbowasm_validation_global {
@@ -101,6 +107,16 @@ bool turbowasm_validation_context_append_table(
 bool turbowasm_validation_context_append_memory(
     turbowasm_validation_context *context,
     bool imported);
+
+turbowasm_validation_function *
+turbowasm_validation_context_function_mut(
+    turbowasm_validation_context *context,
+    uint32_t function_index);
+
+const turbowasm_validation_function *
+turbowasm_validation_context_function(
+    const turbowasm_validation_context *context,
+    uint32_t function_index);
 
 const turbowasm_validation_func_type *
 turbowasm_validation_context_function_type(
