@@ -891,6 +891,7 @@ static turbowasm_status turbowasm_exec_function(
     const turbowasm_validation_func_type *type;
     turbowasm_value *locals = NULL;
     turbowasm_value_stack stack = {0};
+    turbowasm_exec_control_stack controls = {0};
     turbowasm_reader reader;
     uint32_t index;
     turbowasm_status status = TURBOWASM_OK;
@@ -950,6 +951,10 @@ static turbowasm_status turbowasm_exec_function(
 
     turbowasm_reader_init(&reader, function->code, function->code_size);
 
+    status = turbowasm_exec_control_push_function(&controls, type);
+    if (status != TURBOWASM_OK)
+        goto done;
+
     while (turbowasm_reader_remaining(&reader) != 0u && !finished) {
         uint8_t opcode;
 
@@ -965,12 +970,184 @@ static turbowasm_status turbowasm_exec_function(
                 goto done;
             case 0x01u: /* nop */
                 break;
+            case 0x02u: /* block */
+            case 0x03u: /* loop */
+            case 0x04u: { /* if */
+                uint32_t opcode_offset;
+                const turbowasm_validation_control *annotation;
+                turbowasm_exec_block_signature signature;
+                turbowasm_exec_control_kind kind;
+                turbowasm_value condition = {0};
+
+                if (reader.cursor <= function->code ||
+                    (size_t)(reader.cursor - function->code - 1u) >
+                        UINT32_MAX) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+                opcode_offset =
+                    (uint32_t)(reader.cursor - function->code - 1u);
+                annotation =
+                    turbowasm_validation_function_control_at(
+                        function, opcode_offset);
+                if (annotation == NULL ||
+                    annotation->end_offset == UINT32_MAX) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                status = turbowasm_exec_read_block_signature(
+                    &reader, context, &signature);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                if ((size_t)(reader.cursor - function->code) >
+                        UINT32_MAX ||
+                    (uint32_t)(reader.cursor - function->code) !=
+                        annotation->body_offset) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                kind = opcode == 0x02u
+                    ? TURBOWASM_EXEC_CONTROL_BLOCK
+                    : opcode == 0x03u
+                        ? TURBOWASM_EXEC_CONTROL_LOOP
+                        : TURBOWASM_EXEC_CONTROL_IF;
+
+                if (opcode == 0x04u) {
+                    status = turbowasm_stack_pop_kind(
+                        &stack, TURBOWASM_VALUE_I32, &condition);
+                    if (status != TURBOWASM_OK)
+                        goto done;
+                }
+
+                status = turbowasm_exec_control_push(
+                    &controls, &stack, kind,
+                    annotation, &signature);
+                if (status != TURBOWASM_OK)
+                    goto done;
+
+                if (opcode == 0x04u && condition.as.i32 == 0) {
+                    if (annotation->else_offset != UINT32_MAX) {
+                        if (annotation->else_offset == UINT32_MAX) {
+                            status = TURBOWASM_MALFORMED_MODULE;
+                            goto done;
+                        }
+                        status = turbowasm_exec_jump(
+                            &reader, function,
+                            annotation->else_offset + 1u);
+                    } else {
+                        status = turbowasm_exec_jump(
+                            &reader, function,
+                            annotation->end_offset);
+                    }
+                    if (status != TURBOWASM_OK)
+                        goto done;
+                }
+                break;
+            }
+            case 0x05u: { /* else */
+                uint32_t opcode_offset;
+                turbowasm_exec_control_frame *frame;
+
+                if (controls.size <= 1u ||
+                    reader.cursor <= function->code ||
+                    (size_t)(reader.cursor - function->code - 1u) >
+                        UINT32_MAX) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                opcode_offset =
+                    (uint32_t)(reader.cursor - function->code - 1u);
+                frame = &controls.frames[controls.size - 1u];
+                if (frame->kind != TURBOWASM_EXEC_CONTROL_IF ||
+                    frame->annotation == NULL ||
+                    frame->annotation->else_offset != opcode_offset ||
+                    frame->annotation->end_offset == UINT32_MAX) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                status = turbowasm_exec_jump(
+                    &reader, function,
+                    frame->annotation->end_offset);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
             case 0x0bu: /* end */
-                finished = true;
+                if (controls.size == 1u) {
+                    if (turbowasm_reader_remaining(&reader) != 0u) {
+                        status = TURBOWASM_MALFORMED_MODULE;
+                        goto done;
+                    }
+                    finished = true;
+                } else {
+                    uint32_t opcode_offset;
+                    turbowasm_exec_control_frame *frame;
+
+                    if (reader.cursor <= function->code ||
+                        (size_t)(reader.cursor - function->code - 1u) >
+                            UINT32_MAX) {
+                        status = TURBOWASM_MALFORMED_MODULE;
+                        goto done;
+                    }
+                    opcode_offset =
+                        (uint32_t)(reader.cursor - function->code - 1u);
+                    frame = &controls.frames[controls.size - 1u];
+                    if (frame->annotation == NULL ||
+                        frame->annotation->end_offset != opcode_offset) {
+                        status = TURBOWASM_MALFORMED_MODULE;
+                        goto done;
+                    }
+
+                    status = turbowasm_exec_finish_control(
+                        &stack, &controls);
+                    if (status != TURBOWASM_OK)
+                        goto done;
+                }
+                break;
+            case 0x0cu: /* br */
+            case 0x0du: { /* br_if */
+                uint32_t branch_depth;
+                turbowasm_value condition = {0};
+
+                if (!turbowasm_reader_uleb32(
+                        &reader, &branch_depth)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                if (opcode == 0x0du) {
+                    status = turbowasm_stack_pop_kind(
+                        &stack, TURBOWASM_VALUE_I32, &condition);
+                    if (status != TURBOWASM_OK)
+                        goto done;
+                    if (condition.as.i32 == 0)
+                        break;
+                }
+
+                status = turbowasm_exec_branch(
+                    &stack, &controls, &reader, function,
+                    branch_depth, &finished, &returned);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
+            case 0x0eu: /* br_table */
+                status = turbowasm_exec_br_table(
+                    &reader, &stack, &controls, function,
+                    &finished, &returned);
+                if (status != TURBOWASM_OK)
+                    goto done;
                 break;
             case 0x0fu: /* return */
-                returned = true;
-                finished = true;
+                status = turbowasm_exec_branch(
+                    &stack, &controls, &reader, function,
+                    controls.size - 1u, &finished, &returned);
+                if (status != TURBOWASM_OK)
+                    goto done;
                 break;
             case 0x10u: /* call */
                 status = turbowasm_exec_direct_call(
@@ -1142,6 +1319,7 @@ static turbowasm_status turbowasm_exec_function(
 done:
     free(locals);
     free(stack.values);
+    free(controls.frames);
     return status;
 }
 
