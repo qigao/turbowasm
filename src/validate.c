@@ -191,7 +191,7 @@ static turbowasm_status turbowasm_validate_function_section(
 static turbowasm_status turbowasm_validate_code_section(
     turbowasm_reader *section,
     turbowasm_module_summary *summary,
-    const turbowasm_validation_context *context) {
+    turbowasm_validation_context *context) {
     uint32_t count;
     uint32_t index;
 
