@@ -9,10 +9,20 @@ enum {
     SIMD_F64 = 0x7c
 };
 
-#define D(op, form) { (op), (form), 0u, 0u }
-#define S(op, type) { (op), TURBOWASM_SIMD_SCALAR_SPLAT, (type), 0u }
-#define E(op, type, lanes)     { (op), TURBOWASM_SIMD_LANE_EXTRACT, (type), (lanes) }
-#define R(op, type, lanes)     { (op), TURBOWASM_SIMD_LANE_REPLACE, (type), (lanes) }
+#define D(op, form) { (op), (form), 0u, 0u, 0u }
+#define S(op, type) { (op), TURBOWASM_SIMD_SCALAR_SPLAT, (type), 0u, 0u }
+#define E(op, type, lanes) \
+    { (op), TURBOWASM_SIMD_LANE_EXTRACT, (type), (lanes), 0u }
+#define R(op, type, lanes) \
+    { (op), TURBOWASM_SIMD_LANE_REPLACE, (type), (lanes), 0u }
+#define ML(op, align) \
+    { (op), TURBOWASM_SIMD_MEMORY_LOAD_V128, 0u, 0u, (align) }
+#define MS(op, align) \
+    { (op), TURBOWASM_SIMD_MEMORY_STORE_V128, 0u, 0u, (align) }
+#define MLL(op, align, lanes) \
+    { (op), TURBOWASM_SIMD_MEMORY_LOAD_LANE, 0u, (lanes), (align) }
+#define MSL(op, align, lanes) \
+    { (op), TURBOWASM_SIMD_MEMORY_STORE_LANE, 0u, (lanes), (align) }
 
 /*
  * SIMD validation deliberately classifies instructions by Wasm stack shape.
@@ -20,6 +30,18 @@ enum {
  * binary value type.
  */
 static const turbowasm_simd_descriptor descriptors[] = {
+    ML(0x00u, 4u),
+    ML(0x01u, 3u),
+    ML(0x02u, 3u),
+    ML(0x03u, 3u),
+    ML(0x04u, 3u),
+    ML(0x05u, 3u),
+    ML(0x06u, 3u),
+    ML(0x07u, 0u),
+    ML(0x08u, 1u),
+    ML(0x09u, 2u),
+    ML(0x0au, 3u),
+    MS(0x0bu, 4u),
     D(0x0cu, TURBOWASM_SIMD_CONST_V128),
     D(0x0du, TURBOWASM_SIMD_SHUFFLE),
     D(0x0eu, TURBOWASM_SIMD_V128_BINARY),
@@ -97,6 +119,17 @@ static const turbowasm_simd_descriptor descriptors[] = {
     D(0x51u, TURBOWASM_SIMD_V128_BINARY),
     D(0x52u, TURBOWASM_SIMD_V128_TERNARY),
     D(0x53u, TURBOWASM_SIMD_V128_TEST_I32),
+
+    MLL(0x54u, 0u, 16u),
+    MLL(0x55u, 1u, 8u),
+    MLL(0x56u, 2u, 4u),
+    MLL(0x57u, 3u, 2u),
+    MSL(0x58u, 0u, 16u),
+    MSL(0x59u, 1u, 8u),
+    MSL(0x5au, 2u, 4u),
+    MSL(0x5bu, 3u, 2u),
+    ML(0x5cu, 2u),
+    ML(0x5du, 3u),
 
     /* Common integer/floating arithmetic already accepted by the validator. */
     D(0x60u, TURBOWASM_SIMD_V128_UNARY),
@@ -244,6 +277,10 @@ static const turbowasm_simd_descriptor descriptors[] = {
     D(0xffu, TURBOWASM_SIMD_V128_UNARY)
 };
 
+#undef MSL
+#undef MLL
+#undef MS
+#undef ML
 #undef R
 #undef E
 #undef S
