@@ -8,7 +8,7 @@
 
 turbowasm_status turbowasm_validate_function_body(
     turbowasm_reader *body,
-    const turbowasm_validation_context *context,
+    turbowasm_validation_context *context,
     uint32_t function_index);
 
 #endif /* TURBOWASM_VALIDATE_INSTR_H */
