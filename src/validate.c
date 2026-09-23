@@ -1,4 +1,5 @@
 #include "validate.h"
+#include "validate_linkage.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -208,8 +209,18 @@ static turbowasm_status turbowasm_validate_section_payload(
     switch (id) {
         case TURBOWASM_SECTION_TYPE:
             return turbowasm_validate_type_section(section, summary);
+        case TURBOWASM_SECTION_IMPORT:
+            return turbowasm_validate_import_section(section, summary);
         case TURBOWASM_SECTION_FUNCTION:
             return turbowasm_validate_function_section(section, summary);
+        case TURBOWASM_SECTION_TABLE:
+            return turbowasm_validate_table_section(section, summary);
+        case TURBOWASM_SECTION_MEMORY:
+            return turbowasm_validate_memory_section(section, summary);
+        case TURBOWASM_SECTION_EXPORT:
+            return turbowasm_validate_export_section(section, summary);
+        case TURBOWASM_SECTION_DATA_COUNT:
+            return turbowasm_validate_data_count_section(section, summary);
         case TURBOWASM_SECTION_CODE:
             return turbowasm_validate_code_section(section, summary);
         default:
@@ -267,6 +278,11 @@ turbowasm_status turbowasm_validate_sections(
     }
 
     if (summary->code_count != summary->function_count)
+        return TURBOWASM_MALFORMED_MODULE;
+    if (summary->has_data_count &&
+        (summary->standard_section_mask &
+         (UINT32_C(1) << TURBOWASM_SECTION_DATA)) == 0u &&
+        summary->data_count != 0u)
         return TURBOWASM_MALFORMED_MODULE;
     return TURBOWASM_OK;
 }
