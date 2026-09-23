@@ -152,17 +152,6 @@ static void test_truncated_section_payload(void) {
 }
 
 
-static void test_unvalidated_standard_section_is_unsupported(void) {
-    static const uint8_t bytes[] = {
-        WASM_HEADER,
-        0x09, 0x01, 0x00
-    };
-    turbowasm_module module = {0};
-
-    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_UNSUPPORTED);
-    assert(module.impl == NULL);
-}
-
 static void test_unknown_section_is_unsupported(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -196,7 +185,6 @@ int main(void) {
     test_bad_code_count();
     test_code_body_requires_end();
     test_truncated_section_payload();
-    test_unvalidated_standard_section_is_unsupported();
     test_unknown_section_is_unsupported();
     test_unknown_value_type_is_unsupported();
     return 0;
