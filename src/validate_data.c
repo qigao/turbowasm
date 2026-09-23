@@ -68,9 +68,9 @@ static bool turbowasm_memory_index_valid(
     return context != NULL && index < context->memory_count;
 }
 
-static turbowasm_status turbowasm_read_const_expr(
+turbowasm_status turbowasm_validate_const_expr(
     turbowasm_reader *reader,
-    const turbowasm_validation_context *context,
+    turbowasm_validation_context *context,
     uint8_t *out_type) {
     uint8_t opcode;
     uint8_t end;
@@ -128,6 +128,9 @@ static turbowasm_status turbowasm_read_const_expr(
                 return TURBOWASM_MALFORMED_MODULE;
             if (!turbowasm_function_index_valid(function_index, context))
                 return TURBOWASM_MALFORMED_MODULE;
+            if (!turbowasm_validation_context_declare_function_ref(
+                    context, function_index))
+                return TURBOWASM_OUT_OF_MEMORY;
             *out_type = TURBOWASM_VAL_FUNCREF;
             break;
         }
@@ -189,7 +192,7 @@ turbowasm_status turbowasm_validate_global_section(
 
         if (status != TURBOWASM_OK)
             return status;
-        status = turbowasm_read_const_expr(
+        status = turbowasm_validate_const_expr(
             section, context, &expression_type);
         if (status != TURBOWASM_OK)
             return status;
@@ -219,9 +222,9 @@ static turbowasm_status turbowasm_skip_byte_vector(
 
 static turbowasm_status turbowasm_read_i32_offset_expr(
     turbowasm_reader *reader,
-    const turbowasm_validation_context *context) {
+    turbowasm_validation_context *context) {
     uint8_t type;
-    turbowasm_status status = turbowasm_read_const_expr(
+    turbowasm_status status = turbowasm_validate_const_expr(
         reader, context, &type);
     if (status != TURBOWASM_OK)
         return status;
@@ -233,7 +236,7 @@ static turbowasm_status turbowasm_read_i32_offset_expr(
 turbowasm_status turbowasm_validate_data_section(
     turbowasm_reader *section,
     turbowasm_module_summary *summary,
-    const turbowasm_validation_context *context) {
+    turbowasm_validation_context *context) {
     uint32_t count;
     uint32_t index;
 
