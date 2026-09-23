@@ -1,5 +1,6 @@
 #include "validate.h"
 #include "validate_linkage.h"
+#include "validate_segments.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -252,14 +253,20 @@ static turbowasm_status turbowasm_validate_section_payload(
             return turbowasm_validate_table_section(section, summary, ir);
         case TURBOWASM_SECTION_MEMORY:
             return turbowasm_validate_memory_section(section, summary, ir);
+        case TURBOWASM_SECTION_GLOBAL:
+            return turbowasm_validate_global_section(section, summary, ir);
         case TURBOWASM_SECTION_EXPORT:
             return turbowasm_validate_export_section(section, summary);
         case TURBOWASM_SECTION_START:
             return turbowasm_validate_start_section(section, summary, ir);
+        case TURBOWASM_SECTION_ELEMENT:
+            return turbowasm_validate_element_section(section, summary, ir);
         case TURBOWASM_SECTION_DATA_COUNT:
             return turbowasm_validate_data_count_section(section, summary);
         case TURBOWASM_SECTION_CODE:
             return turbowasm_validate_code_section(section, summary);
+        case TURBOWASM_SECTION_DATA:
+            return turbowasm_validate_data_section(section, summary, ir);
         default:
             /* A bounded payload is not the same as a validated payload.
              * Standard sections without a semantic validator fail closed until
