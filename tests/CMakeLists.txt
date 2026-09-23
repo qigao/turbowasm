@@ -56,3 +56,12 @@ set_target_properties(turbowasm_element_validation_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_element_validation_test
          COMMAND turbowasm_element_validation_test)
+
+add_executable(turbowasm_instruction_validation_test instruction_validation_test.c)
+target_link_libraries(turbowasm_instruction_validation_test PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_instruction_validation_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_instruction_validation_test
+         COMMAND turbowasm_instruction_validation_test)
