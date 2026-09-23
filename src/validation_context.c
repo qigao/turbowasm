@@ -63,6 +63,7 @@ void turbowasm_validation_context_destroy(
     free(context->globals);
     free(context->tables);
     free(context->memories);
+    free(context->declared_refs);
     memset(context, 0, sizeof(*context));
 }
 
@@ -257,4 +258,36 @@ turbowasm_validation_context_global(
     if (context == NULL || global_index >= context->global_count)
         return NULL;
     return &context->globals[global_index];
+}
+
+bool turbowasm_validation_context_declare_function_ref(
+    turbowasm_validation_context *context,
+    uint32_t function_index) {
+    if (context == NULL || function_index >= context->function_count)
+        return false;
+
+    if (context->declared_refs == NULL) {
+        if (context->function_count == 0u)
+            return false;
+        context->declared_refs = (uint8_t *)calloc(
+            (size_t)context->function_count, 1u);
+        if (context->declared_refs == NULL)
+            return false;
+        context->declared_ref_count = context->function_count;
+    }
+
+    if (function_index >= context->declared_ref_count)
+        return false;
+
+    context->declared_refs[function_index] = 1u;
+    return true;
+}
+
+bool turbowasm_validation_context_has_function_ref(
+    const turbowasm_validation_context *context,
+    uint32_t function_index) {
+    return context != NULL &&
+           context->declared_refs != NULL &&
+           function_index < context->declared_ref_count &&
+           context->declared_refs[function_index] != 0u;
 }
