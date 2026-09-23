@@ -587,13 +587,30 @@ static turbowasm_status turbowasm_exec_function(
     turbowasm_trap *trap,
     uint32_t depth);
 
-static turbowasm_status turbowasm_exec_direct_call(
+static bool turbowasm_exec_type_equal(
+    const turbowasm_validation_func_type *left,
+    const turbowasm_validation_func_type *right) {
+    if (left == NULL || right == NULL ||
+        left->param_count != right->param_count ||
+        left->result_count != right->result_count)
+        return false;
+    if (left->param_count != 0u &&
+        memcmp(left->params, right->params,
+               (size_t)left->param_count) != 0)
+        return false;
+    if (left->result_count != 0u &&
+        memcmp(left->results, right->results,
+               (size_t)left->result_count) != 0)
+        return false;
+    return true;
+}
+
+static turbowasm_status turbowasm_exec_call_index(
     turbowasm_instance_impl *instance,
-    turbowasm_reader *reader,
+    uint32_t function_index,
     turbowasm_value_stack *stack,
     turbowasm_trap *trap,
     uint32_t depth) {
-    uint32_t function_index;
     const turbowasm_module_impl *module;
     const turbowasm_validation_func_type *type;
     turbowasm_value *arguments = NULL;
@@ -602,14 +619,12 @@ static turbowasm_status turbowasm_exec_direct_call(
     uint32_t index;
     turbowasm_status status;
 
-    if (instance == NULL)
+    if (instance == NULL || stack == NULL || trap == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+
     module = turbowasm_module_impl_get(instance->module);
     if (module == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-
-    if (!turbowasm_reader_uleb32(reader, &function_index))
-        return TURBOWASM_MALFORMED_MODULE;
 
     type = turbowasm_validation_context_function_type(
         &module->validation, function_index);
@@ -668,6 +683,84 @@ done:
     free(arguments);
     free(results);
     return status;
+}
+
+static turbowasm_status turbowasm_exec_direct_call(
+    turbowasm_instance_impl *instance,
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    turbowasm_trap *trap,
+    uint32_t depth) {
+    uint32_t function_index;
+
+    if (!turbowasm_reader_uleb32(reader, &function_index))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    return turbowasm_exec_call_index(
+        instance, function_index, stack, trap, depth);
+}
+
+static turbowasm_status turbowasm_exec_indirect_call(
+    turbowasm_instance_impl *instance,
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    turbowasm_trap *trap,
+    uint32_t depth) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_func_type *expected_type;
+    const turbowasm_validation_func_type *actual_type;
+    turbowasm_instance_table_entry entry;
+    turbowasm_value selector;
+    uint32_t type_index;
+    uint32_t table_index;
+    turbowasm_status status;
+
+    if (instance == NULL || reader == NULL ||
+        stack == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!turbowasm_reader_uleb32(reader, &type_index) ||
+        !turbowasm_reader_uleb32(reader, &table_index))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    expected_type = turbowasm_validation_context_type(
+        &module->validation, type_index);
+    if (expected_type == NULL || !expected_type->defined)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_I32, &selector);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = turbowasm_instance_table_lookup(
+        instance, table_index,
+        (uint32_t)selector.as.i32, &entry);
+    if (status == TURBOWASM_TRAPPED) {
+        *trap = TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS;
+        return TURBOWASM_TRAPPED;
+    }
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (entry.is_null) {
+        *trap = TURBOWASM_TRAP_INDIRECT_CALL_NULL;
+        return TURBOWASM_TRAPPED;
+    }
+
+    actual_type = turbowasm_validation_context_function_type(
+        &module->validation, entry.function_index);
+    if (!turbowasm_exec_type_equal(expected_type, actual_type)) {
+        *trap = TURBOWASM_TRAP_INDIRECT_CALL_TYPE_MISMATCH;
+        return TURBOWASM_TRAPPED;
+    }
+
+    return turbowasm_exec_call_index(
+        instance, entry.function_index, stack, trap, depth);
 }
 
 static turbowasm_status turbowasm_exec_i32_binary(
