@@ -313,6 +313,282 @@ static turbowasm_status turbowasm_validate_result_stack(
         : TURBOWASM_MALFORMED_MODULE;
 }
 
+
+typedef struct turbowasm_block_signature {
+    const uint8_t *start_types;
+    uint32_t start_count;
+    const uint8_t *end_types;
+    uint32_t end_count;
+    uint8_t inline_end;
+} turbowasm_block_signature;
+
+static turbowasm_status turbowasm_stack_pop_types(
+    turbowasm_type_stack *stack,
+    const uint8_t *types,
+    uint32_t count) {
+    uint32_t index = count;
+
+    while (index != 0u) {
+        turbowasm_status status;
+        --index;
+        status = turbowasm_stack_pop(stack, types[index]);
+        if (status != TURBOWASM_OK)
+            return status;
+    }
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_stack_push_types(
+    turbowasm_type_stack *stack,
+    const uint8_t *types,
+    uint32_t count) {
+    uint32_t index;
+
+    for (index = 0u; index < count; ++index) {
+        turbowasm_status status = turbowasm_stack_push(
+            stack, types[index]);
+        if (status != TURBOWASM_OK)
+            return status;
+    }
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_read_block_signature(
+    turbowasm_reader *body,
+    const turbowasm_validation_context *context,
+    turbowasm_block_signature *signature) {
+    uint8_t first;
+
+    if (body == NULL || context == NULL || signature == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memset(signature, 0, sizeof(*signature));
+    if (!turbowasm_reader_u8(body, &first))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (first == 0x40u)
+        return TURBOWASM_OK;
+
+    if (turbowasm_instr_valtype(first)) {
+        signature->inline_end = first;
+        signature->end_types = &signature->inline_end;
+        signature->end_count = 1u;
+        return TURBOWASM_OK;
+    }
+
+    {
+        uint64_t value = (uint64_t)(first & 0x7fu);
+        unsigned shift = 7u;
+        unsigned count = 1u;
+        uint8_t byte = first;
+        int64_t signed_value;
+        const turbowasm_validation_func_type *type;
+
+        while ((byte & 0x80u) != 0u) {
+            if (count >= 5u || !turbowasm_reader_u8(body, &byte))
+                return TURBOWASM_MALFORMED_MODULE;
+            value |= (uint64_t)(byte & 0x7fu) << shift;
+            shift += 7u;
+            ++count;
+        }
+
+        if ((byte & 0x40u) != 0u && shift < 64u)
+            value |= UINT64_MAX << shift;
+        signed_value = (int64_t)value;
+
+        if (signed_value < 0 ||
+            (uint64_t)signed_value > UINT32_MAX)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        type = turbowasm_validation_context_type(
+            context, (uint32_t)signed_value);
+        if (type == NULL || !type->defined)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        signature->start_types = type->params;
+        signature->start_count = type->param_count;
+        signature->end_types = type->results;
+        signature->end_count = type->result_count;
+        return TURBOWASM_OK;
+    }
+}
+
+static turbowasm_status turbowasm_control_push(
+    turbowasm_type_stack *stack,
+    turbowasm_control_stack *controls,
+    turbowasm_control_kind kind,
+    const uint8_t *start_types,
+    uint32_t start_count,
+    const uint8_t *end_types,
+    uint32_t end_count) {
+    turbowasm_control_frame frame = {0};
+    turbowasm_control_frame *stored;
+    turbowasm_status status;
+
+    if (stack == NULL || controls == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (controls->size == UINT32_MAX)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    if (!turbowasm_copy_types(
+            start_types, start_count, &frame.start_types) ||
+        !turbowasm_copy_types(
+            end_types, end_count, &frame.end_types)) {
+        turbowasm_control_frame_destroy(&frame);
+        return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    status = turbowasm_stack_pop_types(
+        stack, start_types, start_count);
+    if (status != TURBOWASM_OK) {
+        turbowasm_control_frame_destroy(&frame);
+        return status;
+    }
+
+    if (!turbowasm_control_reserve(
+            controls, controls->size + 1u)) {
+        turbowasm_control_frame_destroy(&frame);
+        return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    frame.kind = kind;
+    frame.height = stack->size;
+    frame.parent_floor = stack->floor;
+    frame.parent_unreachable = stack->unreachable;
+    frame.start_count = start_count;
+    frame.end_count = end_count;
+
+    stored = &controls->frames[controls->size++];
+    *stored = frame;
+
+    stack->floor = stored->height;
+    stack->unreachable = false;
+    status = turbowasm_stack_push_types(
+        stack, stored->start_types, stored->start_count);
+    return status;
+}
+
+static void turbowasm_control_mark_unreachable(
+    turbowasm_type_stack *stack) {
+    stack->size = stack->floor;
+    stack->unreachable = true;
+}
+
+static turbowasm_status turbowasm_control_validate_end(
+    turbowasm_type_stack *stack,
+    const turbowasm_control_frame *frame) {
+    turbowasm_status status = turbowasm_stack_pop_types(
+        stack, frame->end_types, frame->end_count);
+    if (status != TURBOWASM_OK)
+        return status;
+    return stack->size == frame->height
+        ? TURBOWASM_OK
+        : TURBOWASM_MALFORMED_MODULE;
+}
+
+static turbowasm_status turbowasm_control_else(
+    turbowasm_type_stack *stack,
+    turbowasm_control_stack *controls) {
+    turbowasm_control_frame *frame = turbowasm_control_top(controls);
+    turbowasm_status status;
+
+    if (frame == NULL ||
+        frame->kind != TURBOWASM_CTRL_IF ||
+        frame->else_seen)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    status = turbowasm_control_validate_end(stack, frame);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    stack->size = frame->height;
+    stack->floor = frame->height;
+    stack->unreachable = false;
+    status = turbowasm_stack_push_types(
+        stack, frame->start_types, frame->start_count);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    frame->else_seen = true;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_control_end(
+    turbowasm_type_stack *stack,
+    turbowasm_control_stack *controls) {
+    turbowasm_control_frame *frame = turbowasm_control_top(controls);
+    turbowasm_status status;
+    uint32_t parent_floor;
+    bool parent_unreachable;
+    uint32_t end_count;
+    uint8_t *end_types;
+
+    if (frame == NULL || frame->kind == TURBOWASM_CTRL_FUNCTION)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (frame->kind == TURBOWASM_CTRL_IF &&
+        !frame->else_seen &&
+        !turbowasm_types_equal(
+            frame->start_types, frame->start_count,
+            frame->end_types, frame->end_count))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    status = turbowasm_control_validate_end(stack, frame);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    parent_floor = frame->parent_floor;
+    parent_unreachable = frame->parent_unreachable;
+    end_count = frame->end_count;
+    end_types = frame->end_types;
+    frame->end_types = NULL;
+
+    stack->size = frame->height;
+    stack->floor = parent_floor;
+    stack->unreachable = parent_unreachable;
+
+    turbowasm_control_frame_destroy(frame);
+    --controls->size;
+
+    status = turbowasm_stack_push_types(
+        stack, end_types, end_count);
+    free(end_types);
+    return status;
+}
+
+static turbowasm_status turbowasm_control_branch(
+    turbowasm_type_stack *stack,
+    const turbowasm_control_stack *controls,
+    uint32_t depth,
+    bool conditional) {
+    const turbowasm_control_frame *target =
+        turbowasm_control_target(controls, depth);
+    const uint8_t *types;
+    uint32_t count;
+    turbowasm_status status;
+
+    if (target == NULL)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (target->kind == TURBOWASM_CTRL_LOOP) {
+        types = target->start_types;
+        count = target->start_count;
+    } else {
+        types = target->end_types;
+        count = target->end_count;
+    }
+
+    status = turbowasm_stack_pop_types(stack, types, count);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (conditional)
+        return turbowasm_stack_push_types(stack, types, count);
+
+    turbowasm_control_mark_unreachable(stack);
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status turbowasm_read_locals(
     turbowasm_reader *body,
     const turbowasm_validation_func_type *function_type,
