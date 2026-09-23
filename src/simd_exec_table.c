@@ -9,15 +9,15 @@
 
 #define BIN(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_BINARY, &(desc_), \
-      (uint8_t)(op_), (shape_) }
+      (uint8_t)(op_), (shape_), 0u }
 
 #define CMP(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_COMPARE, &(desc_), \
-      (uint8_t)(op_), (shape_) }
+      (uint8_t)(op_), (shape_), 0u }
 
 #define SH(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_SHIFT, &(desc_), \
-      (uint8_t)(op_), (shape_) }
+      (uint8_t)(op_), (shape_), 0u }
 
 #define SEL(opcode_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_SELECT, &cmeta_vector_i8x16, \
