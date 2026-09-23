@@ -67,7 +67,7 @@ static void test_passive_data_bulk_runtime(void) {
         WASM_HEADER,
 
         /* type0 [] -> i32, type1 [] -> [] */
-        0x01, 0x09,
+        0x01, 0x08,
         0x02,
         0x60, 0x00, 0x01, 0x7f,
         0x60, 0x00, 0x00,
@@ -169,7 +169,7 @@ static void test_passive_element_bulk_runtime(void) {
         WASM_HEADER,
 
         /* type0 [] -> i32, type1 [] -> [] */
-        0x01, 0x09,
+        0x01, 0x08,
         0x02,
         0x60, 0x00, 0x01, 0x7f,
         0x60, 0x00, 0x00,
