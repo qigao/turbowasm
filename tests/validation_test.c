@@ -1,5 +1,8 @@
 #include <turbowasm/turbowasm.h>
 
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -152,7 +155,7 @@ static void test_truncated_section_payload(void) {
 static void test_unvalidated_standard_section_is_unsupported(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
-        0x05, 0x01, 0x00
+        0x09, 0x01, 0x00
     };
     turbowasm_module module = {0};
 

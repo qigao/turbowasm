@@ -1,5 +1,8 @@
 #include <turbowasm/turbowasm.h>
 
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
