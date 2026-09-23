@@ -13,8 +13,8 @@ static void test_execution_table_is_validation_subset(void) {
     size_t index;
     size_t other;
 
-    /* First generic Salts-backed family slice. */
-    assert(count == 90u);
+    /* Generic arithmetic/compare + complete SIMD memory variants. */
+    assert(count == 108u);
 
     for (index = 0u; index < count; ++index) {
         const turbowasm_simd_exec_descriptor *descriptor =
@@ -39,6 +39,26 @@ static void test_execution_table_is_validation_subset(void) {
 
 static void test_representative_semantics(void) {
     const turbowasm_simd_exec_descriptor *descriptor;
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x01u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_EXTEND);
+    assert(descriptor->vector_desc == &cmeta_vector_i16x8);
+    assert(descriptor->memory_width == 8u);
+    assert(descriptor->result_shape == TURBOWASM_V128_I16X8);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x57u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_LOAD_LANE);
+    assert(descriptor->vector_desc == &cmeta_vector_u64x2);
+    assert(descriptor->memory_width == 8u);
+    assert(descriptor->result_shape == TURBOWASM_V128_I64X2);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x5bu);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE);
+    assert(descriptor->vector_desc == &cmeta_vector_u64x2);
+    assert(descriptor->memory_width == 8u);
 
     descriptor = turbowasm_simd_exec_descriptor_find(0x26u);
     assert(descriptor != NULL);
