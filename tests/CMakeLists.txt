@@ -144,3 +144,14 @@ set_target_properties(turbowasm_retained_instance_metadata_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_retained_instance_metadata_test
          COMMAND turbowasm_retained_instance_metadata_test)
+
+add_executable(turbowasm_retained_segment_metadata_test
+  retained_segment_metadata_test.c)
+target_link_libraries(turbowasm_retained_segment_metadata_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_retained_segment_metadata_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_retained_segment_metadata_test
+         COMMAND turbowasm_retained_segment_metadata_test)
