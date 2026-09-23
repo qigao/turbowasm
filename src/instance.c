@@ -125,6 +125,28 @@ static turbowasm_status turbowasm_stack_pop_kind(
         : TURBOWASM_TYPE_MISMATCH;
 }
 
+static int32_t turbowasm_sar32(int32_t value, uint32_t shift) {
+    uint32_t bits = (uint32_t)value;
+    shift &= 31u;
+    if (shift == 0u)
+        return value;
+    if (value >= 0)
+        return (int32_t)(bits >> shift);
+    return (int32_t)((bits >> shift) |
+                     (~UINT32_C(0) << (32u - shift)));
+}
+
+static int64_t turbowasm_sar64(int64_t value, uint64_t shift) {
+    uint64_t bits = (uint64_t)value;
+    shift &= 63u;
+    if (shift == 0u)
+        return value;
+    if (value >= 0)
+        return (int64_t)(bits >> shift);
+    return (int64_t)((bits >> shift) |
+                     (~UINT64_C(0) << (64u - shift)));
+}
+
 static uint32_t turbowasm_rotl32(uint32_t value, uint32_t shift) {
     shift &= 31u;
     return shift == 0u
@@ -305,7 +327,9 @@ static turbowasm_status turbowasm_exec_i32_binary(
         case 0x72u: out.as.i32 = (int32_t)(a | b); break;
         case 0x73u: out.as.i32 = (int32_t)(a ^ b); break;
         case 0x74u: out.as.i32 = (int32_t)(a << (b & 31u)); break;
-        case 0x75u: out.as.i32 = left.as.i32 >> (b & 31u); break;
+        case 0x75u:
+            out.as.i32 = turbowasm_sar32(left.as.i32, b);
+            break;
         case 0x76u: out.as.i32 = (int32_t)(a >> (b & 31u)); break;
         case 0x77u: out.as.i32 = (int32_t)turbowasm_rotl32(a, b); break;
         case 0x78u: out.as.i32 = (int32_t)turbowasm_rotr32(a, b); break;
@@ -380,7 +404,9 @@ static turbowasm_status turbowasm_exec_i64_binary(
         case 0x84u: out.as.i64 = (int64_t)(a | b); break;
         case 0x85u: out.as.i64 = (int64_t)(a ^ b); break;
         case 0x86u: out.as.i64 = (int64_t)(a << (b & 63u)); break;
-        case 0x87u: out.as.i64 = left.as.i64 >> (b & 63u); break;
+        case 0x87u:
+            out.as.i64 = turbowasm_sar64(left.as.i64, b);
+            break;
         case 0x88u: out.as.i64 = (int64_t)(a >> (b & 63u)); break;
         case 0x89u: out.as.i64 = (int64_t)turbowasm_rotl64(a, b); break;
         case 0x8au: out.as.i64 = (int64_t)turbowasm_rotr64(a, b); break;
