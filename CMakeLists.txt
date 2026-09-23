@@ -33,6 +33,7 @@ add_library(turbowasm
   src/module.c
   src/reader.c
   src/simd.c
+  src/simd_exec_table.c
   src/status.c
   src/value.c
   src/validation_context.c
