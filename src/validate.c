@@ -261,7 +261,8 @@ static turbowasm_status turbowasm_validate_section_payload(
             return turbowasm_validate_element_section(
                 section, summary, context);
         case TURBOWASM_SECTION_DATA_COUNT:
-            return turbowasm_validate_data_count_section(section, summary);
+            return turbowasm_validate_data_count_section(
+                section, summary, context);
         case TURBOWASM_SECTION_CODE:
             return turbowasm_validate_code_section(
                 section, summary, context);
