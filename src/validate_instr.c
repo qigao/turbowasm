@@ -997,6 +997,82 @@ static turbowasm_status turbowasm_validate_fc(
                 return TURBOWASM_MALFORMED_MODULE;
             return turbowasm_stack_pop_i32_n(stack, 3u);
 
+        case 12u: { /* table.init */
+            uint32_t element_index;
+            uint32_t table_index;
+            if (!turbowasm_reader_uleb32(body, &element_index) ||
+                !turbowasm_reader_uleb32(body, &table_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (element_index >= context->element_segment_count ||
+                table_index >= context->table_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            if (context->element_segments[element_index].reference_type !=
+                context->tables[table_index].reference_type)
+                return TURBOWASM_MALFORMED_MODULE;
+            return turbowasm_stack_pop_i32_n(stack, 3u);
+        }
+
+        case 13u: { /* elem.drop */
+            uint32_t element_index;
+            if (!turbowasm_reader_uleb32(body, &element_index) ||
+                element_index >= context->element_segment_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            return TURBOWASM_OK;
+        }
+
+        case 14u: { /* table.copy */
+            uint32_t destination_table;
+            uint32_t source_table;
+            if (!turbowasm_reader_uleb32(body, &destination_table) ||
+                !turbowasm_reader_uleb32(body, &source_table))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (destination_table >= context->table_count ||
+                source_table >= context->table_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            if (context->tables[destination_table].reference_type !=
+                context->tables[source_table].reference_type)
+                return TURBOWASM_MALFORMED_MODULE;
+            return turbowasm_stack_pop_i32_n(stack, 3u);
+        }
+
+        case 15u: { /* table.grow */
+            uint32_t table_index;
+            if (!turbowasm_reader_uleb32(body, &table_index) ||
+                table_index >= context->table_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(
+                stack, context->tables[table_index].reference_type);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_push(stack, TW_I32);
+        }
+
+        case 16u: { /* table.size */
+            uint32_t table_index;
+            if (!turbowasm_reader_uleb32(body, &table_index) ||
+                table_index >= context->table_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            return turbowasm_stack_push(stack, TW_I32);
+        }
+
+        case 17u: { /* table.fill */
+            uint32_t table_index;
+            if (!turbowasm_reader_uleb32(body, &table_index) ||
+                table_index >= context->table_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(
+                stack, context->tables[table_index].reference_type);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_pop(stack, TW_I32);
+        }
+
         default:
             return TURBOWASM_UNSUPPORTED;
     }
