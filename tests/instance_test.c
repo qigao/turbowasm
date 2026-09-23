@@ -148,6 +148,46 @@ static void test_nested_local_direct_call(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_return_discards_lower_temporaries(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7f,
+
+        0x03, 0x02, 0x01, 0x00,
+
+        0x0a, 0x0a,
+        0x01, 0x08,
+        0x00,
+        0x41, 0x01,
+        0x41, 0x02,
+        0x0f,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(load_module(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+    assert(turbowasm_instance_invoke(
+               &instance, 0u,
+               NULL, 0u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_I32);
+    assert(result.as.i32 == 2);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 static void test_wrong_argument_type_rejected(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -302,6 +342,7 @@ int main(void) {
     test_typed_arguments_and_arithmetic();
     test_locals_are_zero_initialized();
     test_nested_local_direct_call();
+    test_return_discards_lower_temporaries();
     test_wrong_argument_type_rejected();
     test_unreachable_trap();
     test_integer_divide_by_zero_trap();
