@@ -60,8 +60,10 @@ void turbowasm_validation_context_destroy(
 
     free(context->types);
 
-    for (index = 0u; index < context->function_count; ++index)
+    for (index = 0u; index < context->function_count; ++index) {
         free(context->functions[index].local_types);
+        free(context->functions[index].controls);
+    }
     free(context->functions);
     free(context->globals);
     free(context->tables);
@@ -257,6 +259,56 @@ turbowasm_validation_context_function(
     if (context == NULL || function_index >= context->function_count)
         return NULL;
     return &context->functions[function_index];
+}
+
+
+bool turbowasm_validation_function_append_control(
+    turbowasm_validation_function *function,
+    turbowasm_validation_control control,
+    uint32_t *out_index) {
+    uint32_t required;
+
+    if (function == NULL || function->control_count == UINT32_MAX)
+        return false;
+
+    required = function->control_count + 1u;
+    if (!turbowasm_validation_reserve(
+            (void **)&function->controls,
+            &function->control_capacity,
+            required,
+            sizeof(*function->controls)))
+        return false;
+
+    function->controls[function->control_count] = control;
+    if (out_index != NULL)
+        *out_index = function->control_count;
+    ++function->control_count;
+    return true;
+}
+
+turbowasm_validation_control *
+turbowasm_validation_function_control_mut(
+    turbowasm_validation_function *function,
+    uint32_t index) {
+    if (function == NULL || index >= function->control_count)
+        return NULL;
+    return &function->controls[index];
+}
+
+const turbowasm_validation_control *
+turbowasm_validation_function_control_at(
+    const turbowasm_validation_function *function,
+    uint32_t opcode_offset) {
+    uint32_t index;
+
+    if (function == NULL)
+        return NULL;
+
+    for (index = 0u; index < function->control_count; ++index) {
+        if (function->controls[index].opcode_offset == opcode_offset)
+            return &function->controls[index];
+    }
+    return NULL;
 }
 
 const turbowasm_validation_func_type *
