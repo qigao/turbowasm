@@ -10,6 +10,15 @@ typedef struct turbowasm_name_span {
     uint32_t size;
 } turbowasm_name_span;
 
+static bool turbowasm_validation_count_fits(
+    uint32_t count,
+    size_t element_size) {
+    if (element_size == 0u)
+        return false;
+    return (uint64_t)count <=
+           (uint64_t)SIZE_MAX / (uint64_t)element_size;
+}
+
 static bool turbowasm_utf8_cont(uint8_t byte) {
     return byte >= 0x80u && byte <= 0xbfu;
 }
@@ -368,13 +377,14 @@ turbowasm_status turbowasm_validate_export_section(
     turbowasm_name_span *names = NULL;
     turbowasm_status result = TURBOWASM_OK;
 
-    if (section == NULL || summary == NULL || context == NULL)
+    if (section == NULL || summary == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(section, &count))
         return TURBOWASM_MALFORMED_MODULE;
 
     if (count != 0u) {
-        if ((size_t)count > SIZE_MAX / sizeof(*names))
+        if (!turbowasm_validation_count_fits(
+                count, sizeof(*names)))
             return TURBOWASM_OUT_OF_MEMORY;
         names = (turbowasm_name_span *)calloc(
             (size_t)count, sizeof(*names));
