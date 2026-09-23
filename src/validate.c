@@ -54,34 +54,56 @@ static bool turbowasm_valtype_supported(uint8_t type) {
     }
 }
 
-static turbowasm_status turbowasm_read_valtype(turbowasm_reader *reader) {
+static turbowasm_status turbowasm_read_valtype(
+    turbowasm_reader *reader,
+    uint8_t *out_type) {
     uint8_t type;
     if (!turbowasm_reader_u8(reader, &type))
         return TURBOWASM_MALFORMED_MODULE;
-    return turbowasm_valtype_supported(type)
-        ? TURBOWASM_OK
-        : TURBOWASM_UNSUPPORTED;
+    if (!turbowasm_valtype_supported(type))
+        return TURBOWASM_UNSUPPORTED;
+    if (out_type != NULL)
+        *out_type = type;
+    return TURBOWASM_OK;
 }
 
-static turbowasm_status turbowasm_read_valtype_vector(
-    turbowasm_reader *reader) {
+static turbowasm_status turbowasm_read_valtype_vector_alloc(
+    turbowasm_reader *reader,
+    uint8_t **out_values,
+    uint32_t *out_count) {
     uint32_t count;
     uint32_t index;
+    uint8_t *values = NULL;
     turbowasm_status status;
 
+    if (out_values == NULL || out_count == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(reader, &count))
         return TURBOWASM_MALFORMED_MODULE;
-    for (index = 0u; index < count; ++index) {
-        status = turbowasm_read_valtype(reader);
-        if (status != TURBOWASM_OK)
-            return status;
+
+    if (count != 0u) {
+        values = (uint8_t *)malloc((size_t)count);
+        if (values == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
     }
+
+    for (index = 0u; index < count; ++index) {
+        status = turbowasm_read_valtype(reader, &values[index]);
+        if (status != TURBOWASM_OK) {
+            free(values);
+            return status;
+        }
+    }
+
+    *out_values = values;
+    *out_count = count;
     return TURBOWASM_OK;
 }
 
 static turbowasm_status turbowasm_validate_type_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_module_ir *ir) {
     uint32_t count;
     uint32_t index;
     uint8_t form;
@@ -89,16 +111,23 @@ static turbowasm_status turbowasm_validate_type_section(
 
     if (!turbowasm_reader_uleb32(section, &count))
         return TURBOWASM_MALFORMED_MODULE;
+    if (!turbowasm_module_ir_allocate_types(ir, count))
+        return TURBOWASM_OUT_OF_MEMORY;
 
     for (index = 0u; index < count; ++index) {
+        turbowasm_ir_func_type *type = &ir->types[index];
+
         if (!turbowasm_reader_u8(section, &form))
             return TURBOWASM_MALFORMED_MODULE;
         if (form != 0x60u)
             return TURBOWASM_UNSUPPORTED;
-        status = turbowasm_read_valtype_vector(section);
+
+        status = turbowasm_read_valtype_vector_alloc(
+            section, &type->params, &type->param_count);
         if (status != TURBOWASM_OK)
             return status;
-        status = turbowasm_read_valtype_vector(section);
+        status = turbowasm_read_valtype_vector_alloc(
+            section, &type->results, &type->result_count);
         if (status != TURBOWASM_OK)
             return status;
     }
@@ -111,7 +140,8 @@ static turbowasm_status turbowasm_validate_type_section(
 
 static turbowasm_status turbowasm_validate_function_section(
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_module_ir *ir) {
     uint32_t count;
     uint32_t index;
     uint32_t type_index;
@@ -124,6 +154,9 @@ static turbowasm_status turbowasm_validate_function_section(
             return TURBOWASM_MALFORMED_MODULE;
         if (type_index >= summary->type_count)
             return TURBOWASM_MALFORMED_MODULE;
+        if (!turbowasm_module_ir_append_function(
+                ir, (turbowasm_ir_function){type_index, false}))
+            return TURBOWASM_OUT_OF_MEMORY;
     }
 
     if (turbowasm_reader_remaining(section) != 0u)
@@ -146,7 +179,7 @@ static turbowasm_status turbowasm_validate_local_decls(
         if (!turbowasm_reader_uleb32(body, &local_count))
             return TURBOWASM_MALFORMED_MODULE;
         (void)local_count;
-        status = turbowasm_read_valtype(body);
+        status = turbowasm_read_valtype(body, NULL);
         if (status != TURBOWASM_OK)
             return status;
     }
@@ -205,18 +238,19 @@ static turbowasm_status turbowasm_validate_code_section(
 static turbowasm_status turbowasm_validate_section_payload(
     uint8_t id,
     turbowasm_reader *section,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_module_ir *ir) {
     switch (id) {
         case TURBOWASM_SECTION_TYPE:
-            return turbowasm_validate_type_section(section, summary);
+            return turbowasm_validate_type_section(section, summary, ir);
         case TURBOWASM_SECTION_IMPORT:
-            return turbowasm_validate_import_section(section, summary);
+            return turbowasm_validate_import_section(section, summary, ir);
         case TURBOWASM_SECTION_FUNCTION:
-            return turbowasm_validate_function_section(section, summary);
+            return turbowasm_validate_function_section(section, summary, ir);
         case TURBOWASM_SECTION_TABLE:
-            return turbowasm_validate_table_section(section, summary);
+            return turbowasm_validate_table_section(section, summary, ir);
         case TURBOWASM_SECTION_MEMORY:
-            return turbowasm_validate_memory_section(section, summary);
+            return turbowasm_validate_memory_section(section, summary, ir);
         case TURBOWASM_SECTION_EXPORT:
             return turbowasm_validate_export_section(section, summary);
         case TURBOWASM_SECTION_DATA_COUNT:
@@ -234,11 +268,12 @@ static turbowasm_status turbowasm_validate_section_payload(
 
 turbowasm_status turbowasm_validate_sections(
     turbowasm_reader *reader,
-    turbowasm_module_summary *summary) {
+    turbowasm_module_summary *summary,
+    turbowasm_module_ir *ir) {
     uint32_t seen = 0u;
     unsigned last_rank = 0u;
 
-    if (reader == NULL || summary == NULL)
+    if (reader == NULL || summary == NULL || ir == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     while (turbowasm_reader_remaining(reader) != 0u) {
@@ -270,7 +305,7 @@ turbowasm_status turbowasm_validate_sections(
         last_rank = rank;
         summary->standard_section_mask = seen;
 
-        status = turbowasm_validate_section_payload(id, &section, summary);
+        status = turbowasm_validate_section_payload(id, &section, summary, ir);
         if (status != TURBOWASM_OK)
             return status;
         if (turbowasm_reader_remaining(&section) != 0u)
