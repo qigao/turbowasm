@@ -1818,6 +1818,28 @@ turbowasm_status turbowasm_instance_create(
         }
     }
     instance->impl = impl;
+
+    {
+        const turbowasm_module_impl *module_impl =
+            turbowasm_module_impl_get(module);
+        if (module_impl != NULL &&
+            module_impl->summary.has_start) {
+            size_t result_count = 0u;
+            turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+            turbowasm_status status = turbowasm_instance_invoke(
+                instance,
+                module_impl->summary.start_function_index,
+                NULL, 0u,
+                NULL, 0u,
+                &result_count,
+                &trap);
+            if (status != TURBOWASM_OK) {
+                turbowasm_instance_destroy(instance);
+                return status;
+            }
+        }
+    }
+
     return TURBOWASM_OK;
 }
 
