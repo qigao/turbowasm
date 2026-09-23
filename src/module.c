@@ -1,7 +1,7 @@
 #include <turbowasm/module.h>
 
+#include "module_internal.h"
 #include "reader.h"
-#include "validation_context.h"
 #include "validate.h"
 
 #include <stdlib.h>
@@ -10,13 +10,6 @@ enum {
     TURBOWASM_MAGIC = 0x6d736100u,
     TURBOWASM_BINARY_VERSION = 1u
 };
-
-typedef struct turbowasm_module_impl {
-    const uint8_t *bytes;
-    size_t size;
-    turbowasm_module_summary summary;
-    turbowasm_validation_context validation;
-} turbowasm_module_impl;
 
 turbowasm_status turbowasm_module_load_borrowed(turbowasm_module *module,
                                                 const uint8_t *bytes,
