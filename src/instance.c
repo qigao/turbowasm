@@ -241,8 +241,9 @@ static turbowasm_status turbowasm_exec_make_frame(
         return TURBOWASM_MALFORMED_MODULE;
     if (metadata->imported)
         return TURBOWASM_UNSUPPORTED;
-    if (metadata->code == NULL || metadata->local_types == NULL &&
-        metadata->local_count != 0u)
+    if (metadata->code == NULL ||
+        (metadata->local_types == NULL &&
+         metadata->local_count != 0u))
         return TURBOWASM_MALFORMED_MODULE;
     if (argument_count != type->param_count)
         return TURBOWASM_INVALID_ARGUMENT;
