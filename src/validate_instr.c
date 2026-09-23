@@ -1,4 +1,5 @@
 #include "validate_instr.h"
+#include "validate_simd_table.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1002,37 +1003,130 @@ static turbowasm_status turbowasm_validate_fc(
     }
 }
 
-static turbowasm_status turbowasm_validate_simd(
+static turbowasm_status turbowasm_validate_simd_descriptor(
     turbowasm_reader *body,
     turbowasm_type_stack *stack,
-    const turbowasm_validation_context *context) {
-    uint32_t subopcode;
+    const turbowasm_simd_descriptor *descriptor) {
     turbowasm_status status;
 
-    if (!turbowasm_reader_uleb32(body, &subopcode))
-        return TURBOWASM_MALFORMED_MODULE;
+    if (body == NULL || stack == NULL || descriptor == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
 
-    switch (subopcode) {
-        case 0x00u: /* v128.load */
-            return turbowasm_validate_load(
-                body, stack, context, TW_V128, 4u);
-        case 0x0bu: /* v128.store */
-            return turbowasm_validate_store(
-                body, stack, context, TW_V128, 4u);
-        case 0x0cu: {
+    switch (descriptor->form) {
+        case TURBOWASM_SIMD_CONST_V128: {
             turbowasm_reader bytes;
             if (!turbowasm_reader_slice(body, 16u, &bytes))
                 return TURBOWASM_MALFORMED_MODULE;
             return turbowasm_stack_push(stack, TW_V128);
         }
-        case 0xaeu: /* i32x4.add */
-        case 0xe6u: /* f32x4.mul */
-            status = turbowasm_stack_binary(
+
+        case TURBOWASM_SIMD_SHUFFLE: {
+            uint32_t index;
+            for (index = 0u; index < 16u; ++index) {
+                uint8_t lane;
+                if (!turbowasm_reader_u8(body, &lane))
+                    return TURBOWASM_MALFORMED_MODULE;
+                if (lane >= 32u)
+                    return TURBOWASM_MALFORMED_MODULE;
+            }
+            return turbowasm_stack_binary(
                 stack, TW_V128, TW_V128);
-            return status;
+        }
+
+        case TURBOWASM_SIMD_V128_UNARY:
+            return turbowasm_stack_unary(
+                stack, TW_V128, TW_V128);
+
+        case TURBOWASM_SIMD_V128_BINARY:
+            return turbowasm_stack_binary(
+                stack, TW_V128, TW_V128);
+
+        case TURBOWASM_SIMD_V128_TERNARY:
+            status = turbowasm_stack_pop(stack, TW_V128);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_V128);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_V128);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_push(stack, TW_V128);
+
+        case TURBOWASM_SIMD_V128_TEST_I32:
+            return turbowasm_stack_unary(
+                stack, TW_V128, TW_I32);
+
+        case TURBOWASM_SIMD_SCALAR_SPLAT:
+            return turbowasm_stack_unary(
+                stack, descriptor->scalar_type, TW_V128);
+
+        case TURBOWASM_SIMD_LANE_EXTRACT: {
+            uint8_t lane;
+            if (!turbowasm_reader_u8(body, &lane))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (lane >= descriptor->lane_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            return turbowasm_stack_unary(
+                stack, TW_V128, descriptor->scalar_type);
+        }
+
+        case TURBOWASM_SIMD_LANE_REPLACE: {
+            uint8_t lane;
+            if (!turbowasm_reader_u8(body, &lane))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (lane >= descriptor->lane_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            status = turbowasm_stack_pop(
+                stack, descriptor->scalar_type);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_V128);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_push(stack, TW_V128);
+        }
+
+        case TURBOWASM_SIMD_V128_SHIFT:
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_V128);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_push(stack, TW_V128);
+
         default:
             return TURBOWASM_UNSUPPORTED;
     }
+}
+
+static turbowasm_status turbowasm_validate_simd(
+    turbowasm_reader *body,
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_context *context) {
+    uint32_t subopcode;
+    const turbowasm_simd_descriptor *descriptor;
+
+    if (!turbowasm_reader_uleb32(body, &subopcode))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    /* Memory forms keep using the common memory validator.  Their descriptor
+     * classes are added in the next SIMD slice together with lane-memory
+     * immediates. */
+    if (subopcode == 0x00u)
+        return turbowasm_validate_load(
+            body, stack, context, TW_V128, 4u);
+    if (subopcode == 0x0bu)
+        return turbowasm_validate_store(
+            body, stack, context, TW_V128, 4u);
+
+    descriptor = turbowasm_simd_descriptor_find(subopcode);
+    if (descriptor == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    return turbowasm_validate_simd_descriptor(
+        body, stack, descriptor);
 }
 
 turbowasm_status turbowasm_validate_function_body(
