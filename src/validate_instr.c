@@ -1351,6 +1351,39 @@ turbowasm_status turbowasm_validate_function_body(
                 if (result != TURBOWASM_OK) goto done;
                 break;
             }
+            case 0x25u: /* table.get */
+            case 0x26u: { /* table.set */
+                uint32_t table_index;
+                const turbowasm_validation_table *table;
+
+                if (!turbowasm_reader_uleb32(
+                        body, &table_index) ||
+                    table_index >= context->table_count) {
+                    result = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                table = &context->tables[table_index];
+                if (opcode == 0x25u) {
+                    result = turbowasm_stack_pop(
+                        &stack, TW_I32);
+                    if (result != TURBOWASM_OK)
+                        goto done;
+                    result = turbowasm_stack_push(
+                        &stack, table->reference_type);
+                } else {
+                    result = turbowasm_stack_pop(
+                        &stack, table->reference_type);
+                    if (result != TURBOWASM_OK)
+                        goto done;
+                    result = turbowasm_stack_pop(
+                        &stack, TW_I32);
+                }
+                if (result != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
+
             case 0x28u: /* i32.load */
                 result = turbowasm_validate_load(
                     body, &stack, context, TW_I32, 2u);
