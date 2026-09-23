@@ -483,10 +483,6 @@ static turbowasm_status turbowasm_exec_branch(
             reader, function, target->annotation->body_offset);
     }
 
-    if (target->annotation->end_offset == UINT32_MAX ||
-        target->annotation->end_offset == UINT32_MAX - 1u)
-        return TURBOWASM_MALFORMED_MODULE;
-
     controls->size = target_index;
     return turbowasm_exec_jump(
         reader, function, target->annotation->end_offset + 1u);
@@ -1029,10 +1025,6 @@ static turbowasm_status turbowasm_exec_function(
 
                 if (opcode == 0x04u && condition.as.i32 == 0) {
                     if (annotation->else_offset != UINT32_MAX) {
-                        if (annotation->else_offset == UINT32_MAX) {
-                            status = TURBOWASM_MALFORMED_MODULE;
-                            goto done;
-                        }
                         status = turbowasm_exec_jump(
                             &reader, function,
                             annotation->else_offset + 1u);
