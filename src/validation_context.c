@@ -68,6 +68,10 @@ void turbowasm_validation_context_destroy(
     free(context->globals);
     free(context->tables);
     free(context->memories);
+    free(context->data_segments);
+    for (index = 0u; index < context->element_segment_count; ++index)
+        free(context->element_segments[index].items);
+    free(context->element_segments);
     free(context->declared_refs);
     memset(context, 0, sizeof(*context));
 }
@@ -249,6 +253,47 @@ bool turbowasm_validation_context_append_memory(
     context->memories[context->memory_count].imported = imported;
     context->memories[context->memory_count].limits = limits;
     ++context->memory_count;
+    return true;
+}
+
+
+bool turbowasm_validation_context_append_data_segment(
+    turbowasm_validation_context *context,
+    turbowasm_validation_data_segment segment) {
+    uint32_t required;
+
+    if (context == NULL || context->data_segment_count == UINT32_MAX)
+        return false;
+
+    required = context->data_segment_count + 1u;
+    if (!turbowasm_validation_reserve(
+            (void **)&context->data_segments,
+            &context->data_segment_capacity,
+            required,
+            sizeof(*context->data_segments)))
+        return false;
+
+    context->data_segments[context->data_segment_count++] = segment;
+    return true;
+}
+
+bool turbowasm_validation_context_append_element_segment(
+    turbowasm_validation_context *context,
+    turbowasm_validation_element_segment segment) {
+    uint32_t required;
+
+    if (context == NULL || context->element_segment_count == UINT32_MAX)
+        return false;
+
+    required = context->element_segment_count + 1u;
+    if (!turbowasm_validation_reserve(
+            (void **)&context->element_segments,
+            &context->element_segment_capacity,
+            required,
+            sizeof(*context->element_segments)))
+        return false;
+
+    context->element_segments[context->element_segment_count++] = segment;
     return true;
 }
 
