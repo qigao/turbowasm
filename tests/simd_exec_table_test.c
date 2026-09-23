@@ -13,8 +13,8 @@ static void test_execution_table_is_validation_subset(void) {
     size_t index;
     size_t other;
 
-    /* 90 generic arithmetic/compare + 20 SIMD memory variants. */
-    assert(count == 110u);
+    /* 90 generic + 20 memory + 16 lane/shuffle mappings. */
+    assert(count == 126u);
 
     for (index = 0u; index < count; ++index) {
         const turbowasm_simd_exec_descriptor *descriptor =
@@ -59,6 +59,22 @@ static void test_representative_semantics(void) {
     assert(descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE);
     assert(descriptor->vector_desc == &cmeta_vector_u64x2);
     assert(descriptor->memory_width == 8u);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x0du);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_SHUFFLE);
+    assert(descriptor->result_shape == TURBOWASM_V128_I8X16);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x16u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_LANE_EXTRACT);
+    assert(descriptor->vector_desc == &cmeta_vector_u8x16);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x20u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_LANE_REPLACE);
+    assert(descriptor->vector_desc == &cmeta_vector_f32x4);
+    assert(descriptor->result_shape == TURBOWASM_V128_F32X4);
 
     descriptor = turbowasm_simd_exec_descriptor_find(0x26u);
     assert(descriptor != NULL);
