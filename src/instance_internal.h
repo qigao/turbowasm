@@ -88,4 +88,16 @@ turbowasm_status turbowasm_instance_table_lookup(
     uint32_t element_index,
     turbowasm_instance_table_entry *out);
 
+turbowasm_status turbowasm_instance_table_get_value(
+    const turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    uint32_t element_index,
+    turbowasm_value *out);
+
+turbowasm_status turbowasm_instance_table_set_value(
+    turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    uint32_t element_index,
+    turbowasm_value value);
+
 #endif /* TURBOWASM_INSTANCE_INTERNAL_H */
