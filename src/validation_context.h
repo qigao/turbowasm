@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 typedef struct turbowasm_validation_func_type {
+    bool defined;
     uint8_t *params;
     uint32_t param_count;
     uint8_t *results;
