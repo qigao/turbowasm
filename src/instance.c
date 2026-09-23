@@ -1553,6 +1553,12 @@ static turbowasm_status turbowasm_exec_function(
                 if (status != TURBOWASM_OK)
                     goto done;
                 break;
+            case 0x11u: /* call_indirect */
+                status = turbowasm_exec_indirect_call(
+                    instance, &reader, &stack, trap, depth);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
             case 0x1au: { /* drop */
                 turbowasm_value ignored;
                 status = turbowasm_stack_pop(&stack, &ignored);
@@ -1592,6 +1598,68 @@ static turbowasm_status turbowasm_exec_function(
                     goto done;
                 break;
             }
+            case 0x23u: /* global.get */
+            case 0x24u: { /* global.set */
+                uint32_t global_index;
+                turbowasm_value value;
+
+                if (!turbowasm_reader_uleb32(
+                        &reader, &global_index)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                if (opcode == 0x23u) {
+                    status = turbowasm_instance_global_get(
+                        instance, global_index, &value);
+                    if (status == TURBOWASM_OK)
+                        status = turbowasm_stack_push(
+                            &stack, value);
+                } else {
+                    status = turbowasm_stack_pop(
+                        &stack, &value);
+                    if (status == TURBOWASM_OK)
+                        status = turbowasm_instance_global_set(
+                            instance, global_index, value);
+                }
+
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
+
+            case 0x28u: case 0x29u:
+            case 0x2au: case 0x2bu:
+            case 0x2cu: case 0x2du:
+            case 0x2eu: case 0x2fu:
+            case 0x30u: case 0x31u:
+            case 0x32u: case 0x33u:
+            case 0x34u: case 0x35u:
+                status = turbowasm_exec_memory_load(
+                    instance, &reader, &stack, trap, opcode);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+
+            case 0x36u: case 0x37u:
+            case 0x38u: case 0x39u:
+            case 0x3au: case 0x3bu:
+            case 0x3cu: case 0x3du:
+            case 0x3eu:
+                status = turbowasm_exec_memory_store(
+                    instance, &reader, &stack, trap, opcode);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+
+            case 0x3fu: /* memory.size */
+            case 0x40u: /* memory.grow */
+                status = turbowasm_exec_memory_size_or_grow(
+                    instance, &reader, &stack, opcode);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+
             case 0x41u: {
                 int32_t value;
                 turbowasm_value out = {0};
@@ -1815,6 +1883,14 @@ const char *turbowasm_trap_string(turbowasm_trap trap) {
             return "integer_divide_by_zero";
         case TURBOWASM_TRAP_INTEGER_OVERFLOW:
             return "integer_overflow";
+        case TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS:
+            return "memory_out_of_bounds";
+        case TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS:
+            return "table_out_of_bounds";
+        case TURBOWASM_TRAP_INDIRECT_CALL_NULL:
+            return "indirect_call_null";
+        case TURBOWASM_TRAP_INDIRECT_CALL_TYPE_MISMATCH:
+            return "indirect_call_type_mismatch";
         default: return "unknown";
     }
 }
