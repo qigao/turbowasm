@@ -43,6 +43,22 @@
     { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE, &(desc_), \
       0u, TURBOWASM_V128_RAW, (width_) }
 
+#define LEXT(opcode_, desc_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_LANE_EXTRACT, &(desc_), \
+      0u, TURBOWASM_V128_RAW, 0u }
+
+#define LREP(opcode_, desc_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_LANE_REPLACE, &(desc_), \
+      0u, (shape_), 0u }
+
+#define SHUF(opcode_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_SHUFFLE, &cmeta_vector_i8x16, \
+      0u, TURBOWASM_V128_I8X16, 0u }
+
+#define SWIZ(opcode_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_SWIZZLE, &cmeta_vector_i8x16, \
+      0u, TURBOWASM_V128_I8X16, 0u }
+
 /*
  * This is intentionally an execution-capability table, not another
  * validation table. Every opcode here must also exist in
@@ -77,6 +93,30 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
 
     MZERO(0x5cu, cmeta_vector_i32x4, 4u, TURBOWASM_V128_I32X4),
     MZERO(0x5du, cmeta_vector_i64x2, 8u, TURBOWASM_V128_I64X2),
+
+    /* lane/shuffle forms */
+    SHUF(0x0du),
+    SWIZ(0x0eu),
+
+    LEXT(0x15u, cmeta_vector_i8x16),
+    LEXT(0x16u, cmeta_vector_u8x16),
+    LREP(0x17u, cmeta_vector_i8x16, TURBOWASM_V128_I8X16),
+
+    LEXT(0x18u, cmeta_vector_i16x8),
+    LEXT(0x19u, cmeta_vector_u16x8),
+    LREP(0x1au, cmeta_vector_i16x8, TURBOWASM_V128_I16X8),
+
+    LEXT(0x1bu, cmeta_vector_i32x4),
+    LREP(0x1cu, cmeta_vector_i32x4, TURBOWASM_V128_I32X4),
+
+    LEXT(0x1du, cmeta_vector_i64x2),
+    LREP(0x1eu, cmeta_vector_i64x2, TURBOWASM_V128_I64X2),
+
+    LEXT(0x1fu, cmeta_vector_f32x4),
+    LREP(0x20u, cmeta_vector_f32x4, TURBOWASM_V128_F32X4),
+
+    LEXT(0x21u, cmeta_vector_f64x2),
+    LREP(0x22u, cmeta_vector_f64x2, TURBOWASM_V128_F64X2),
 
     /* splat */
     SP(0x0fu, cmeta_vector_i8x16, TURBOWASM_V128_I8X16),
@@ -273,6 +313,10 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_F64X2)
 };
 
+#undef SWIZ
+#undef SHUF
+#undef LREP
+#undef LEXT
 #undef MSTORELANE
 #undef MLOADLANE
 #undef MZERO
