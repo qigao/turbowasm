@@ -8,6 +8,7 @@ const char *turbowasm_status_string(turbowasm_status status) {
         case TURBOWASM_UNSUPPORTED: return "unsupported";
         case TURBOWASM_OUT_OF_MEMORY: return "out_of_memory";
         case TURBOWASM_TYPE_MISMATCH: return "type_mismatch";
+        case TURBOWASM_TRAPPED: return "trapped";
         default: return "unknown";
     }
 }
