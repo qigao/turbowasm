@@ -177,3 +177,14 @@ set_target_properties(turbowasm_simd_descriptor_validation_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_simd_descriptor_validation_test
          COMMAND turbowasm_simd_descriptor_validation_test)
+
+add_executable(turbowasm_simd_memory_validation_test
+  simd_memory_validation_test.c)
+target_link_libraries(turbowasm_simd_memory_validation_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_simd_memory_validation_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_simd_memory_validation_test
+         COMMAND turbowasm_simd_memory_validation_test)
