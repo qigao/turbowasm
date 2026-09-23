@@ -13,8 +13,8 @@ static void test_execution_table_is_validation_subset(void) {
     size_t index;
     size_t other;
 
-    /* Generic arithmetic/compare + memory + lane/shuffle families. */
-    assert(count == 124u);
+    /* 90 generic + 20 memory + 16 lane/shuffle mappings. */
+    assert(count == 126u);
 
     for (index = 0u; index < count; ++index) {
         const turbowasm_simd_exec_descriptor *descriptor =
