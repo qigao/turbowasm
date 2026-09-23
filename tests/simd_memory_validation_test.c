@@ -134,6 +134,22 @@ static void test_lane_store(void) {
     assert(load(bytes, sizeof(bytes)) == TURBOWASM_OK);
 }
 
+
+static void test_demote_promote_descriptor_gap(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7b, 0x01, 0x7b,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x08, 0x01, 0x06,
+        0x00,
+        0x20, 0x00,
+        0xfd, 0x5e,
+        0x0b
+    };
+    assert(load(bytes, sizeof(bytes)) == TURBOWASM_OK);
+}
+
 static void test_simd_memory_requires_memory(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -155,6 +171,7 @@ int main(void) {
     test_splat_and_zero_loads();
     test_lane_load_bounds();
     test_lane_store();
+    test_demote_promote_descriptor_gap();
     test_simd_memory_requires_memory();
     return 0;
 }
