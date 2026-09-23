@@ -90,10 +90,10 @@ static turbowasm_status turbowasm_validate_type_section(
         return TURBOWASM_MALFORMED_MODULE;
 
     for (index = 0u; index < count; ++index) {
-        if (!turbowasm_reader_u8(section, &form) || form != 0x60u)
-            return form == 0x60u
-                ? TURBOWASM_MALFORMED_MODULE
-                : TURBOWASM_UNSUPPORTED;
+        if (!turbowasm_reader_u8(section, &form))
+            return TURBOWASM_MALFORMED_MODULE;
+        if (form != 0x60u)
+            return TURBOWASM_UNSUPPORTED;
         status = turbowasm_read_valtype_vector(section);
         if (status != TURBOWASM_OK)
             return status;
