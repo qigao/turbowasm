@@ -59,6 +59,9 @@ void turbowasm_validation_context_destroy(
     }
 
     free(context->types);
+
+    for (index = 0u; index < context->function_count; ++index)
+        free(context->functions[index].local_types);
     free(context->functions);
     free(context->globals);
     free(context->tables);
@@ -236,6 +239,24 @@ bool turbowasm_validation_context_append_memory(
     context->memories[context->memory_count].imported = imported;
     ++context->memory_count;
     return true;
+}
+
+turbowasm_validation_function *
+turbowasm_validation_context_function_mut(
+    turbowasm_validation_context *context,
+    uint32_t function_index) {
+    if (context == NULL || function_index >= context->function_count)
+        return NULL;
+    return &context->functions[function_index];
+}
+
+const turbowasm_validation_function *
+turbowasm_validation_context_function(
+    const turbowasm_validation_context *context,
+    uint32_t function_index) {
+    if (context == NULL || function_index >= context->function_count)
+        return NULL;
+    return &context->functions[function_index];
 }
 
 const turbowasm_validation_func_type *
