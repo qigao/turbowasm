@@ -28,6 +28,7 @@ if(NOT TARGET Salts::SIMD)
 endif()
 
 add_library(turbowasm
+  src/instance.c
   src/module.c
   src/reader.c
   src/simd.c
