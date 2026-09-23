@@ -23,6 +23,34 @@ typedef struct turbowasm_value_stack {
     uint32_t capacity;
 } turbowasm_value_stack;
 
+typedef enum turbowasm_exec_control_kind {
+    TURBOWASM_EXEC_CONTROL_FUNCTION = 0,
+    TURBOWASM_EXEC_CONTROL_BLOCK,
+    TURBOWASM_EXEC_CONTROL_LOOP,
+    TURBOWASM_EXEC_CONTROL_IF
+} turbowasm_exec_control_kind;
+
+typedef struct turbowasm_exec_control_frame {
+    turbowasm_exec_control_kind kind;
+    uint32_t height;
+    const turbowasm_validation_control *annotation;
+    const turbowasm_validation_func_type *signature_type;
+    uint8_t inline_end_type;
+    bool has_inline_end_type;
+} turbowasm_exec_control_frame;
+
+typedef struct turbowasm_exec_control_stack {
+    turbowasm_exec_control_frame *frames;
+    uint32_t size;
+    uint32_t capacity;
+} turbowasm_exec_control_stack;
+
+typedef struct turbowasm_exec_block_signature {
+    const turbowasm_validation_func_type *indexed_type;
+    uint8_t inline_end_type;
+    bool has_inline_end_type;
+} turbowasm_exec_block_signature;
+
 static turbowasm_value_kind turbowasm_kind_from_valtype(uint8_t type) {
     switch (type) {
         case 0x7fu: return TURBOWASM_VALUE_I32;
