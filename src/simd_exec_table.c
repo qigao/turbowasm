@@ -1,27 +1,47 @@
 #include "simd_exec_table.h"
 
 #define SP(opcode_, desc_, shape_) \
-    { (opcode_), TURBOWASM_SIMD_EXEC_SPLAT, &(desc_), 0u, (shape_) }
+    { (opcode_), TURBOWASM_SIMD_EXEC_SPLAT, &(desc_), 0u, (shape_), 0u }
 
 #define UN(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_UNARY, &(desc_), \
-      (uint8_t)(op_), (shape_) }
+      (uint8_t)(op_), (shape_), 0u }
 
 #define BIN(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_BINARY, &(desc_), \
-      (uint8_t)(op_), (shape_) }
+      (uint8_t)(op_), (shape_), 0u }
 
 #define CMP(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_COMPARE, &(desc_), \
-      (uint8_t)(op_), (shape_) }
+      (uint8_t)(op_), (shape_), 0u }
 
 #define SH(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_SHIFT, &(desc_), \
-      (uint8_t)(op_), (shape_) }
+      (uint8_t)(op_), (shape_), 0u }
 
 #define SEL(opcode_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_SELECT, &cmeta_vector_i8x16, \
-      0u, TURBOWASM_V128_RAW }
+      0u, TURBOWASM_V128_RAW, 0u }
+
+#define MEXT(opcode_, desc_, width_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_EXTEND, &(desc_), \
+      0u, (shape_), (width_) }
+
+#define MSPLAT(opcode_, desc_, width_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_SPLAT, &(desc_), \
+      0u, (shape_), (width_) }
+
+#define MZERO(opcode_, desc_, width_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_ZERO, &(desc_), \
+      0u, (shape_), (width_) }
+
+#define MLOADLANE(opcode_, desc_, width_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_LOAD_LANE, &(desc_), \
+      0u, (shape_), (width_) }
+
+#define MSTORELANE(opcode_, desc_, width_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE, &(desc_), \
+      0u, TURBOWASM_V128_RAW, (width_) }
 
 /*
  * This is intentionally an execution-capability table, not another
@@ -32,6 +52,32 @@
  * only the Wasm-opcode mapping.
  */
 static const turbowasm_simd_exec_descriptor descriptors[] = {
+    /* SIMD memory transforms; baseline v128.load/store stay direct. */
+    MEXT(0x01u, cmeta_vector_i16x8, 8u, TURBOWASM_V128_I16X8),
+    MEXT(0x02u, cmeta_vector_u16x8, 8u, TURBOWASM_V128_U16X8),
+    MEXT(0x03u, cmeta_vector_i32x4, 8u, TURBOWASM_V128_I32X4),
+    MEXT(0x04u, cmeta_vector_u32x4, 8u, TURBOWASM_V128_U32X4),
+    MEXT(0x05u, cmeta_vector_i64x2, 8u, TURBOWASM_V128_I64X2),
+    MEXT(0x06u, cmeta_vector_u64x2, 8u, TURBOWASM_V128_U64X2),
+
+    MSPLAT(0x07u, cmeta_vector_i8x16, 1u, TURBOWASM_V128_I8X16),
+    MSPLAT(0x08u, cmeta_vector_i16x8, 2u, TURBOWASM_V128_I16X8),
+    MSPLAT(0x09u, cmeta_vector_i32x4, 4u, TURBOWASM_V128_I32X4),
+    MSPLAT(0x0au, cmeta_vector_i64x2, 8u, TURBOWASM_V128_I64X2),
+
+    MLOADLANE(0x54u, cmeta_vector_u8x16, 1u, TURBOWASM_V128_I8X16),
+    MLOADLANE(0x55u, cmeta_vector_u16x8, 2u, TURBOWASM_V128_I16X8),
+    MLOADLANE(0x56u, cmeta_vector_u32x4, 4u, TURBOWASM_V128_I32X4),
+    MLOADLANE(0x57u, cmeta_vector_u64x2, 8u, TURBOWASM_V128_I64X2),
+
+    MSTORELANE(0x58u, cmeta_vector_u8x16, 1u),
+    MSTORELANE(0x59u, cmeta_vector_u16x8, 2u),
+    MSTORELANE(0x5au, cmeta_vector_u32x4, 4u),
+    MSTORELANE(0x5bu, cmeta_vector_u64x2, 8u),
+
+    MZERO(0x5cu, cmeta_vector_i32x4, 4u, TURBOWASM_V128_I32X4),
+    MZERO(0x5du, cmeta_vector_i64x2, 8u, TURBOWASM_V128_I64X2),
+
     /* splat */
     SP(0x0fu, cmeta_vector_i8x16, TURBOWASM_V128_I8X16),
     SP(0x10u, cmeta_vector_i16x8, TURBOWASM_V128_I16X8),
@@ -227,6 +273,11 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_F64X2)
 };
 
+#undef MSTORELANE
+#undef MLOADLANE
+#undef MZERO
+#undef MSPLAT
+#undef MEXT
 #undef SEL
 #undef SH
 #undef CMP
