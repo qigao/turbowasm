@@ -1304,10 +1304,16 @@ static bool turbowasm_mir_emit_stack_to_regs(
 
     base = stack_size - count;
     for (index = 0u; index < count; ++index) {
-        if (!turbowasm_mir_text_appendf(
-                text, "mov r%u, r%u\n",
-                reg_base + index,
-                stack[base + index].reg))
+        const char *move_name =
+            turbowasm_mir_move_name(types[index]);
+        const char *prefix =
+            turbowasm_mir_reg_prefix(types[index]);
+        if (move_name == NULL || prefix == NULL ||
+            !turbowasm_mir_text_appendf(
+                text, "%s %s%u, %s%u\n",
+                move_name,
+                prefix, reg_base + index,
+                prefix, stack[base + index].reg))
             return false;
     }
     return true;
@@ -1334,13 +1340,14 @@ static bool turbowasm_mir_push_regs(
 
 static bool turbowasm_mir_frame_signature(
     const turbowasm_validation_context *validation,
-    turbowasm_mir_control_frame *frame) {
+    turbowasm_mir_control_frame *frame,
+    uint8_t function_result_type) {
     if (validation == NULL || frame == NULL ||
         frame->annotation == NULL)
         return false;
 
-    return turbowasm_mir_integer_control_signature(
-        validation, frame->annotation,
+    return turbowasm_mir_scalar_control_signature(
+        validation, frame->annotation, function_result_type,
         &frame->start_types, &frame->start_count,
         &frame->end_types, &frame->end_count);
 }
@@ -1348,6 +1355,7 @@ static bool turbowasm_mir_frame_signature(
 static bool turbowasm_mir_control_register_budget(
     const turbowasm_validation_context *validation,
     const turbowasm_validation_function *function,
+    uint8_t function_result_type,
     uint32_t *out_extra) {
     uint64_t total = 0u;
     uint32_t index;
@@ -1362,8 +1370,8 @@ static bool turbowasm_mir_control_register_budget(
         uint32_t start_count = 0u;
         uint32_t end_count = 0u;
 
-        if (!turbowasm_mir_integer_control_signature(
-                validation, control,
+        if (!turbowasm_mir_scalar_control_signature(
+                validation, control, function_result_type,
                 NULL, &start_count, NULL, &end_count))
             return false;
 
@@ -1388,6 +1396,7 @@ static bool turbowasm_mir_structured_emit_call(
     const turbowasm_validation_func_type *callee_type;
     const char *proto_name = NULL;
     const char *external_name = NULL;
+    const char *result_prefix;
     uint32_t arg_index;
     uint32_t base;
 
@@ -1401,7 +1410,6 @@ static bool turbowasm_mir_structured_emit_call(
         validation, callee_index);
     if (callee == NULL || callee->imported ||
         !turbowasm_mir_call_signature_supported(callee_type) ||
-        !turbowasm_mir_integer_type(callee_type->results[0]) ||
         *stack_size < callee_type->param_count)
         return false;
 
@@ -1414,32 +1422,58 @@ static bool turbowasm_mir_structured_emit_call(
             return false;
     }
 
-    if (callee_type->param_count == 0u) {
-        proto_name = "tw_call_i64_0_p";
-        external_name = "tw_jit_call_i64_0";
-    } else if (callee_type->param_count == 1u) {
-        proto_name = "tw_call_i64_1_p";
-        external_name = "tw_jit_call_i64_1";
-    } else if (callee_type->param_count == 2u) {
-        proto_name = "tw_call_i64_2_p";
-        external_name = "tw_jit_call_i64_2";
-    } else {
-        return false;
+    if (turbowasm_mir_integer_type(callee_type->results[0])) {
+        if (callee_type->param_count == 0u) {
+            proto_name = "tw_call_i64_0_p";
+            external_name = "tw_jit_call_i64_0";
+        } else if (callee_type->param_count == 1u) {
+            proto_name = "tw_call_i64_1_p";
+            external_name = "tw_jit_call_i64_1";
+        } else if (callee_type->param_count == 2u) {
+            proto_name = "tw_call_i64_2_p";
+            external_name = "tw_jit_call_i64_2";
+        }
+    } else if (callee_type->results[0] == 0x7du) {
+        if (callee_type->param_count == 0u) {
+            proto_name = "tw_call_f32_0_p";
+            external_name = "tw_jit_call_f32_0";
+        } else if (callee_type->param_count == 1u) {
+            proto_name = "tw_call_f32_1_p";
+            external_name = "tw_jit_call_f32_1";
+        }
+    } else if (callee_type->results[0] == 0x7cu) {
+        if (callee_type->param_count == 0u) {
+            proto_name = "tw_call_f64_0_p";
+            external_name = "tw_jit_call_f64_0";
+        } else if (callee_type->param_count == 1u) {
+            proto_name = "tw_call_f64_1_p";
+            external_name = "tw_jit_call_f64_1";
+        }
     }
+
+    result_prefix =
+        turbowasm_mir_reg_prefix(callee_type->results[0]);
+    if (proto_name == NULL || external_name == NULL ||
+        result_prefix == NULL)
+        return false;
 
     if (!turbowasm_mir_text_appendf(
             text,
-            "call %s, %s, r%u, jit_ctx, %u",
+            "call %s, %s, %s%u, jit_ctx, %u",
             proto_name, external_name,
-            *next_reg, callee_index))
+            result_prefix, *next_reg, callee_index))
         return false;
 
     for (arg_index = 0u;
          arg_index < callee_type->param_count;
          ++arg_index) {
-        if (!turbowasm_mir_text_appendf(
-                text, ", r%u",
-                stack[base + arg_index].reg))
+        const char *prefix =
+            turbowasm_mir_reg_prefix(
+                stack[base + arg_index].type);
+        if (prefix == NULL ||
+            !turbowasm_mir_text_appendf(
+                text, ", %s%u",
+                prefix, stack[base + arg_index].reg))
             return false;
     }
 
@@ -1478,10 +1512,16 @@ static bool turbowasm_mir_materialize_branch_target(
     target = &controls[target_index];
 
     if (target->kind == TURBOWASM_MIR_CONTROL_FUNCTION) {
+        const char *move_name =
+            turbowasm_mir_move_name(function_result_type);
+        const char *prefix =
+            turbowasm_mir_reg_prefix(function_result_type);
         if (stack_size == 0u ||
             stack[stack_size - 1u].type != function_result_type ||
+            move_name == NULL || prefix == NULL ||
             !turbowasm_mir_text_appendf(
-                text, "mov jit_return_value, r%u\n",
+                text, "%s jit_return_value, %s%u\n",
+                move_name, prefix,
                 stack[stack_size - 1u].reg))
             return false;
     } else if (target->kind == TURBOWASM_MIR_CONTROL_LOOP) {
@@ -1583,7 +1623,7 @@ static bool turbowasm_mir_structured_branch_target(
     return true;
 }
 
-static turbowasm_status turbowasm_mir_compile_structured_integer(
+static turbowasm_status turbowasm_mir_compile_structured_scalar(
     turbowasm_mir_backend_context *backend,
     const turbowasm_validation_context *validation,
     uint32_t function_index,
@@ -1626,7 +1666,8 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
         return TURBOWASM_INVALID_ARGUMENT;
 
     if (!turbowasm_mir_control_register_budget(
-            validation, function, &control_register_count))
+            validation, function, result_type,
+            &control_register_count))
         return TURBOWASM_UNSUPPORTED;
 
     if ((uint64_t)function->code_size + 1u +
@@ -2353,7 +2394,7 @@ static turbowasm_status turbowasm_mir_compile_function(
     if (!turbowasm_mir_scan_scalar_locals(
             validation, function_index, function,
             &register_count, &result_type)) {
-        return turbowasm_mir_compile_structured_integer(
+        return turbowasm_mir_compile_structured_scalar(
             backend, validation, function_index, function, out);
     }
 
