@@ -117,6 +117,27 @@ jobs:
           path: deps/salts
           persist-credentials: false
 
+      - name: Resolve Salts cache identity
+        id: salts-cache-meta
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sha = (git -C deps/salts rev-parse HEAD).Trim()
+          if ([string]::IsNullOrWhiteSpace($sha)) { throw "unable to resolve Salts master SHA" }
+          $image = "$env:ImageOS-$env:ImageVersion"
+          if ([string]::IsNullOrWhiteSpace($env:ImageOS)) {
+            $image = "windows-2022-unknown"
+          }
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "image=$image" >> $env:GITHUB_OUTPUT
+
+      - name: Restore exact-master Salts SDK
+        id: salts-sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/salts-sdk-windows
+          key: turbowasm-salts-sdk-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-cache-meta.outputs.image }}-${{ steps.salts-cache-meta.outputs.sha }}
+
       - name: Restore Salts build dependencies
         uses: ./deps/salts/.github/actions/setup-re2c-tools
 
@@ -132,6 +153,7 @@ jobs:
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
 
       - name: Build and install Salts master
+        if: steps.salts-sdk-cache.outputs.cache-hit != 'true'
         shell: cmd
         working-directory: deps/salts
         run: |
@@ -156,9 +178,14 @@ jobs:
           if (-not (Select-String -LiteralPath $targets -SimpleMatch "Salts::SIMD" -Quiet)) {
             throw "installed Salts SDK does not export Salts::SIMD"
           }
-          $head = git -C deps/salts rev-parse HEAD
-          $branch = git -C deps/salts branch --show-current
+          $head = (git -C deps/salts rev-parse HEAD).Trim()
+          $branch = (git -C deps/salts branch --show-current).Trim()
           if ($branch -ne "master") { throw "expected Salts master, got $branch at $head" }
+          if ($head -ne "${{ steps.salts-cache-meta.outputs.sha }}") {
+            throw "Salts checkout moved after cache identity resolution"
+          }
+          Write-Host "Salts SDK cache hit: ${{ steps.salts-sdk-cache.outputs.cache-hit }}"
+          Write-Host "Salts master: $head"
           "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
 
       - name: Configure, build and test TurboWasm
