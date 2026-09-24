@@ -11,6 +11,7 @@ include(CTest)
 
 option(TURBOWASM_BUILD_TOOLS "Build TurboWasm command-line tools" ON)
 option(TURBOWASM_BUILD_TESTS "Build TurboWasm tests" ON)
+option(TURBOWASM_ENABLE_MIR_JIT "Enable optional MIR JIT backend" OFF)
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
   message(FATAL_ERROR "SALTS_ROOT must point at an installed Salts SDK")
@@ -57,6 +58,15 @@ target_include_directories(turbowasm
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 target_link_libraries(turbowasm PUBLIC Salts::SIMD)
+
+if(TURBOWASM_ENABLE_MIR_JIT)
+  find_package(MIR CONFIG REQUIRED)
+  target_sources(turbowasm PRIVATE
+    src/jit/mir_backend.c)
+  target_link_libraries(turbowasm PRIVATE MIR::MIR)
+  target_compile_definitions(turbowasm PRIVATE
+    TURBOWASM_ENABLE_MIR_JIT=1)
+endif()
 
 if(MSVC)
   target_compile_options(turbowasm PRIVATE /W4)
