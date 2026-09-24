@@ -4295,7 +4295,7 @@ static bool turbowasm_mir_register_call_externals(
     {
         int64_t (*fn)(
             turbowasm_jit_invocation_context *,
-            int64_t, int64_t, int64_t, int64_t) =
+            int64_t, int64_t, int64_t) =
                 turbowasm_jit_simd_const;
         _Static_assert(sizeof(fn) == sizeof(address),
                        "MIR external pointer size mismatch");
