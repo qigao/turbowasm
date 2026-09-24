@@ -302,3 +302,14 @@ turbowasm_simd_descriptor_find(uint32_t opcode) {
     }
     return NULL;
 }
+
+size_t turbowasm_simd_descriptor_count(void) {
+    return sizeof(descriptors) / sizeof(descriptors[0]);
+}
+
+const turbowasm_simd_descriptor *
+turbowasm_simd_descriptor_at(size_t index) {
+    if (index >= turbowasm_simd_descriptor_count())
+        return NULL;
+    return &descriptors[index];
+}
