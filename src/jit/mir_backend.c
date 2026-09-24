@@ -1957,14 +1957,14 @@ static bool turbowasm_mir_materialize_branch_target(
             !turbowasm_mir_emit_stack_to_locations(
                 text, stack, stack_size,
                 target->start_types, target->start_count,
-                target->start_reg_base))
+                target->start_reg_base, target->start_slot_base))
             return false;
     } else {
         if (target->annotation == NULL ||
             !turbowasm_mir_emit_stack_to_locations(
                 text, stack, stack_size,
                 target->end_types, target->end_count,
-                target->end_reg_base))
+                target->end_reg_base, target->end_slot_base))
             return false;
         target->end_incoming = true;
     }
@@ -2051,6 +2051,274 @@ static bool turbowasm_mir_structured_branch_target(
     return true;
 }
 
+static turbowasm_status turbowasm_mir_structured_emit_simd(
+    turbowasm_mir_text *text,
+    turbowasm_reader *reader,
+    turbowasm_mir_stack_value *stack,
+    uint32_t *stack_size,
+    uint32_t *next_reg,
+    uint32_t register_limit,
+    uint32_t *next_slot,
+    uint32_t slot_limit) {
+    uint32_t subopcode;
+    const turbowasm_simd_exec_descriptor *descriptor;
+
+    if (text == NULL || reader == NULL || stack == NULL ||
+        stack_size == NULL || next_reg == NULL || next_slot == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!turbowasm_reader_uleb32(reader, &subopcode))
+        return TURBOWASM_UNSUPPORTED;
+
+    if (subopcode == 0x0cu) {
+        turbowasm_reader bytes;
+        uint64_t low = 0u;
+        uint64_t high = 0u;
+        int64_t low_signed;
+        int64_t high_signed;
+        uint32_t index;
+
+        if (!turbowasm_reader_slice(reader, 16u, &bytes) ||
+            *next_slot >= slot_limit)
+            return TURBOWASM_UNSUPPORTED;
+
+        for (index = 0u; index < 8u; ++index) {
+            low |= (uint64_t)bytes.cursor[index] << (8u * index);
+            high |= (uint64_t)bytes.cursor[8u + index] << (8u * index);
+        }
+        memcpy(&low_signed, &low, sizeof(low_signed));
+        memcpy(&high_signed, &high, sizeof(high_signed));
+
+        if (!turbowasm_mir_text_appendf(
+                text,
+                "call tw_simd_const_p, tw_jit_simd_const, "
+                "jit_status, jit_ctx, %u, %lld, %lld\n"
+                "bne jit_fail, jit_status, 0\n",
+                *next_slot,
+                (long long)low_signed,
+                (long long)high_signed))
+            return TURBOWASM_OUT_OF_MEMORY;
+
+        stack[*stack_size].reg = (*next_slot)++;
+        stack[*stack_size].type = 0x7bu;
+        ++*stack_size;
+        return TURBOWASM_OK;
+    }
+
+    if (subopcode == 0x00u || subopcode == 0x0bu) {
+        uint32_t alignment;
+        uint32_t offset;
+        turbowasm_mir_stack_value address;
+        turbowasm_mir_stack_value vector_value;
+
+        if (!turbowasm_reader_uleb32(reader, &alignment) ||
+            !turbowasm_reader_uleb32(reader, &offset))
+            return TURBOWASM_UNSUPPORTED;
+        (void)alignment;
+
+        if (subopcode == 0x00u) {
+            if (*stack_size < 1u || *next_slot >= slot_limit)
+                return TURBOWASM_UNSUPPORTED;
+            address = stack[--*stack_size];
+            if (address.type != 0x7fu)
+                return TURBOWASM_UNSUPPORTED;
+
+            if (!turbowasm_mir_text_appendf(
+                    text,
+                    "call tw_simd_memory_p, tw_jit_simd_memory, "
+                    "jit_status, jit_ctx, 0, %u, r%u, %u\n"
+                    "bne jit_fail, jit_status, 0\n",
+                    *next_slot, address.reg, offset))
+                return TURBOWASM_OUT_OF_MEMORY;
+
+            stack[*stack_size].reg = (*next_slot)++;
+            stack[*stack_size].type = 0x7bu;
+            ++*stack_size;
+        } else {
+            if (*stack_size < 2u)
+                return TURBOWASM_UNSUPPORTED;
+            vector_value = stack[--*stack_size];
+            address = stack[--*stack_size];
+            if (vector_value.type != 0x7bu ||
+                address.type != 0x7fu)
+                return TURBOWASM_UNSUPPORTED;
+
+            if (!turbowasm_mir_text_appendf(
+                    text,
+                    "call tw_simd_memory_p, tw_jit_simd_memory, "
+                    "jit_status, jit_ctx, 11, %u, r%u, %u\n"
+                    "bne jit_fail, jit_status, 0\n",
+                    vector_value.reg, address.reg, offset))
+                return TURBOWASM_OUT_OF_MEMORY;
+        }
+        return TURBOWASM_OK;
+    }
+
+    descriptor = turbowasm_simd_exec_descriptor_find(subopcode);
+    if (descriptor == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    if (descriptor->kind == TURBOWASM_SIMD_EXEC_SPLAT) {
+        uint8_t scalar_type =
+            turbowasm_mir_simd_splat_scalar_type(descriptor);
+        turbowasm_mir_stack_value scalar;
+
+        if (*stack_size < 1u || scalar_type == 0u ||
+            *next_slot >= slot_limit)
+            return TURBOWASM_UNSUPPORTED;
+        scalar = stack[--*stack_size];
+        if (scalar.type != scalar_type)
+            return TURBOWASM_UNSUPPORTED;
+
+        if (scalar_type == 0x7du) {
+            if (!turbowasm_mir_text_appendf(
+                    text,
+                    "call tw_simd_splat_f32_p, tw_jit_simd_splat_f32, "
+                    "jit_status, jit_ctx, %u, %u, f%u\n",
+                    subopcode, *next_slot, scalar.reg))
+                return TURBOWASM_OUT_OF_MEMORY;
+        } else if (scalar_type == 0x7cu) {
+            if (!turbowasm_mir_text_appendf(
+                    text,
+                    "call tw_simd_splat_f64_p, tw_jit_simd_splat_f64, "
+                    "jit_status, jit_ctx, %u, %u, d%u\n",
+                    subopcode, *next_slot, scalar.reg))
+                return TURBOWASM_OUT_OF_MEMORY;
+        } else {
+            if (!turbowasm_mir_text_appendf(
+                    text,
+                    "call tw_simd_splat_i64_p, tw_jit_simd_splat_i64, "
+                    "jit_status, jit_ctx, %u, %u, r%u\n",
+                    subopcode, *next_slot, scalar.reg))
+                return TURBOWASM_OUT_OF_MEMORY;
+        }
+
+        if (!turbowasm_mir_text_appendf(
+                text, "bne jit_fail, jit_status, 0\n"))
+            return TURBOWASM_OUT_OF_MEMORY;
+
+        stack[*stack_size].reg = (*next_slot)++;
+        stack[*stack_size].type = 0x7bu;
+        ++*stack_size;
+        return TURBOWASM_OK;
+    }
+
+    if (descriptor->kind == TURBOWASM_SIMD_EXEC_REDUCE) {
+        turbowasm_mir_stack_value vector_value;
+
+        if (*stack_size < 1u || *next_reg >= register_limit)
+            return TURBOWASM_UNSUPPORTED;
+        vector_value = stack[--*stack_size];
+        if (vector_value.type != 0x7bu)
+            return TURBOWASM_UNSUPPORTED;
+
+        if (!turbowasm_mir_text_appendf(
+                text,
+                "call tw_simd_reduce_p, tw_jit_simd_reduce, r%u, "
+                "jit_ctx, %u, %u\n"
+                "call tw_call_status_p, tw_jit_call_status, "
+                "jit_status, jit_ctx\n"
+                "bne jit_fail, jit_status, 0\n",
+                *next_reg, subopcode, vector_value.reg))
+            return TURBOWASM_OUT_OF_MEMORY;
+
+        stack[*stack_size].reg = (*next_reg)++;
+        stack[*stack_size].type = 0x7fu;
+        ++*stack_size;
+        return TURBOWASM_OK;
+    }
+
+    {
+        turbowasm_mir_stack_value a = {0};
+        turbowasm_mir_stack_value b = {0};
+        turbowasm_mir_stack_value c = {0};
+        turbowasm_mir_stack_value count = {0};
+        int64_t a_slot = -1;
+        int64_t b_slot = -1;
+        int64_t c_slot = -1;
+        uint32_t count_reg = UINT32_MAX;
+
+        if (*next_slot >= slot_limit)
+            return TURBOWASM_UNSUPPORTED;
+
+        if (turbowasm_mir_simd_kind_unary(descriptor->kind)) {
+            if (*stack_size < 1u)
+                return TURBOWASM_UNSUPPORTED;
+            a = stack[--*stack_size];
+            if (a.type != 0x7bu)
+                return TURBOWASM_UNSUPPORTED;
+            a_slot = (int64_t)a.reg;
+        } else if (turbowasm_mir_simd_kind_binary(
+                       descriptor->kind)) {
+            if (*stack_size < 2u)
+                return TURBOWASM_UNSUPPORTED;
+            b = stack[--*stack_size];
+            a = stack[--*stack_size];
+            if (a.type != 0x7bu || b.type != 0x7bu)
+                return TURBOWASM_UNSUPPORTED;
+            a_slot = (int64_t)a.reg;
+            b_slot = (int64_t)b.reg;
+        } else if (descriptor->kind == TURBOWASM_SIMD_EXEC_SHIFT) {
+            if (*stack_size < 2u)
+                return TURBOWASM_UNSUPPORTED;
+            count = stack[--*stack_size];
+            a = stack[--*stack_size];
+            if (count.type != 0x7fu || a.type != 0x7bu)
+                return TURBOWASM_UNSUPPORTED;
+            a_slot = (int64_t)a.reg;
+            count_reg = count.reg;
+        } else if (descriptor->kind == TURBOWASM_SIMD_EXEC_SELECT) {
+            if (*stack_size < 3u)
+                return TURBOWASM_UNSUPPORTED;
+            c = stack[--*stack_size];
+            b = stack[--*stack_size];
+            a = stack[--*stack_size];
+            if (a.type != 0x7bu || b.type != 0x7bu ||
+                c.type != 0x7bu)
+                return TURBOWASM_UNSUPPORTED;
+            a_slot = (int64_t)a.reg;
+            b_slot = (int64_t)b.reg;
+            c_slot = (int64_t)c.reg;
+        } else {
+            return TURBOWASM_UNSUPPORTED;
+        }
+
+        if (count_reg != UINT32_MAX) {
+            if (!turbowasm_mir_text_appendf(
+                    text,
+                    "call tw_simd_op_p, tw_jit_simd_op, "
+                    "jit_status, jit_ctx, %u, %u, "
+                    "%lld, %lld, %lld, r%u\n",
+                    subopcode, *next_slot,
+                    (long long)a_slot,
+                    (long long)b_slot,
+                    (long long)c_slot,
+                    count_reg))
+                return TURBOWASM_OUT_OF_MEMORY;
+        } else {
+            if (!turbowasm_mir_text_appendf(
+                    text,
+                    "call tw_simd_op_p, tw_jit_simd_op, "
+                    "jit_status, jit_ctx, %u, %u, "
+                    "%lld, %lld, %lld, 0\n",
+                    subopcode, *next_slot,
+                    (long long)a_slot,
+                    (long long)b_slot,
+                    (long long)c_slot))
+                return TURBOWASM_OUT_OF_MEMORY;
+        }
+
+        if (!turbowasm_mir_text_appendf(
+                text, "bne jit_fail, jit_status, 0\n"))
+            return TURBOWASM_OUT_OF_MEMORY;
+
+        stack[*stack_size].reg = (*next_slot)++;
+        stack[*stack_size].type = 0x7bu;
+        ++*stack_size;
+        return TURBOWASM_OK;
+    }
+}
+
 static turbowasm_status turbowasm_mir_compile_structured_scalar(
     turbowasm_mir_backend_context *backend,
     const turbowasm_validation_context *validation,
@@ -2067,7 +2335,10 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     MIR_item_t function_item;
     uint32_t register_count;
     uint32_t control_register_count = 0u;
+    uint32_t control_slot_count = 0u;
     uint32_t next_reg = 0u;
+    uint32_t next_slot = 0u;
+    uint32_t slot_limit = 0u;
     uint32_t stack_size = 0u;
     uint32_t control_size = 0u;
     uint32_t index;
@@ -2094,18 +2365,21 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     if (type == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    if (!turbowasm_mir_control_register_budget(
+    if (!turbowasm_mir_control_location_budget(
             validation, function, result_type,
-            &control_register_count))
+            &control_register_count, &control_slot_count))
         return TURBOWASM_UNSUPPORTED;
 
     if ((uint64_t)function->code_size + 1u +
-            (uint64_t)control_register_count >
-        UINT32_MAX)
+            (uint64_t)control_register_count > UINT32_MAX ||
+        (uint64_t)function->code_size + 1u +
+            (uint64_t)control_slot_count > UINT32_MAX)
         return TURBOWASM_OUT_OF_MEMORY;
 
     register_count =
         function->code_size + 1u + control_register_count;
+    slot_limit =
+        function->code_size + 1u + control_slot_count;
     stack = (turbowasm_mir_stack_value *)calloc(
         (size_t)register_count + 1u, sizeof(*stack));
     controls = (turbowasm_mir_control_frame *)calloc(
@@ -2118,7 +2392,9 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     controls[0].kind = TURBOWASM_MIR_CONTROL_FUNCTION;
     controls[0].height = 0u;
     controls[0].start_reg_base = UINT32_MAX;
+    controls[0].start_slot_base = UINT32_MAX;
     controls[0].end_reg_base = UINT32_MAX;
+    controls[0].end_slot_base = UINT32_MAX;
     control_size = 1u;
 
     module_id = backend->next_module_id++;
@@ -2144,11 +2420,24 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             "tw_call_f64_1_p: proto d, p:ctx, i64:index, d:a0\n"
             "tw_call_status_p: proto i64, p:ctx\n"
             "tw_checkpoint_p: proto i64, p:ctx\n"
+            "tw_simd_copy_p: proto i64, p:ctx, i64:out_slot, i64:in_slot\n"
+            "tw_simd_const_p: proto i64, p:ctx, i64:slot, i64:low, i64:high\n"
+            "tw_simd_splat_i64_p: proto i64, p:ctx, i64:opcode, i64:slot, i64:value\n"
+            "tw_simd_splat_f32_p: proto i64, p:ctx, i64:opcode, i64:slot, f:value\n"
+            "tw_simd_splat_f64_p: proto i64, p:ctx, i64:opcode, i64:slot, d:value\n"
+            "tw_simd_op_p: proto i64, p:ctx, i64:opcode, i64:out_slot, "
+                "i64:a_slot, i64:b_slot, i64:c_slot, i64:count\n"
+            "tw_simd_reduce_p: proto i64, p:ctx, i64:opcode, i64:slot\n"
+            "tw_simd_memory_p: proto i64, p:ctx, i64:opcode, i64:slot, "
+                "i64:address, i64:offset\n"
             "import tw_jit_call_i64_0, tw_jit_call_i64_1, "
             "tw_jit_call_i64_2, tw_jit_call_f32_0, "
             "tw_jit_call_f32_1, tw_jit_call_f64_0, "
             "tw_jit_call_f64_1, tw_jit_call_status, "
-            "tw_jit_checkpoint\n"
+            "tw_jit_checkpoint, tw_jit_simd_copy, tw_jit_simd_const, "
+            "tw_jit_simd_splat_i64, tw_jit_simd_splat_f32, "
+            "tw_jit_simd_splat_f64, tw_jit_simd_op, "
+            "tw_jit_simd_reduce, tw_jit_simd_memory\n"
             "export %s\n"
             "%s: func %s, p:jit_ctx",
             module_id, function_name, function_name,
@@ -2279,7 +2568,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 if (!turbowasm_mir_emit_stack_to_locations(
                         &text, stack, stack_size,
                         frame->end_types, frame->end_count,
-                        frame->end_reg_base))
+                        frame->end_reg_base, frame->end_slot_base))
                     goto done;
                 if (!turbowasm_mir_emit_control_jump(
                         &text, frame->annotation->opcode_offset,
@@ -2297,7 +2586,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             if (!turbowasm_mir_push_locations(
                     stack, &stack_size,
                     frame->start_types, frame->start_count,
-                    frame->start_reg_base))
+                    frame->start_reg_base, frame->start_slot_base))
                 goto done;
 
             frame->else_seen = true;
@@ -2366,7 +2655,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                     !turbowasm_mir_emit_stack_to_locations(
                         &text, stack, stack_size,
                         frame->end_types, frame->end_count,
-                        frame->end_reg_base))
+                        frame->end_reg_base, frame->end_slot_base))
                     goto done;
 
                 end_opcode_reachable =
@@ -2394,7 +2683,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                     !turbowasm_mir_push_locations(
                         stack, &stack_size,
                         frame->end_types, frame->end_count,
-                        frame->end_reg_base))
+                        frame->end_reg_base, frame->end_slot_base))
                     goto done;
 
                 --control_size;
@@ -2422,6 +2711,10 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 const uint8_t *end_types = NULL;
                 uint32_t start_count = 0u;
                 uint32_t end_count = 0u;
+                uint32_t start_registers = 0u;
+                uint32_t start_slots = 0u;
+                uint32_t end_registers = 0u;
+                uint32_t end_slots = 0u;
                 uint32_t current_offset;
                 uint32_t condition_reg = 0u;
 
@@ -2439,7 +2732,13 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                     !turbowasm_mir_structured_control_signature(
                         validation, annotation, result_type,
                         &start_types, &start_count,
-                        &end_types, &end_count))
+                        &end_types, &end_count) ||
+                    !turbowasm_mir_count_location_types(
+                        start_types, start_count,
+                        &start_registers, &start_slots) ||
+                    !turbowasm_mir_count_location_types(
+                        end_types, end_count,
+                        &end_registers, &end_slots))
                     goto done;
 
                 if (opcode == 0x04u) {
@@ -2465,13 +2764,20 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 frame->end_types = end_types;
                 frame->end_count = end_count;
                 frame->start_reg_base =
-                    start_count == 0u ? UINT32_MAX : next_reg;
-                next_reg += start_count;
+                    start_registers == 0u ? UINT32_MAX : next_reg;
+                next_reg += start_registers;
+                frame->start_slot_base =
+                    start_slots == 0u ? UINT32_MAX : next_slot;
+                next_slot += start_slots;
                 frame->end_reg_base =
-                    end_count == 0u ? UINT32_MAX : next_reg;
-                next_reg += end_count;
+                    end_registers == 0u ? UINT32_MAX : next_reg;
+                next_reg += end_registers;
+                frame->end_slot_base =
+                    end_slots == 0u ? UINT32_MAX : next_slot;
+                next_slot += end_slots;
 
-                if (next_reg > register_count)
+                if (next_reg > register_count ||
+                    next_slot > slot_limit)
                     goto done;
 
                 frame->height = stack_size - start_count;
@@ -2480,14 +2786,14 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                     !turbowasm_mir_emit_stack_to_locations(
                         &text, stack, stack_size,
                         start_types, start_count,
-                        frame->start_reg_base))
+                        frame->start_reg_base, frame->start_slot_base))
                     goto done;
 
                 stack_size = frame->height;
                 if (!turbowasm_mir_push_locations(
                         stack, &stack_size,
                         start_types, start_count,
-                        frame->start_reg_base))
+                        frame->start_reg_base, frame->start_slot_base))
                     goto done;
 
                 /*
@@ -2521,7 +2827,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                             !turbowasm_mir_emit_stack_to_locations(
                                 &text, stack, stack_size,
                                 end_types, end_count,
-                                frame->end_reg_base))
+                                frame->end_reg_base, frame->end_slot_base))
                             goto done;
                         if (!turbowasm_mir_emit_control_branch_false(
                                 &text, annotation->opcode_offset,
@@ -2746,6 +3052,98 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 break;
             }
 
+            case 0x1bu: { /* select */
+                turbowasm_mir_stack_value condition;
+                turbowasm_mir_stack_value false_value;
+                turbowasm_mir_stack_value true_value;
+
+                if (stack_size < 3u)
+                    goto done;
+
+                condition = stack[--stack_size];
+                false_value = stack[--stack_size];
+                true_value = stack[--stack_size];
+                if (condition.type != 0x7fu ||
+                    true_value.type != false_value.type)
+                    goto done;
+
+                if (true_value.type == 0x7bu) {
+                    uint32_t out_slot;
+                    if (next_slot >= slot_limit)
+                        goto done;
+                    out_slot = next_slot++;
+
+                    if (!turbowasm_mir_text_appendf(
+                            &text,
+                            "bf select_%u_false, r%u\n"
+                            "call tw_simd_copy_p, tw_jit_simd_copy, "
+                            "jit_status, jit_ctx, %u, %u\n"
+                            "bne jit_fail, jit_status, 0\n"
+                            "jmp select_%u_end\n"
+                            "select_%u_false:\n"
+                            "call tw_simd_copy_p, tw_jit_simd_copy, "
+                            "jit_status, jit_ctx, %u, %u\n"
+                            "bne jit_fail, jit_status, 0\n"
+                            "select_%u_end:\n",
+                            opcode_offset, condition.reg,
+                            out_slot, true_value.reg,
+                            opcode_offset, opcode_offset,
+                            out_slot, false_value.reg,
+                            opcode_offset))
+                        goto oom;
+
+                    stack[stack_size].reg = out_slot;
+                    stack[stack_size].type = 0x7bu;
+                    ++stack_size;
+                } else {
+                    const char *move_name =
+                        turbowasm_mir_move_name(true_value.type);
+                    const char *prefix =
+                        turbowasm_mir_reg_prefix(true_value.type);
+                    uint32_t out_reg;
+
+                    if (move_name == NULL || prefix == NULL ||
+                        next_reg >= register_count)
+                        goto done;
+                    out_reg = next_reg++;
+
+                    if (!turbowasm_mir_text_appendf(
+                            &text,
+                            "bf select_%u_false, r%u\n"
+                            "%s %s%u, %s%u\n"
+                            "jmp select_%u_end\n"
+                            "select_%u_false:\n"
+                            "%s %s%u, %s%u\n"
+                            "select_%u_end:\n",
+                            opcode_offset, condition.reg,
+                            move_name, prefix, out_reg,
+                            prefix, true_value.reg,
+                            opcode_offset, opcode_offset,
+                            move_name, prefix, out_reg,
+                            prefix, false_value.reg,
+                            opcode_offset))
+                        goto oom;
+
+                    stack[stack_size].reg = out_reg;
+                    stack[stack_size].type = true_value.type;
+                    ++stack_size;
+                }
+                break;
+            }
+
+            case 0xfdu: {
+                turbowasm_status simd_status =
+                    turbowasm_mir_structured_emit_simd(
+                        &text, &reader, stack, &stack_size,
+                        &next_reg, register_count,
+                        &next_slot, slot_limit);
+                if (simd_status == TURBOWASM_OUT_OF_MEMORY)
+                    goto oom;
+                if (simd_status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
+
             case 0x41u: {
                 int32_t value;
                 if (!turbowasm_reader_sleb32(&reader, &value) ||
@@ -2881,6 +3279,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
         goto done;
 
     compiled->result_type = result_type;
+    compiled->simd_slot_count = next_slot;
     compiled->param_count = (uint8_t)type->param_count;
     for (index = 0u; index < type->param_count; ++index)
         compiled->param_types[index] = type->params[index];
