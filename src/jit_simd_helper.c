@@ -106,6 +106,25 @@ int64_t turbowasm_jit_simd_const(
     return (int64_t)TURBOWASM_OK;
 }
 
+int64_t turbowasm_jit_simd_copy(
+    turbowasm_jit_invocation_context *context,
+    int64_t out_slot,
+    int64_t in_slot) {
+    salts_v128 *out =
+        turbowasm_jit_simd_slot(context, out_slot);
+    const salts_v128 *in =
+        turbowasm_jit_simd_slot_const(context, in_slot);
+
+    if (out == NULL || in == NULL) {
+        return turbowasm_jit_simd_status(
+            context, TURBOWASM_INVALID_ARGUMENT,
+            TURBOWASM_TRAP_NONE);
+    }
+
+    *out = *in;
+    return (int64_t)TURBOWASM_OK;
+}
+
 int64_t turbowasm_jit_simd_splat_i64(
     turbowasm_jit_invocation_context *context,
     int64_t opcode,
