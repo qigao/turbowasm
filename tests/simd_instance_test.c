@@ -504,43 +504,6 @@ static void test_generic_f64x2_div(void) {
     turbowasm_module_destroy(&module);
 }
 
-static void test_validated_but_unimplemented_simd_fails_closed(void) {
-    static const uint8_t bytes[] = {
-        WASM_HEADER,
-        0x01, 0x06,
-        0x01, 0x60, 0x01, 0x7b, 0x01, 0x7b,
-        0x03, 0x02, 0x01, 0x00,
-        0x0a, 0x09, 0x01, 0x07,
-        0x00,
-        0x20, 0x00,
-        /* i32x4.trunc_sat_f32x4_s remains deferred under #54. */
-        0xfd, 0xf8, 0x01,
-        0x0b
-    };
-    turbowasm_module module = {0};
-    turbowasm_instance instance = {0};
-    turbowasm_value argument = v128_i32x4(1, 2, 3, 4);
-    turbowasm_value result = {0};
-    size_t result_count = 0u;
-    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
-
-    assert(turbowasm_module_load_borrowed(
-               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
-    assert(turbowasm_instance_create(
-               &instance, &module) == TURBOWASM_OK);
-
-    assert(turbowasm_instance_invoke(
-               &instance, 0u,
-               &argument, 1u,
-               &result, 1u,
-               &result_count,
-               &trap) == TURBOWASM_UNSUPPORTED);
-    assert(trap == TURBOWASM_TRAP_NONE);
-
-    turbowasm_instance_destroy(&instance);
-    turbowasm_module_destroy(&module);
-}
-
 int main(void) {
     test_v128_const();
     test_i32x4_splat();
@@ -552,6 +515,5 @@ int main(void) {
     test_generic_i16x8_mul();
     test_generic_unsigned_shift();
     test_generic_f64x2_div();
-    test_validated_but_unimplemented_simd_fails_closed();
     return 0;
 }

@@ -1,95 +1,99 @@
 #include "simd_exec_table.h"
 
 #define SP(opcode_, desc_, shape_) \
-    { (opcode_), TURBOWASM_SIMD_EXEC_SPLAT, &(desc_), 0u, (shape_), 0u }
+    { (opcode_), TURBOWASM_SIMD_EXEC_SPLAT, &(desc_), 0u, (shape_), 0u, NULL, 0u }
 
 #define UN(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_UNARY, &(desc_), \
-      (uint8_t)(op_), (shape_), 0u }
+      (uint8_t)(op_), (shape_), 0u, NULL, 0u }
 
 #define BIN(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_BINARY, &(desc_), \
-      (uint8_t)(op_), (shape_), 0u }
+      (uint8_t)(op_), (shape_), 0u, NULL, 0u }
 
 #define CMP(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_COMPARE, &(desc_), \
-      (uint8_t)(op_), (shape_), 0u }
+      (uint8_t)(op_), (shape_), 0u, NULL, 0u }
 
 #define SH(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_SHIFT, &(desc_), \
-      (uint8_t)(op_), (shape_), 0u }
+      (uint8_t)(op_), (shape_), 0u, NULL, 0u }
 
 #define SEL(opcode_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_SELECT, &cmeta_vector_i8x16, \
-      0u, TURBOWASM_V128_RAW, 0u }
+      0u, TURBOWASM_V128_RAW, 0u, NULL, 0u }
 
 #define SAT(opcode_, desc_, op_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_SATURATING, &(desc_), \
-      (uint8_t)(op_), (shape_), 0u }
+      (uint8_t)(op_), (shape_), 0u, NULL, 0u }
 
 #define RED(opcode_, desc_, op_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_REDUCE, &(desc_), \
-      (uint8_t)(op_), TURBOWASM_V128_RAW, 0u }
+      (uint8_t)(op_), TURBOWASM_V128_RAW, 0u, NULL, 0u }
 
 #define NAR(opcode_, desc_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_NARROW, &(desc_), \
-      0u, (shape_), 0u }
+      0u, (shape_), 0u, NULL, 0u }
 
 #define EXH(opcode_, desc_, half_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_EXTEND_HALF, &(desc_), \
-      (uint8_t)(half_), (shape_), 0u }
+      (uint8_t)(half_), (shape_), 0u, NULL, 0u }
 
 #define EMH(opcode_, desc_, half_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_EXTMUL_HALF, &(desc_), \
-      (uint8_t)(half_), (shape_), 0u }
+      (uint8_t)(half_), (shape_), 0u, NULL, 0u }
 
 #define PAIR(opcode_, desc_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_EXTADD_PAIRWISE, &(desc_), \
-      0u, (shape_), 0u }
+      0u, (shape_), 0u, NULL, 0u }
 
 #define Q15(opcode_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_Q15MULR, &cmeta_vector_i16x8, \
-      0u, TURBOWASM_V128_I16X8, 0u }
+      0u, TURBOWASM_V128_I16X8, 0u, NULL, 0u }
 
 #define DOT(opcode_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_DOT_PAIRWISE, &cmeta_vector_i32x4, \
-      0u, TURBOWASM_V128_I32X4, 0u }
+      0u, TURBOWASM_V128_I32X4, 0u, NULL, 0u }
+
+#define CONV(opcode_, dst_, src_, op_, policy_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_CONVERT, &(dst_), \
+      (uint8_t)(op_), (shape_), 0u, &(src_), (uint8_t)(policy_) }
 
 #define MEXT(opcode_, desc_, width_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_EXTEND, &(desc_), \
-      0u, (shape_), (width_) }
+      0u, (shape_), (width_), NULL, 0u }
 
 #define MSPLAT(opcode_, desc_, width_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_SPLAT, &(desc_), \
-      0u, (shape_), (width_) }
+      0u, (shape_), (width_), NULL, 0u }
 
 #define MZERO(opcode_, desc_, width_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_ZERO, &(desc_), \
-      0u, (shape_), (width_) }
+      0u, (shape_), (width_), NULL, 0u }
 
 #define MLOADLANE(opcode_, desc_, width_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_LOAD_LANE, &(desc_), \
-      0u, (shape_), (width_) }
+      0u, (shape_), (width_), NULL, 0u }
 
 #define MSTORELANE(opcode_, desc_, width_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE, &(desc_), \
-      0u, TURBOWASM_V128_RAW, (width_) }
+      0u, TURBOWASM_V128_RAW, (width_), NULL, 0u }
 
 #define LEXT(opcode_, desc_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_LANE_EXTRACT, &(desc_), \
-      0u, TURBOWASM_V128_RAW, 0u }
+      0u, TURBOWASM_V128_RAW, 0u, NULL, 0u }
 
 #define LREP(opcode_, desc_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_LANE_REPLACE, &(desc_), \
-      0u, (shape_), 0u }
+      0u, (shape_), 0u, NULL, 0u }
 
 #define SHUF(opcode_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_SHUFFLE, &cmeta_vector_i8x16, \
-      0u, TURBOWASM_V128_I8X16, 0u }
+      0u, TURBOWASM_V128_I8X16, 0u, NULL, 0u }
 
 #define SWIZ(opcode_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_SWIZZLE, &cmeta_vector_i8x16, \
-      0u, TURBOWASM_V128_I8X16, 0u }
+      0u, TURBOWASM_V128_I8X16, 0u, NULL, 0u }
 
 /*
  * This is intentionally an execution-capability table, not another
@@ -125,6 +129,13 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
 
     MZERO(0x5cu, cmeta_vector_i32x4, 4u, TURBOWASM_V128_I32X4),
     MZERO(0x5du, cmeta_vector_i64x2, 8u, TURBOWASM_V128_I64X2),
+
+    CONV(0x5eu, cmeta_vector_f32x4, cmeta_vector_f64x2,
+         SALTS_SIMD_CONVERT_DEMOTE, SALTS_SIMD_LANES_LOW_ZERO,
+         TURBOWASM_V128_F32X4),
+    CONV(0x5fu, cmeta_vector_f64x2, cmeta_vector_f32x4,
+         SALTS_SIMD_CONVERT_PROMOTE, SALTS_SIMD_LANES_LOW,
+         TURBOWASM_V128_F64X2),
 
     /* lane/shuffle forms */
     SHUF(0x0du),
@@ -527,7 +538,32 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
     BIN(0xf6u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_PSEUDO_MIN,
         TURBOWASM_V128_F64X2),
     BIN(0xf7u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_PSEUDO_MAX,
-        TURBOWASM_V128_F64X2)
+        TURBOWASM_V128_F64X2),
+
+    CONV(0xf8u, cmeta_vector_i32x4, cmeta_vector_f32x4,
+         SALTS_SIMD_CONVERT_TRUNC_SAT, SALTS_SIMD_LANES_FULL,
+         TURBOWASM_V128_I32X4),
+    CONV(0xf9u, cmeta_vector_u32x4, cmeta_vector_f32x4,
+         SALTS_SIMD_CONVERT_TRUNC_SAT, SALTS_SIMD_LANES_FULL,
+         TURBOWASM_V128_U32X4),
+    CONV(0xfau, cmeta_vector_f32x4, cmeta_vector_i32x4,
+         SALTS_SIMD_CONVERT_NUMERIC, SALTS_SIMD_LANES_FULL,
+         TURBOWASM_V128_F32X4),
+    CONV(0xfbu, cmeta_vector_f32x4, cmeta_vector_u32x4,
+         SALTS_SIMD_CONVERT_NUMERIC, SALTS_SIMD_LANES_FULL,
+         TURBOWASM_V128_F32X4),
+    CONV(0xfcu, cmeta_vector_i32x4, cmeta_vector_f64x2,
+         SALTS_SIMD_CONVERT_TRUNC_SAT, SALTS_SIMD_LANES_LOW_ZERO,
+         TURBOWASM_V128_I32X4),
+    CONV(0xfdu, cmeta_vector_u32x4, cmeta_vector_f64x2,
+         SALTS_SIMD_CONVERT_TRUNC_SAT, SALTS_SIMD_LANES_LOW_ZERO,
+         TURBOWASM_V128_U32X4),
+    CONV(0xfeu, cmeta_vector_f64x2, cmeta_vector_i32x4,
+         SALTS_SIMD_CONVERT_NUMERIC, SALTS_SIMD_LANES_LOW,
+         TURBOWASM_V128_F64X2),
+    CONV(0xffu, cmeta_vector_f64x2, cmeta_vector_u32x4,
+         SALTS_SIMD_CONVERT_NUMERIC, SALTS_SIMD_LANES_LOW,
+         TURBOWASM_V128_F64X2)
 };
 
 #undef SWIZ
@@ -539,6 +575,7 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
 #undef MZERO
 #undef MSPLAT
 #undef MEXT
+#undef CONV
 #undef DOT
 #undef Q15
 #undef PAIR

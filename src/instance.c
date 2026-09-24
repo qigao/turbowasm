@@ -1832,6 +1832,21 @@ static turbowasm_status turbowasm_exec_simd_generic(
                 &right.as.v128.bits);
             break;
 
+        case TURBOWASM_SIMD_EXEC_CONVERT:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &left);
+            if (status != TURBOWASM_OK) return status;
+            if (descriptor->source_desc == NULL)
+                return TURBOWASM_UNSUPPORTED;
+            supported = salts_simd_convert(
+                descriptor->vector_desc,
+                descriptor->source_desc,
+                (salts_simd_convert_op)descriptor->op,
+                (salts_simd_lane_policy)descriptor->lane_policy,
+                &out.as.v128.bits,
+                &left.as.v128.bits);
+            break;
+
         case TURBOWASM_SIMD_EXEC_SPLAT:
         default:
             return TURBOWASM_UNSUPPORTED;
