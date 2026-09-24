@@ -84,6 +84,11 @@ typedef struct turbowasm_jit_invocation_context {
     uint32_t depth;
     turbowasm_status call_status;
     turbowasm_trap call_trap;
+
+    /* Invocation-local v128 temporary frame used by helper-backed JIT
+     * lowering. Nested compiled calls save/replace/restore this frame. */
+    salts_v128 *simd_slots;
+    uint32_t simd_slot_count;
 } turbowasm_jit_invocation_context;
 
 turbowasm_status turbowasm_jit_instance_attach_backend(
