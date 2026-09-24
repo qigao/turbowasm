@@ -13,8 +13,8 @@ static void test_execution_table_is_validation_subset(void) {
     size_t index;
     size_t other;
 
-    /* 174 prior mappings + 4 floating pseudo min/max mappings. */
-    assert(count == 178u);
+    /* 178 prior mappings + 11 residual rounding/bitwise/average mappings. */
+    assert(count == 189u);
 
     for (index = 0u; index < count; ++index) {
         const turbowasm_simd_exec_descriptor *descriptor =
@@ -121,7 +121,25 @@ static void test_representative_semantics(void) {
     assert(descriptor->op == SALTS_SIMD_BINARY_PSEUDO_MAX);
     assert(descriptor->result_shape == TURBOWASM_V128_F64X2);
 
-    /* Still validated but intentionally deferred to later #48 slices. */
+    descriptor = turbowasm_simd_exec_descriptor_find(0x4fu);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_BINARY);
+    assert(descriptor->op == SALTS_SIMD_BINARY_AND_NOT);
+    assert(descriptor->result_shape == TURBOWASM_V128_RAW);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x67u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_UNARY);
+    assert(descriptor->vector_desc == &cmeta_vector_f32x4);
+    assert(descriptor->op == SALTS_SIMD_UNARY_CEIL);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x9bu);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_BINARY);
+    assert(descriptor->vector_desc == &cmeta_vector_u16x8);
+    assert(descriptor->op == SALTS_SIMD_BINARY_AVERAGE_ROUND_UNSIGNED);
+
+    /* Still validated but intentionally deferred to #53/#54. */
     assert(turbowasm_simd_descriptor_find(0x65u) != NULL);
     assert(turbowasm_simd_exec_descriptor_find(0x65u) == NULL);
 }
