@@ -1465,7 +1465,10 @@ static bool turbowasm_mir_is_function_eligible(
     return turbowasm_mir_scan_scalar_locals(
                validation, function_index, function, NULL, NULL) ||
            turbowasm_mir_scan_structured_scalar(
-               validation, function_index, function, NULL);
+               validation, function_index, function, NULL) ||
+           turbowasm_mir_scan_simd_straightline(
+               validation, function_index, function,
+               NULL, NULL, NULL);
 }
 
 static const char *turbowasm_mir_binary_name(uint8_t opcode) {
@@ -3280,7 +3283,7 @@ static bool turbowasm_mir_argument_matches(
     }
 }
 
-static turbowasm_status turbowasm_mir_invoke_compiled(
+static turbowasm_status turbowasm_mir_invoke_compiled_inner(
     const turbowasm_compiled_function *compiled,
     turbowasm_jit_invocation_context *context,
     const turbowasm_value *arguments,
@@ -3445,6 +3448,56 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
 
     *result_count = 1u;
     return TURBOWASM_OK;
+}
+
+
+static turbowasm_status turbowasm_mir_invoke_compiled(
+    const turbowasm_compiled_function *compiled,
+    turbowasm_jit_invocation_context *context,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    const turbowasm_mir_compiled *function;
+    salts_v128 *saved_slots;
+    uint32_t saved_count;
+    salts_v128 *slots = NULL;
+    turbowasm_status status;
+
+    if (compiled == NULL || compiled->impl == NULL ||
+        context == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    function = (const turbowasm_mir_compiled *)compiled->impl;
+    saved_slots = context->simd_slots;
+    saved_count = context->simd_slot_count;
+
+    if (function->simd_slot_count != 0u) {
+        if ((uint64_t)function->simd_slot_count *
+                sizeof(*slots) > (uint64_t)SIZE_MAX)
+            return TURBOWASM_OUT_OF_MEMORY;
+        slots = (salts_v128 *)calloc(
+            (size_t)function->simd_slot_count,
+            sizeof(*slots));
+        if (slots == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    context->simd_slots = slots;
+    context->simd_slot_count = function->simd_slot_count;
+
+    status = turbowasm_mir_invoke_compiled_inner(
+        compiled, context,
+        arguments, argument_count,
+        results, result_capacity,
+        result_count, trap);
+
+    context->simd_slots = saved_slots;
+    context->simd_slot_count = saved_count;
+    free(slots);
+    return status;
 }
 
 static void turbowasm_mir_destroy_function(
