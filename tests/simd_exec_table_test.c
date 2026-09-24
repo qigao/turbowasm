@@ -13,8 +13,8 @@ static void test_execution_table_is_validation_subset(void) {
     size_t index;
     size_t other;
 
-    /* 174 prior mappings + 4 floating pseudo min/max mappings. */
-    assert(count == 178u);
+    /* 178 prior mappings + 32 widening/narrowing mappings. */
+    assert(count == 210u);
 
     for (index = 0u; index < count; ++index) {
         const turbowasm_simd_exec_descriptor *descriptor =
@@ -121,9 +121,31 @@ static void test_representative_semantics(void) {
     assert(descriptor->op == SALTS_SIMD_BINARY_PSEUDO_MAX);
     assert(descriptor->result_shape == TURBOWASM_V128_F64X2);
 
-    /* Still validated but intentionally deferred to later #48 slices. */
-    assert(turbowasm_simd_descriptor_find(0x65u) != NULL);
-    assert(turbowasm_simd_exec_descriptor_find(0x65u) == NULL);
+    descriptor = turbowasm_simd_exec_descriptor_find(0x65u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_NARROW);
+    assert(descriptor->vector_desc == &cmeta_vector_i8x16);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x88u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_EXTEND_HALF);
+    assert(descriptor->vector_desc == &cmeta_vector_i16x8);
+    assert(descriptor->op == SALTS_SIMD_HALF_HIGH);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x9eu);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_EXTMUL_HALF);
+    assert(descriptor->vector_desc == &cmeta_vector_u16x8);
+    assert(descriptor->op == SALTS_SIMD_HALF_LOW);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x7eu);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_EXTADD_PAIRWISE);
+    assert(descriptor->vector_desc == &cmeta_vector_i32x4);
+
+    /* q15/dot/conversions remain intentionally deferred. */
+    assert(turbowasm_simd_descriptor_find(0x82u) != NULL);
+    assert(turbowasm_simd_exec_descriptor_find(0x82u) == NULL);
 }
 
 int main(void) {
