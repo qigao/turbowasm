@@ -124,19 +124,36 @@ jobs:
           $ErrorActionPreference = "Stop"
           $sha = (git -C deps/salts rev-parse HEAD).Trim()
           if ([string]::IsNullOrWhiteSpace($sha)) { throw "unable to resolve Salts master SHA" }
-          $image = "$env:ImageOS-$env:ImageVersion"
-          if ([string]::IsNullOrWhiteSpace($env:ImageOS)) {
-            $image = "windows-2022-unknown"
+          $imageFamily = $env:ImageOS
+          if ([string]::IsNullOrWhiteSpace($imageFamily)) {
+            $imageFamily = "windows-2022"
           }
+          $legacyImage = "$imageFamily-$env:ImageVersion"
           "sha=$sha" >> $env:GITHUB_OUTPUT
-          "image=$image" >> $env:GITHUB_OUTPUT
+          "image-family=$imageFamily" >> $env:GITHUB_OUTPUT
+          "legacy-image=$legacyImage" >> $env:GITHUB_OUTPUT
 
       - name: Restore exact-master Salts SDK
         id: salts-sdk-cache
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/salts-sdk-windows
-          key: turbowasm-salts-sdk-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-cache-meta.outputs.image }}-${{ steps.salts-cache-meta.outputs.sha }}
+          key: turbowasm-salts-sdk-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-cache-meta.outputs.image-family }}-${{ steps.salts-cache-meta.outputs.sha }}
+          restore-keys: |
+            turbowasm-salts-sdk-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-cache-meta.outputs.legacy-image }}-${{ steps.salts-cache-meta.outputs.sha }}
+
+      - name: Validate restored Salts SDK
+        id: salts-sdk-restore
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $saltsRoot = Join-Path $env:RUNNER_TEMP "salts-sdk-windows"
+          $config = Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"
+          $targets = Join-Path $saltsRoot "lib\cmake\Salts\SaltsTargets.cmake"
+          $valid = (Test-Path -LiteralPath $config -PathType Leaf) -and
+                   (Test-Path -LiteralPath $targets -PathType Leaf)
+          "valid=$($valid.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          Write-Host "Restored Salts SDK valid: $valid"
 
       - name: Restore Salts build dependencies
         uses: ./deps/salts/.github/actions/setup-re2c-tools
@@ -153,7 +170,7 @@ jobs:
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
 
       - name: Build and install Salts master
-        if: steps.salts-sdk-cache.outputs.cache-hit != 'true'
+        if: steps.salts-sdk-restore.outputs.valid != 'true'
         shell: cmd
         working-directory: deps/salts
         run: |
@@ -184,7 +201,8 @@ jobs:
           if ($head -ne "${{ steps.salts-cache-meta.outputs.sha }}") {
             throw "Salts checkout moved after cache identity resolution"
           }
-          Write-Host "Salts SDK cache hit: ${{ steps.salts-sdk-cache.outputs.cache-hit }}"
+          Write-Host "Salts SDK exact-key hit: ${{ steps.salts-sdk-cache.outputs.cache-hit }}"
+          Write-Host "Salts SDK restored valid: ${{ steps.salts-sdk-restore.outputs.valid }}"
           Write-Host "Salts master: $head"
           "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
 
