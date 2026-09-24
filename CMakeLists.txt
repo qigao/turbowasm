@@ -74,7 +74,7 @@ if(TURBOWASM_ENABLE_MIR_JIT)
       ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(turbowasm_mir_backend
     PRIVATE
-      Salts::SIMD
+      turbowasm
       MIR::MIR)
   target_compile_definitions(turbowasm_mir_backend PRIVATE
     TURBOWASM_ENABLE_MIR_JIT=1)
