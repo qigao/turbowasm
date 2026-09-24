@@ -69,12 +69,13 @@ static void destroy_backend_noop(void *context) {
 
 int main(void) {
     turbowasm_jit_backend backend = {
-        NULL,
-        never_eligible,
-        never_compile,
-        never_invoke,
-        destroy_noop,
-        destroy_backend_noop
+        .context = NULL,
+        .supports_execution_control = false,
+        .is_function_eligible = never_eligible,
+        .compile_function = never_compile,
+        .invoke = never_invoke,
+        .destroy_function = destroy_noop,
+        .destroy_backend = destroy_backend_noop
     };
     turbowasm_compiled_function compiled = {0};
     size_t result_count = 1u;

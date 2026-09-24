@@ -474,6 +474,11 @@ static int64_t turbowasm_mir_call_status(
         : (int64_t)context->call_status;
 }
 
+static int64_t turbowasm_mir_checkpoint(
+    turbowasm_jit_invocation_context *context) {
+    return (int64_t)turbowasm_jit_execution_checkpoint(context);
+}
+
 static bool turbowasm_mir_scan_scalar_locals(
     const turbowasm_validation_context *validation,
     uint32_t function_index,
@@ -820,10 +825,12 @@ static turbowasm_status turbowasm_mir_compile_function(
             "tw_call_f64_0_p: proto d, p:ctx, i64:index\n"
             "tw_call_f64_1_p: proto d, p:ctx, i64:index, d:a0\n"
             "tw_call_status_p: proto i64, p:ctx\n"
+            "tw_checkpoint_p: proto i64, p:ctx\n"
             "import tw_jit_call_i64_0, tw_jit_call_i64_1, "
             "tw_jit_call_i64_2, tw_jit_call_f32_0, "
             "tw_jit_call_f32_1, tw_jit_call_f64_0, "
-            "tw_jit_call_f64_1, tw_jit_call_status\n"
+            "tw_jit_call_f64_1, tw_jit_call_status, "
+            "tw_jit_checkpoint\n"
             "export %s\n"
             "%s: func %s, p:jit_ctx",
             module_id, function_name, function_name,
@@ -891,6 +898,17 @@ static turbowasm_status turbowasm_mir_compile_function(
 
         if (!turbowasm_reader_u8(&reader, &opcode))
             goto done;
+
+        /*
+         * Match the interpreter's #60 accounting exactly: one checkpoint
+         * before every executed Wasm instruction, including the final end.
+         */
+        if (!turbowasm_mir_text_appendf(
+                &text,
+                "call tw_checkpoint_p, tw_jit_checkpoint, "
+                "jit_status, jit_ctx\n"
+                "bne jit_fail, jit_status, 0\n"))
+            goto oom;
 
         if (opcode == 0x10u) {
             uint32_t callee_index;
@@ -1272,8 +1290,6 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
     context->call_status = TURBOWASM_OK;
     context->call_trap = TURBOWASM_TRAP_NONE;
 
-    if (context->execution != NULL)
-        return TURBOWASM_UNSUPPORTED;
     if (result_capacity < 1u)
         return TURBOWASM_INVALID_ARGUMENT;
 
@@ -1521,6 +1537,16 @@ static bool turbowasm_mir_register_call_externals(
         MIR_load_external(
             backend->mir, "tw_jit_call_status", address);
     }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *) =
+                turbowasm_mir_checkpoint;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_checkpoint", address);
+    }
 
     return true;
 }
@@ -1571,6 +1597,7 @@ turbowasm_status turbowasm_mir_backend_create(
     }
 
     out_backend->context = context;
+    out_backend->supports_execution_control = true;
     out_backend->is_function_eligible =
         turbowasm_mir_is_function_eligible;
     out_backend->compile_function =

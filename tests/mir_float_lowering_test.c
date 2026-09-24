@@ -86,6 +86,8 @@ static void compare_float_function(
 
     generated_count = 3u;
     generated_trap = TURBOWASM_TRAP_UNREACHABLE;
+    execution.fuel_limited = true;
+    execution.fuel_remaining = 0u;
     jit_context.execution = &execution;
     assert(backend->invoke(
                &compiled,
@@ -94,7 +96,7 @@ static void compare_float_function(
                &generated, 1u,
                &generated_count,
                &generated_trap) ==
-           TURBOWASM_UNSUPPORTED);
+           TURBOWASM_FUEL_EXHAUSTED);
     assert(generated_count == 0u);
     assert(generated_trap == TURBOWASM_TRAP_NONE);
 

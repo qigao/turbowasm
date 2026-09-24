@@ -94,6 +94,9 @@ turbowasm_status turbowasm_jit_instance_attach_backend(
 void turbowasm_jit_instance_detach_backend(
     turbowasm_instance_impl *instance);
 
+turbowasm_status turbowasm_jit_execution_checkpoint(
+    turbowasm_jit_invocation_context *context);
+
 turbowasm_status turbowasm_jit_direct_call(
     turbowasm_jit_invocation_context *context,
     uint32_t function_index,
