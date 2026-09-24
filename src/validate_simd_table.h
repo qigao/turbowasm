@@ -1,6 +1,7 @@
 #ifndef TURBOWASM_VALIDATE_SIMD_TABLE_H
 #define TURBOWASM_VALIDATE_SIMD_TABLE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef enum turbowasm_simd_stack_form {
@@ -30,5 +31,10 @@ typedef struct turbowasm_simd_descriptor {
 
 const turbowasm_simd_descriptor *
 turbowasm_simd_descriptor_find(uint32_t opcode);
+
+size_t turbowasm_simd_descriptor_count(void);
+
+const turbowasm_simd_descriptor *
+turbowasm_simd_descriptor_at(size_t index);
 
 #endif /* TURBOWASM_VALIDATE_SIMD_TABLE_H */
