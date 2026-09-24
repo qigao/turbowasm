@@ -312,71 +312,32 @@ static void test_pseudo_minmax(void) {
     turbowasm_module_destroy(&module);
 }
 
-static void test_rounding_and_residual_ops(void) {
+static void test_v128_andnot_runtime(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
-
-        0x01, 0x0c,
-        0x02,
-        0x60, 0x02, 0x7b, 0x7b, 0x01, 0x7b,
-        0x60, 0x01, 0x7b, 0x01, 0x7b,
-
-        0x03, 0x04,
-        0x03, 0x00, 0x01, 0x00,
-
-        0x0a, 0x19,
-        0x03,
-
-        /* v128.andnot */
-        0x08, 0x00,
-              0x20, 0x00,
-              0x20, 0x01,
-              0xfd, 0x4f,
-              0x0b,
-
-        /* f32x4.ceil */
-        0x06, 0x00,
-              0x20, 0x00,
-              0xfd, 0x67,
-              0x0b,
-
-        /* i8x16.avgr_u */
-        0x08, 0x00,
-              0x20, 0x00,
-              0x20, 0x01,
-              0xfd, 0x7b,
-              0x0b
+        0x01, 0x07,
+        0x01, 0x60, 0x02, 0x7b, 0x7b, 0x01, 0x7b,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x0a,
+        0x01, 0x08, 0x00,
+        0x20, 0x00,
+        0x20, 0x01,
+        0xfd, 0x4f,
+        0x0b
     };
-    const uint32_t andnot_left[4] = {
+    const uint32_t left[4] = {
         UINT32_C(0xffffffff), UINT32_C(0x0f0f0f0f),
         UINT32_C(0xaaaaaaaa), UINT32_C(0x12345678)
     };
-    const uint32_t andnot_right[4] = {
+    const uint32_t right[4] = {
         UINT32_C(0x00ff00ff), UINT32_C(0xf0f0f0f0),
         UINT32_C(0x55555555), UINT32_C(0xffff0000)
     };
-    const uint32_t andnot_expected[4] = {
+    const uint32_t expected[4] = {
         UINT32_C(0xff00ff00), UINT32_C(0x0f0f0f0f),
         UINT32_C(0xaaaaaaaa), UINT32_C(0x00005678)
     };
-    const float round_input[4] = {1.2f, -1.2f, 2.5f, -2.5f};
-    const float round_expected[4] = {2.0f, -1.0f, 3.0f, -2.0f};
-    const uint8_t avg_left[16] = {
-        0u, 1u, 2u, 3u, 10u, 11u, 100u, 101u,
-        200u, 201u, 250u, 251u, 254u, 255u, 7u, 8u
-    };
-    const uint8_t avg_right[16] = {
-        1u, 2u, 3u, 4u, 11u, 12u, 101u, 102u,
-        201u, 202u, 251u, 252u, 255u, 255u, 8u, 9u
-    };
-    const uint8_t avg_expected[16] = {
-        1u, 2u, 3u, 4u, 11u, 12u, 101u, 102u,
-        201u, 202u, 251u, 252u, 255u, 255u, 8u, 9u
-    };
-
-    uint32_t andnot_actual[4] = {0};
-    float round_actual[4] = {0};
-    uint8_t avg_actual[16] = {0};
+    uint32_t actual[4] = {0};
     turbowasm_module module = {0};
     turbowasm_instance instance = {0};
     turbowasm_value args[2];
@@ -384,33 +345,94 @@ static void test_rounding_and_residual_ops(void) {
 
     assert(turbowasm_module_load_borrowed(
                &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
-    assert(turbowasm_instance_create(
-               &instance, &module) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
 
-    args[0] = raw_v128_value(andnot_left);
-    args[1] = raw_v128_value(andnot_right);
+    args[0] = raw_v128_value(left);
+    args[1] = raw_v128_value(right);
     result = invoke_v128(&instance, 0u, args, 2u);
     assert(result.as.v128.shape == TURBOWASM_V128_RAW);
-    assert(turbowasm_v128_store(
-               andnot_actual, &result.as.v128) == TURBOWASM_OK);
-    assert(memcmp(
-        andnot_actual, andnot_expected, sizeof(andnot_actual)) == 0);
+    assert(turbowasm_v128_store(actual, &result.as.v128) == TURBOWASM_OK);
+    assert(memcmp(actual, expected, sizeof(actual)) == 0);
 
-    args[0] = f32x4_value(round_input);
-    result = invoke_v128(&instance, 1u, args, 1u);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_f32x4_ceil_runtime(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7b, 0x01, 0x7b,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x08,
+        0x01, 0x06, 0x00,
+        0x20, 0x00,
+        0xfd, 0x67,
+        0x0b
+    };
+    const float input[4] = {1.2f, -1.2f, 2.5f, -2.5f};
+    const float expected[4] = {2.0f, -1.0f, 3.0f, -2.0f};
+    float actual[4] = {0};
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value arg;
+    turbowasm_value result;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+
+    arg = f32x4_value(input);
+    result = invoke_v128(&instance, 0u, &arg, 1u);
     assert(result.as.v128.shape == TURBOWASM_V128_F32X4);
-    assert(turbowasm_v128_store(
-               round_actual, &result.as.v128) == TURBOWASM_OK);
-    assert(memcmp(
-        round_actual, round_expected, sizeof(round_actual)) == 0);
+    assert(turbowasm_v128_store(actual, &result.as.v128) == TURBOWASM_OK);
+    assert(memcmp(actual, expected, sizeof(actual)) == 0);
 
-    args[0] = raw_v128_value(avg_left);
-    args[1] = raw_v128_value(avg_right);
-    result = invoke_v128(&instance, 2u, args, 2u);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_i8x16_avgr_u_runtime(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x07,
+        0x01, 0x60, 0x02, 0x7b, 0x7b, 0x01, 0x7b,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x0a,
+        0x01, 0x08, 0x00,
+        0x20, 0x00,
+        0x20, 0x01,
+        0xfd, 0x7b,
+        0x0b
+    };
+    const uint8_t left[16] = {
+        0u, 1u, 2u, 3u, 10u, 11u, 100u, 101u,
+        200u, 201u, 250u, 251u, 254u, 255u, 7u, 8u
+    };
+    const uint8_t right[16] = {
+        1u, 2u, 3u, 4u, 11u, 12u, 101u, 102u,
+        201u, 202u, 251u, 252u, 255u, 255u, 8u, 9u
+    };
+    const uint8_t expected[16] = {
+        1u, 2u, 3u, 4u, 11u, 12u, 101u, 102u,
+        201u, 202u, 251u, 252u, 255u, 255u, 8u, 9u
+    };
+    uint8_t actual[16] = {0};
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value args[2];
+    turbowasm_value result;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+
+    args[0] = raw_v128_value(left);
+    args[1] = raw_v128_value(right);
+    result = invoke_v128(&instance, 0u, args, 2u);
     assert(result.as.v128.shape == TURBOWASM_V128_U8X16);
-    assert(turbowasm_v128_store(
-               avg_actual, &result.as.v128) == TURBOWASM_OK);
-    assert(memcmp(avg_actual, avg_expected, sizeof(avg_actual)) == 0);
+    assert(turbowasm_v128_store(actual, &result.as.v128) == TURBOWASM_OK);
+    assert(memcmp(actual, expected, sizeof(actual)) == 0);
 
     turbowasm_instance_destroy(&instance);
     turbowasm_module_destroy(&module);
@@ -419,6 +441,8 @@ static void test_rounding_and_residual_ops(void) {
 int main(void) {
     test_advanced_numeric_core();
     test_pseudo_minmax();
-    test_rounding_and_residual_ops();
+    test_v128_andnot_runtime();
+    test_f32x4_ceil_runtime();
+    test_i8x16_avgr_u_runtime();
     return 0;
 }
