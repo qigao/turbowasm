@@ -24,6 +24,21 @@ typedef struct turbowasm_validation_control {
     uint32_t body_offset;
     uint32_t else_offset;
     uint32_t end_offset;
+
+    /*
+     * Retained validated block signature identity.
+     *
+     * type_index != UINT32_MAX:
+     *   signature is validation_context.types[type_index].
+     *
+     * type_index == UINT32_MAX && inline_result_type != 0:
+     *   no parameters, one inline result type.
+     *
+     * type_index == UINT32_MAX && inline_result_type == 0:
+     *   empty [] -> [] block signature.
+     */
+    uint32_t type_index;
+    uint8_t inline_result_type;
 } turbowasm_validation_control;
 
 typedef struct turbowasm_validation_function {
@@ -221,6 +236,14 @@ const turbowasm_validation_control *
 turbowasm_validation_function_control_at(
     const turbowasm_validation_function *function,
     uint32_t opcode_offset);
+
+bool turbowasm_validation_control_signature(
+    const turbowasm_validation_context *context,
+    const turbowasm_validation_control *control,
+    const uint8_t **out_start_types,
+    uint32_t *out_start_count,
+    const uint8_t **out_end_types,
+    uint32_t *out_end_count);
 
 const turbowasm_validation_func_type *
 turbowasm_validation_context_function_type(

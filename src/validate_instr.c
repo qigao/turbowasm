@@ -321,6 +321,7 @@ typedef struct turbowasm_block_signature {
     uint32_t start_count;
     const uint8_t *end_types;
     uint32_t end_count;
+    uint32_t type_index;
     uint8_t inline_end;
 } turbowasm_block_signature;
 
@@ -365,6 +366,7 @@ static turbowasm_status turbowasm_read_block_signature(
         return TURBOWASM_INVALID_ARGUMENT;
 
     memset(signature, 0, sizeof(*signature));
+    signature->type_index = UINT32_MAX;
     if (!turbowasm_reader_u8(body, &first))
         return TURBOWASM_MALFORMED_MODULE;
 
@@ -417,6 +419,7 @@ static turbowasm_status turbowasm_read_block_signature(
         signature->start_count = type->param_count;
         signature->end_types = type->results;
         signature->end_count = type->result_count;
+        signature->type_index = (uint32_t)signed_value;
         return TURBOWASM_OK;
     }
 }
@@ -1336,6 +1339,8 @@ turbowasm_status turbowasm_validate_function_body(
                     (uint32_t)(body->cursor - code_start - 1u);
                 annotation.else_offset = UINT32_MAX;
                 annotation.end_offset = UINT32_MAX;
+                annotation.type_index = UINT32_MAX;
+                annotation.inline_result_type = 0u;
 
                 if (opcode == 0x04u) {
                     result = turbowasm_stack_pop(&stack, TW_I32);
@@ -1354,6 +1359,8 @@ turbowasm_status turbowasm_validate_function_body(
                 }
                 annotation.body_offset =
                     (uint32_t)(body->cursor - code_start);
+                annotation.type_index = signature.type_index;
+                annotation.inline_result_type = signature.inline_end;
 
                 if (!turbowasm_validation_function_append_control(
                         function_metadata,
