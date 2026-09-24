@@ -41,6 +41,18 @@ typedef struct turbowasm_jit_execution_control {
     void *interrupt_context;
 } turbowasm_jit_execution_control;
 
+typedef enum turbowasm_jit_function_state_kind {
+    TURBOWASM_JIT_INTERPRET = 0,
+    TURBOWASM_JIT_INTERPRET_ONLY,
+    TURBOWASM_JIT_COMPILED
+} turbowasm_jit_function_state_kind;
+
+typedef struct turbowasm_jit_function_state {
+    uint32_t call_count;
+    turbowasm_jit_function_state_kind state;
+    turbowasm_compiled_function compiled;
+} turbowasm_jit_function_state;
+
 typedef struct turbowasm_instance_impl {
     const turbowasm_module *module;
 
@@ -58,6 +70,12 @@ typedef struct turbowasm_instance_impl {
 
     uint8_t *element_segment_dropped;
     uint32_t element_segment_count;
+
+    bool jit_backend_attached;
+    turbowasm_jit_backend jit_backend;
+    turbowasm_jit_function_state *jit_functions;
+    uint32_t jit_function_count;
+    uint32_t jit_hot_threshold;
 } turbowasm_instance_impl;
 
 typedef struct turbowasm_jit_invocation_context {
@@ -67,6 +85,14 @@ typedef struct turbowasm_jit_invocation_context {
     turbowasm_status call_status;
     turbowasm_trap call_trap;
 } turbowasm_jit_invocation_context;
+
+turbowasm_status turbowasm_jit_instance_attach_backend(
+    turbowasm_instance_impl *instance,
+    turbowasm_jit_backend *backend,
+    uint32_t hot_threshold);
+
+void turbowasm_jit_instance_detach_backend(
+    turbowasm_instance_impl *instance);
 
 turbowasm_status turbowasm_jit_direct_call(
     turbowasm_jit_invocation_context *context,
