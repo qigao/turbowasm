@@ -160,8 +160,9 @@ turbowasm_status turbowasm_mir_backend_smoke_constant(
     if (module == NULL)
         return TURBOWASM_UNSUPPORTED;
 
-    function = MIR_get_global_item(context->mir, "smoke");
-    if (function == NULL)
+    function = DLIST_TAIL(MIR_item_t, module->items);
+    if (function == NULL ||
+        strcmp(MIR_item_name(context->mir, function), "smoke") != 0)
         return TURBOWASM_UNSUPPORTED;
 
     MIR_load_module(context->mir, module);
@@ -171,7 +172,10 @@ turbowasm_status turbowasm_mir_backend_smoke_constant(
     if (generated == NULL)
         return TURBOWASM_UNSUPPORTED;
 
-    entry = (int64_t (*)(void))generated;
+    _Static_assert(
+        sizeof(entry) == sizeof(generated),
+        "MIR generated entry pointer size mismatch");
+    memcpy(&entry, &generated, sizeof(entry));
     result = entry();
 
     return result == expected
