@@ -195,7 +195,17 @@ jobs:
           "valid=$($valid.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           Write-Host "Restored Salts SDK valid: $valid"
 
+      - name: Ensure Ninja
+        if: steps.salts-sdk-restore.outputs.valid == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($null -eq (Get-Command ninja.exe -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+          }
+
       - name: Restore Salts build dependencies
+        if: steps.salts-sdk-restore.outputs.valid != 'true'
         uses: ./deps/salts/.github/actions/setup-re2c-tools
 
       - name: Resolve MSVC environment
