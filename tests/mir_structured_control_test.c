@@ -35,6 +35,53 @@ static turbowasm_value i32_value(int32_t value) {
     return result;
 }
 
+static turbowasm_value f32_value(float value) {
+    turbowasm_value result = {0};
+    result.kind = TURBOWASM_VALUE_F32;
+    result.as.f32 = value;
+    return result;
+}
+
+static float invoke_interpreter_f32(
+    turbowasm_instance *instance,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count) {
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_instance_invoke(
+               instance, function_index,
+               arguments, argument_count,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_F32);
+    assert(trap == TURBOWASM_TRAP_NONE);
+    return result.as.f32;
+}
+
+static double invoke_interpreter_f64(
+    turbowasm_instance *instance,
+    uint32_t function_index) {
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_instance_invoke(
+               instance, function_index,
+               NULL, 0u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_F64);
+    assert(trap == TURBOWASM_TRAP_NONE);
+    return result.as.f64;
+}
+
 static void compile_function(
     turbowasm_jit_backend *backend,
     turbowasm_module *module,
@@ -766,6 +813,240 @@ static void test_structured_hot_tiering(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_native_f32_block_result_branch(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* () -> f32 */
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7d,
+
+        0x03, 0x02,
+        0x01, 0x00,
+
+        0x0a, 0x13,
+        0x01, 0x11,
+        0x00,
+        0x02, 0x7d,
+        0x43, 0x00, 0x00, 0xc0, 0x3f,
+        0x0c, 0x00,
+        0x43, 0x00, 0x00, 0x10, 0x41,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_jit_backend backend = {0};
+    turbowasm_compiled_function compiled = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+    assert(invoke_interpreter_f32(
+               &instance, 0u, NULL, 0u) == 1.5f);
+
+    assert(turbowasm_mir_backend_create(
+               &backend) == TURBOWASM_OK);
+    compile_function(&backend, &module, 0u, &compiled);
+
+    assert(invoke_compiled(
+               &backend, &compiled, &instance,
+               NULL, NULL, 0u,
+               &result, &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_F32);
+    assert(result.as.f32 == 1.5f);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    backend.destroy_function(backend.context, &compiled);
+    backend.destroy_backend(backend.context);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_native_f64_if_else_result(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* () -> f64 */
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7c,
+
+        0x03, 0x02,
+        0x01, 0x00,
+
+        0x0a, 0x1c,
+        0x01, 0x1a,
+        0x00,
+        0x41, 0x00,
+        0x04, 0x7c,
+        0x44, 0x00, 0x00, 0x00, 0x00,
+              0x00, 0x00, 0x00, 0x40,
+        0x05,
+        0x44, 0x00, 0x00, 0x00, 0x00,
+              0x00, 0x00, 0x08, 0x40,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_jit_backend backend = {0};
+    turbowasm_compiled_function compiled = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+    assert(invoke_interpreter_f64(&instance, 0u) == 3.0);
+
+    assert(turbowasm_mir_backend_create(
+               &backend) == TURBOWASM_OK);
+    compile_function(&backend, &module, 0u, &compiled);
+
+    assert(invoke_compiled(
+               &backend, &compiled, &instance,
+               NULL, NULL, 0u,
+               &result, &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_F64);
+    assert(result.as.f64 == 3.0);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    backend.destroy_function(backend.context, &compiled);
+    backend.destroy_backend(backend.context);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_native_f32_typeidx_block_parameter(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: (f32) -> f32, also used as blocktype. */
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7d, 0x01, 0x7d,
+
+        0x03, 0x02,
+        0x01, 0x00,
+
+        0x0a, 0x11,
+        0x01, 0x0f,
+        0x00,
+        0x20, 0x00,
+        0x02, 0x00,
+        0x43, 0x00, 0x00, 0x80, 0x3f,
+        0x92,
+        0x0c, 0x00,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_jit_backend backend = {0};
+    turbowasm_compiled_function compiled = {0};
+    turbowasm_value argument = f32_value(2.5f);
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+    assert(invoke_interpreter_f32(
+               &instance, 0u, &argument, 1u) == 3.5f);
+
+    assert(turbowasm_mir_backend_create(
+               &backend) == TURBOWASM_OK);
+    compile_function(&backend, &module, 0u, &compiled);
+
+    assert(invoke_compiled(
+               &backend, &compiled, &instance,
+               NULL, &argument, 1u,
+               &result, &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_F32);
+    assert(result.as.f32 == 3.5f);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    backend.destroy_function(backend.context, &compiled);
+    backend.destroy_backend(backend.context);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_native_f64_br_table_forwards_value(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* () -> f64 */
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7c,
+
+        0x03, 0x02,
+        0x01, 0x00,
+
+        0x0a, 0x1c,
+        0x01, 0x1a,
+        0x00,
+        0x02, 0x7c,
+        0x02, 0x7c,
+        0x44, 0x00, 0x00, 0x00, 0x00,
+              0x00, 0x00, 0x26, 0x40,
+        0x41, 0x00,
+        0x0e, 0x01, 0x00, 0x01,
+        0x0b,
+        0x44, 0x00, 0x00, 0x00, 0x00,
+              0x00, 0x00, 0xf0, 0x3f,
+        0xa0,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_jit_backend backend = {0};
+    turbowasm_compiled_function compiled = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+    assert(invoke_interpreter_f64(&instance, 0u) == 12.0);
+
+    assert(turbowasm_mir_backend_create(
+               &backend) == TURBOWASM_OK);
+    compile_function(&backend, &module, 0u, &compiled);
+
+    assert(invoke_compiled(
+               &backend, &compiled, &instance,
+               NULL, NULL, 0u,
+               &result, &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_F64);
+    assert(result.as.f64 == 12.0);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    backend.destroy_function(backend.context, &compiled);
+    backend.destroy_backend(backend.context);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
     test_native_loop_exact_safe_points();
     test_native_if_else();
@@ -775,6 +1056,10 @@ int main(void) {
     test_native_loop_parameter_backedge();
     test_native_br_if_false_preserves_loop_parameter();
     test_native_br_table_forwards_values();
+    test_native_f32_block_result_branch();
+    test_native_f64_if_else_result();
+    test_native_f32_typeidx_block_parameter();
+    test_native_f64_br_table_forwards_value();
     test_structured_direct_call_shares_budget();
     test_structured_hot_tiering();
     return 0;
