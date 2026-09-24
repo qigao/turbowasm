@@ -1933,8 +1933,8 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
             case 0x0eu: { /* br_table */
                 uint32_t count;
                 uint32_t case_index;
-                uint32_t depth;
                 uint32_t selector_reg;
+                uint32_t *depths = NULL;
                 turbowasm_mir_control_frame *target = NULL;
 
                 if (!turbowasm_reader_uleb32(&reader, &count) ||
@@ -1942,32 +1942,81 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
                     stack[stack_size - 1u].type != 0x7fu)
                     goto done;
 
-                selector_reg = stack[--stack_size].reg;
+                if ((uint64_t)count + 1u >
+                    (uint64_t)SIZE_MAX / sizeof(*depths))
+                    goto oom;
 
-                for (case_index = 0u; case_index < count; ++case_index) {
-                    if (!turbowasm_reader_uleb32(&reader, &depth) ||
-                        depth >= control_size ||
-                        !turbowasm_mir_materialize_branch_target(
-                            &text, controls, control_size, depth,
-                            stack, stack_size, result_type,
-                            &target) ||
-                        !turbowasm_mir_emit_br_table_target(
-                            &text, target, selector_reg,
-                            case_index, false))
+                depths = (uint32_t *)calloc(
+                    (size_t)count + 1u, sizeof(*depths));
+                if (depths == NULL)
+                    goto oom;
+
+                for (case_index = 0u;
+                     case_index < count + 1u;
+                     ++case_index) {
+                    if (!turbowasm_reader_uleb32(
+                            &reader, &depths[case_index]) ||
+                        depths[case_index] >= control_size) {
+                        free(depths);
                         goto done;
+                    }
                 }
 
-                if (!turbowasm_reader_uleb32(&reader, &depth) ||
-                    depth >= control_size ||
+                selector_reg = stack[--stack_size].reg;
+
+                /*
+                 * Dispatch first without touching any target merge register.
+                 * Each taken-only trampoline performs its own materialization.
+                 */
+                for (case_index = 0u; case_index < count; ++case_index) {
+                    if (!turbowasm_mir_text_appendf(
+                            &text,
+                            "beq br_table_%u_%u, r%u, %u\n",
+                            opcode_offset, case_index,
+                            selector_reg, case_index)) {
+                        free(depths);
+                        goto oom;
+                    }
+                }
+
+                if (!turbowasm_mir_text_appendf(
+                        &text, "jmp br_table_%u_default\n",
+                        opcode_offset)) {
+                    free(depths);
+                    goto oom;
+                }
+
+                for (case_index = 0u; case_index < count; ++case_index) {
+                    if (!turbowasm_mir_text_appendf(
+                            &text, "br_table_%u_%u:\n",
+                            opcode_offset, case_index) ||
+                        !turbowasm_mir_materialize_branch_target(
+                            &text, controls, control_size,
+                            depths[case_index],
+                            stack, stack_size, result_type,
+                            &target) ||
+                        !turbowasm_mir_emit_target_jump(
+                            &text, target, false, 0u)) {
+                        free(depths);
+                        goto done;
+                    }
+                }
+
+                if (!turbowasm_mir_text_appendf(
+                        &text, "br_table_%u_default:\n",
+                        opcode_offset) ||
                     !turbowasm_mir_materialize_branch_target(
-                        &text, controls, control_size, depth,
+                        &text, controls, control_size,
+                        depths[count],
                         stack, stack_size, result_type,
                         &target) ||
-                    !turbowasm_mir_emit_br_table_target(
-                        &text, target, selector_reg,
-                        0u, true))
+                    !turbowasm_mir_emit_target_jump(
+                        &text, target, false, 0u)) {
+                    free(depths);
                     goto done;
+                }
 
+                free(depths);
                 stack_size = controls[control_size - 1u].height;
                 reachable = false;
                 break;
