@@ -1338,20 +1338,6 @@ static bool turbowasm_mir_push_regs(
     return true;
 }
 
-static bool turbowasm_mir_frame_signature(
-    const turbowasm_validation_context *validation,
-    turbowasm_mir_control_frame *frame,
-    uint8_t function_result_type) {
-    if (validation == NULL || frame == NULL ||
-        frame->annotation == NULL)
-        return false;
-
-    return turbowasm_mir_scalar_control_signature(
-        validation, frame->annotation, function_result_type,
-        &frame->start_types, &frame->start_count,
-        &frame->end_types, &frame->end_count);
-}
-
 static bool turbowasm_mir_control_register_budget(
     const turbowasm_validation_context *validation,
     const turbowasm_validation_function *function,
