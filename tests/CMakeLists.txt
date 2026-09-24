@@ -427,6 +427,21 @@ if(TURBOWASM_ENABLE_MIR_JIT)
   add_test(NAME turbowasm_mir_differential_safety_test
            COMMAND turbowasm_mir_differential_safety_test)
 
+  add_executable(turbowasm_mir_native_safe_point_test
+    mir_native_safe_point_test.c)
+  target_link_libraries(turbowasm_mir_native_safe_point_test
+    PRIVATE
+      turbowasm_mir_backend
+      TurboWasm::Runtime)
+  target_include_directories(turbowasm_mir_native_safe_point_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_mir_native_safe_point_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_mir_native_safe_point_test
+           COMMAND turbowasm_mir_native_safe_point_test)
+
   add_executable(turbowasm_mir_tiering_test
     mir_tiering_test.c)
   target_link_libraries(turbowasm_mir_tiering_test
