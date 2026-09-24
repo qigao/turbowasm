@@ -859,18 +859,22 @@ static bool turbowasm_mir_scan_structured_integer(
             case 0x03u: /* loop */
             case 0x04u: { /* if */
                 const turbowasm_validation_control *annotation;
-                uint8_t blocktype;
+                uint32_t current_offset;
 
                 annotation =
                     turbowasm_validation_function_control_at(
                         function, opcode_offset);
+                current_offset =
+                    (uint32_t)(reader.cursor - function->code);
+
                 if (annotation == NULL ||
                     annotation->end_offset == UINT32_MAX ||
                     control_size >= function->control_count ||
-                    !turbowasm_reader_u8(&reader, &blocktype) ||
-                    blocktype != 0x40u ||
-                    (uint32_t)(reader.cursor - function->code) !=
-                        annotation->body_offset)
+                    annotation->body_offset < current_offset ||
+                    annotation->body_offset > function->code_size ||
+                    !turbowasm_mir_integer_control_signature(
+                        validation, annotation,
+                        NULL, NULL, NULL, NULL))
                     goto done;
 
                 if ((opcode == 0x02u &&
@@ -883,6 +887,14 @@ static bool turbowasm_mir_scan_structured_integer(
                      annotation->kind !=
                          TURBOWASM_VALIDATION_CONTROL_IF))
                     goto done;
+
+                /*
+                 * The validator already parsed and proved the blocktype.
+                 * Advance directly to the retained body offset instead of
+                 * reconstructing s33/type-index validation here.
+                 */
+                reader.cursor =
+                    function->code + annotation->body_offset;
 
                 controls[control_size++].annotation = annotation;
                 saw_structured = true;
@@ -905,9 +917,8 @@ static bool turbowasm_mir_scan_structured_integer(
             case 0x0bu: /* end */
                 if (control_size == 0u) {
                     if (turbowasm_reader_remaining(&reader) != 0u ||
-                        !saw_structured) {
+                        !saw_structured)
                         goto done;
-                    }
                     ok = true;
                     goto done;
                 } else {
@@ -923,6 +934,26 @@ static bool turbowasm_mir_scan_structured_integer(
             case 0x0cu: /* br */
             case 0x0du: { /* br_if */
                 uint32_t depth;
+                if (!turbowasm_reader_uleb32(&reader, &depth) ||
+                    depth > control_size)
+                    goto done;
+                break;
+            }
+
+            case 0x0eu: { /* br_table */
+                uint32_t count;
+                uint32_t index;
+                uint32_t depth;
+
+                if (!turbowasm_reader_uleb32(&reader, &count))
+                    goto done;
+
+                for (index = 0u; index < count; ++index) {
+                    if (!turbowasm_reader_uleb32(&reader, &depth) ||
+                        depth > control_size)
+                        goto done;
+                }
+
                 if (!turbowasm_reader_uleb32(&reader, &depth) ||
                     depth > control_size)
                     goto done;
