@@ -1464,45 +1464,6 @@ static bool turbowasm_mir_structured_branch_target(
     return true;
 }
 
-static bool turbowasm_mir_emit_br_table_target(
-    turbowasm_mir_text *text,
-    turbowasm_mir_control_frame *target,
-    uint32_t selector_reg,
-    uint32_t case_index,
-    bool is_default) {
-    if (text == NULL || target == NULL)
-        return false;
-
-    if (target->kind == TURBOWASM_MIR_CONTROL_FUNCTION) {
-        return is_default
-            ? turbowasm_mir_text_appendf(text, "jmp jit_return\n")
-            : turbowasm_mir_text_appendf(
-                  text, "beq jit_return, r%u, %u\n",
-                  selector_reg, case_index);
-    }
-
-    if (target->annotation == NULL)
-        return false;
-
-    if (target->kind == TURBOWASM_MIR_CONTROL_LOOP) {
-        return is_default
-            ? turbowasm_mir_emit_control_jump(
-                  text, target->annotation->opcode_offset, "body")
-            : turbowasm_mir_text_appendf(
-                  text, "beq c_%u_body, r%u, %u\n",
-                  target->annotation->opcode_offset,
-                  selector_reg, case_index);
-    }
-
-    return is_default
-        ? turbowasm_mir_emit_control_jump(
-              text, target->annotation->opcode_offset, "end")
-        : turbowasm_mir_text_appendf(
-              text, "beq c_%u_end, r%u, %u\n",
-              target->annotation->opcode_offset,
-              selector_reg, case_index);
-}
-
 static turbowasm_status turbowasm_mir_compile_structured_integer(
     turbowasm_mir_backend_context *backend,
     const turbowasm_validation_context *validation,
