@@ -394,6 +394,10 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_F32X4),
     BIN(0xe9u, cmeta_vector_f32x4, SALTS_SIMD_BINARY_MAX,
         TURBOWASM_V128_F32X4),
+    BIN(0xeau, cmeta_vector_f32x4, SALTS_SIMD_BINARY_PSEUDO_MIN,
+        TURBOWASM_V128_F32X4),
+    BIN(0xebu, cmeta_vector_f32x4, SALTS_SIMD_BINARY_PSEUDO_MAX,
+        TURBOWASM_V128_F32X4),
 
     UN(0xecu, cmeta_vector_f64x2, SALTS_SIMD_UNARY_ABS,
        TURBOWASM_V128_F64X2),
@@ -413,6 +417,10 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
     BIN(0xf4u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_MIN,
         TURBOWASM_V128_F64X2),
     BIN(0xf5u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_MAX,
+        TURBOWASM_V128_F64X2),
+    BIN(0xf6u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_PSEUDO_MIN,
+        TURBOWASM_V128_F64X2),
+    BIN(0xf7u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_PSEUDO_MAX,
         TURBOWASM_V128_F64X2)
 };
 
