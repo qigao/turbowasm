@@ -60,6 +60,7 @@ int main(void) {
     assert(impl != NULL);
 
     assert(turbowasm_mir_backend_create(&backend) == TURBOWASM_OK);
+    assert(backend.supports_execution_control);
     assert(turbowasm_jit_instance_attach_backend(
                impl, &backend, 2u) == TURBOWASM_OK);
     assert(backend.context == NULL);
@@ -85,7 +86,7 @@ int main(void) {
     assert(impl->jit_functions[0].compiled.impl == compiled_impl);
     assert(impl->jit_functions[0].call_count == 2u);
 
-    /* Execution-control calls stay interpreted but preserve the hot cache. */
+    /* Execution-control calls use native safe points and preserve the cache. */
     options.has_fuel_limit = true;
     options.fuel = 2u;
     assert(turbowasm_instance_invoke_with_options(
