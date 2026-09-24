@@ -1,0 +1,121 @@
+name: TurboWasm MIR JIT
+
+on:
+  pull_request:
+    paths:
+      - "src/jit/**"
+      - "tests/mir_backend_test.c"
+      - "CMakeLists.txt"
+      - "tests/CMakeLists.txt"
+      - ".github/workflows/mir-jit.yml"
+  push:
+    branches: [master]
+    paths:
+      - "src/jit/**"
+      - "tests/mir_backend_test.c"
+      - "CMakeLists.txt"
+      - "tests/CMakeLists.txt"
+      - ".github/workflows/mir-jit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  linux:
+    name: Linux x64 JIT
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout TurboWasm
+        uses: actions/checkout@v4
+
+      - name: Checkout shared vcpkg cache contract
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: master
+          path: deps/vcpkg-cache
+          persist-credentials: false
+
+      - name: Configure shared vcpkg cache
+        uses: ./deps/vcpkg-cache/.github/actions/setup-vcpkg-cache
+        with:
+          mode: read
+
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build nasm pkg-config
+
+      - name: Install MIR profile
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mir_root="$RUNNER_TEMP/turbowasm-mir"
+          echo "MIR_ROOT=$mir_root" >> "$GITHUB_ENV"
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$VCPKG_CACHE_REPOSITORY_ROOT/manifests/turbowasm-mir" \
+            --x-install-root="$mir_root" \
+            --triplet x64-linux
+          test -f "$mir_root/x64-linux/share/mir/MIRConfig.cmake"
+
+      - name: Checkout Salts master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: master
+          path: deps/salts
+          persist-credentials: false
+
+      - name: Restore Salts build dependencies
+        uses: ./deps/salts/.github/actions/setup-re2c-tools
+
+      - name: Build and install Salts master
+        shell: bash
+        run: |
+          set -euxo pipefail
+          salts_root="$RUNNER_TEMP/salts-sdk"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          cmake -S deps/salts -B build/salts -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/build/salts-vcpkg" \
+            -DVCPKG_OVERLAY_PORTS="$VCPKG_OVERLAY_PORTS" \
+            -DCMAKE_INSTALL_PREFIX="$salts_root" \
+            -DENABLE_TESTS=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=OFF
+          cmake --build build/salts -j2
+          cmake --install build/salts
+
+      - name: Configure JIT-enabled TurboWasm
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/turbowasm-jit -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$MIR_ROOT/x64-linux" \
+            -DTURBOWASM_ENABLE_MIR_JIT=ON \
+            -DTURBOWASM_BUILD_TESTS=ON \
+            -DTURBOWASM_BUILD_TOOLS=OFF
+
+      - name: Build and test private MIR backend
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/turbowasm-jit -j2
+          ctest --test-dir build/turbowasm-jit \
+            -R '^turbowasm_mir_backend_test$' \
+            --no-tests=error --output-on-failure
+
+      - name: Verify installed Runtime contract remains MIR-free
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --install build/turbowasm-jit --prefix "$RUNNER_TEMP/turbowasm-sdk"
+          targets="$RUNNER_TEMP/turbowasm-sdk/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
+          test -f "$targets"
+          ! grep -qi 'MIR::\|mir_backend' "$targets"
