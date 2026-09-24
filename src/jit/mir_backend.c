@@ -6,6 +6,7 @@
 #include <mir-gen.h>
 #include <mir.h>
 
+#include <float.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -570,8 +571,10 @@ static turbowasm_status turbowasm_mir_compile_function(
             memcpy(&value, &bits, sizeof(value));
             if (!isfinite(value) ||
                 !turbowasm_mir_text_appendf(
-                    &text, "fmov r%u, %af\n",
-                    next_reg, (double)value))
+                    &text, "fmov r%u, %.*ef\n",
+                    next_reg,
+                    FLT_DECIMAL_DIG - 1,
+                    (double)value))
                 goto done;
             stack[stack_size].reg = next_reg++;
             stack[stack_size].type = 0x7du;
@@ -590,8 +593,10 @@ static turbowasm_status turbowasm_mir_compile_function(
             memcpy(&value, &bits, sizeof(value));
             if (!isfinite(value) ||
                 !turbowasm_mir_text_appendf(
-                    &text, "dmov r%u, %a\n",
-                    next_reg, value))
+                    &text, "dmov r%u, %.*e\n",
+                    next_reg,
+                    DBL_DECIMAL_DIG - 1,
+                    value))
                 goto done;
             stack[stack_size].reg = next_reg++;
             stack[stack_size].type = 0x7cu;
