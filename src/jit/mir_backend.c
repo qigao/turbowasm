@@ -1,6 +1,8 @@
 #include "mir_backend.h"
 
 #include "../instance_internal.h"
+#include "../jit_simd_helper.h"
+#include "../simd_exec_table.h"
 
 #include "../reader.h"
 #include "../validation_context.h"
@@ -26,6 +28,7 @@ typedef struct turbowasm_mir_compiled {
     uint8_t result_type;
     uint8_t param_count;
     uint8_t param_types[2];
+    uint32_t simd_slot_count;
 } turbowasm_mir_compiled;
 
 typedef struct turbowasm_mir_stack_value {
@@ -760,6 +763,312 @@ done:
     return ok;
 }
 
+
+
+static uint8_t turbowasm_mir_simd_splat_scalar_type(
+    const turbowasm_simd_exec_descriptor *descriptor) {
+    if (descriptor == NULL || descriptor->vector_desc == NULL)
+        return 0u;
+
+    switch (descriptor->vector_desc->lane_kind) {
+        case CMETA_VECTOR_I8:
+        case CMETA_VECTOR_U8:
+        case CMETA_VECTOR_I16:
+        case CMETA_VECTOR_U16:
+        case CMETA_VECTOR_I32:
+        case CMETA_VECTOR_U32:
+            return 0x7fu;
+        case CMETA_VECTOR_I64:
+        case CMETA_VECTOR_U64:
+            return 0x7eu;
+        case CMETA_VECTOR_F32:
+            return 0x7du;
+        case CMETA_VECTOR_F64:
+            return 0x7cu;
+        default:
+            return 0u;
+    }
+}
+
+static bool turbowasm_mir_simd_kind_unary(
+    turbowasm_simd_exec_kind kind) {
+    return kind == TURBOWASM_SIMD_EXEC_UNARY ||
+           kind == TURBOWASM_SIMD_EXEC_EXTEND_HALF ||
+           kind == TURBOWASM_SIMD_EXEC_EXTADD_PAIRWISE ||
+           kind == TURBOWASM_SIMD_EXEC_CONVERT;
+}
+
+static bool turbowasm_mir_simd_kind_binary(
+    turbowasm_simd_exec_kind kind) {
+    return kind == TURBOWASM_SIMD_EXEC_BINARY ||
+           kind == TURBOWASM_SIMD_EXEC_COMPARE ||
+           kind == TURBOWASM_SIMD_EXEC_SATURATING ||
+           kind == TURBOWASM_SIMD_EXEC_NARROW ||
+           kind == TURBOWASM_SIMD_EXEC_EXTMUL_HALF ||
+           kind == TURBOWASM_SIMD_EXEC_Q15MULR ||
+           kind == TURBOWASM_SIMD_EXEC_DOT_PAIRWISE ||
+           kind == TURBOWASM_SIMD_EXEC_SWIZZLE;
+}
+
+static bool turbowasm_mir_simd_stack_pop(
+    uint8_t *types,
+    uint32_t *size,
+    uint8_t expected) {
+    if (types == NULL || size == NULL || *size == 0u)
+        return false;
+    if (types[*size - 1u] != expected)
+        return false;
+    --*size;
+    return true;
+}
+
+static bool turbowasm_mir_scan_simd_straightline(
+    const turbowasm_validation_context *validation,
+    uint32_t function_index,
+    const turbowasm_validation_function *function,
+    uint32_t *out_register_count,
+    uint32_t *out_slot_count,
+    uint8_t *out_result_type) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_reader reader;
+    uint8_t *types = NULL;
+    uint32_t stack_size = 0u;
+    uint32_t register_count = 0u;
+    uint32_t slot_count = 0u;
+    uint32_t index;
+    bool saw_simd = false;
+    bool ok = false;
+
+    if (validation == NULL || function == NULL ||
+        function->imported || function->code == NULL ||
+        function->code_size == 0u)
+        return false;
+
+    type = turbowasm_validation_context_function_type(
+        validation, function_index);
+    if (!turbowasm_mir_call_signature_supported(type))
+        return false;
+
+    for (index = 0u; index < function->local_count; ++index) {
+        if (!turbowasm_mir_scalar_type(function->local_types[index]))
+            return false;
+    }
+
+    types = (uint8_t *)calloc(
+        (size_t)function->code_size + 1u, sizeof(*types));
+    if (types == NULL)
+        return false;
+
+    turbowasm_reader_init(
+        &reader, function->code, function->code_size);
+
+    while (turbowasm_reader_remaining(&reader) != 0u) {
+        uint8_t opcode;
+
+        if (!turbowasm_reader_u8(&reader, &opcode))
+            goto done;
+
+        if (opcode == 0x20u) { /* local.get */
+            uint32_t local_index;
+            if (!turbowasm_reader_uleb32(&reader, &local_index) ||
+                local_index >= function->local_count)
+                goto done;
+            types[stack_size++] = function->local_types[local_index];
+            ++register_count;
+            continue;
+        }
+
+        if (opcode == 0x41u) {
+            int32_t value;
+            if (!turbowasm_reader_sleb32(&reader, &value))
+                goto done;
+            (void)value;
+            types[stack_size++] = 0x7fu;
+            ++register_count;
+            continue;
+        }
+
+        if (opcode == 0x42u) {
+            int64_t value;
+            if (!turbowasm_reader_sleb64(&reader, &value))
+                goto done;
+            (void)value;
+            types[stack_size++] = 0x7eu;
+            ++register_count;
+            continue;
+        }
+
+        if (opcode == 0x43u) {
+            uint32_t bits;
+            if (!turbowasm_reader_u32le(&reader, &bits))
+                goto done;
+            types[stack_size++] = 0x7du;
+            ++register_count;
+            continue;
+        }
+
+        if (opcode == 0x44u) {
+            turbowasm_reader bytes;
+            if (!turbowasm_reader_slice(&reader, 8u, &bytes))
+                goto done;
+            types[stack_size++] = 0x7cu;
+            ++register_count;
+            continue;
+        }
+
+        if (turbowasm_mir_binary_type(opcode) != 0u) {
+            uint8_t expected = turbowasm_mir_binary_type(opcode);
+            if (!turbowasm_mir_simd_stack_pop(
+                    types, &stack_size, expected) ||
+                !turbowasm_mir_simd_stack_pop(
+                    types, &stack_size, expected))
+                goto done;
+            types[stack_size++] = expected;
+            ++register_count;
+            continue;
+        }
+
+        if (opcode == 0xfdu) {
+            uint32_t subopcode;
+            const turbowasm_simd_exec_descriptor *descriptor;
+
+            if (!turbowasm_reader_uleb32(&reader, &subopcode))
+                goto done;
+
+            saw_simd = true;
+
+            if (subopcode == 0x0cu) { /* v128.const */
+                turbowasm_reader bytes;
+                if (!turbowasm_reader_slice(&reader, 16u, &bytes))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (subopcode == 0x00u || subopcode == 0x0bu) {
+                uint32_t alignment;
+                uint32_t offset;
+                if (!turbowasm_reader_uleb32(
+                        &reader, &alignment) ||
+                    !turbowasm_reader_uleb32(
+                        &reader, &offset))
+                    goto done;
+                (void)alignment;
+                (void)offset;
+
+                if (subopcode == 0x00u) {
+                    if (!turbowasm_mir_simd_stack_pop(
+                            types, &stack_size, 0x7fu))
+                        goto done;
+                    types[stack_size++] = 0x7bu;
+                    ++slot_count;
+                } else {
+                    if (!turbowasm_mir_simd_stack_pop(
+                            types, &stack_size, 0x7bu) ||
+                        !turbowasm_mir_simd_stack_pop(
+                            types, &stack_size, 0x7fu))
+                        goto done;
+                }
+                continue;
+            }
+
+            descriptor =
+                turbowasm_simd_exec_descriptor_find(subopcode);
+            if (descriptor == NULL)
+                goto done;
+
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_SPLAT) {
+                uint8_t scalar_type =
+                    turbowasm_mir_simd_splat_scalar_type(descriptor);
+                if (scalar_type == 0u ||
+                    !turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, scalar_type))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (turbowasm_mir_simd_kind_unary(descriptor->kind)) {
+                if (!turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (turbowasm_mir_simd_kind_binary(descriptor->kind)) {
+                if (!turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu) ||
+                    !turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_SHIFT) {
+                if (!turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7fu) ||
+                    !turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_SELECT) {
+                if (!turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu) ||
+                    !turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu) ||
+                    !turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_REDUCE) {
+                if (!turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu))
+                    goto done;
+                types[stack_size++] = 0x7fu;
+                ++register_count;
+                continue;
+            }
+
+            goto done;
+        }
+
+        if (opcode == 0x0bu) { /* end */
+            if (turbowasm_reader_remaining(&reader) != 0u ||
+                stack_size != 1u ||
+                types[0] != type->results[0] ||
+                !saw_simd)
+                goto done;
+            if (out_register_count != NULL)
+                *out_register_count = register_count;
+            if (out_slot_count != NULL)
+                *out_slot_count = slot_count;
+            if (out_result_type != NULL)
+                *out_result_type = type->results[0];
+            ok = true;
+            goto done;
+        }
+
+        goto done;
+    }
+
+done:
+    free(types);
+    return ok;
+}
 
 typedef struct turbowasm_mir_scan_control {
     const turbowasm_validation_control *annotation;
