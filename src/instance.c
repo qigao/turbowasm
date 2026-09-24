@@ -2987,6 +2987,211 @@ done:
     return status;
 }
 
+static turbowasm_status turbowasm_dispatch_function(
+    turbowasm_instance_impl *instance,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap,
+    turbowasm_jit_execution_control *execution,
+    uint32_t depth) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_function *function;
+    turbowasm_jit_function_state *entry;
+    turbowasm_status status;
+
+    if (instance == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (execution != NULL ||
+        !instance->jit_backend_attached ||
+        instance->jit_functions == NULL ||
+        function_index >= instance->jit_function_count) {
+        return turbowasm_exec_function(
+            instance, function_index,
+            arguments, argument_count,
+            results, result_capacity,
+            result_count, trap,
+            execution, depth);
+    }
+
+    entry = &instance->jit_functions[function_index];
+
+    if (entry->state == TURBOWASM_JIT_COMPILED) {
+        turbowasm_jit_invocation_context context = {
+            instance, NULL, depth,
+            TURBOWASM_OK, TURBOWASM_TRAP_NONE
+        };
+        return instance->jit_backend.invoke(
+            &entry->compiled,
+            &context,
+            arguments, argument_count,
+            results, result_capacity,
+            result_count, trap);
+    }
+
+    if (entry->state == TURBOWASM_JIT_INTERPRET_ONLY) {
+        return turbowasm_exec_function(
+            instance, function_index,
+            arguments, argument_count,
+            results, result_capacity,
+            result_count, trap,
+            NULL, depth);
+    }
+
+    if (entry->call_count != UINT32_MAX)
+        ++entry->call_count;
+
+    if (entry->call_count < instance->jit_hot_threshold) {
+        return turbowasm_exec_function(
+            instance, function_index,
+            arguments, argument_count,
+            results, result_capacity,
+            result_count, trap,
+            NULL, depth);
+    }
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL) {
+        entry->state = TURBOWASM_JIT_INTERPRET_ONLY;
+        return turbowasm_exec_function(
+            instance, function_index,
+            arguments, argument_count,
+            results, result_capacity,
+            result_count, trap,
+            NULL, depth);
+    }
+
+    function = turbowasm_validation_context_function(
+        &module->validation, function_index);
+    if (function == NULL || function->imported ||
+        !instance->jit_backend.is_function_eligible(
+            instance->jit_backend.context,
+            &module->validation,
+            function_index,
+            function)) {
+        entry->state = TURBOWASM_JIT_INTERPRET_ONLY;
+        return turbowasm_exec_function(
+            instance, function_index,
+            arguments, argument_count,
+            results, result_capacity,
+            result_count, trap,
+            NULL, depth);
+    }
+
+    status = instance->jit_backend.compile_function(
+        instance->jit_backend.context,
+        &module->validation,
+        function_index,
+        function,
+        &entry->compiled);
+    if (status != TURBOWASM_OK ||
+        entry->compiled.impl == NULL) {
+        if (entry->compiled.impl != NULL) {
+            instance->jit_backend.destroy_function(
+                instance->jit_backend.context,
+                &entry->compiled);
+        }
+        entry->state = TURBOWASM_JIT_INTERPRET_ONLY;
+        return turbowasm_exec_function(
+            instance, function_index,
+            arguments, argument_count,
+            results, result_capacity,
+            result_count, trap,
+            NULL, depth);
+    }
+
+    entry->state = TURBOWASM_JIT_COMPILED;
+    {
+        turbowasm_jit_invocation_context context = {
+            instance, NULL, depth,
+            TURBOWASM_OK, TURBOWASM_TRAP_NONE
+        };
+        return instance->jit_backend.invoke(
+            &entry->compiled,
+            &context,
+            arguments, argument_count,
+            results, result_capacity,
+            result_count, trap);
+    }
+}
+
+turbowasm_status turbowasm_jit_instance_attach_backend(
+    turbowasm_instance_impl *instance,
+    turbowasm_jit_backend *backend,
+    uint32_t hot_threshold) {
+    const turbowasm_module_impl *module;
+    turbowasm_jit_function_state *states = NULL;
+
+    if (instance == NULL || backend == NULL ||
+        backend->context == NULL ||
+        backend->is_function_eligible == NULL ||
+        backend->compile_function == NULL ||
+        backend->invoke == NULL ||
+        backend->destroy_function == NULL ||
+        backend->destroy_backend == NULL ||
+        hot_threshold == 0u ||
+        instance->jit_backend_attached)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (module->validation.function_count != 0u) {
+        states = (turbowasm_jit_function_state *)calloc(
+            (size_t)module->validation.function_count,
+            sizeof(*states));
+        if (states == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    instance->jit_backend = *backend;
+    memset(backend, 0, sizeof(*backend));
+    instance->jit_functions = states;
+    instance->jit_function_count =
+        module->validation.function_count;
+    instance->jit_hot_threshold = hot_threshold;
+    instance->jit_backend_attached = true;
+    return TURBOWASM_OK;
+}
+
+void turbowasm_jit_instance_detach_backend(
+    turbowasm_instance_impl *instance) {
+    uint32_t index;
+
+    if (instance == NULL || !instance->jit_backend_attached)
+        return;
+
+    if (instance->jit_functions != NULL) {
+        for (index = 0u;
+             index < instance->jit_function_count;
+             ++index) {
+            turbowasm_jit_function_state *entry =
+                &instance->jit_functions[index];
+            if (entry->compiled.impl != NULL) {
+                instance->jit_backend.destroy_function(
+                    instance->jit_backend.context,
+                    &entry->compiled);
+            }
+        }
+    }
+
+    free(instance->jit_functions);
+    instance->jit_functions = NULL;
+    instance->jit_function_count = 0u;
+    instance->jit_hot_threshold = 0u;
+
+    instance->jit_backend.destroy_backend(
+        instance->jit_backend.context);
+    memset(&instance->jit_backend, 0,
+           sizeof(instance->jit_backend));
+    instance->jit_backend_attached = false;
+}
+
 turbowasm_status turbowasm_jit_direct_call(
     turbowasm_jit_invocation_context *context,
     uint32_t function_index,
@@ -3021,7 +3226,7 @@ turbowasm_status turbowasm_jit_direct_call(
     if (type->result_count != 0u && results == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    return turbowasm_exec_function(
+    return turbowasm_dispatch_function(
         context->instance,
         function_index,
         arguments,
@@ -3093,6 +3298,7 @@ void turbowasm_instance_destroy(turbowasm_instance *instance) {
     if (instance == NULL || instance->impl == NULL)
         return;
     impl = (turbowasm_instance_impl *)instance->impl;
+    turbowasm_jit_instance_detach_backend(impl);
     turbowasm_instance_state_destroy(impl);
     free(impl);
     instance->impl = NULL;
@@ -3160,7 +3366,7 @@ turbowasm_status turbowasm_instance_invoke_with_options(
 
     impl = (turbowasm_instance_impl *)instance->impl;
 
-    return turbowasm_exec_function(
+    return turbowasm_dispatch_function(
         impl,
         function_index,
         arguments,
