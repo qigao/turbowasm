@@ -1047,6 +1047,71 @@ static void test_native_f64_br_table_forwards_value(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_structured_f32_direct_call(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: () -> f32 */
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7d,
+
+        /* f0 callee, f1 structured caller */
+        0x03, 0x03,
+        0x02, 0x00, 0x00,
+
+        0x0a, 0x11,
+        0x02,
+
+        /* f0: f32.const 2.0; end */
+        0x07,
+        0x00,
+        0x43, 0x00, 0x00, 0x00, 0x40,
+        0x0b,
+
+        /* f1: block (result f32) { call f0 }; end */
+        0x07,
+        0x00,
+        0x02, 0x7d,
+        0x10, 0x00,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_jit_backend backend = {0};
+    turbowasm_compiled_function compiled = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+    assert(invoke_interpreter_f32(
+               &instance, 1u, NULL, 0u) == 2.0f);
+
+    assert(turbowasm_mir_backend_create(
+               &backend) == TURBOWASM_OK);
+    compile_function(&backend, &module, 1u, &compiled);
+
+    assert(invoke_compiled(
+               &backend, &compiled, &instance,
+               NULL, NULL, 0u,
+               &result, &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_F32);
+    assert(result.as.f32 == 2.0f);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    backend.destroy_function(backend.context, &compiled);
+    backend.destroy_backend(backend.context);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
     test_native_loop_exact_safe_points();
     test_native_if_else();
@@ -1060,6 +1125,7 @@ int main(void) {
     test_native_f64_if_else_result();
     test_native_f32_typeidx_block_parameter();
     test_native_f64_br_table_forwards_value();
+    test_structured_f32_direct_call();
     test_structured_direct_call_shares_budget();
     test_structured_hot_tiering();
     return 0;
