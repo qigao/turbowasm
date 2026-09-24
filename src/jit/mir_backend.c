@@ -732,6 +732,45 @@ typedef struct turbowasm_mir_scan_control {
     const turbowasm_validation_control *annotation;
 } turbowasm_mir_scan_control;
 
+static bool turbowasm_mir_integer_control_signature(
+    const turbowasm_validation_context *validation,
+    const turbowasm_validation_control *annotation,
+    const uint8_t **out_start_types,
+    uint32_t *out_start_count,
+    const uint8_t **out_end_types,
+    uint32_t *out_end_count) {
+    const uint8_t *start_types = NULL;
+    const uint8_t *end_types = NULL;
+    uint32_t start_count = 0u;
+    uint32_t end_count = 0u;
+    uint32_t index;
+
+    if (!turbowasm_validation_control_signature(
+            validation, annotation,
+            &start_types, &start_count,
+            &end_types, &end_count))
+        return false;
+
+    for (index = 0u; index < start_count; ++index) {
+        if (!turbowasm_mir_integer_type(start_types[index]))
+            return false;
+    }
+    for (index = 0u; index < end_count; ++index) {
+        if (!turbowasm_mir_integer_type(end_types[index]))
+            return false;
+    }
+
+    if (out_start_types != NULL)
+        *out_start_types = start_types;
+    if (out_start_count != NULL)
+        *out_start_count = start_count;
+    if (out_end_types != NULL)
+        *out_end_types = end_types;
+    if (out_end_count != NULL)
+        *out_end_count = end_count;
+    return true;
+}
+
 static bool turbowasm_mir_integer_function_shape(
     const turbowasm_validation_context *validation,
     uint32_t function_index,
@@ -1005,6 +1044,14 @@ typedef struct turbowasm_mir_control_frame {
     bool else_seen;
     bool end_incoming;
     bool end_opcode_incoming;
+
+    const uint8_t *start_types;
+    uint32_t start_count;
+    const uint8_t *end_types;
+    uint32_t end_count;
+
+    uint32_t start_reg_base;
+    uint32_t end_reg_base;
 } turbowasm_mir_control_frame;
 
 static bool turbowasm_mir_emit_checkpoint_text(
@@ -1071,6 +1118,114 @@ static turbowasm_mir_control_kind turbowasm_mir_control_kind_from_annotation(
             return TURBOWASM_MIR_CONTROL_FUNCTION;
     }
 }
+
+static bool turbowasm_mir_stack_matches_types(
+    const turbowasm_mir_stack_value *stack,
+    uint32_t stack_size,
+    const uint8_t *types,
+    uint32_t count) {
+    uint32_t base;
+    uint32_t index;
+
+    if (count > stack_size)
+        return false;
+    base = stack_size - count;
+
+    for (index = 0u; index < count; ++index) {
+        if (stack[base + index].type != types[index])
+            return false;
+    }
+    return true;
+}
+
+static bool turbowasm_mir_emit_stack_to_regs(
+    turbowasm_mir_text *text,
+    const turbowasm_mir_stack_value *stack,
+    uint32_t stack_size,
+    const uint8_t *types,
+    uint32_t count,
+    uint32_t reg_base) {
+    uint32_t base;
+    uint32_t index;
+
+    if (!turbowasm_mir_stack_matches_types(
+            stack, stack_size, types, count))
+        return false;
+
+    base = stack_size - count;
+    for (index = 0u; index < count; ++index) {
+        if (!turbowasm_mir_text_appendf(
+                text, "mov r%u, r%u\n",
+                reg_base + index,
+                stack[base + index].reg))
+            return false;
+    }
+    return true;
+}
+
+static bool turbowasm_mir_push_regs(
+    turbowasm_mir_stack_value *stack,
+    uint32_t *stack_size,
+    const uint8_t *types,
+    uint32_t count,
+    uint32_t reg_base) {
+    uint32_t index;
+
+    if (stack == NULL || stack_size == NULL)
+        return false;
+
+    for (index = 0u; index < count; ++index) {
+        stack[*stack_size].reg = reg_base + index;
+        stack[*stack_size].type = types[index];
+        ++*stack_size;
+    }
+    return true;
+}
+
+static bool turbowasm_mir_frame_signature(
+    const turbowasm_validation_context *validation,
+    turbowasm_mir_control_frame *frame) {
+    if (validation == NULL || frame == NULL ||
+        frame->annotation == NULL)
+        return false;
+
+    return turbowasm_mir_integer_control_signature(
+        validation, frame->annotation,
+        &frame->start_types, &frame->start_count,
+        &frame->end_types, &frame->end_count);
+}
+
+static bool turbowasm_mir_control_register_budget(
+    const turbowasm_validation_context *validation,
+    const turbowasm_validation_function *function,
+    uint32_t *out_extra) {
+    uint64_t total = 0u;
+    uint32_t index;
+
+    if (validation == NULL || function == NULL ||
+        out_extra == NULL)
+        return false;
+
+    for (index = 0u; index < function->control_count; ++index) {
+        const turbowasm_validation_control *control =
+            &function->controls[index];
+        uint32_t start_count = 0u;
+        uint32_t end_count = 0u;
+
+        if (!turbowasm_mir_integer_control_signature(
+                validation, control,
+                NULL, &start_count, NULL, &end_count))
+            return false;
+
+        total += (uint64_t)start_count + end_count;
+        if (total > UINT32_MAX)
+            return false;
+    }
+
+    *out_extra = (uint32_t)total;
+    return true;
+}
+
 
 static bool turbowasm_mir_structured_emit_call(
     turbowasm_mir_text *text,
