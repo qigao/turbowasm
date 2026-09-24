@@ -1525,7 +1525,17 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
     if (type == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    register_count = function->code_size + 1u;
+    if (!turbowasm_mir_control_register_budget(
+            validation, function, &control_register_count))
+        return TURBOWASM_UNSUPPORTED;
+
+    if ((uint64_t)function->code_size + 1u +
+            (uint64_t)control_register_count >
+        UINT32_MAX)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    register_count =
+        function->code_size + 1u + control_register_count;
     stack = (turbowasm_mir_stack_value *)calloc(
         (size_t)register_count + 1u, sizeof(*stack));
     controls = (turbowasm_mir_control_frame *)calloc(
