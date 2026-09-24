@@ -316,3 +316,17 @@ set_target_properties(turbowasm_jit_backend_contract_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_jit_backend_contract_test
          COMMAND turbowasm_jit_backend_contract_test)
+
+
+if(TURBOWASM_ENABLE_MIR_JIT)
+  add_executable(turbowasm_mir_backend_test
+    mir_backend_test.c)
+  target_link_libraries(turbowasm_mir_backend_test
+    PRIVATE TurboWasm::Runtime)
+  set_target_properties(turbowasm_mir_backend_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_mir_backend_test
+           COMMAND turbowasm_mir_backend_test)
+endif()
