@@ -47,6 +47,10 @@
     { (opcode_), TURBOWASM_SIMD_EXEC_EXTADD_PAIRWISE, &(desc_), \
       0u, (shape_), 0u }
 
+#define CONV(opcode_, dst_, src_, op_, policy_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_CONVERT, &(dst_), \
+      (uint8_t)(op_), (shape_), 0u, &(src_), (uint8_t)(policy_) }
+
 #define MEXT(opcode_, desc_, width_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_EXTEND, &(desc_), \
       0u, (shape_), (width_) }
@@ -117,6 +121,14 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
 
     MZERO(0x5cu, cmeta_vector_i32x4, 4u, TURBOWASM_V128_I32X4),
     MZERO(0x5du, cmeta_vector_i64x2, 8u, TURBOWASM_V128_I64X2),
+
+    /* floating shape conversions */
+    CONV(0x5eu, cmeta_vector_f32x4, cmeta_vector_f64x2,
+         SALTS_SIMD_CONVERT_DEMOTE, SALTS_SIMD_LANES_LOW_ZERO,
+         TURBOWASM_V128_F32X4),
+    CONV(0x5fu, cmeta_vector_f64x2, cmeta_vector_f32x4,
+         SALTS_SIMD_CONVERT_PROMOTE, SALTS_SIMD_LANES_LOW,
+         TURBOWASM_V128_F64X2),
 
     /* lane/shuffle forms */
     SHUF(0x0du),
@@ -493,7 +505,33 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
     BIN(0xf6u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_PSEUDO_MIN,
         TURBOWASM_V128_F64X2),
     BIN(0xf7u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_PSEUDO_MAX,
-        TURBOWASM_V128_F64X2)
+        TURBOWASM_V128_F64X2),
+
+    /* numeric conversions */
+    CONV(0xf8u, cmeta_vector_i32x4, cmeta_vector_f32x4,
+         SALTS_SIMD_CONVERT_TRUNC_SAT, SALTS_SIMD_LANES_FULL,
+         TURBOWASM_V128_I32X4),
+    CONV(0xf9u, cmeta_vector_u32x4, cmeta_vector_f32x4,
+         SALTS_SIMD_CONVERT_TRUNC_SAT, SALTS_SIMD_LANES_FULL,
+         TURBOWASM_V128_U32X4),
+    CONV(0xfau, cmeta_vector_f32x4, cmeta_vector_i32x4,
+         SALTS_SIMD_CONVERT_NUMERIC, SALTS_SIMD_LANES_FULL,
+         TURBOWASM_V128_F32X4),
+    CONV(0xfbu, cmeta_vector_f32x4, cmeta_vector_u32x4,
+         SALTS_SIMD_CONVERT_NUMERIC, SALTS_SIMD_LANES_FULL,
+         TURBOWASM_V128_F32X4),
+    CONV(0xfcu, cmeta_vector_i32x4, cmeta_vector_f64x2,
+         SALTS_SIMD_CONVERT_TRUNC_SAT, SALTS_SIMD_LANES_LOW_ZERO,
+         TURBOWASM_V128_I32X4),
+    CONV(0xfdu, cmeta_vector_u32x4, cmeta_vector_f64x2,
+         SALTS_SIMD_CONVERT_TRUNC_SAT, SALTS_SIMD_LANES_LOW_ZERO,
+         TURBOWASM_V128_U32X4),
+    CONV(0xfeu, cmeta_vector_f64x2, cmeta_vector_i32x4,
+         SALTS_SIMD_CONVERT_NUMERIC, SALTS_SIMD_LANES_LOW,
+         TURBOWASM_V128_F64X2),
+    CONV(0xffu, cmeta_vector_f64x2, cmeta_vector_u32x4,
+         SALTS_SIMD_CONVERT_NUMERIC, SALTS_SIMD_LANES_LOW,
+         TURBOWASM_V128_F64X2)
 };
 
 #undef SWIZ
@@ -505,6 +543,7 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
 #undef MZERO
 #undef MSPLAT
 #undef MEXT
+#undef CONV
 #undef PAIR
 #undef EMH
 #undef EXH
