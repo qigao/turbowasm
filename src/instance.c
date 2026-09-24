@@ -21,6 +21,31 @@ typedef struct turbowasm_value_stack {
     uint32_t capacity;
 } turbowasm_value_stack;
 
+typedef struct turbowasm_execution_context {
+    uint64_t fuel_remaining;
+    bool fuel_limited;
+    turbowasm_interrupt_check_fn should_interrupt;
+    void *interrupt_context;
+} turbowasm_execution_context;
+
+static turbowasm_status turbowasm_execution_checkpoint(
+    turbowasm_execution_context *execution) {
+    if (execution == NULL)
+        return TURBOWASM_OK;
+
+    if (execution->should_interrupt != NULL &&
+        execution->should_interrupt(execution->interrupt_context))
+        return TURBOWASM_INTERRUPTED;
+
+    if (execution->fuel_limited) {
+        if (execution->fuel_remaining == 0u)
+            return TURBOWASM_FUEL_EXHAUSTED;
+        --execution->fuel_remaining;
+    }
+
+    return TURBOWASM_OK;
+}
+
 typedef enum turbowasm_exec_control_kind {
     TURBOWASM_EXEC_CONTROL_FUNCTION = 0,
     TURBOWASM_EXEC_CONTROL_BLOCK,
@@ -591,6 +616,7 @@ static turbowasm_status turbowasm_exec_function(
     size_t result_capacity,
     size_t *result_count,
     turbowasm_trap *trap,
+    turbowasm_execution_context *execution,
     uint32_t depth);
 
 static bool turbowasm_exec_type_equal(
@@ -616,6 +642,7 @@ static turbowasm_status turbowasm_exec_call_index(
     uint32_t function_index,
     turbowasm_value_stack *stack,
     turbowasm_trap *trap,
+    turbowasm_execution_context *execution,
     uint32_t depth) {
     const turbowasm_module_impl *module;
     const turbowasm_validation_func_type *type;
@@ -670,6 +697,7 @@ static turbowasm_status turbowasm_exec_call_index(
         type->result_count,
         &result_count,
         trap,
+        execution,
         depth + 1u);
     if (status != TURBOWASM_OK)
         goto done;
@@ -696,6 +724,7 @@ static turbowasm_status turbowasm_exec_direct_call(
     turbowasm_reader *reader,
     turbowasm_value_stack *stack,
     turbowasm_trap *trap,
+    turbowasm_execution_context *execution,
     uint32_t depth) {
     uint32_t function_index;
 
@@ -703,7 +732,7 @@ static turbowasm_status turbowasm_exec_direct_call(
         return TURBOWASM_MALFORMED_MODULE;
 
     return turbowasm_exec_call_index(
-        instance, function_index, stack, trap, depth);
+        instance, function_index, stack, trap, execution, depth);
 }
 
 static turbowasm_status turbowasm_exec_indirect_call(
@@ -711,6 +740,7 @@ static turbowasm_status turbowasm_exec_indirect_call(
     turbowasm_reader *reader,
     turbowasm_value_stack *stack,
     turbowasm_trap *trap,
+    turbowasm_execution_context *execution,
     uint32_t depth) {
     const turbowasm_module_impl *module;
     const turbowasm_validation_func_type *expected_type;
@@ -766,7 +796,7 @@ static turbowasm_status turbowasm_exec_indirect_call(
     }
 
     return turbowasm_exec_call_index(
-        instance, entry.function_index, stack, trap, depth);
+        instance, entry.function_index, stack, trap, execution, depth);
 }
 
 static turbowasm_status turbowasm_exec_i32_binary(
@@ -2321,6 +2351,7 @@ static turbowasm_status turbowasm_exec_function(
     size_t result_capacity,
     size_t *result_count,
     turbowasm_trap *trap,
+    turbowasm_execution_context *execution,
     uint32_t depth) {
     const turbowasm_module_impl *module;
     const turbowasm_validation_context *context;
@@ -2398,6 +2429,10 @@ static turbowasm_status turbowasm_exec_function(
 
     while (turbowasm_reader_remaining(&reader) != 0u && !finished) {
         uint8_t opcode;
+
+        status = turbowasm_execution_checkpoint(execution);
+        if (status != TURBOWASM_OK)
+            goto done;
 
         if (!turbowasm_reader_u8(&reader, &opcode)) {
             status = TURBOWASM_MALFORMED_MODULE;
@@ -2588,13 +2623,13 @@ static turbowasm_status turbowasm_exec_function(
                 break;
             case 0x10u: /* call */
                 status = turbowasm_exec_direct_call(
-                    instance, &reader, &stack, trap, depth);
+                    instance, &reader, &stack, trap, execution, depth);
                 if (status != TURBOWASM_OK)
                     goto done;
                 break;
             case 0x11u: /* call_indirect */
                 status = turbowasm_exec_indirect_call(
-                    instance, &reader, &stack, trap, depth);
+                    instance, &reader, &stack, trap, execution, depth);
                 if (status != TURBOWASM_OK)
                     goto done;
                 break;
@@ -3042,7 +3077,31 @@ turbowasm_status turbowasm_instance_invoke(
     size_t result_capacity,
     size_t *result_count,
     turbowasm_trap *trap) {
+    return turbowasm_instance_invoke_with_options(
+        instance,
+        function_index,
+        arguments,
+        argument_count,
+        results,
+        result_capacity,
+        result_count,
+        trap,
+        NULL);
+}
+
+turbowasm_status turbowasm_instance_invoke_with_options(
+    turbowasm_instance *instance,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap,
+    const turbowasm_execution_options *options) {
     turbowasm_instance_impl *impl;
+    turbowasm_execution_context execution = {0};
+    turbowasm_execution_context *execution_ptr = NULL;
 
     if (instance == NULL || instance->impl == NULL ||
         result_count == NULL || trap == NULL)
@@ -3050,6 +3109,14 @@ turbowasm_status turbowasm_instance_invoke(
 
     *result_count = 0u;
     *trap = TURBOWASM_TRAP_NONE;
+
+    if (options != NULL) {
+        execution.fuel_remaining = options->fuel;
+        execution.fuel_limited = options->has_fuel_limit;
+        execution.should_interrupt = options->should_interrupt;
+        execution.interrupt_context = options->interrupt_context;
+        execution_ptr = &execution;
+    }
 
     impl = (turbowasm_instance_impl *)instance->impl;
 
@@ -3062,6 +3129,7 @@ turbowasm_status turbowasm_instance_invoke(
         result_capacity,
         result_count,
         trap,
+        execution_ptr,
         0u);
 }
 
