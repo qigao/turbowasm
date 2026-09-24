@@ -108,6 +108,39 @@ static bool turbowasm_mir_float_type(uint8_t type) {
     return type == 0x7du || type == 0x7cu;
 }
 
+static bool turbowasm_mir_scalar_type(uint8_t type) {
+    return turbowasm_mir_integer_type(type) ||
+           turbowasm_mir_float_type(type);
+}
+
+static const char *turbowasm_mir_reg_prefix(uint8_t type) {
+    switch (type) {
+        case 0x7fu:
+        case 0x7eu:
+            return "r";
+        case 0x7du:
+            return "f";
+        case 0x7cu:
+            return "d";
+        default:
+            return NULL;
+    }
+}
+
+static const char *turbowasm_mir_zero_literal(uint8_t type) {
+    switch (type) {
+        case 0x7fu:
+        case 0x7eu:
+            return "0";
+        case 0x7du:
+            return "0.0f";
+        case 0x7cu:
+            return "0.0";
+        default:
+            return NULL;
+    }
+}
+
 static const char *turbowasm_mir_type_name(uint8_t type) {
     switch (type) {
         case 0x7fu:
@@ -732,9 +765,10 @@ typedef struct turbowasm_mir_scan_control {
     const turbowasm_validation_control *annotation;
 } turbowasm_mir_scan_control;
 
-static bool turbowasm_mir_integer_control_signature(
+static bool turbowasm_mir_scalar_control_signature(
     const turbowasm_validation_context *validation,
     const turbowasm_validation_control *annotation,
+    uint8_t function_result_type,
     const uint8_t **out_start_types,
     uint32_t *out_start_count,
     const uint8_t **out_end_types,
@@ -744,20 +778,32 @@ static bool turbowasm_mir_integer_control_signature(
     uint32_t start_count = 0u;
     uint32_t end_count = 0u;
     uint32_t index;
+    bool float_function;
 
-    if (!turbowasm_validation_control_signature(
+    if (!turbowasm_mir_scalar_type(function_result_type) ||
+        !turbowasm_validation_control_signature(
             validation, annotation,
             &start_types, &start_count,
             &end_types, &end_count))
         return false;
 
+    float_function = turbowasm_mir_float_type(function_result_type);
+
     for (index = 0u; index < start_count; ++index) {
-        if (!turbowasm_mir_integer_type(start_types[index]))
+        if (float_function) {
+            if (start_types[index] != function_result_type)
+                return false;
+        } else if (!turbowasm_mir_integer_type(start_types[index])) {
             return false;
+        }
     }
     for (index = 0u; index < end_count; ++index) {
-        if (!turbowasm_mir_integer_type(end_types[index]))
+        if (float_function) {
+            if (end_types[index] != function_result_type)
+                return false;
+        } else if (!turbowasm_mir_integer_type(end_types[index])) {
             return false;
+        }
     }
 
     if (out_start_types != NULL)
@@ -771,13 +817,14 @@ static bool turbowasm_mir_integer_control_signature(
     return true;
 }
 
-static bool turbowasm_mir_integer_function_shape(
+static bool turbowasm_mir_scalar_function_shape(
     const turbowasm_validation_context *validation,
     uint32_t function_index,
     const turbowasm_validation_function *function,
     uint8_t *out_result_type) {
     const turbowasm_validation_func_type *type;
     uint32_t index;
+    uint8_t result_type;
 
     if (validation == NULL || function == NULL ||
         function->imported || function->code == NULL)
@@ -787,26 +834,44 @@ static bool turbowasm_mir_integer_function_shape(
         validation, function_index);
     if (type == NULL || !type->defined ||
         type->result_count != 1u ||
-        !turbowasm_mir_integer_type(type->results[0]) ||
-        type->param_count > 2u ||
         function->local_count < type->param_count)
         return false;
 
-    for (index = 0u; index < type->param_count; ++index) {
-        if (!turbowasm_mir_integer_type(type->params[index]))
+    result_type = type->results[0];
+    if (!turbowasm_mir_scalar_type(result_type))
+        return false;
+
+    if (turbowasm_mir_float_type(result_type)) {
+        if (type->param_count > 1u)
             return false;
-    }
-    for (index = 0u; index < function->local_count; ++index) {
-        if (!turbowasm_mir_integer_type(function->local_types[index]))
+        for (index = 0u; index < type->param_count; ++index) {
+            if (type->params[index] != result_type)
+                return false;
+        }
+        for (index = 0u; index < function->local_count; ++index) {
+            if (function->local_types[index] != result_type)
+                return false;
+        }
+    } else {
+        if (type->param_count > 2u)
             return false;
+        for (index = 0u; index < type->param_count; ++index) {
+            if (!turbowasm_mir_integer_type(type->params[index]))
+                return false;
+        }
+        for (index = 0u; index < function->local_count; ++index) {
+            if (!turbowasm_mir_integer_type(
+                    function->local_types[index]))
+                return false;
+        }
     }
 
     if (out_result_type != NULL)
-        *out_result_type = type->results[0];
+        *out_result_type = result_type;
     return true;
 }
 
-static bool turbowasm_mir_scan_structured_integer(
+static bool turbowasm_mir_scan_structured_scalar(
     const turbowasm_validation_context *validation,
     uint32_t function_index,
     const turbowasm_validation_function *function,
@@ -819,7 +884,7 @@ static bool turbowasm_mir_scan_structured_integer(
     bool saw_structured = false;
     bool ok = false;
 
-    if (!turbowasm_mir_integer_function_shape(
+    if (!turbowasm_mir_scalar_function_shape(
             validation, function_index, function, &result_type) ||
         function->code_size == 0u)
         return false;
@@ -872,8 +937,8 @@ static bool turbowasm_mir_scan_structured_integer(
                     control_size >= function->control_count ||
                     annotation->body_offset < current_offset ||
                     annotation->body_offset > function->code_size ||
-                    !turbowasm_mir_integer_control_signature(
-                        validation, annotation,
+                    !turbowasm_mir_scalar_control_signature(
+                        validation, annotation, result_type,
                         NULL, NULL, NULL, NULL))
                     goto done;
 
@@ -976,9 +1041,22 @@ static bool turbowasm_mir_scan_structured_integer(
                     turbowasm_validation_context_function_type(
                         validation, callee_index);
                 if (callee == NULL || callee->imported ||
-                    !turbowasm_mir_call_signature_supported(callee_type) ||
-                    !turbowasm_mir_integer_type(callee_type->results[0]))
+                    !turbowasm_mir_call_signature_supported(callee_type))
                     goto done;
+                if (turbowasm_mir_float_type(result_type)) {
+                    uint32_t arg_index;
+                    if (callee_type->results[0] != result_type)
+                        goto done;
+                    for (arg_index = 0u;
+                         arg_index < callee_type->param_count;
+                         ++arg_index) {
+                        if (callee_type->params[arg_index] != result_type)
+                            goto done;
+                    }
+                } else if (!turbowasm_mir_integer_type(
+                               callee_type->results[0])) {
+                    goto done;
+                }
                 break;
             }
 
@@ -1006,14 +1084,55 @@ static bool turbowasm_mir_scan_structured_integer(
 
             case 0x42u: {
                 int64_t value;
-                if (!turbowasm_reader_sleb64(&reader, &value))
+                if (turbowasm_mir_float_type(result_type) ||
+                    !turbowasm_reader_sleb64(&reader, &value))
                     goto done;
                 (void)value;
                 break;
             }
 
+            case 0x43u: {
+                uint32_t bits;
+                float value;
+                if (result_type != 0x7du ||
+                    !turbowasm_reader_u32le(&reader, &bits))
+                    goto done;
+                memcpy(&value, &bits, sizeof(value));
+                if (!isfinite(value))
+                    goto done;
+                break;
+            }
+
+            case 0x44u: {
+                turbowasm_reader bytes;
+                uint64_t bits = 0u;
+                double value;
+                uint32_t index;
+                if (result_type != 0x7cu ||
+                    !turbowasm_reader_slice(&reader, 8u, &bytes))
+                    goto done;
+                for (index = 0u; index < 8u; ++index)
+                    bits |= (uint64_t)bytes.cursor[index] << (8u * index);
+                memcpy(&value, &bits, sizeof(value));
+                if (!isfinite(value))
+                    goto done;
+                break;
+            }
+
             case 0x6au: case 0x6bu: case 0x6cu:
             case 0x7cu: case 0x7du: case 0x7eu:
+                if (turbowasm_mir_float_type(result_type))
+                    goto done;
+                break;
+
+            case 0x92u: case 0x93u: case 0x94u: case 0x95u:
+                if (result_type != 0x7du)
+                    goto done;
+                break;
+
+            case 0xa0u: case 0xa1u: case 0xa2u: case 0xa3u:
+                if (result_type != 0x7cu)
+                    goto done;
                 break;
 
             default:
@@ -1036,7 +1155,7 @@ static bool turbowasm_mir_is_function_eligible(
     (void)context;
     return turbowasm_mir_scan_scalar_locals(
                validation, function_index, function, NULL, NULL) ||
-           turbowasm_mir_scan_structured_integer(
+           turbowasm_mir_scan_structured_scalar(
                validation, function_index, function, NULL);
 }
 
@@ -1497,7 +1616,7 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
 
     out->impl = NULL;
 
-    if (!turbowasm_mir_scan_structured_integer(
+    if (!turbowasm_mir_scan_structured_scalar(
             validation, function_index, function, &result_type))
         return TURBOWASM_UNSUPPORTED;
 
