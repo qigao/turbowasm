@@ -384,4 +384,17 @@ if(TURBOWASM_ENABLE_MIR_JIT)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_mir_float_lowering_test
            COMMAND turbowasm_mir_float_lowering_test)
+
+  add_executable(turbowasm_mir_direct_call_test
+    mir_direct_call_test.c)
+  target_link_libraries(turbowasm_mir_direct_call_test
+    PRIVATE
+      turbowasm_mir_backend
+      TurboWasm::Runtime)
+  set_target_properties(turbowasm_mir_direct_call_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_mir_direct_call_test
+           COMMAND turbowasm_mir_direct_call_test)
 endif()
