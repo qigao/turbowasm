@@ -19,6 +19,11 @@ int64_t turbowasm_jit_simd_const(
     int64_t low_bits,
     int64_t high_bits);
 
+int64_t turbowasm_jit_simd_copy(
+    turbowasm_jit_invocation_context *context,
+    int64_t out_slot,
+    int64_t in_slot);
+
 int64_t turbowasm_jit_simd_splat_i64(
     turbowasm_jit_invocation_context *context,
     int64_t opcode,
