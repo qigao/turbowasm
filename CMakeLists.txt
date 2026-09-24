@@ -12,6 +12,7 @@ include(CTest)
 option(TURBOWASM_BUILD_TOOLS "Build TurboWasm command-line tools" ON)
 option(TURBOWASM_BUILD_TESTS "Build TurboWasm tests" ON)
 option(TURBOWASM_ENABLE_MIR_JIT "Enable optional MIR JIT backend" OFF)
+option(TURBOWASM_ENABLE_CFLOW_ADAPTER "Build optional CFlow execution adapter" ON)
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
   message(FATAL_ERROR "SALTS_ROOT must point at an installed Salts SDK")
@@ -59,6 +60,36 @@ target_include_directories(turbowasm
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 target_link_libraries(turbowasm PUBLIC Salts::SIMD)
+
+if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
+  if(NOT TARGET Salts::CFlow)
+    message(FATAL_ERROR
+      "TurboWasm CFlow adapter requires a Salts SDK that exports Salts::CFlow")
+  endif()
+
+  add_library(turbowasm_cflow
+    src/cflow_adapter.c)
+  add_library(TurboWasm::CFlow ALIAS turbowasm_cflow)
+  set_target_properties(turbowasm_cflow PROPERTIES
+    EXPORT_NAME CFlow
+    VERSION ${PROJECT_VERSION}
+    SOVERSION 0)
+  target_compile_features(turbowasm_cflow PUBLIC c_std_11)
+  target_include_directories(turbowasm_cflow
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>)
+  target_link_libraries(turbowasm_cflow
+    PUBLIC
+      TurboWasm::Runtime
+      Salts::CFlow)
+
+  if(MSVC)
+    target_compile_options(turbowasm_cflow PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_cflow PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+endif()
 
 if(TURBOWASM_ENABLE_MIR_JIT)
   find_package(MIR CONFIG REQUIRED)
@@ -111,6 +142,15 @@ install(
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
+  install(
+    TARGETS turbowasm_cflow
+    EXPORT TurboWasmTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 
 if(TURBOWASM_BUILD_TOOLS)
   install(TARGETS turbowasm_cli
