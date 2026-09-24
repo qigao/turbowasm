@@ -1958,7 +1958,7 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
                 if (!turbowasm_mir_structured_branch_target(
                         &text, controls, control_size, depth,
                         stack, stack_size, result_type,
-                        conditional, condition_reg))
+                        conditional, condition_reg, opcode_offset))
                     goto oom;
 
                 if (!conditional) {
