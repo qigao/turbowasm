@@ -13,8 +13,8 @@ static void test_execution_table_is_validation_subset(void) {
     size_t index;
     size_t other;
 
-    /* 90 generic + 20 memory + 16 lane/shuffle mappings. */
-    assert(count == 126u);
+    /* 126 core/memory/lane + 48 advanced numeric mappings. */
+    assert(count == 174u);
 
     for (index = 0u; index < count; ++index) {
         const turbowasm_simd_exec_descriptor *descriptor =
@@ -75,6 +75,24 @@ static void test_representative_semantics(void) {
     assert(descriptor->kind == TURBOWASM_SIMD_EXEC_LANE_REPLACE);
     assert(descriptor->vector_desc == &cmeta_vector_f32x4);
     assert(descriptor->result_shape == TURBOWASM_V128_F32X4);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x6fu);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_SATURATING_BINARY);
+    assert(descriptor->vector_desc == &cmeta_vector_i8x16);
+    assert(descriptor->op == SALTS_SIMD_SATURATING_ADD);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x64u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_REDUCE_I32);
+    assert(descriptor->vector_desc == &cmeta_vector_i8x16);
+    assert(descriptor->op == SALTS_SIMD_REDUCE_BITMASK);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0xe3u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_UNARY);
+    assert(descriptor->vector_desc == &cmeta_vector_f32x4);
+    assert(descriptor->op == SALTS_SIMD_UNARY_SQRT);
 
     descriptor = turbowasm_simd_exec_descriptor_find(0x26u);
     assert(descriptor != NULL);
