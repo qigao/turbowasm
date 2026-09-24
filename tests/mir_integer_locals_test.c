@@ -33,6 +33,13 @@ static void compare_with_args(
     size_t generated_count = 0u;
     turbowasm_trap interpreted_trap = TURBOWASM_TRAP_NONE;
     turbowasm_trap generated_trap = TURBOWASM_TRAP_NONE;
+    turbowasm_jit_invocation_context jit_context = {0};
+    turbowasm_jit_execution_control execution = {0};
+
+    jit_context.instance =
+        (turbowasm_instance_impl *)instance->impl;
+    jit_context.execution = NULL;
+    jit_context.depth = 0u;
 
     assert(impl != NULL);
     function = turbowasm_validation_context_function(
@@ -64,12 +71,11 @@ static void compare_with_args(
 
     assert(backend->invoke(
                &compiled,
-               (turbowasm_instance_impl *)instance->impl,
+               &jit_context,
                arguments, argument_count,
                &generated, 1u,
                &generated_count,
-               &generated_trap,
-               NULL) == TURBOWASM_OK);
+               &generated_trap) == TURBOWASM_OK);
     assert(generated_count == 1u);
     assert(generated.kind == interpreted.kind);
     assert(generated_trap == TURBOWASM_TRAP_NONE);
@@ -81,14 +87,14 @@ static void compare_with_args(
 
     generated_count = 7u;
     generated_trap = TURBOWASM_TRAP_UNREACHABLE;
+    jit_context.execution = &execution;
     assert(backend->invoke(
                &compiled,
-               (turbowasm_instance_impl *)instance->impl,
+               &jit_context,
                arguments, argument_count,
                &generated, 1u,
                &generated_count,
-               &generated_trap,
-               (turbowasm_jit_execution_control *)(uintptr_t)1u) ==
+               &generated_trap) ==
            TURBOWASM_UNSUPPORTED);
     assert(generated_count == 0u);
     assert(generated_trap == TURBOWASM_TRAP_NONE);
@@ -210,14 +216,19 @@ int main(void) {
         turbowasm_value result = {0};
         size_t result_count = 0u;
         turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+        turbowasm_jit_invocation_context jit_context = {0};
+
+        jit_context.instance =
+            (turbowasm_instance_impl *)instance.impl;
+        jit_context.execution = NULL;
+        jit_context.depth = 0u;
         assert(backend.invoke(
                    &compiled,
-                   (turbowasm_instance_impl *)instance.impl,
+                   &jit_context,
                    i32_args, 2u,
                    &result, 1u,
                    &result_count,
-                   &trap,
-                   NULL) == TURBOWASM_TYPE_MISMATCH);
+                   &trap) == TURBOWASM_TYPE_MISMATCH);
         assert(result_count == 0u);
         assert(trap == TURBOWASM_TRAP_NONE);
     }
