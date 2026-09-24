@@ -39,6 +39,21 @@ static turbowasm_status turbowasm_execution_checkpoint(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_jit_execution_checkpoint(
+    turbowasm_jit_invocation_context *context) {
+    turbowasm_status status;
+
+    if (context == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = turbowasm_execution_checkpoint(context->execution);
+    if (status != TURBOWASM_OK) {
+        context->call_status = status;
+        context->call_trap = TURBOWASM_TRAP_NONE;
+    }
+    return status;
+}
+
 typedef enum turbowasm_exec_control_kind {
     TURBOWASM_EXEC_CONTROL_FUNCTION = 0,
     TURBOWASM_EXEC_CONTROL_BLOCK,
@@ -3006,10 +3021,11 @@ static turbowasm_status turbowasm_dispatch_function(
     if (instance == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    if (execution != NULL ||
-        !instance->jit_backend_attached ||
+    if (!instance->jit_backend_attached ||
         instance->jit_functions == NULL ||
-        function_index >= instance->jit_function_count) {
+        function_index >= instance->jit_function_count ||
+        (execution != NULL &&
+         !instance->jit_backend.supports_execution_control)) {
         return turbowasm_exec_function(
             instance, function_index,
             arguments, argument_count,
@@ -3022,7 +3038,7 @@ static turbowasm_status turbowasm_dispatch_function(
 
     if (entry->state == TURBOWASM_JIT_COMPILED) {
         turbowasm_jit_invocation_context context = {
-            instance, NULL, depth,
+            instance, execution, depth,
             TURBOWASM_OK, TURBOWASM_TRAP_NONE
         };
         return instance->jit_backend.invoke(
@@ -3039,7 +3055,7 @@ static turbowasm_status turbowasm_dispatch_function(
             arguments, argument_count,
             results, result_capacity,
             result_count, trap,
-            NULL, depth);
+            execution, depth);
     }
 
     if (entry->call_count != UINT32_MAX)
@@ -3051,7 +3067,7 @@ static turbowasm_status turbowasm_dispatch_function(
             arguments, argument_count,
             results, result_capacity,
             result_count, trap,
-            NULL, depth);
+            execution, depth);
     }
 
     module = turbowasm_module_impl_get(instance->module);
@@ -3062,7 +3078,7 @@ static turbowasm_status turbowasm_dispatch_function(
             arguments, argument_count,
             results, result_capacity,
             result_count, trap,
-            NULL, depth);
+            execution, depth);
     }
 
     function = turbowasm_validation_context_function(
@@ -3079,7 +3095,7 @@ static turbowasm_status turbowasm_dispatch_function(
             arguments, argument_count,
             results, result_capacity,
             result_count, trap,
-            NULL, depth);
+            execution, depth);
     }
 
     status = instance->jit_backend.compile_function(
@@ -3101,13 +3117,13 @@ static turbowasm_status turbowasm_dispatch_function(
             arguments, argument_count,
             results, result_capacity,
             result_count, trap,
-            NULL, depth);
+            execution, depth);
     }
 
     entry->state = TURBOWASM_JIT_COMPILED;
     {
         turbowasm_jit_invocation_context context = {
-            instance, NULL, depth,
+            instance, execution, depth,
             TURBOWASM_OK, TURBOWASM_TRAP_NONE
         };
         return instance->jit_backend.invoke(
