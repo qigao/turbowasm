@@ -21,6 +21,7 @@ typedef enum turbowasm_simd_exec_kind {
     TURBOWASM_SIMD_EXEC_EXTEND_HALF,
     TURBOWASM_SIMD_EXEC_EXTMUL_HALF,
     TURBOWASM_SIMD_EXEC_EXTADD_PAIRWISE,
+    TURBOWASM_SIMD_EXEC_CONVERT,
     TURBOWASM_SIMD_EXEC_MEMORY_EXTEND,
     TURBOWASM_SIMD_EXEC_MEMORY_SPLAT,
     TURBOWASM_SIMD_EXEC_MEMORY_ZERO,
@@ -39,6 +40,8 @@ typedef struct turbowasm_simd_exec_descriptor {
     uint8_t op;
     turbowasm_v128_shape result_shape;
     uint8_t memory_width;
+    const cmeta_vector_desc *source_desc;
+    uint8_t lane_policy;
 } turbowasm_simd_exec_descriptor;
 
 const turbowasm_simd_exec_descriptor *
