@@ -513,7 +513,8 @@ static void test_validated_but_unimplemented_simd_fails_closed(void) {
         0x0a, 0x08, 0x01, 0x06,
         0x00,
         0x20, 0x00,
-        0xfd, 0x60,
+        /* i16x8.extend_low_i8x16_s remains deferred under #48. */
+        0xfd, 0x67,
         0x0b
     };
     turbowasm_module module = {0};
