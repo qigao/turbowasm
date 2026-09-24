@@ -611,7 +611,7 @@ static void test_execution_control_parity_and_cache(void) {
     assert(interpreted.trap == TURBOWASM_TRAP_NONE);
     assert(a.checks == b.checks);
 
-    /* Policy-controlled calls bypass native code but preserve the hot cache. */
+    /* Policy-controlled calls remain compiled and consume native checkpoints. */
     assert(impl->jit_functions[0].state ==
            TURBOWASM_JIT_COMPILED);
     compare_unbounded(&pair, 0u, NULL, 0u);
