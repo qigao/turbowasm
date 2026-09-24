@@ -22,6 +22,27 @@ static turbowasm_value i8x16_value(const int8_t lanes[16]) {
     return value;
 }
 
+
+static turbowasm_value f32x4_value(const float lanes[4]) {
+    turbowasm_value value = {0};
+    value.kind = TURBOWASM_VALUE_V128;
+    assert(turbowasm_v128_load(
+               &value.as.v128,
+               TURBOWASM_V128_F32X4,
+               lanes) == TURBOWASM_OK);
+    return value;
+}
+
+static turbowasm_value f64x2_value(const double lanes[2]) {
+    turbowasm_value value = {0};
+    value.kind = TURBOWASM_VALUE_V128;
+    assert(turbowasm_v128_load(
+               &value.as.v128,
+               TURBOWASM_V128_F64X2,
+               lanes) == TURBOWASM_OK);
+    return value;
+}
+
 static turbowasm_value invoke_v128(
     turbowasm_instance *instance,
     uint32_t function_index,
@@ -215,7 +236,74 @@ static void test_advanced_numeric_core(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_pseudo_minmax(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        0x01, 0x07,
+        0x01, 0x60, 0x02, 0x7b, 0x7b, 0x01, 0x7b,
+
+        0x03, 0x03,
+        0x02, 0x00, 0x00,
+
+        0x0a, 0x15,
+        0x02,
+
+        /* f32x4.pmin */
+        0x09, 0x00,
+              0x20, 0x00,
+              0x20, 0x01,
+              0xfd, 0xea, 0x01,
+              0x0b,
+
+        /* f64x2.pmax */
+        0x09, 0x00,
+              0x20, 0x00,
+              0x20, 0x01,
+              0xfd, 0xf7, 0x01,
+              0x0b
+    };
+    const float f32_left[4] = {1.0f, 8.0f, -3.0f, 4.0f};
+    const float f32_right[4] = {2.0f, 7.0f, -4.0f, 5.0f};
+    const float f32_expected[4] = {1.0f, 7.0f, -4.0f, 4.0f};
+    const double f64_left[2] = {9.0, -2.0};
+    const double f64_right[2] = {8.0, -3.0};
+    const double f64_expected[2] = {9.0, -2.0};
+    float f32_actual[4] = {0};
+    double f64_actual[2] = {0};
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value args[2];
+    turbowasm_value result;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    args[0] = f32x4_value(f32_left);
+    args[1] = f32x4_value(f32_right);
+    result = invoke_v128(&instance, 0u, args, 2u);
+    assert(result.as.v128.shape == TURBOWASM_V128_F32X4);
+    assert(turbowasm_v128_store(
+               f32_actual, &result.as.v128) == TURBOWASM_OK);
+    assert(memcmp(f32_actual, f32_expected, sizeof(f32_actual)) == 0);
+
+    args[0] = f64x2_value(f64_left);
+    args[1] = f64x2_value(f64_right);
+    result = invoke_v128(&instance, 1u, args, 2u);
+    assert(result.as.v128.shape == TURBOWASM_V128_F64X2);
+    assert(turbowasm_v128_store(
+               f64_actual, &result.as.v128) == TURBOWASM_OK);
+    assert(memcmp(f64_actual, f64_expected, sizeof(f64_actual)) == 0);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
     test_advanced_numeric_core();
+    test_pseudo_minmax();
     return 0;
 }
