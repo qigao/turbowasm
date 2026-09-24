@@ -6,6 +6,8 @@
 #include <mir-gen.h>
 #include <mir.h>
 
+#include <float.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -96,7 +98,55 @@ static bool turbowasm_mir_text_appendf(
     return true;
 }
 
-static bool turbowasm_mir_scan_integer_locals(
+static bool turbowasm_mir_integer_type(uint8_t type) {
+    return type == 0x7fu || type == 0x7eu;
+}
+
+static bool turbowasm_mir_float_type(uint8_t type) {
+    return type == 0x7du || type == 0x7cu;
+}
+
+static const char *turbowasm_mir_type_name(uint8_t type) {
+    switch (type) {
+        case 0x7fu:
+        case 0x7eu:
+            return "i64";
+        case 0x7du:
+            return "f";
+        case 0x7cu:
+            return "d";
+        default:
+            return NULL;
+    }
+}
+
+static const char *turbowasm_mir_move_name(uint8_t type) {
+    switch (type) {
+        case 0x7fu:
+        case 0x7eu:
+            return "mov";
+        case 0x7du:
+            return "fmov";
+        case 0x7cu:
+            return "dmov";
+        default:
+            return NULL;
+    }
+}
+
+static uint8_t turbowasm_mir_binary_type(uint8_t opcode) {
+    if (opcode >= 0x6au && opcode <= 0x6cu)
+        return 0x7fu;
+    if (opcode >= 0x7cu && opcode <= 0x7eu)
+        return 0x7eu;
+    if (opcode >= 0x92u && opcode <= 0x95u)
+        return 0x7du;
+    if (opcode >= 0xa0u && opcode <= 0xa3u)
+        return 0x7cu;
+    return 0u;
+}
+
+static bool turbowasm_mir_scan_scalar_locals(
     const turbowasm_validation_context *validation,
     uint32_t function_index,
     const turbowasm_validation_function *function,
@@ -108,6 +158,8 @@ static bool turbowasm_mir_scan_integer_locals(
     uint32_t stack_size = 0u;
     uint32_t register_count = 0u;
     uint32_t index;
+    uint8_t result_type;
+    bool float_function;
     bool ok = false;
 
     if (validation == NULL || function == NULL ||
@@ -117,22 +169,40 @@ static bool turbowasm_mir_scan_integer_locals(
     type = turbowasm_validation_context_function_type(
         validation, function_index);
     if (type == NULL || !type->defined ||
-        type->param_count > 2u ||
         function->local_count < type->param_count ||
-        type->result_count != 1u ||
-        (type->results[0] != 0x7fu &&
-         type->results[0] != 0x7eu))
+        type->result_count != 1u)
         return false;
 
-    for (index = 0u; index < type->param_count; ++index) {
-        if (type->params[index] != 0x7fu &&
-            type->params[index] != 0x7eu)
+    result_type = type->results[0];
+    if (!turbowasm_mir_integer_type(result_type) &&
+        !turbowasm_mir_float_type(result_type))
+        return false;
+
+    float_function = turbowasm_mir_float_type(result_type);
+
+    if (float_function) {
+        if (type->param_count > 1u)
             return false;
-    }
-    for (index = 0u; index < function->local_count; ++index) {
-        if (function->local_types[index] != 0x7fu &&
-            function->local_types[index] != 0x7eu)
+        for (index = 0u; index < type->param_count; ++index) {
+            if (type->params[index] != result_type)
+                return false;
+        }
+        for (index = 0u; index < function->local_count; ++index) {
+            if (function->local_types[index] != result_type)
+                return false;
+        }
+    } else {
+        if (type->param_count > 2u)
             return false;
+        for (index = 0u; index < type->param_count; ++index) {
+            if (!turbowasm_mir_integer_type(type->params[index]))
+                return false;
+        }
+        for (index = 0u; index < function->local_count; ++index) {
+            if (!turbowasm_mir_integer_type(
+                    function->local_types[index]))
+                return false;
+        }
     }
 
     if (function->code_size == 0u)
@@ -183,7 +253,8 @@ static bool turbowasm_mir_scan_integer_locals(
             }
             case 0x41u: { /* i32.const */
                 int32_t value;
-                if (!turbowasm_reader_sleb32(&reader, &value))
+                if (float_function ||
+                    !turbowasm_reader_sleb32(&reader, &value))
                     goto done;
                 (void)value;
                 types[stack_size++] = 0x7fu;
@@ -192,44 +263,71 @@ static bool turbowasm_mir_scan_integer_locals(
             }
             case 0x42u: { /* i64.const */
                 int64_t value;
-                if (!turbowasm_reader_sleb64(&reader, &value))
+                if (float_function ||
+                    !turbowasm_reader_sleb64(&reader, &value))
                     goto done;
                 (void)value;
                 types[stack_size++] = 0x7eu;
                 ++register_count;
                 break;
             }
-            case 0x6au: /* i32.add */
-            case 0x6bu: /* i32.sub */
-            case 0x6cu: /* i32.mul */
-                if (stack_size < 2u ||
-                    types[stack_size - 1u] != 0x7fu ||
-                    types[stack_size - 2u] != 0x7fu)
+            case 0x43u: { /* f32.const */
+                uint32_t bits;
+                float value;
+                if (!float_function || result_type != 0x7du ||
+                    !turbowasm_reader_u32le(&reader, &bits))
                     goto done;
-                --stack_size;
-                types[stack_size - 1u] = 0x7fu;
+                memcpy(&value, &bits, sizeof(value));
+                if (!isfinite(value))
+                    goto done;
+                types[stack_size++] = 0x7du;
                 ++register_count;
                 break;
-            case 0x7cu: /* i64.add */
-            case 0x7du: /* i64.sub */
-            case 0x7eu: /* i64.mul */
-                if (stack_size < 2u ||
-                    types[stack_size - 1u] != 0x7eu ||
-                    types[stack_size - 2u] != 0x7eu)
+            }
+            case 0x44u: { /* f64.const */
+                turbowasm_reader bytes;
+                uint64_t bits = 0u;
+                double value;
+                if (!float_function || result_type != 0x7cu ||
+                    !turbowasm_reader_slice(&reader, 8u, &bytes))
                     goto done;
-                --stack_size;
-                types[stack_size - 1u] = 0x7eu;
+                for (index = 0u; index < 8u; ++index)
+                    bits |= (uint64_t)bytes.cursor[index] << (8u * index);
+                memcpy(&value, &bits, sizeof(value));
+                if (!isfinite(value))
+                    goto done;
+                types[stack_size++] = 0x7cu;
                 ++register_count;
                 break;
+            }
+            case 0x6au: case 0x6bu: case 0x6cu:
+            case 0x7cu: case 0x7du: case 0x7eu:
+            case 0x92u: case 0x93u: case 0x94u: case 0x95u:
+            case 0xa0u: case 0xa1u: case 0xa2u: case 0xa3u: {
+                uint8_t expected =
+                    turbowasm_mir_binary_type(opcode);
+                if (expected == 0u ||
+                    (float_function
+                        ? expected != result_type
+                        : !turbowasm_mir_integer_type(expected)) ||
+                    stack_size < 2u ||
+                    types[stack_size - 1u] != expected ||
+                    types[stack_size - 2u] != expected)
+                    goto done;
+                --stack_size;
+                types[stack_size - 1u] = expected;
+                ++register_count;
+                break;
+            }
             case 0x0bu: /* end */
                 if (turbowasm_reader_remaining(&reader) != 0u ||
                     stack_size != 1u ||
-                    types[0] != type->results[0])
+                    types[0] != result_type)
                     goto done;
                 if (out_register_count != NULL)
                     *out_register_count = register_count;
                 if (out_result_type != NULL)
-                    *out_result_type = type->results[0];
+                    *out_result_type = result_type;
                 ok = true;
                 goto done;
             default:
@@ -248,7 +346,7 @@ static bool turbowasm_mir_is_function_eligible(
     uint32_t function_index,
     const struct turbowasm_validation_function *function) {
     (void)context;
-    return turbowasm_mir_scan_integer_locals(
+    return turbowasm_mir_scan_scalar_locals(
         validation, function_index, function, NULL, NULL);
 }
 
@@ -260,6 +358,14 @@ static const char *turbowasm_mir_binary_name(uint8_t opcode) {
         case 0x7cu: return "add";
         case 0x7du: return "sub";
         case 0x7eu: return "mul";
+        case 0x92u: return "fadd";
+        case 0x93u: return "fsub";
+        case 0x94u: return "fmul";
+        case 0x95u: return "fdiv";
+        case 0xa0u: return "dadd";
+        case 0xa1u: return "dsub";
+        case 0xa2u: return "dmul";
+        case 0xa3u: return "ddiv";
         default: return NULL;
     }
 }
@@ -288,6 +394,7 @@ static turbowasm_status turbowasm_mir_compile_function(
     char function_name[64];
     bool finished = false;
     turbowasm_status status = TURBOWASM_UNSUPPORTED;
+    const char *result_name;
 
     if (backend == NULL || backend->mir == NULL ||
         validation == NULL || function == NULL || out == NULL)
@@ -299,9 +406,13 @@ static turbowasm_status turbowasm_mir_compile_function(
     if (type == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    if (!turbowasm_mir_scan_integer_locals(
+    if (!turbowasm_mir_scan_scalar_locals(
             validation, function_index, function,
             &register_count, &result_type))
+        return TURBOWASM_UNSUPPORTED;
+
+    result_name = turbowasm_mir_type_name(result_type);
+    if (result_name == NULL)
         return TURBOWASM_UNSUPPORTED;
 
     stack = (turbowasm_mir_stack_value *)calloc(
@@ -320,13 +431,17 @@ static turbowasm_status turbowasm_mir_compile_function(
             &text,
             "tw_jit_m_%u: module\n"
             "export %s\n"
-            "%s: func i64",
-            module_id, function_name, function_name))
+            "%s: func %s",
+            module_id, function_name, function_name,
+            result_name))
         goto oom;
 
     for (index = 0u; index < type->param_count; ++index) {
-        if (!turbowasm_mir_text_appendf(
-                &text, ", i64:l%u", index))
+        const char *param_name =
+            turbowasm_mir_type_name(type->params[index]);
+        if (param_name == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, ", %s:l%u", param_name, index))
             goto oom;
     }
     if (!turbowasm_mir_text_appendf(&text, "\n"))
@@ -335,22 +450,35 @@ static turbowasm_status turbowasm_mir_compile_function(
     for (index = type->param_count;
          index < function->local_count;
          ++index) {
-        if (!turbowasm_mir_text_appendf(
-                &text, "local i64:l%u\n", index))
+        const char *local_name =
+            turbowasm_mir_type_name(function->local_types[index]);
+        if (local_name == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, "local %s:l%u\n",
+                local_name, index))
             goto oom;
     }
 
     for (index = 0u; index < register_count; ++index) {
         if (!turbowasm_mir_text_appendf(
-                &text, "local i64:r%u\n", index))
+                &text, "local %s:r%u\n",
+                result_name, index))
             goto oom;
     }
 
     for (index = type->param_count;
          index < function->local_count;
          ++index) {
-        if (!turbowasm_mir_text_appendf(
-                &text, "mov l%u, 0\n", index))
+        uint8_t local_type = function->local_types[index];
+        const char *move_name =
+            turbowasm_mir_move_name(local_type);
+        const char *zero =
+            local_type == 0x7du ? "0.0f" :
+            local_type == 0x7cu ? "0.0" : "0";
+        if (move_name == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, "%s l%u, %s\n",
+                move_name, index, zero))
             goto oom;
     }
 
@@ -365,17 +493,21 @@ static turbowasm_status turbowasm_mir_compile_function(
 
         if (opcode == 0x20u) {
             uint32_t local_index;
+            uint8_t local_type;
+            const char *move_name;
             if (!turbowasm_reader_uleb32(
                     &reader, &local_index) ||
                 local_index >= function->local_count)
                 goto done;
-            if (!turbowasm_mir_text_appendf(
-                    &text, "mov r%u, l%u\n",
-                    next_reg, local_index))
+            local_type = function->local_types[local_index];
+            move_name = turbowasm_mir_move_name(local_type);
+            if (move_name == NULL ||
+                !turbowasm_mir_text_appendf(
+                    &text, "%s r%u, l%u\n",
+                    move_name, next_reg, local_index))
                 goto oom;
             stack[stack_size].reg = next_reg++;
-            stack[stack_size].type =
-                function->local_types[local_index];
+            stack[stack_size].type = local_type;
             ++stack_size;
             continue;
         }
@@ -383,6 +515,7 @@ static turbowasm_status turbowasm_mir_compile_function(
         if (opcode == 0x21u || opcode == 0x22u) {
             uint32_t local_index;
             turbowasm_mir_stack_value value;
+            const char *move_name;
             if (!turbowasm_reader_uleb32(
                     &reader, &local_index) ||
                 local_index >= function->local_count ||
@@ -391,9 +524,11 @@ static turbowasm_status turbowasm_mir_compile_function(
             value = stack[stack_size - 1u];
             if (value.type != function->local_types[local_index])
                 goto done;
-            if (!turbowasm_mir_text_appendf(
-                    &text, "mov l%u, r%u\n",
-                    local_index, value.reg))
+            move_name = turbowasm_mir_move_name(value.type);
+            if (move_name == NULL ||
+                !turbowasm_mir_text_appendf(
+                    &text, "%s l%u, r%u\n",
+                    move_name, local_index, value.reg))
                 goto oom;
             if (opcode == 0x21u)
                 --stack_size;
@@ -428,14 +563,53 @@ static turbowasm_status turbowasm_mir_compile_function(
             continue;
         }
 
-        if (opcode == 0x6au || opcode == 0x6bu ||
-            opcode == 0x6cu || opcode == 0x7cu ||
-            opcode == 0x7du || opcode == 0x7eu) {
+        if (opcode == 0x43u) {
+            uint32_t bits;
+            float value;
+            if (!turbowasm_reader_u32le(&reader, &bits))
+                goto done;
+            memcpy(&value, &bits, sizeof(value));
+            if (!isfinite(value) ||
+                !turbowasm_mir_text_appendf(
+                    &text, "fmov r%u, %.*ef\n",
+                    next_reg,
+                    FLT_DECIMAL_DIG - 1,
+                    (double)value))
+                goto done;
+            stack[stack_size].reg = next_reg++;
+            stack[stack_size].type = 0x7du;
+            ++stack_size;
+            continue;
+        }
+
+        if (opcode == 0x44u) {
+            turbowasm_reader bytes;
+            uint64_t bits = 0u;
+            double value;
+            if (!turbowasm_reader_slice(&reader, 8u, &bytes))
+                goto done;
+            for (index = 0u; index < 8u; ++index)
+                bits |= (uint64_t)bytes.cursor[index] << (8u * index);
+            memcpy(&value, &bits, sizeof(value));
+            if (!isfinite(value) ||
+                !turbowasm_mir_text_appendf(
+                    &text, "dmov r%u, %.*e\n",
+                    next_reg,
+                    DBL_DECIMAL_DIG - 1,
+                    value))
+                goto done;
+            stack[stack_size].reg = next_reg++;
+            stack[stack_size].type = 0x7cu;
+            ++stack_size;
+            continue;
+        }
+
+        if (turbowasm_mir_binary_type(opcode) != 0u) {
             const char *name = turbowasm_mir_binary_name(opcode);
             turbowasm_mir_stack_value right;
             turbowasm_mir_stack_value left;
             uint8_t expected =
-                opcode >= 0x7cu ? 0x7eu : 0x7fu;
+                turbowasm_mir_binary_type(opcode);
 
             if (name == NULL || stack_size < 2u)
                 goto done;
@@ -546,6 +720,21 @@ static bool turbowasm_mir_argument_raw(
     return false;
 }
 
+static bool turbowasm_mir_argument_matches(
+    const turbowasm_value *value,
+    uint8_t type) {
+    if (value == NULL)
+        return false;
+
+    switch (type) {
+        case 0x7fu: return value->kind == TURBOWASM_VALUE_I32;
+        case 0x7eu: return value->kind == TURBOWASM_VALUE_I64;
+        case 0x7du: return value->kind == TURBOWASM_VALUE_F32;
+        case 0x7cu: return value->kind == TURBOWASM_VALUE_F64;
+        default: return false;
+    }
+}
+
 static turbowasm_status turbowasm_mir_invoke_compiled(
     const turbowasm_compiled_function *compiled,
     struct turbowasm_instance_impl *instance,
@@ -558,8 +747,6 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
     turbowasm_jit_execution_control *execution) {
     const turbowasm_mir_compiled *function;
     void *generated;
-    int64_t raw_args[2] = {0, 0};
-    int64_t raw;
     uint32_t index;
 
     (void)instance;
@@ -582,10 +769,9 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
         return TURBOWASM_INVALID_ARGUMENT;
 
     for (index = 0u; index < function->param_count; ++index) {
-        if (!turbowasm_mir_argument_raw(
+        if (!turbowasm_mir_argument_matches(
                 &arguments[index],
-                function->param_types[index],
-                &raw_args[index]))
+                function->param_types[index]))
             return TURBOWASM_TYPE_MISMATCH;
     }
 
@@ -593,37 +779,99 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
     if (generated == NULL)
         return TURBOWASM_UNSUPPORTED;
 
-    if (function->param_count == 0u) {
-        int64_t (*entry)(void);
-        _Static_assert(
-            sizeof(entry) == sizeof(generated),
-            "MIR generated entry pointer size mismatch");
-        memcpy(&entry, &generated, sizeof(entry));
-        raw = entry();
-    } else if (function->param_count == 1u) {
-        int64_t (*entry)(int64_t);
-        _Static_assert(
-            sizeof(entry) == sizeof(generated),
-            "MIR generated entry pointer size mismatch");
-        memcpy(&entry, &generated, sizeof(entry));
-        raw = entry(raw_args[0]);
-    } else if (function->param_count == 2u) {
-        int64_t (*entry)(int64_t, int64_t);
-        _Static_assert(
-            sizeof(entry) == sizeof(generated),
-            "MIR generated entry pointer size mismatch");
-        memcpy(&entry, &generated, sizeof(entry));
-        raw = entry(raw_args[0], raw_args[1]);
-    } else {
-        return TURBOWASM_UNSUPPORTED;
-    }
+    if (function->result_type == 0x7fu ||
+        function->result_type == 0x7eu) {
+        int64_t raw_args[2] = {0, 0};
+        int64_t raw;
 
-    if (function->result_type == 0x7fu) {
-        results[0].kind = TURBOWASM_VALUE_I32;
-        results[0].as.i32 = (int32_t)(uint32_t)raw;
-    } else if (function->result_type == 0x7eu) {
-        results[0].kind = TURBOWASM_VALUE_I64;
-        results[0].as.i64 = raw;
+        for (index = 0u; index < function->param_count; ++index) {
+            if (!turbowasm_mir_argument_raw(
+                    &arguments[index],
+                    function->param_types[index],
+                    &raw_args[index]))
+                return TURBOWASM_TYPE_MISMATCH;
+        }
+
+        if (function->param_count == 0u) {
+            int64_t (*entry)(void);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry();
+        } else if (function->param_count == 1u) {
+            int64_t (*entry)(int64_t);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry(raw_args[0]);
+        } else if (function->param_count == 2u) {
+            int64_t (*entry)(int64_t, int64_t);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry(raw_args[0], raw_args[1]);
+        } else {
+            return TURBOWASM_UNSUPPORTED;
+        }
+
+        if (function->result_type == 0x7fu) {
+            results[0].kind = TURBOWASM_VALUE_I32;
+            results[0].as.i32 = (int32_t)(uint32_t)raw;
+        } else {
+            results[0].kind = TURBOWASM_VALUE_I64;
+            results[0].as.i64 = raw;
+        }
+    } else if (function->result_type == 0x7du) {
+        float raw;
+
+        if (function->param_count == 0u) {
+            float (*entry)(void);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry();
+        } else if (function->param_count == 1u &&
+                   function->param_types[0] == 0x7du) {
+            float (*entry)(float);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry(arguments[0].as.f32);
+        } else {
+            return TURBOWASM_UNSUPPORTED;
+        }
+
+        results[0].kind = TURBOWASM_VALUE_F32;
+        results[0].as.f32 = raw;
+    } else if (function->result_type == 0x7cu) {
+        double raw;
+
+        if (function->param_count == 0u) {
+            double (*entry)(void);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry();
+        } else if (function->param_count == 1u &&
+                   function->param_types[0] == 0x7cu) {
+            double (*entry)(double);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry(arguments[0].as.f64);
+        } else {
+            return TURBOWASM_UNSUPPORTED;
+        }
+
+        results[0].kind = TURBOWASM_VALUE_F64;
+        results[0].as.f64 = raw;
     } else {
         return TURBOWASM_UNSUPPORTED;
     }
