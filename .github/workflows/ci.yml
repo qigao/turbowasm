@@ -100,3 +100,203 @@ jobs:
           cmake --build build/installed-consumer -j2
           ctest --test-dir build/installed-consumer \
             --no-tests=error --output-on-failure
+
+
+  linux-mir:
+    name: Linux x64 + MIR JIT
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout TurboWasm
+        uses: actions/checkout@v4
+
+      - name: Checkout Salts master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: master
+          path: deps/salts
+          persist-credentials: false
+
+      - name: Install native build tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y nasm ninja-build
+
+      - name: Restore Salts build dependencies
+        uses: ./deps/salts/.github/actions/setup-re2c-tools
+
+      - name: Build and install Salts master
+        shell: bash
+        run: |
+          set -euxo pipefail
+          salts_root="$RUNNER_TEMP/salts-sdk-mir"
+          vcpkg_installed="$GITHUB_WORKSPACE/build/salts-vcpkg-mir"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          cmake -S deps/salts -B build/salts-mir -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_INSTALLED_DIR="$vcpkg_installed" \
+            -DVCPKG_OVERLAY_PORTS="$VCPKG_OVERLAY_PORTS" \
+            -DCMAKE_INSTALL_PREFIX="$salts_root" \
+            -DENABLE_TESTS=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=OFF
+          cmake --build build/salts-mir -j2
+          cmake --install build/salts-mir
+
+      - name: Restore MIR from shared cache only
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -n "$VCPKG_CACHE_REPOSITORY_ROOT"
+          log="$RUNNER_TEMP/turbowasm-mir-cache.log"
+          mir_root="$GITHUB_WORKSPACE/build/mir-vcpkg"
+          rm -rf "$mir_root"
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$VCPKG_CACHE_REPOSITORY_ROOT/manifests/turbowasm-mir" \
+            --x-install-root="$mir_root" \
+            --triplet x64-linux \
+            --only-binarycaching 2>&1 | tee "$log"
+          ! grep -Eq '^Building mir-jit:x64-linux' "$log"
+          grep -Eq 'Restored [1-9][0-9]* package\(s\) from NuGet' "$log"
+          test -f "$mir_root/x64-linux/share/MIR/MIRConfig.cmake"
+          echo "MIR_PREFIX=$mir_root/x64-linux" >> "$GITHUB_ENV"
+
+      - name: Configure TurboWasm with MIR JIT
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/turbowasm-mir -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$MIR_PREFIX" \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/turbowasm-sdk-mir" \
+            -DTURBOWASM_BUILD_TESTS=ON \
+            -DTURBOWASM_BUILD_TOOLS=ON \
+            -DTURBOWASM_ENABLE_MIR_JIT=ON
+
+      - name: Build and test MIR JIT backend
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/turbowasm-mir -j2
+          ctest --test-dir build/turbowasm-mir \
+            --no-tests=error --output-on-failure
+          ctest --test-dir build/turbowasm-mir \
+            -R turbowasm_mir_backend_test \
+            --output-on-failure
+
+      - name: Install and verify Runtime export stays MIR-free
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --install build/turbowasm-mir
+          targets="$RUNNER_TEMP/turbowasm-sdk-mir/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
+          test -f "$targets"
+          ! grep -q 'MIR::MIR' "$targets"
+          ! grep -q 'mir-jit' "$targets"
+
+
+  macos-mir:
+    name: macOS + MIR JIT
+    runs-on: macos-15
+    steps:
+      - name: Checkout TurboWasm
+        uses: actions/checkout@v4
+
+      - name: Checkout Salts master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: master
+          path: deps/salts
+          persist-credentials: false
+
+      - name: Prepare host build tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          brew install ninja nasm autoconf automake autoconf-archive libtool
+          case "$RUNNER_ARCH" in
+            X64) echo "TURBOWASM_MIR_TRIPLET=x64-osx" >> "$GITHUB_ENV" ;;
+            ARM64) echo "TURBOWASM_MIR_TRIPLET=arm64-osx" >> "$GITHUB_ENV" ;;
+            *) echo "unsupported macOS arch: $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+
+      - name: Restore Salts build dependencies
+        uses: ./deps/salts/.github/actions/setup-re2c-tools
+
+      - name: Build and install Salts master
+        shell: bash
+        run: |
+          set -euxo pipefail
+          salts_root="$RUNNER_TEMP/salts-sdk-mir"
+          vcpkg_installed="$GITHUB_WORKSPACE/build/salts-vcpkg-mir"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          cmake -S deps/salts -B build/salts-mir -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET="$TURBOWASM_MIR_TRIPLET" \
+            -DVCPKG_INSTALLED_DIR="$vcpkg_installed" \
+            -DVCPKG_OVERLAY_PORTS="$VCPKG_OVERLAY_PORTS" \
+            -DCMAKE_INSTALL_PREFIX="$salts_root" \
+            -DENABLE_TESTS=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=OFF
+          cmake --build build/salts-mir -j2
+          cmake --install build/salts-mir
+
+      - name: Restore MIR from shared cache only
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -n "$VCPKG_CACHE_REPOSITORY_ROOT"
+          log="$RUNNER_TEMP/turbowasm-mir-cache.log"
+          mir_root="$GITHUB_WORKSPACE/build/mir-vcpkg"
+          rm -rf "$mir_root"
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$VCPKG_CACHE_REPOSITORY_ROOT/manifests/turbowasm-mir" \
+            --x-install-root="$mir_root" \
+            --triplet "$TURBOWASM_MIR_TRIPLET" \
+            --only-binarycaching 2>&1 | tee "$log"
+          ! grep -Eq "^Building mir-jit:$TURBOWASM_MIR_TRIPLET" "$log"
+          grep -Eq 'Restored [1-9][0-9]* package\(s\) from NuGet' "$log"
+          test -f "$mir_root/$TURBOWASM_MIR_TRIPLET/share/MIR/MIRConfig.cmake"
+          echo "MIR_PREFIX=$mir_root/$TURBOWASM_MIR_TRIPLET" >> "$GITHUB_ENV"
+
+      - name: Configure TurboWasm with MIR JIT
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/turbowasm-mir -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$MIR_PREFIX" \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/turbowasm-sdk-mir" \
+            -DTURBOWASM_BUILD_TESTS=ON \
+            -DTURBOWASM_BUILD_TOOLS=ON \
+            -DTURBOWASM_ENABLE_MIR_JIT=ON
+
+      - name: Build and test MIR JIT backend
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/turbowasm-mir -j2
+          ctest --test-dir build/turbowasm-mir \
+            --no-tests=error --output-on-failure
+          ctest --test-dir build/turbowasm-mir \
+            -R turbowasm_mir_backend_test \
+            --output-on-failure
+
+      - name: Install and verify Runtime export stays MIR-free
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --install build/turbowasm-mir
+          targets="$RUNNER_TEMP/turbowasm-sdk-mir/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
+          test -f "$targets"
+          ! grep -q 'MIR::MIR' "$targets"
+          ! grep -q 'mir-jit' "$targets"
