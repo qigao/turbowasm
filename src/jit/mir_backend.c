@@ -715,6 +715,21 @@ static bool turbowasm_mir_argument_raw(
     return false;
 }
 
+static bool turbowasm_mir_argument_matches(
+    const turbowasm_value *value,
+    uint8_t type) {
+    if (value == NULL)
+        return false;
+
+    switch (type) {
+        case 0x7fu: return value->kind == TURBOWASM_VALUE_I32;
+        case 0x7eu: return value->kind == TURBOWASM_VALUE_I64;
+        case 0x7du: return value->kind == TURBOWASM_VALUE_F32;
+        case 0x7cu: return value->kind == TURBOWASM_VALUE_F64;
+        default: return false;
+    }
+}
+
 static turbowasm_status turbowasm_mir_invoke_compiled(
     const turbowasm_compiled_function *compiled,
     struct turbowasm_instance_impl *instance,
@@ -727,8 +742,6 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
     turbowasm_jit_execution_control *execution) {
     const turbowasm_mir_compiled *function;
     void *generated;
-    int64_t raw_args[2] = {0, 0};
-    int64_t raw;
     uint32_t index;
 
     (void)instance;
@@ -751,10 +764,9 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
         return TURBOWASM_INVALID_ARGUMENT;
 
     for (index = 0u; index < function->param_count; ++index) {
-        if (!turbowasm_mir_argument_raw(
+        if (!turbowasm_mir_argument_matches(
                 &arguments[index],
-                function->param_types[index],
-                &raw_args[index]))
+                function->param_types[index]))
             return TURBOWASM_TYPE_MISMATCH;
     }
 
@@ -762,37 +774,99 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
     if (generated == NULL)
         return TURBOWASM_UNSUPPORTED;
 
-    if (function->param_count == 0u) {
-        int64_t (*entry)(void);
-        _Static_assert(
-            sizeof(entry) == sizeof(generated),
-            "MIR generated entry pointer size mismatch");
-        memcpy(&entry, &generated, sizeof(entry));
-        raw = entry();
-    } else if (function->param_count == 1u) {
-        int64_t (*entry)(int64_t);
-        _Static_assert(
-            sizeof(entry) == sizeof(generated),
-            "MIR generated entry pointer size mismatch");
-        memcpy(&entry, &generated, sizeof(entry));
-        raw = entry(raw_args[0]);
-    } else if (function->param_count == 2u) {
-        int64_t (*entry)(int64_t, int64_t);
-        _Static_assert(
-            sizeof(entry) == sizeof(generated),
-            "MIR generated entry pointer size mismatch");
-        memcpy(&entry, &generated, sizeof(entry));
-        raw = entry(raw_args[0], raw_args[1]);
-    } else {
-        return TURBOWASM_UNSUPPORTED;
-    }
+    if (function->result_type == 0x7fu ||
+        function->result_type == 0x7eu) {
+        int64_t raw_args[2] = {0, 0};
+        int64_t raw;
 
-    if (function->result_type == 0x7fu) {
-        results[0].kind = TURBOWASM_VALUE_I32;
-        results[0].as.i32 = (int32_t)(uint32_t)raw;
-    } else if (function->result_type == 0x7eu) {
-        results[0].kind = TURBOWASM_VALUE_I64;
-        results[0].as.i64 = raw;
+        for (index = 0u; index < function->param_count; ++index) {
+            if (!turbowasm_mir_argument_raw(
+                    &arguments[index],
+                    function->param_types[index],
+                    &raw_args[index]))
+                return TURBOWASM_TYPE_MISMATCH;
+        }
+
+        if (function->param_count == 0u) {
+            int64_t (*entry)(void);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry();
+        } else if (function->param_count == 1u) {
+            int64_t (*entry)(int64_t);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry(raw_args[0]);
+        } else if (function->param_count == 2u) {
+            int64_t (*entry)(int64_t, int64_t);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry(raw_args[0], raw_args[1]);
+        } else {
+            return TURBOWASM_UNSUPPORTED;
+        }
+
+        if (function->result_type == 0x7fu) {
+            results[0].kind = TURBOWASM_VALUE_I32;
+            results[0].as.i32 = (int32_t)(uint32_t)raw;
+        } else {
+            results[0].kind = TURBOWASM_VALUE_I64;
+            results[0].as.i64 = raw;
+        }
+    } else if (function->result_type == 0x7du) {
+        float raw;
+
+        if (function->param_count == 0u) {
+            float (*entry)(void);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry();
+        } else if (function->param_count == 1u &&
+                   function->param_types[0] == 0x7du) {
+            float (*entry)(float);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry(arguments[0].as.f32);
+        } else {
+            return TURBOWASM_UNSUPPORTED;
+        }
+
+        results[0].kind = TURBOWASM_VALUE_F32;
+        results[0].as.f32 = raw;
+    } else if (function->result_type == 0x7cu) {
+        double raw;
+
+        if (function->param_count == 0u) {
+            double (*entry)(void);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry();
+        } else if (function->param_count == 1u &&
+                   function->param_types[0] == 0x7cu) {
+            double (*entry)(double);
+            _Static_assert(
+                sizeof(entry) == sizeof(generated),
+                "MIR generated entry pointer size mismatch");
+            memcpy(&entry, &generated, sizeof(entry));
+            raw = entry(arguments[0].as.f64);
+        } else {
+            return TURBOWASM_UNSUPPORTED;
+        }
+
+        results[0].kind = TURBOWASM_VALUE_F64;
+        results[0].as.f64 = raw;
     } else {
         return TURBOWASM_UNSUPPORTED;
     }
