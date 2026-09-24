@@ -35,21 +35,19 @@ static turbowasm_status never_compile(
 
 static turbowasm_status never_invoke(
     const turbowasm_compiled_function *compiled,
-    struct turbowasm_instance_impl *instance,
+    turbowasm_jit_invocation_context *context,
     const turbowasm_value *arguments,
     size_t argument_count,
     turbowasm_value *results,
     size_t result_capacity,
     size_t *result_count,
-    turbowasm_trap *trap,
-    turbowasm_jit_execution_control *execution) {
+    turbowasm_trap *trap) {
     (void)compiled;
-    (void)instance;
+    (void)context;
     (void)arguments;
     (void)argument_count;
     (void)results;
     (void)result_capacity;
-    (void)execution;
     if (result_count != NULL)
         *result_count = 0u;
     if (trap != NULL)
@@ -93,8 +91,7 @@ int main(void) {
                NULL, 0u,
                NULL, 0u,
                &result_count,
-               &trap,
-               NULL) == TURBOWASM_UNSUPPORTED);
+               &trap) == TURBOWASM_UNSUPPORTED);
     assert(result_count == 0u);
     assert(trap == TURBOWASM_TRAP_NONE);
 
