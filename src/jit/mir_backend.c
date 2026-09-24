@@ -1339,20 +1339,20 @@ static bool turbowasm_mir_structured_emit_call(
     return true;
 }
 
-static bool turbowasm_mir_structured_branch_target(
+static bool turbowasm_mir_materialize_branch_target(
     turbowasm_mir_text *text,
     turbowasm_mir_control_frame *controls,
     uint32_t control_size,
     uint32_t depth,
-    turbowasm_mir_stack_value *stack,
+    const turbowasm_mir_stack_value *stack,
     uint32_t stack_size,
     uint8_t function_result_type,
-    bool conditional,
-    uint32_t condition_reg) {
+    turbowasm_mir_control_frame **out_target) {
     uint32_t target_index;
     turbowasm_mir_control_frame *target;
 
-    if (text == NULL || controls == NULL || depth >= control_size)
+    if (text == NULL || controls == NULL ||
+        stack == NULL || depth >= control_size)
         return false;
 
     target_index = control_size - 1u - depth;
@@ -1365,7 +1365,37 @@ static bool turbowasm_mir_structured_branch_target(
                 text, "mov jit_return_value, r%u\n",
                 stack[stack_size - 1u].reg))
             return false;
+    } else if (target->kind == TURBOWASM_MIR_CONTROL_LOOP) {
+        if (target->annotation == NULL ||
+            !turbowasm_mir_emit_stack_to_regs(
+                text, stack, stack_size,
+                target->start_types, target->start_count,
+                target->start_reg_base))
+            return false;
+    } else {
+        if (target->annotation == NULL ||
+            !turbowasm_mir_emit_stack_to_regs(
+                text, stack, stack_size,
+                target->end_types, target->end_count,
+                target->end_reg_base))
+            return false;
+        target->end_incoming = true;
+    }
 
+    if (out_target != NULL)
+        *out_target = target;
+    return true;
+}
+
+static bool turbowasm_mir_emit_target_jump(
+    turbowasm_mir_text *text,
+    turbowasm_mir_control_frame *target,
+    bool conditional,
+    uint32_t condition_reg) {
+    if (text == NULL || target == NULL)
+        return false;
+
+    if (target->kind == TURBOWASM_MIR_CONTROL_FUNCTION) {
         return conditional
             ? turbowasm_mir_text_appendf(
                   text, "bt jit_return, r%u\n", condition_reg)
@@ -1384,13 +1414,73 @@ static bool turbowasm_mir_structured_branch_target(
                   text, target->annotation->opcode_offset, "body");
     }
 
-    target->end_incoming = true;
     return conditional
         ? turbowasm_mir_emit_control_branch_true(
               text, target->annotation->opcode_offset,
               "end", condition_reg)
         : turbowasm_mir_emit_control_jump(
               text, target->annotation->opcode_offset, "end");
+}
+
+static bool turbowasm_mir_structured_branch_target(
+    turbowasm_mir_text *text,
+    turbowasm_mir_control_frame *controls,
+    uint32_t control_size,
+    uint32_t depth,
+    turbowasm_mir_stack_value *stack,
+    uint32_t stack_size,
+    uint8_t function_result_type,
+    bool conditional,
+    uint32_t condition_reg) {
+    turbowasm_mir_control_frame *target = NULL;
+
+    if (!turbowasm_mir_materialize_branch_target(
+            text, controls, control_size, depth,
+            stack, stack_size, function_result_type,
+            &target))
+        return false;
+
+    return turbowasm_mir_emit_target_jump(
+        text, target, conditional, condition_reg);
+}
+
+static bool turbowasm_mir_emit_br_table_target(
+    turbowasm_mir_text *text,
+    turbowasm_mir_control_frame *target,
+    uint32_t selector_reg,
+    uint32_t case_index,
+    bool is_default) {
+    if (text == NULL || target == NULL)
+        return false;
+
+    if (target->kind == TURBOWASM_MIR_CONTROL_FUNCTION) {
+        return is_default
+            ? turbowasm_mir_text_appendf(text, "jmp jit_return\n")
+            : turbowasm_mir_text_appendf(
+                  text, "beq jit_return, r%u, %u\n",
+                  selector_reg, case_index);
+    }
+
+    if (target->annotation == NULL)
+        return false;
+
+    if (target->kind == TURBOWASM_MIR_CONTROL_LOOP) {
+        return is_default
+            ? turbowasm_mir_emit_control_jump(
+                  text, target->annotation->opcode_offset, "body")
+            : turbowasm_mir_text_appendf(
+                  text, "beq c_%u_body, r%u, %u\n",
+                  target->annotation->opcode_offset,
+                  selector_reg, case_index);
+    }
+
+    return is_default
+        ? turbowasm_mir_emit_control_jump(
+              text, target->annotation->opcode_offset, "end")
+        : turbowasm_mir_text_appendf(
+              text, "beq c_%u_end, r%u, %u\n",
+              target->annotation->opcode_offset,
+              selector_reg, case_index);
 }
 
 static turbowasm_status turbowasm_mir_compile_structured_integer(
