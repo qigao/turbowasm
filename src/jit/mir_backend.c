@@ -145,8 +145,9 @@ turbowasm_status turbowasm_mir_backend_smoke_constant(
             "m_smoke: module\n"
             "export smoke\n"
             "smoke: func i64\n"
-            "mov r0, %lld\n"
-            "ret r0\n"
+            "local i64:r\n"
+            "mov r, %lld\n"
+            "ret r\n"
             "endfunc\n"
             "endmodule\n",
             (long long)expected) <= 0)
