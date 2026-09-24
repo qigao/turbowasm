@@ -67,6 +67,37 @@ static void test_slot_ops_and_reduce(void) {
     assert(context.call_trap == TURBOWASM_TRAP_NONE);
 }
 
+static void test_slot_copy(void) {
+    salts_v128 slots[3] = {{{0}}};
+    turbowasm_jit_invocation_context context = {0};
+    uint8_t expected[16];
+    uint8_t actual[16] = {0};
+    uint32_t index;
+
+    for (index = 0u; index < 16u; ++index)
+        expected[index] = (uint8_t)(index * 7u + 3u);
+
+    context.simd_slots = slots;
+    context.simd_slot_count = 3u;
+    reset_status(&context);
+
+    salts_simd_v128_load(&slots[0], expected);
+    assert(turbowasm_jit_simd_copy(
+               &context, 2, 0) == TURBOWASM_OK);
+    salts_simd_v128_store(actual, &slots[2]);
+    assert(memcmp(actual, expected, sizeof(actual)) == 0);
+    assert(context.call_status == TURBOWASM_OK);
+    assert(context.call_trap == TURBOWASM_TRAP_NONE);
+
+    reset_status(&context);
+    assert(turbowasm_jit_simd_copy(
+               &context, 3, 0) ==
+           TURBOWASM_INVALID_ARGUMENT);
+    assert(context.call_status ==
+           TURBOWASM_INVALID_ARGUMENT);
+    assert(context.call_trap == TURBOWASM_TRAP_NONE);
+}
+
 static void test_memory_helper_and_trap(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -170,6 +201,7 @@ static void test_unsupported_kind_records_status(void) {
 
 int main(void) {
     test_slot_ops_and_reduce();
+    test_slot_copy();
     test_memory_helper_and_trap();
     test_invalid_slot_is_invalid_argument();
     test_success_does_not_set_trap();
