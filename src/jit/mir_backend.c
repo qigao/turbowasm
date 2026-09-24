@@ -1,5 +1,7 @@
 #include "mir_backend.h"
 
+#include "../instance_internal.h"
+
 #include "../reader.h"
 #include "../validation_context.h"
 
