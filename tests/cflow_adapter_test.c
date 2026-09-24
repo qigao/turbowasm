@@ -181,7 +181,82 @@ static void test_rejected_admission_has_no_callbacks(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_virtual_clock_deadline(void) {
+    cflow_clock clock = {0};
+    turbowasm_cflow_deadline deadline = {0};
+
+    assert(cflow_clock_virtual_init(
+        &clock, (cflow_instant){100u}));
+    assert(turbowasm_cflow_deadline_init_after(
+        &deadline, &clock, cflow_duration_from_ns(25u)));
+
+    assert(!turbowasm_cflow_deadline_should_interrupt(
+        &deadline));
+    assert(cflow_clock_advance(
+        &clock, cflow_duration_from_ns(24u)));
+    assert(!turbowasm_cflow_deadline_should_interrupt(
+        &deadline));
+    assert(cflow_clock_advance(
+        &clock, cflow_duration_from_ns(1u)));
+    assert(turbowasm_cflow_deadline_should_interrupt(
+        &deadline));
+
+    cflow_clock_destroy(&clock);
+}
+
+static void test_deadline_execution_policy(void) {
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    cflow_clock clock = {0};
+    turbowasm_cflow_deadline deadline = {0};
+    turbowasm_execution_options options = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    load_constant_module(&module, &instance);
+    assert(cflow_clock_virtual_init(
+        &clock, (cflow_instant){100u}));
+
+    /* Zero delay is expired at the first execution checkpoint. */
+    assert(turbowasm_cflow_deadline_init_after(
+        &deadline, &clock, cflow_duration_from_ns(0u)));
+    assert(turbowasm_cflow_execution_options_set_deadline(
+        &options, &deadline));
+    assert(turbowasm_instance_invoke_with_options(
+               &instance, 0u,
+               NULL, 0u,
+               &result, 1u,
+               &result_count, &trap,
+               &options) == TURBOWASM_INTERRUPTED);
+    assert(result_count == 0u);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    /* Deadline policy leaves fuel accounting untouched. */
+    options = (turbowasm_execution_options){0};
+    options.has_fuel_limit = true;
+    options.fuel = 1u;
+    assert(turbowasm_cflow_deadline_init_after(
+        &deadline, &clock, cflow_duration_from_s(1u)));
+    assert(turbowasm_cflow_execution_options_set_deadline(
+        &options, &deadline));
+    assert(turbowasm_instance_invoke_with_options(
+               &instance, 0u,
+               NULL, 0u,
+               &result, 1u,
+               &result_count, &trap,
+               &options) == TURBOWASM_FUEL_EXHAUSTED);
+    assert(result_count == 0u);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    cflow_clock_destroy(&clock);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
+    test_virtual_clock_deadline();
+    test_deadline_execution_policy();
     test_manual_execution();
     test_cancel_pending();
     test_rejected_admission_has_no_callbacks();
