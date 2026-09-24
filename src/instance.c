@@ -2648,6 +2648,35 @@ static turbowasm_status turbowasm_exec_function(
                     goto done;
                 break;
             }
+            case 0x1bu: { /* select */
+                turbowasm_value condition;
+                turbowasm_value right;
+                turbowasm_value left;
+
+                status = turbowasm_stack_pop_kind(
+                    &stack, TURBOWASM_VALUE_I32, &condition);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                status = turbowasm_stack_pop(&stack, &right);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                status = turbowasm_stack_pop(&stack, &left);
+                if (status != TURBOWASM_OK)
+                    goto done;
+
+                if (left.kind != right.kind ||
+                    left.kind == TURBOWASM_VALUE_FUNCREF) {
+                    status = TURBOWASM_TYPE_MISMATCH;
+                    goto done;
+                }
+
+                status = turbowasm_stack_push(
+                    &stack,
+                    condition.as.i32 != 0 ? left : right);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
             case 0x20u: /* local.get */
             case 0x21u: /* local.set */
             case 0x22u: { /* local.tee */
