@@ -900,7 +900,11 @@ static bool turbowasm_mir_scan_simd_straightline(
 
         if (opcode == 0x43u) {
             uint32_t bits;
+            float value;
             if (!turbowasm_reader_u32le(&reader, &bits))
+                goto done;
+            memcpy(&value, &bits, sizeof(value));
+            if (!isfinite(value))
                 goto done;
             types[stack_size++] = 0x7du;
             ++register_count;
@@ -909,7 +913,14 @@ static bool turbowasm_mir_scan_simd_straightline(
 
         if (opcode == 0x44u) {
             turbowasm_reader bytes;
+            uint64_t bits = 0u;
+            double value;
             if (!turbowasm_reader_slice(&reader, 8u, &bytes))
+                goto done;
+            for (index = 0u; index < 8u; ++index)
+                bits |= (uint64_t)bytes.cursor[index] << (8u * index);
+            memcpy(&value, &bits, sizeof(value));
+            if (!isfinite(value))
                 goto done;
             types[stack_size++] = 0x7cu;
             ++register_count;
