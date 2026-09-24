@@ -552,6 +552,60 @@ static bool turbowasm_mir_scan_scalar_locals(
             goto done;
 
         switch (opcode) {
+            case 0x10u: { /* call */
+                uint32_t callee_index;
+                const turbowasm_validation_function *callee;
+                const turbowasm_validation_func_type *callee_type;
+                uint32_t arg_index;
+                uint32_t base;
+
+                if (!turbowasm_reader_uleb32(
+                        &reader, &callee_index))
+                    goto done;
+
+                callee = turbowasm_validation_context_function(
+                    validation, callee_index);
+                callee_type =
+                    turbowasm_validation_context_function_type(
+                        validation, callee_index);
+                if (callee == NULL || callee->imported ||
+                    !turbowasm_mir_call_signature_supported(
+                        callee_type))
+                    goto done;
+
+                if (float_function) {
+                    if (callee_type->results[0] != result_type)
+                        goto done;
+                    for (arg_index = 0u;
+                         arg_index < callee_type->param_count;
+                         ++arg_index) {
+                        if (callee_type->params[arg_index] !=
+                            result_type)
+                            goto done;
+                    }
+                } else {
+                    if (!turbowasm_mir_integer_type(
+                            callee_type->results[0]))
+                        goto done;
+                }
+
+                if (stack_size < callee_type->param_count)
+                    goto done;
+                base = stack_size - callee_type->param_count;
+                for (arg_index = 0u;
+                     arg_index < callee_type->param_count;
+                     ++arg_index) {
+                    if (types[base + arg_index] !=
+                        callee_type->params[arg_index])
+                        goto done;
+                }
+
+                stack_size = base;
+                types[stack_size++] =
+                    callee_type->results[0];
+                ++register_count;
+                break;
+            }
             case 0x20u: { /* local.get */
                 uint32_t local_index;
                 if (!turbowasm_reader_uleb32(
