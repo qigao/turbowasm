@@ -1883,26 +1883,39 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                     goto done;
 
                 if (reachable) {
+                    const char *move_name =
+                        turbowasm_mir_move_name(result_type);
+                    const char *prefix =
+                        turbowasm_mir_reg_prefix(result_type);
                     if (!turbowasm_mir_emit_checkpoint_text(&text) ||
                         stack_size != 1u ||
                         stack[0].type != result_type ||
+                        move_name == NULL || prefix == NULL ||
                         !turbowasm_mir_text_appendf(
                             &text,
-                            "mov jit_return_value, r%u\n",
-                            stack[0].reg))
+                            "%s jit_return_value, %s%u\n",
+                            move_name, prefix, stack[0].reg))
                         goto done;
                 }
 
-                if (!turbowasm_mir_text_appendf(
-                        &text,
-                        "jit_return:\n"
-                        "ret jit_return_value\n"
-                        "jit_fail:\n"
-                        "mov jit_fail_value, 0\n"
-                        "ret jit_fail_value\n"
-                        "endfunc\n"
-                        "endmodule\n"))
-                    goto oom;
+                {
+                    const char *fail_move =
+                        turbowasm_mir_move_name(result_type);
+                    const char *fail_zero =
+                        turbowasm_mir_zero_literal(result_type);
+                    if (fail_move == NULL || fail_zero == NULL ||
+                        !turbowasm_mir_text_appendf(
+                            &text,
+                            "jit_return:\n"
+                            "ret jit_return_value\n"
+                            "jit_fail:\n"
+                            "%s jit_fail_value, %s\n"
+                            "ret jit_fail_value\n"
+                            "endfunc\n"
+                            "endmodule\n",
+                            fail_move, fail_zero))
+                        goto oom;
+                }
 
                 finished = true;
                 break;
@@ -1995,8 +2008,8 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                     annotation->body_offset < current_offset ||
                     annotation->body_offset > function->code_size ||
                     control_size > function->control_count ||
-                    !turbowasm_mir_integer_control_signature(
-                        validation, annotation,
+                    !turbowasm_mir_scalar_control_signature(
+                        validation, annotation, result_type,
                         &start_types, &start_count,
                         &end_types, &end_count))
                     goto done;
@@ -2215,17 +2228,24 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 break;
             }
 
-            case 0x0fu: /* return */
+            case 0x0fu: { /* return */
+                const char *move_name =
+                    turbowasm_mir_move_name(result_type);
+                const char *prefix =
+                    turbowasm_mir_reg_prefix(result_type);
                 if (stack_size == 0u ||
                     stack[stack_size - 1u].type != result_type ||
+                    move_name == NULL || prefix == NULL ||
                     !turbowasm_mir_text_appendf(
                         &text,
-                        "mov jit_return_value, r%u\n"
+                        "%s jit_return_value, %s%u\n"
                         "jmp jit_return\n",
+                        move_name, prefix,
                         stack[stack_size - 1u].reg))
                     goto done;
                 reachable = false;
                 break;
+            }
 
             case 0x10u: { /* call */
                 uint32_t callee_index;
@@ -2252,10 +2272,18 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                     local_index >= function->local_count)
                     goto done;
                 local_type = function->local_types[local_index];
-                if (!turbowasm_mir_text_appendf(
-                        &text, "mov r%u, l%u\n",
-                        next_reg, local_index))
-                    goto oom;
+                {
+                    const char *move_name =
+                        turbowasm_mir_move_name(local_type);
+                    const char *prefix =
+                        turbowasm_mir_reg_prefix(local_type);
+                    if (move_name == NULL || prefix == NULL ||
+                        !turbowasm_mir_text_appendf(
+                            &text, "%s %s%u, l%u\n",
+                            move_name, prefix,
+                            next_reg, local_index))
+                        goto oom;
+                }
                 stack[stack_size].reg = next_reg++;
                 stack[stack_size].type = local_type;
                 ++stack_size;
@@ -2272,11 +2300,19 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                     stack_size == 0u)
                     goto done;
                 value = stack[stack_size - 1u];
-                if (value.type != function->local_types[local_index] ||
-                    !turbowasm_mir_text_appendf(
-                        &text, "mov l%u, r%u\n",
-                        local_index, value.reg))
-                    goto done;
+                {
+                    const char *move_name =
+                        turbowasm_mir_move_name(value.type);
+                    const char *prefix =
+                        turbowasm_mir_reg_prefix(value.type);
+                    if (value.type != function->local_types[local_index] ||
+                        move_name == NULL || prefix == NULL ||
+                        !turbowasm_mir_text_appendf(
+                            &text, "%s l%u, %s%u\n",
+                            move_name, local_index,
+                            prefix, value.reg))
+                        goto done;
+                }
                 if (opcode == 0x21u)
                     --stack_size;
                 break;
@@ -2308,10 +2344,54 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 break;
             }
 
+            case 0x43u: {
+                uint32_t bits;
+                float value;
+                if (!turbowasm_reader_u32le(&reader, &bits))
+                    goto done;
+                memcpy(&value, &bits, sizeof(value));
+                if (!isfinite(value) ||
+                    !turbowasm_mir_text_appendf(
+                        &text, "fmov f%u, %.*ef\n",
+                        next_reg,
+                        FLT_DECIMAL_DIG - 1,
+                        (double)value))
+                    goto done;
+                stack[stack_size].reg = next_reg++;
+                stack[stack_size].type = 0x7du;
+                ++stack_size;
+                break;
+            }
+
+            case 0x44u: {
+                turbowasm_reader bytes;
+                uint64_t bits = 0u;
+                double value;
+                if (!turbowasm_reader_slice(&reader, 8u, &bytes))
+                    goto done;
+                for (index = 0u; index < 8u; ++index)
+                    bits |= (uint64_t)bytes.cursor[index] << (8u * index);
+                memcpy(&value, &bits, sizeof(value));
+                if (!isfinite(value) ||
+                    !turbowasm_mir_text_appendf(
+                        &text, "dmov d%u, %.*e\n",
+                        next_reg,
+                        DBL_DECIMAL_DIG - 1,
+                        value))
+                    goto done;
+                stack[stack_size].reg = next_reg++;
+                stack[stack_size].type = 0x7cu;
+                ++stack_size;
+                break;
+            }
+
             case 0x6au: case 0x6bu: case 0x6cu:
-            case 0x7cu: case 0x7du: case 0x7eu: {
+            case 0x7cu: case 0x7du: case 0x7eu:
+            case 0x92u: case 0x93u: case 0x94u: case 0x95u:
+            case 0xa0u: case 0xa1u: case 0xa2u: case 0xa3u: {
                 const char *name = turbowasm_mir_binary_name(opcode);
                 uint8_t expected = turbowasm_mir_binary_type(opcode);
+                const char *prefix;
                 turbowasm_mir_stack_value right;
                 turbowasm_mir_stack_value left;
 
@@ -2322,10 +2402,15 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 left = stack[--stack_size];
                 if (left.type != expected || right.type != expected)
                     goto done;
-                if (!turbowasm_mir_text_appendf(
-                        &text, "%s r%u, r%u, r%u\n",
-                        name, next_reg,
-                        left.reg, right.reg))
+
+                prefix = turbowasm_mir_reg_prefix(expected);
+                if (prefix == NULL ||
+                    !turbowasm_mir_text_appendf(
+                        &text, "%s %s%u, %s%u, %s%u\n",
+                        name,
+                        prefix, next_reg,
+                        prefix, left.reg,
+                        prefix, right.reg))
                     goto oom;
                 stack[stack_size].reg = next_reg++;
                 stack[stack_size].type = expected;
