@@ -404,20 +404,22 @@ static void test_structured_direct_call_shares_budget(void) {
         0x03, 0x03,
         0x02, 0x00, 0x00,
 
-        0x0a, 0x0f,
+        0x0a, 0x14,
         0x02,
 
         /* f0: const 7; end */
         0x04,
         0x00, 0x41, 0x07, 0x0b,
 
-        /* f1: block; call f0; return; end; end */
-        0x08,
-        0x00,
+        /* f1: local i32; block { call f0; local.set 0; };
+         * local.get 0; end */
+        0x0d,
+        0x01, 0x01, 0x7f,
         0x02, 0x40,
         0x10, 0x00,
-        0x0f,
+        0x21, 0x00,
         0x0b,
+        0x20, 0x00,
         0x0b
     };
     turbowasm_module module = {0};
@@ -437,9 +439,10 @@ static void test_structured_direct_call_shares_budget(void) {
                &backend) == TURBOWASM_OK);
     compile_function(&backend, &module, 1u, &compiled);
 
-    /* block + call + callee const/end + return = 5 checkpoints. */
+    /* block + call + callee const/end + set + block-end + get +
+     * function-end = 8 checkpoints. */
     execution.fuel_limited = true;
-    execution.fuel_remaining = 4u;
+    execution.fuel_remaining = 7u;
     assert(invoke_compiled(
                &backend, &compiled, &instance,
                &execution, NULL, 0u,
@@ -447,7 +450,7 @@ static void test_structured_direct_call_shares_budget(void) {
                &trap) == TURBOWASM_FUEL_EXHAUSTED);
     assert(execution.fuel_remaining == 0u);
 
-    execution.fuel_remaining = 5u;
+    execution.fuel_remaining = 8u;
     result_count = 0u;
     trap = TURBOWASM_TRAP_NONE;
     assert(invoke_compiled(
