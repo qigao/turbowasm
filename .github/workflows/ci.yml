@@ -58,12 +58,14 @@ jobs:
           echo "valid=$valid" >> "$GITHUB_OUTPUT"
           echo "Restored Salts SDK valid: $valid"
 
-      - name: Install native build tools
+      - name: Ensure Ninja
         shell: bash
         run: |
           set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y nasm ninja-build
+          if ! command -v ninja >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ninja-build
+          fi
 
       - name: Restore Salts build dependencies
         if: steps.salts-sdk-restore.outputs.valid != 'true'
@@ -329,12 +331,14 @@ jobs:
           echo "valid=$valid" >> "$GITHUB_OUTPUT"
           echo "Restored Salts SDK valid: $valid"
 
-      - name: Install native build tools
+      - name: Ensure Ninja
         shell: bash
         run: |
           set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y nasm ninja-build
+          if ! command -v ninja >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ninja-build
+          fi
 
       - name: Restore Salts build dependencies
         if: steps.salts-sdk-restore.outputs.valid != 'true'
@@ -484,7 +488,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          brew install ninja nasm autoconf automake autoconf-archive libtool
+          command -v ninja >/dev/null 2>&1 || brew install ninja
           case "$RUNNER_ARCH" in
             X64) echo "TURBOWASM_MIR_TRIPLET=x64-osx" >> "$GITHUB_ENV" ;;
             ARM64) echo "TURBOWASM_MIR_TRIPLET=arm64-osx" >> "$GITHUB_ENV" ;;
