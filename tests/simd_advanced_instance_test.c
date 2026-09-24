@@ -23,6 +23,16 @@ static turbowasm_value i8x16_value(const int8_t lanes[16]) {
 }
 
 
+static turbowasm_value raw_v128_value(const void *bytes) {
+    turbowasm_value value = {0};
+    value.kind = TURBOWASM_VALUE_V128;
+    assert(turbowasm_v128_load(
+               &value.as.v128,
+               TURBOWASM_V128_RAW,
+               bytes) == TURBOWASM_OK);
+    return value;
+}
+
 static turbowasm_value f32x4_value(const float lanes[4]) {
     turbowasm_value value = {0};
     value.kind = TURBOWASM_VALUE_V128;
@@ -302,8 +312,137 @@ static void test_pseudo_minmax(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_v128_andnot_runtime(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x07,
+        0x01, 0x60, 0x02, 0x7b, 0x7b, 0x01, 0x7b,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x0a,
+        0x01, 0x08, 0x00,
+        0x20, 0x00,
+        0x20, 0x01,
+        0xfd, 0x4f,
+        0x0b
+    };
+    const uint32_t left[4] = {
+        UINT32_C(0xffffffff), UINT32_C(0x0f0f0f0f),
+        UINT32_C(0xaaaaaaaa), UINT32_C(0x12345678)
+    };
+    const uint32_t right[4] = {
+        UINT32_C(0x00ff00ff), UINT32_C(0xf0f0f0f0),
+        UINT32_C(0x55555555), UINT32_C(0xffff0000)
+    };
+    const uint32_t expected[4] = {
+        UINT32_C(0xff00ff00), UINT32_C(0x0f0f0f0f),
+        UINT32_C(0xaaaaaaaa), UINT32_C(0x00005678)
+    };
+    uint32_t actual[4] = {0};
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value args[2];
+    turbowasm_value result;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+
+    args[0] = raw_v128_value(left);
+    args[1] = raw_v128_value(right);
+    result = invoke_v128(&instance, 0u, args, 2u);
+    assert(result.as.v128.shape == TURBOWASM_V128_RAW);
+    assert(turbowasm_v128_store(actual, &result.as.v128) == TURBOWASM_OK);
+    assert(memcmp(actual, expected, sizeof(actual)) == 0);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_f32x4_ceil_runtime(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7b, 0x01, 0x7b,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x08,
+        0x01, 0x06, 0x00,
+        0x20, 0x00,
+        0xfd, 0x67,
+        0x0b
+    };
+    const float input[4] = {1.2f, -1.2f, 2.5f, -2.5f};
+    const float expected[4] = {2.0f, -1.0f, 3.0f, -2.0f};
+    float actual[4] = {0};
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value arg;
+    turbowasm_value result;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+
+    arg = f32x4_value(input);
+    result = invoke_v128(&instance, 0u, &arg, 1u);
+    assert(result.as.v128.shape == TURBOWASM_V128_F32X4);
+    assert(turbowasm_v128_store(actual, &result.as.v128) == TURBOWASM_OK);
+    assert(memcmp(actual, expected, sizeof(actual)) == 0);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_i8x16_avgr_u_runtime(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x07,
+        0x01, 0x60, 0x02, 0x7b, 0x7b, 0x01, 0x7b,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x0a,
+        0x01, 0x08, 0x00,
+        0x20, 0x00,
+        0x20, 0x01,
+        0xfd, 0x7b,
+        0x0b
+    };
+    const uint8_t left[16] = {
+        0u, 1u, 2u, 3u, 10u, 11u, 100u, 101u,
+        200u, 201u, 250u, 251u, 254u, 255u, 7u, 8u
+    };
+    const uint8_t right[16] = {
+        1u, 2u, 3u, 4u, 11u, 12u, 101u, 102u,
+        201u, 202u, 251u, 252u, 255u, 255u, 8u, 9u
+    };
+    const uint8_t expected[16] = {
+        1u, 2u, 3u, 4u, 11u, 12u, 101u, 102u,
+        201u, 202u, 251u, 252u, 255u, 255u, 8u, 9u
+    };
+    uint8_t actual[16] = {0};
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value args[2];
+    turbowasm_value result;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+
+    args[0] = raw_v128_value(left);
+    args[1] = raw_v128_value(right);
+    result = invoke_v128(&instance, 0u, args, 2u);
+    assert(result.as.v128.shape == TURBOWASM_V128_U8X16);
+    assert(turbowasm_v128_store(actual, &result.as.v128) == TURBOWASM_OK);
+    assert(memcmp(actual, expected, sizeof(actual)) == 0);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
     test_advanced_numeric_core();
     test_pseudo_minmax();
+    test_v128_andnot_runtime();
+    test_f32x4_ceil_runtime();
+    test_i8x16_avgr_u_runtime();
     return 0;
 }
