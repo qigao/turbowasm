@@ -8,13 +8,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static void test_execution_table_is_validation_subset(void) {
+static bool is_direct_simd_opcode(uint32_t opcode) {
+    return opcode == 0x00u || opcode == 0x0bu || opcode == 0x0cu;
+}
+
+static void test_execution_table_matches_validation_coverage(void) {
     size_t count = turbowasm_simd_exec_descriptor_count();
+    size_t validation_count = turbowasm_simd_descriptor_count();
     size_t index;
     size_t other;
 
-    /* 221 prior mappings + q15 and dot mappings. */
-    assert(count == 223u);
+    /* 233 descriptor-driven + v128.load/store/const direct interpreter paths. */
+    assert(count == 233u);
+    assert(validation_count == 236u);
 
     for (index = 0u; index < count; ++index) {
         const turbowasm_simd_exec_descriptor *descriptor =
@@ -35,6 +41,21 @@ static void test_execution_table_is_validation_subset(void) {
     }
 
     assert(turbowasm_simd_exec_descriptor_at(count) == NULL);
+
+    for (index = 0u; index < validation_count; ++index) {
+        const turbowasm_simd_descriptor *validated =
+            turbowasm_simd_descriptor_at(index);
+        assert(validated != NULL);
+        if (is_direct_simd_opcode(validated->opcode)) {
+            assert(turbowasm_simd_exec_descriptor_find(
+                       validated->opcode) == NULL);
+        } else {
+            assert(turbowasm_simd_exec_descriptor_find(
+                       validated->opcode) != NULL);
+        }
+    }
+
+    assert(turbowasm_simd_descriptor_at(validation_count) == NULL);
 }
 
 static void test_representative_semantics(void) {
@@ -170,13 +191,33 @@ static void test_representative_semantics(void) {
     assert(descriptor->kind == TURBOWASM_SIMD_EXEC_DOT_PAIRWISE);
     assert(descriptor->vector_desc == &cmeta_vector_i32x4);
 
-    /* conversions remain intentionally deferred under #54. */
-    assert(turbowasm_simd_descriptor_find(0xf8u) != NULL);
-    assert(turbowasm_simd_exec_descriptor_find(0xf8u) == NULL);
+    descriptor = turbowasm_simd_exec_descriptor_find(0x5eu);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_CONVERT);
+    assert(descriptor->vector_desc == &cmeta_vector_f32x4);
+    assert(descriptor->source_desc == &cmeta_vector_f64x2);
+    assert(descriptor->op == SALTS_SIMD_CONVERT_DEMOTE);
+    assert(descriptor->lane_policy == SALTS_SIMD_LANES_LOW_ZERO);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0xf8u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_CONVERT);
+    assert(descriptor->vector_desc == &cmeta_vector_i32x4);
+    assert(descriptor->source_desc == &cmeta_vector_f32x4);
+    assert(descriptor->op == SALTS_SIMD_CONVERT_TRUNC_SAT);
+    assert(descriptor->lane_policy == SALTS_SIMD_LANES_FULL);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0xffu);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_CONVERT);
+    assert(descriptor->vector_desc == &cmeta_vector_f64x2);
+    assert(descriptor->source_desc == &cmeta_vector_u32x4);
+    assert(descriptor->op == SALTS_SIMD_CONVERT_NUMERIC);
+    assert(descriptor->lane_policy == SALTS_SIMD_LANES_LOW);
 }
 
 int main(void) {
-    test_execution_table_is_validation_subset();
+    test_execution_table_matches_validation_coverage();
     test_representative_semantics();
     return 0;
 }
