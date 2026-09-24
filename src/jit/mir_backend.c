@@ -812,8 +812,20 @@ static turbowasm_status turbowasm_mir_compile_function(
     if (!turbowasm_mir_text_appendf(
             &text,
             "tw_jit_m_%u: module\n"
+            "tw_call_i64_0_p: proto i64, p:ctx, i64:index\n"
+            "tw_call_i64_1_p: proto i64, p:ctx, i64:index, i64:a0\n"
+            "tw_call_i64_2_p: proto i64, p:ctx, i64:index, i64:a0, i64:a1\n"
+            "tw_call_f32_0_p: proto f, p:ctx, i64:index\n"
+            "tw_call_f32_1_p: proto f, p:ctx, i64:index, f:a0\n"
+            "tw_call_f64_0_p: proto d, p:ctx, i64:index\n"
+            "tw_call_f64_1_p: proto d, p:ctx, i64:index, d:a0\n"
+            "tw_call_status_p: proto i64, p:ctx\n"
+            "import tw_jit_call_i64_0, tw_jit_call_i64_1, "
+            "tw_jit_call_i64_2, tw_jit_call_f32_0, "
+            "tw_jit_call_f32_1, tw_jit_call_f64_0, "
+            "tw_jit_call_f64_1, tw_jit_call_status\n"
             "export %s\n"
-            "%s: func %s",
+            "%s: func %s, p:jit_ctx",
             module_id, function_name, function_name,
             result_name))
         goto oom;
@@ -847,6 +859,13 @@ static turbowasm_status turbowasm_mir_compile_function(
                 result_name, index))
             goto oom;
     }
+
+    if (!turbowasm_mir_text_appendf(
+            &text,
+            "local i64:jit_status\n"
+            "local %s:jit_fail_value\n",
+            result_name))
+        goto oom;
 
     for (index = type->param_count;
          index < function->local_count;
@@ -1017,13 +1036,26 @@ static turbowasm_status turbowasm_mir_compile_function(
                 stack_size != 1u ||
                 stack[0].type != result_type)
                 goto done;
-            if (!turbowasm_mir_text_appendf(
-                    &text,
-                    "ret r%u\n"
-                    "endfunc\n"
-                    "endmodule\n",
-                    stack[0].reg))
-                goto oom;
+            {
+                const char *fail_move =
+                    turbowasm_mir_move_name(result_type);
+                const char *fail_zero =
+                    result_type == 0x7du ? "0.0f" :
+                    result_type == 0x7cu ? "0.0" : "0";
+                if (fail_move == NULL ||
+                    !turbowasm_mir_text_appendf(
+                        &text,
+                        "ret r%u\n"
+                        "jit_fail:\n"
+                        "%s jit_fail_value, %s\n"
+                        "ret jit_fail_value\n"
+                        "endfunc\n"
+                        "endmodule\n",
+                        stack[0].reg,
+                        fail_move,
+                        fail_zero))
+                    goto oom;
+            }
             finished = true;
             break;
         }
