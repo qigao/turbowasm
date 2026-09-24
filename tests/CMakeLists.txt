@@ -331,4 +331,17 @@ if(TURBOWASM_ENABLE_MIR_JIT)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_mir_backend_test
            COMMAND turbowasm_mir_backend_test)
+
+  add_executable(turbowasm_mir_scalar_lowering_test
+    mir_scalar_lowering_test.c)
+  target_link_libraries(turbowasm_mir_scalar_lowering_test
+    PRIVATE
+      turbowasm_mir_backend
+      TurboWasm::Runtime)
+  set_target_properties(turbowasm_mir_scalar_lowering_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_mir_scalar_lowering_test
+           COMMAND turbowasm_mir_scalar_lowering_test)
 endif()
