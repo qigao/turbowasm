@@ -19,8 +19,19 @@ int main(void) {
 
     assert(!backend.is_function_eligible(
         backend.context, NULL, 0u, NULL));
+
+    assert(turbowasm_mir_backend_code_memory_limit(
+               &backend) == 8u * 1024u * 1024u);
+    assert(turbowasm_mir_backend_code_memory_used(
+               &backend) == 0u);
+
     assert(turbowasm_mir_backend_smoke_constant(
                &backend, INT64_C(42)) == TURBOWASM_OK);
+    assert(turbowasm_mir_backend_code_memory_used(
+               &backend) > 0u);
+    assert(turbowasm_mir_backend_code_memory_used(
+               &backend) <=
+           turbowasm_mir_backend_code_memory_limit(&backend));
 
     backend.destroy_backend(backend.context);
     backend.context = NULL;
