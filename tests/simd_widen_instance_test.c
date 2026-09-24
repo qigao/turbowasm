@@ -174,7 +174,90 @@ static void test_widen_narrow_runtime(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_q15_and_dot_runtime(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        0x01, 0x07,
+        0x01, 0x60, 0x02, 0x7b, 0x7b, 0x01, 0x7b,
+
+        0x03, 0x03,
+        0x02, 0x00, 0x00,
+
+        0x0a, 0x15,
+        0x02,
+
+        /* i16x8.q15mulr_sat_s */
+        0x09, 0x00,
+              0x20, 0x00,
+              0x20, 0x01,
+              0xfd, 0x82, 0x01,
+              0x0b,
+
+        /* i32x4.dot_i16x8_s */
+        0x09, 0x00,
+              0x20, 0x00,
+              0x20, 0x01,
+              0xfd, 0xba, 0x01,
+              0x0b
+    };
+    const int16_t q15_left[8] = {
+        16384, 32767, -32768, 8192,
+        -16384, 1000, -1000, 0
+    };
+    const int16_t q15_right[8] = {
+        16384, 32767, -32768, 16384,
+        16384, 2000, 2000, 32767
+    };
+    const int16_t q15_expected[8] = {
+        8192, 32766, 32767, 4096,
+        -8192, 61, -61, 0
+    };
+    const int16_t dot_left[8] = {
+        1, 2, 3, 4, -1, -2, 100, 200
+    };
+    const int16_t dot_right[8] = {
+        10, 20, 30, 40, 5, 6, -2, 3
+    };
+    const int32_t dot_expected[4] = {
+        50, 250, -17, 400
+    };
+
+    int16_t q15_actual[8] = {0};
+    int32_t dot_actual[4] = {0};
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value args[2];
+    turbowasm_value result;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    args[0] = v128_value(TURBOWASM_V128_I16X8, q15_left);
+    args[1] = v128_value(TURBOWASM_V128_I16X8, q15_right);
+    result = invoke_v128(&instance, 0u, args, 2u);
+    assert(result.as.v128.shape == TURBOWASM_V128_I16X8);
+    assert(turbowasm_v128_store(
+               q15_actual, &result.as.v128) == TURBOWASM_OK);
+    assert(memcmp(q15_actual, q15_expected, sizeof(q15_actual)) == 0);
+
+    args[0] = v128_value(TURBOWASM_V128_I16X8, dot_left);
+    args[1] = v128_value(TURBOWASM_V128_I16X8, dot_right);
+    result = invoke_v128(&instance, 1u, args, 2u);
+    assert(result.as.v128.shape == TURBOWASM_V128_I32X4);
+    assert(turbowasm_v128_store(
+               dot_actual, &result.as.v128) == TURBOWASM_OK);
+    assert(memcmp(dot_actual, dot_expected, sizeof(dot_actual)) == 0);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
     test_widen_narrow_runtime();
+    test_q15_and_dot_runtime();
     return 0;
 }
