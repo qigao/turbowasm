@@ -21,15 +21,8 @@ typedef struct turbowasm_value_stack {
     uint32_t capacity;
 } turbowasm_value_stack;
 
-typedef struct turbowasm_execution_context {
-    uint64_t fuel_remaining;
-    bool fuel_limited;
-    turbowasm_interrupt_check_fn should_interrupt;
-    void *interrupt_context;
-} turbowasm_execution_context;
-
 static turbowasm_status turbowasm_execution_checkpoint(
-    turbowasm_execution_context *execution) {
+    turbowasm_jit_execution_control *execution) {
     if (execution == NULL)
         return TURBOWASM_OK;
 
@@ -616,7 +609,7 @@ static turbowasm_status turbowasm_exec_function(
     size_t result_capacity,
     size_t *result_count,
     turbowasm_trap *trap,
-    turbowasm_execution_context *execution,
+    turbowasm_jit_execution_control *execution,
     uint32_t depth);
 
 static bool turbowasm_exec_type_equal(
@@ -642,7 +635,7 @@ static turbowasm_status turbowasm_exec_call_index(
     uint32_t function_index,
     turbowasm_value_stack *stack,
     turbowasm_trap *trap,
-    turbowasm_execution_context *execution,
+    turbowasm_jit_execution_control *execution,
     uint32_t depth) {
     const turbowasm_module_impl *module;
     const turbowasm_validation_func_type *type;
@@ -724,7 +717,7 @@ static turbowasm_status turbowasm_exec_direct_call(
     turbowasm_reader *reader,
     turbowasm_value_stack *stack,
     turbowasm_trap *trap,
-    turbowasm_execution_context *execution,
+    turbowasm_jit_execution_control *execution,
     uint32_t depth) {
     uint32_t function_index;
 
@@ -740,7 +733,7 @@ static turbowasm_status turbowasm_exec_indirect_call(
     turbowasm_reader *reader,
     turbowasm_value_stack *stack,
     turbowasm_trap *trap,
-    turbowasm_execution_context *execution,
+    turbowasm_jit_execution_control *execution,
     uint32_t depth) {
     const turbowasm_module_impl *module;
     const turbowasm_validation_func_type *expected_type;
@@ -2351,7 +2344,7 @@ static turbowasm_status turbowasm_exec_function(
     size_t result_capacity,
     size_t *result_count,
     turbowasm_trap *trap,
-    turbowasm_execution_context *execution,
+    turbowasm_jit_execution_control *execution,
     uint32_t depth) {
     const turbowasm_module_impl *module;
     const turbowasm_validation_context *context;
@@ -2994,6 +2987,53 @@ done:
     return status;
 }
 
+turbowasm_status turbowasm_jit_direct_call(
+    turbowasm_jit_invocation_context *context,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_func_type *type;
+
+    if (context == NULL || context->instance == NULL ||
+        result_count == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    module = turbowasm_module_impl_get(context->instance->module);
+    if (module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    type = turbowasm_validation_context_function_type(
+        &module->validation, function_index);
+    if (type == NULL || !type->defined)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (argument_count != type->param_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (type->result_count > result_capacity)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (type->param_count != 0u && arguments == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (type->result_count != 0u && results == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    return turbowasm_exec_function(
+        context->instance,
+        function_index,
+        arguments,
+        argument_count,
+        results,
+        result_capacity,
+        result_count,
+        trap,
+        context->execution,
+        context->depth + 1u);
+}
+
 turbowasm_status turbowasm_instance_create(
     turbowasm_instance *instance,
     const turbowasm_module *module) {
@@ -3100,8 +3140,8 @@ turbowasm_status turbowasm_instance_invoke_with_options(
     turbowasm_trap *trap,
     const turbowasm_execution_options *options) {
     turbowasm_instance_impl *impl;
-    turbowasm_execution_context execution = {0};
-    turbowasm_execution_context *execution_ptr = NULL;
+    turbowasm_jit_execution_control execution = {0};
+    turbowasm_jit_execution_control *execution_ptr = NULL;
 
     if (instance == NULL || instance->impl == NULL ||
         result_count == NULL || trap == NULL)

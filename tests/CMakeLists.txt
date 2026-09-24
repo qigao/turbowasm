@@ -318,6 +318,20 @@ add_test(NAME turbowasm_jit_backend_contract_test
          COMMAND turbowasm_jit_backend_contract_test)
 
 
+add_executable(turbowasm_jit_direct_call_helper_test
+  jit_direct_call_helper_test.c)
+target_link_libraries(turbowasm_jit_direct_call_helper_test
+  PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_jit_direct_call_helper_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_jit_direct_call_helper_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_jit_direct_call_helper_test
+         COMMAND turbowasm_jit_direct_call_helper_test)
+
+
 if(TURBOWASM_ENABLE_MIR_JIT)
   add_executable(turbowasm_mir_backend_test
     mir_backend_test.c)
