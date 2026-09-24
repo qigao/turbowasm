@@ -392,6 +392,251 @@ static void test_native_return_inside_if(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_native_block_result_branch(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* () -> i32 */
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7f,
+
+        0x03, 0x02,
+        0x01, 0x00,
+
+        0x0a, 0x0d,
+        0x01, 0x0b,
+        0x00,
+        0x02, 0x7f,
+        0x41, 0x05,
+        0x0c, 0x00,
+        0x41, 0x09,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_jit_backend backend = {0};
+    turbowasm_compiled_function compiled = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+    assert(invoke_interpreter_i32(
+               &instance, 0u, NULL, 0u) == 5);
+
+    assert(turbowasm_mir_backend_create(
+               &backend) == TURBOWASM_OK);
+    compile_function(&backend, &module, 0u, &compiled);
+
+    assert(invoke_compiled(
+               &backend, &compiled, &instance,
+               NULL, NULL, 0u,
+               &result, &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_I32);
+    assert(result.as.i32 == 5);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    backend.destroy_function(backend.context, &compiled);
+    backend.destroy_backend(backend.context);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_native_loop_parameter_backedge(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: (i32) -> i32, also used as loop blocktype. */
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+
+        0x03, 0x02,
+        0x01, 0x00,
+
+        0x0a, 0x12,
+        0x01, 0x10,
+        0x00,
+        0x20, 0x00,
+        0x03, 0x00,
+        0x41, 0x01,
+        0x6b,
+        0x22, 0x00,
+        0x20, 0x00,
+        0x0d, 0x00,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_jit_backend backend = {0};
+    turbowasm_compiled_function compiled = {0};
+    turbowasm_value argument = i32_value(3);
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+    assert(invoke_interpreter_i32(
+               &instance, 0u, &argument, 1u) == 0);
+
+    assert(turbowasm_mir_backend_create(
+               &backend) == TURBOWASM_OK);
+    compile_function(&backend, &module, 0u, &compiled);
+
+    assert(invoke_compiled(
+               &backend, &compiled, &instance,
+               NULL, &argument, 1u,
+               &result, &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.as.i32 == 0);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    backend.destroy_function(backend.context, &compiled);
+    backend.destroy_backend(backend.context);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_native_br_if_false_preserves_loop_parameter(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: (i32) -> i32, also used as loop blocktype. */
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+
+        0x03, 0x02,
+        0x01, 0x00,
+
+        0x0a, 0x10,
+        0x01, 0x0e,
+        0x00,
+        0x20, 0x00,
+        0x03, 0x00,
+        0x41, 0x09,
+        0x41, 0x00,
+        0x0d, 0x00,
+        0x1a,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_jit_backend backend = {0};
+    turbowasm_compiled_function compiled = {0};
+    turbowasm_value argument = i32_value(5);
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+    assert(invoke_interpreter_i32(
+               &instance, 0u, &argument, 1u) == 5);
+
+    assert(turbowasm_mir_backend_create(
+               &backend) == TURBOWASM_OK);
+    compile_function(&backend, &module, 0u, &compiled);
+
+    assert(invoke_compiled(
+               &backend, &compiled, &instance,
+               NULL, &argument, 1u,
+               &result, &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.as.i32 == 5);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    backend.destroy_function(backend.context, &compiled);
+    backend.destroy_backend(backend.context);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_native_br_table_forwards_values(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* (i32) -> i32 */
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+
+        0x03, 0x02,
+        0x01, 0x00,
+
+        0x0a, 0x15,
+        0x01, 0x13,
+        0x00,
+        0x02, 0x7f,
+        0x02, 0x7f,
+        0x41, 0x0b,
+        0x20, 0x00,
+        0x0e, 0x01, 0x00, 0x01,
+        0x0b,
+        0x41, 0x01,
+        0x6a,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_jit_backend backend = {0};
+    turbowasm_compiled_function compiled = {0};
+    turbowasm_value zero = i32_value(0);
+    turbowasm_value one = i32_value(1);
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    assert(invoke_interpreter_i32(
+               &instance, 0u, &zero, 1u) == 12);
+    assert(invoke_interpreter_i32(
+               &instance, 0u, &one, 1u) == 11);
+
+    assert(turbowasm_mir_backend_create(
+               &backend) == TURBOWASM_OK);
+    compile_function(&backend, &module, 0u, &compiled);
+
+    assert(invoke_compiled(
+               &backend, &compiled, &instance,
+               NULL, &zero, 1u,
+               &result, &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result.as.i32 == 12);
+
+    result_count = 0u;
+    trap = TURBOWASM_TRAP_NONE;
+    assert(invoke_compiled(
+               &backend, &compiled, &instance,
+               NULL, &one, 1u,
+               &result, &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result.as.i32 == 11);
+
+    backend.destroy_function(backend.context, &compiled);
+    backend.destroy_backend(backend.context);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 static void test_structured_direct_call_shares_budget(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -526,6 +771,10 @@ int main(void) {
     test_native_if_else();
     test_native_block_branch();
     test_native_return_inside_if();
+    test_native_block_result_branch();
+    test_native_loop_parameter_backedge();
+    test_native_br_if_false_preserves_loop_parameter();
+    test_native_br_table_forwards_values();
     test_structured_direct_call_shares_budget();
     test_structured_hot_tiering();
     return 0;
