@@ -1498,6 +1498,7 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
     MIR_module_t module;
     MIR_item_t function_item;
     uint32_t register_count;
+    uint32_t control_register_count = 0u;
     uint32_t next_reg = 0u;
     uint32_t stack_size = 0u;
     uint32_t control_size = 0u;
