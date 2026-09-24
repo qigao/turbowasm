@@ -892,6 +892,106 @@ static turbowasm_status turbowasm_mir_compile_function(
         if (!turbowasm_reader_u8(&reader, &opcode))
             goto done;
 
+        if (opcode == 0x10u) {
+            uint32_t callee_index;
+            const turbowasm_validation_function *callee;
+            const turbowasm_validation_func_type *callee_type;
+            const char *proto_name = NULL;
+            const char *external_name = NULL;
+            uint32_t arg_index;
+            uint32_t base;
+
+            if (!turbowasm_reader_uleb32(
+                    &reader, &callee_index))
+                goto done;
+
+            callee = turbowasm_validation_context_function(
+                validation, callee_index);
+            callee_type =
+                turbowasm_validation_context_function_type(
+                    validation, callee_index);
+            if (callee == NULL || callee->imported ||
+                !turbowasm_mir_call_signature_supported(
+                    callee_type) ||
+                stack_size < callee_type->param_count)
+                goto done;
+
+            base = stack_size - callee_type->param_count;
+            for (arg_index = 0u;
+                 arg_index < callee_type->param_count;
+                 ++arg_index) {
+                if (stack[base + arg_index].type !=
+                    callee_type->params[arg_index])
+                    goto done;
+            }
+
+            if (turbowasm_mir_integer_type(
+                    callee_type->results[0])) {
+                if (callee_type->param_count == 0u) {
+                    proto_name = "tw_call_i64_0_p";
+                    external_name = "tw_jit_call_i64_0";
+                } else if (callee_type->param_count == 1u) {
+                    proto_name = "tw_call_i64_1_p";
+                    external_name = "tw_jit_call_i64_1";
+                } else if (callee_type->param_count == 2u) {
+                    proto_name = "tw_call_i64_2_p";
+                    external_name = "tw_jit_call_i64_2";
+                }
+            } else if (callee_type->results[0] == 0x7du) {
+                if (callee_type->param_count == 0u) {
+                    proto_name = "tw_call_f32_0_p";
+                    external_name = "tw_jit_call_f32_0";
+                } else if (callee_type->param_count == 1u) {
+                    proto_name = "tw_call_f32_1_p";
+                    external_name = "tw_jit_call_f32_1";
+                }
+            } else if (callee_type->results[0] == 0x7cu) {
+                if (callee_type->param_count == 0u) {
+                    proto_name = "tw_call_f64_0_p";
+                    external_name = "tw_jit_call_f64_0";
+                } else if (callee_type->param_count == 1u) {
+                    proto_name = "tw_call_f64_1_p";
+                    external_name = "tw_jit_call_f64_1";
+                }
+            }
+
+            if (proto_name == NULL || external_name == NULL)
+                goto done;
+
+            if (!turbowasm_mir_text_appendf(
+                    &text,
+                    "call %s, %s, r%u, jit_ctx, %u",
+                    proto_name,
+                    external_name,
+                    next_reg,
+                    callee_index))
+                goto oom;
+
+            for (arg_index = 0u;
+                 arg_index < callee_type->param_count;
+                 ++arg_index) {
+                if (!turbowasm_mir_text_appendf(
+                        &text, ", r%u",
+                        stack[base + arg_index].reg))
+                    goto oom;
+            }
+
+            if (!turbowasm_mir_text_appendf(
+                    &text,
+                    "\n"
+                    "call tw_call_status_p, tw_jit_call_status, "
+                    "jit_status, jit_ctx\n"
+                    "bne jit_fail, jit_status, 0\n"))
+                goto oom;
+
+            stack_size = base;
+            stack[stack_size].reg = next_reg++;
+            stack[stack_size].type =
+                callee_type->results[0];
+            ++stack_size;
+            continue;
+        }
+
         if (opcode == 0x20u) {
             uint32_t local_index;
             uint8_t local_type;
