@@ -292,3 +292,15 @@ set_target_properties(turbowasm_simd_conversion_instance_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_simd_conversion_instance_test
          COMMAND turbowasm_simd_conversion_instance_test)
+
+
+add_executable(turbowasm_execution_control_test
+  execution_control_test.c)
+target_link_libraries(turbowasm_execution_control_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_execution_control_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_execution_control_test
+         COMMAND turbowasm_execution_control_test)
