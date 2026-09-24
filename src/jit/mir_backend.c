@@ -1649,6 +1649,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     bool reachable = true;
     bool finished = false;
     turbowasm_status status = TURBOWASM_UNSUPPORTED;
+    const char *structured_result_name = NULL;
 
     if (backend == NULL || backend->mir == NULL ||
         validation == NULL || function == NULL || out == NULL)
@@ -1698,20 +1699,32 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             "tw_jit_f_%u", module_id) <= 0)
         goto done;
 
+    structured_result_name =
+        turbowasm_mir_type_name(result_type);
+    if (structured_result_name == NULL)
+        goto done;
+
     if (!turbowasm_mir_text_appendf(
             &text,
             "tw_jit_m_%u: module\n"
             "tw_call_i64_0_p: proto i64, p:ctx, i64:index\n"
             "tw_call_i64_1_p: proto i64, p:ctx, i64:index, i64:a0\n"
             "tw_call_i64_2_p: proto i64, p:ctx, i64:index, i64:a0, i64:a1\n"
+            "tw_call_f32_0_p: proto f, p:ctx, i64:index\n"
+            "tw_call_f32_1_p: proto f, p:ctx, i64:index, f:a0\n"
+            "tw_call_f64_0_p: proto d, p:ctx, i64:index\n"
+            "tw_call_f64_1_p: proto d, p:ctx, i64:index, d:a0\n"
             "tw_call_status_p: proto i64, p:ctx\n"
             "tw_checkpoint_p: proto i64, p:ctx\n"
             "import tw_jit_call_i64_0, tw_jit_call_i64_1, "
-            "tw_jit_call_i64_2, tw_jit_call_status, "
+            "tw_jit_call_i64_2, tw_jit_call_f32_0, "
+            "tw_jit_call_f32_1, tw_jit_call_f64_0, "
+            "tw_jit_call_f64_1, tw_jit_call_status, "
             "tw_jit_checkpoint\n"
             "export %s\n"
-            "%s: func i64, p:jit_ctx",
-            module_id, function_name, function_name))
+            "%s: func %s, p:jit_ctx",
+            module_id, function_name, function_name,
+            structured_result_name))
         goto oom;
 
     for (index = 0u; index < type->param_count; ++index) {
