@@ -737,19 +737,16 @@ static bool turbowasm_mir_argument_matches(
 
 static turbowasm_status turbowasm_mir_invoke_compiled(
     const turbowasm_compiled_function *compiled,
-    struct turbowasm_instance_impl *instance,
+    turbowasm_jit_invocation_context *context,
     const turbowasm_value *arguments,
     size_t argument_count,
     turbowasm_value *results,
     size_t result_capacity,
     size_t *result_count,
-    turbowasm_trap *trap,
-    turbowasm_jit_execution_control *execution) {
+    turbowasm_trap *trap) {
     const turbowasm_mir_compiled *function;
     void *generated;
     uint32_t index;
-
-    (void)instance;
 
     if (compiled == NULL || compiled->impl == NULL ||
         results == NULL || result_count == NULL || trap == NULL)
@@ -758,7 +755,7 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
     *result_count = 0u;
     *trap = TURBOWASM_TRAP_NONE;
 
-    if (execution != NULL)
+    if (context != NULL && context->execution != NULL)
         return TURBOWASM_UNSUPPORTED;
     if (result_capacity < 1u)
         return TURBOWASM_INVALID_ARGUMENT;
