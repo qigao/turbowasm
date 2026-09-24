@@ -1636,6 +1636,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
     turbowasm_value right;
     turbowasm_value mask;
     turbowasm_value count;
+    uint32_t reduced = 0u;
     bool supported;
     turbowasm_status status;
 
@@ -1721,6 +1722,36 @@ static turbowasm_status turbowasm_exec_simd_generic(
                 &left.as.v128.bits,
                 &right.as.v128.bits,
                 &mask.as.v128.bits);
+            break;
+
+        case TURBOWASM_SIMD_EXEC_SATURATING:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &right);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &left);
+            if (status != TURBOWASM_OK) return status;
+            supported = salts_simd_saturating_binary(
+                descriptor->vector_desc,
+                (salts_simd_saturating_op)descriptor->op,
+                &out.as.v128.bits,
+                &left.as.v128.bits,
+                &right.as.v128.bits);
+            break;
+
+        case TURBOWASM_SIMD_EXEC_REDUCE:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &left);
+            if (status != TURBOWASM_OK) return status;
+            supported = salts_simd_reduce(
+                descriptor->vector_desc,
+                (salts_simd_reduce_op)descriptor->op,
+                &left.as.v128.bits,
+                &reduced);
+            if (supported) {
+                out.kind = TURBOWASM_VALUE_I32;
+                out.as.i32 = (int32_t)reduced;
+            }
             break;
 
         case TURBOWASM_SIMD_EXEC_SPLAT:
