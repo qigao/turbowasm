@@ -1085,7 +1085,7 @@ typedef struct turbowasm_mir_scan_control {
     const turbowasm_validation_control *annotation;
 } turbowasm_mir_scan_control;
 
-static bool turbowasm_mir_scalar_control_signature(
+static bool turbowasm_mir_structured_control_signature(
     const turbowasm_validation_context *validation,
     const turbowasm_validation_control *annotation,
     uint8_t function_result_type,
@@ -1098,32 +1098,24 @@ static bool turbowasm_mir_scalar_control_signature(
     uint32_t start_count = 0u;
     uint32_t end_count = 0u;
     uint32_t index;
-    bool float_function;
 
-    if (!turbowasm_mir_scalar_type(function_result_type) ||
-        !turbowasm_validation_control_signature(
+    (void)function_result_type;
+
+    if (!turbowasm_validation_control_signature(
             validation, annotation,
             &start_types, &start_count,
             &end_types, &end_count))
         return false;
 
-    float_function = turbowasm_mir_float_type(function_result_type);
-
     for (index = 0u; index < start_count; ++index) {
-        if (float_function) {
-            if (start_types[index] != function_result_type)
-                return false;
-        } else if (!turbowasm_mir_integer_type(start_types[index])) {
+        if (!turbowasm_mir_scalar_type(start_types[index]) &&
+            start_types[index] != 0x7bu)
             return false;
-        }
     }
     for (index = 0u; index < end_count; ++index) {
-        if (float_function) {
-            if (end_types[index] != function_result_type)
-                return false;
-        } else if (!turbowasm_mir_integer_type(end_types[index])) {
+        if (!turbowasm_mir_scalar_type(end_types[index]) &&
+            end_types[index] != 0x7bu)
             return false;
-        }
     }
 
     if (out_start_types != NULL)
@@ -1257,7 +1249,7 @@ static bool turbowasm_mir_scan_structured_scalar(
                     control_size >= function->control_count ||
                     annotation->body_offset < current_offset ||
                     annotation->body_offset > function->code_size ||
-                    !turbowasm_mir_scalar_control_signature(
+                    !turbowasm_mir_structured_control_signature(
                         validation, annotation, result_type,
                         NULL, NULL, NULL, NULL))
                     goto done;
@@ -1455,6 +1447,50 @@ static bool turbowasm_mir_scan_structured_scalar(
                     goto done;
                 break;
 
+            case 0x1bu: /* select */
+                break;
+
+            case 0xfdu: { /* SIMD */
+                uint32_t subopcode;
+                const turbowasm_simd_exec_descriptor *descriptor;
+
+                if (!turbowasm_reader_uleb32(&reader, &subopcode))
+                    goto done;
+
+                if (subopcode == 0x0cu) {
+                    turbowasm_reader bytes;
+                    if (!turbowasm_reader_slice(&reader, 16u, &bytes))
+                        goto done;
+                    break;
+                }
+
+                if (subopcode == 0x00u || subopcode == 0x0bu) {
+                    uint32_t alignment;
+                    uint32_t offset;
+                    if (!turbowasm_reader_uleb32(&reader, &alignment) ||
+                        !turbowasm_reader_uleb32(&reader, &offset))
+                        goto done;
+                    (void)alignment;
+                    (void)offset;
+                    break;
+                }
+
+                descriptor =
+                    turbowasm_simd_exec_descriptor_find(subopcode);
+                if (descriptor == NULL)
+                    goto done;
+
+                if (descriptor->kind == TURBOWASM_SIMD_EXEC_SPLAT ||
+                    descriptor->kind == TURBOWASM_SIMD_EXEC_REDUCE ||
+                    descriptor->kind == TURBOWASM_SIMD_EXEC_SHIFT ||
+                    descriptor->kind == TURBOWASM_SIMD_EXEC_SELECT ||
+                    turbowasm_mir_simd_kind_unary(descriptor->kind) ||
+                    turbowasm_mir_simd_kind_binary(descriptor->kind))
+                    break;
+
+                goto done;
+            }
+
             default:
                 goto done;
         }
@@ -1524,7 +1560,9 @@ typedef struct turbowasm_mir_control_frame {
     uint32_t end_count;
 
     uint32_t start_reg_base;
+    uint32_t start_slot_base;
     uint32_t end_reg_base;
+    uint32_t end_slot_base;
 } turbowasm_mir_control_frame;
 
 static bool turbowasm_mir_emit_checkpoint_text(
@@ -1611,14 +1649,49 @@ static bool turbowasm_mir_stack_matches_types(
     return true;
 }
 
-static bool turbowasm_mir_emit_stack_to_regs(
+static bool turbowasm_mir_count_location_types(
+    const uint8_t *types,
+    uint32_t count,
+    uint32_t *out_register_count,
+    uint32_t *out_slot_count) {
+    uint32_t register_count = 0u;
+    uint32_t slot_count = 0u;
+    uint32_t index;
+
+    if ((count != 0u && types == NULL) ||
+        out_register_count == NULL || out_slot_count == NULL)
+        return false;
+
+    for (index = 0u; index < count; ++index) {
+        if (types[index] == 0x7bu) {
+            if (slot_count == UINT32_MAX)
+                return false;
+            ++slot_count;
+        } else if (turbowasm_mir_scalar_type(types[index])) {
+            if (register_count == UINT32_MAX)
+                return false;
+            ++register_count;
+        } else {
+            return false;
+        }
+    }
+
+    *out_register_count = register_count;
+    *out_slot_count = slot_count;
+    return true;
+}
+
+static bool turbowasm_mir_emit_stack_to_locations(
     turbowasm_mir_text *text,
     const turbowasm_mir_stack_value *stack,
     uint32_t stack_size,
     const uint8_t *types,
     uint32_t count,
-    uint32_t reg_base) {
+    uint32_t reg_base,
+    uint32_t slot_base) {
     uint32_t base;
+    uint32_t reg_index = 0u;
+    uint32_t slot_index = 0u;
     uint32_t index;
 
     if (!turbowasm_mir_stack_matches_types(
@@ -1627,72 +1700,118 @@ static bool turbowasm_mir_emit_stack_to_regs(
 
     base = stack_size - count;
     for (index = 0u; index < count; ++index) {
-        const char *move_name =
-            turbowasm_mir_move_name(types[index]);
-        const char *prefix =
-            turbowasm_mir_reg_prefix(types[index]);
-        if (move_name == NULL || prefix == NULL ||
-            !turbowasm_mir_text_appendf(
-                text, "%s %s%u, %s%u\n",
-                move_name,
-                prefix, reg_base + index,
-                prefix, stack[base + index].reg))
-            return false;
+        if (types[index] == 0x7bu) {
+            if (slot_base == UINT32_MAX ||
+                !turbowasm_mir_text_appendf(
+                    text,
+                    "call tw_simd_copy_p, tw_jit_simd_copy, "
+                    "jit_status, jit_ctx, %u, %u\n"
+                    "bne jit_fail, jit_status, 0\n",
+                    slot_base + slot_index,
+                    stack[base + index].reg))
+                return false;
+            ++slot_index;
+        } else {
+            const char *move_name =
+                turbowasm_mir_move_name(types[index]);
+            const char *prefix =
+                turbowasm_mir_reg_prefix(types[index]);
+            if (reg_base == UINT32_MAX ||
+                move_name == NULL || prefix == NULL ||
+                !turbowasm_mir_text_appendf(
+                    text, "%s %s%u, %s%u\n",
+                    move_name,
+                    prefix, reg_base + reg_index,
+                    prefix, stack[base + index].reg))
+                return false;
+            ++reg_index;
+        }
     }
     return true;
 }
 
-static bool turbowasm_mir_push_regs(
+static bool turbowasm_mir_push_locations(
     turbowasm_mir_stack_value *stack,
     uint32_t *stack_size,
     const uint8_t *types,
     uint32_t count,
-    uint32_t reg_base) {
+    uint32_t reg_base,
+    uint32_t slot_base) {
+    uint32_t reg_index = 0u;
+    uint32_t slot_index = 0u;
     uint32_t index;
 
     if (stack == NULL || stack_size == NULL)
         return false;
 
     for (index = 0u; index < count; ++index) {
-        stack[*stack_size].reg = reg_base + index;
+        if (types[index] == 0x7bu) {
+            if (slot_base == UINT32_MAX)
+                return false;
+            stack[*stack_size].reg = slot_base + slot_index++;
+        } else if (turbowasm_mir_scalar_type(types[index])) {
+            if (reg_base == UINT32_MAX)
+                return false;
+            stack[*stack_size].reg = reg_base + reg_index++;
+        } else {
+            return false;
+        }
         stack[*stack_size].type = types[index];
         ++*stack_size;
     }
     return true;
 }
 
-static bool turbowasm_mir_control_register_budget(
+static bool turbowasm_mir_control_location_budget(
     const turbowasm_validation_context *validation,
     const turbowasm_validation_function *function,
     uint8_t function_result_type,
-    uint32_t *out_extra) {
-    uint64_t total = 0u;
+    uint32_t *out_register_extra,
+    uint32_t *out_slot_extra) {
+    uint64_t register_total = 0u;
+    uint64_t slot_total = 0u;
     uint32_t index;
 
     if (validation == NULL || function == NULL ||
-        out_extra == NULL)
+        out_register_extra == NULL || out_slot_extra == NULL)
         return false;
 
     for (index = 0u; index < function->control_count; ++index) {
         const turbowasm_validation_control *control =
             &function->controls[index];
+        const uint8_t *start_types = NULL;
+        const uint8_t *end_types = NULL;
         uint32_t start_count = 0u;
         uint32_t end_count = 0u;
+        uint32_t start_registers = 0u;
+        uint32_t start_slots = 0u;
+        uint32_t end_registers = 0u;
+        uint32_t end_slots = 0u;
 
-        if (!turbowasm_mir_scalar_control_signature(
+        if (!turbowasm_mir_structured_control_signature(
                 validation, control, function_result_type,
-                NULL, &start_count, NULL, &end_count))
+                &start_types, &start_count,
+                &end_types, &end_count) ||
+            !turbowasm_mir_count_location_types(
+                start_types, start_count,
+                &start_registers, &start_slots) ||
+            !turbowasm_mir_count_location_types(
+                end_types, end_count,
+                &end_registers, &end_slots))
             return false;
 
-        total += (uint64_t)start_count + end_count;
-        if (total > UINT32_MAX)
+        register_total +=
+            (uint64_t)start_registers + end_registers;
+        slot_total +=
+            (uint64_t)start_slots + end_slots;
+        if (register_total > UINT32_MAX || slot_total > UINT32_MAX)
             return false;
     }
 
-    *out_extra = (uint32_t)total;
+    *out_register_extra = (uint32_t)register_total;
+    *out_slot_extra = (uint32_t)slot_total;
     return true;
 }
-
 
 static bool turbowasm_mir_structured_emit_call(
     turbowasm_mir_text *text,
@@ -1835,14 +1954,14 @@ static bool turbowasm_mir_materialize_branch_target(
             return false;
     } else if (target->kind == TURBOWASM_MIR_CONTROL_LOOP) {
         if (target->annotation == NULL ||
-            !turbowasm_mir_emit_stack_to_regs(
+            !turbowasm_mir_emit_stack_to_locations(
                 text, stack, stack_size,
                 target->start_types, target->start_count,
                 target->start_reg_base))
             return false;
     } else {
         if (target->annotation == NULL ||
-            !turbowasm_mir_emit_stack_to_regs(
+            !turbowasm_mir_emit_stack_to_locations(
                 text, stack, stack_size,
                 target->end_types, target->end_count,
                 target->end_reg_base))
@@ -2157,7 +2276,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                  */
                 if (!turbowasm_mir_emit_checkpoint_text(&text))
                     goto oom;
-                if (!turbowasm_mir_emit_stack_to_regs(
+                if (!turbowasm_mir_emit_stack_to_locations(
                         &text, stack, stack_size,
                         frame->end_types, frame->end_count,
                         frame->end_reg_base))
@@ -2175,7 +2294,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 goto oom;
 
             stack_size = frame->height;
-            if (!turbowasm_mir_push_regs(
+            if (!turbowasm_mir_push_locations(
                     stack, &stack_size,
                     frame->start_types, frame->start_count,
                     frame->start_reg_base))
@@ -2244,7 +2363,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                  * arguments in the same merge registers.
                  */
                 if (reachable &&
-                    !turbowasm_mir_emit_stack_to_regs(
+                    !turbowasm_mir_emit_stack_to_locations(
                         &text, stack, stack_size,
                         frame->end_types, frame->end_count,
                         frame->end_reg_base))
@@ -2272,7 +2391,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
 
                 stack_size = frame->height;
                 if (next_reachable &&
-                    !turbowasm_mir_push_regs(
+                    !turbowasm_mir_push_locations(
                         stack, &stack_size,
                         frame->end_types, frame->end_count,
                         frame->end_reg_base))
@@ -2317,7 +2436,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                     annotation->body_offset < current_offset ||
                     annotation->body_offset > function->code_size ||
                     control_size > function->control_count ||
-                    !turbowasm_mir_scalar_control_signature(
+                    !turbowasm_mir_structured_control_signature(
                         validation, annotation, result_type,
                         &start_types, &start_count,
                         &end_types, &end_count))
@@ -2358,14 +2477,14 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 frame->height = stack_size - start_count;
 
                 if (start_count != 0u &&
-                    !turbowasm_mir_emit_stack_to_regs(
+                    !turbowasm_mir_emit_stack_to_locations(
                         &text, stack, stack_size,
                         start_types, start_count,
                         frame->start_reg_base))
                     goto done;
 
                 stack_size = frame->height;
-                if (!turbowasm_mir_push_regs(
+                if (!turbowasm_mir_push_locations(
                         stack, &stack_size,
                         start_types, start_count,
                         frame->start_reg_base))
@@ -2399,7 +2518,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                              memcmp(start_types, end_types, start_count) != 0))
                             goto done;
                         if (end_count != 0u &&
-                            !turbowasm_mir_emit_stack_to_regs(
+                            !turbowasm_mir_emit_stack_to_locations(
                                 &text, stack, stack_size,
                                 end_types, end_count,
                                 frame->end_reg_base))
