@@ -304,3 +304,20 @@ set_target_properties(turbowasm_execution_control_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_execution_control_test
          COMMAND turbowasm_execution_control_test)
+
+
+if(TARGET turbowasm_mir_backend)
+  add_executable(turbowasm_mir_backend_test
+    mir_backend_test.c)
+  target_include_directories(turbowasm_mir_backend_test
+    PRIVATE
+      ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(turbowasm_mir_backend_test
+    PRIVATE turbowasm_mir_backend)
+  set_target_properties(turbowasm_mir_backend_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_mir_backend_test
+           COMMAND turbowasm_mir_backend_test)
+endif()
