@@ -727,6 +727,237 @@ done:
     return ok;
 }
 
+
+typedef struct turbowasm_mir_scan_control {
+    const turbowasm_validation_control *annotation;
+} turbowasm_mir_scan_control;
+
+static bool turbowasm_mir_integer_function_shape(
+    const turbowasm_validation_context *validation,
+    uint32_t function_index,
+    const turbowasm_validation_function *function,
+    uint8_t *out_result_type) {
+    const turbowasm_validation_func_type *type;
+    uint32_t index;
+
+    if (validation == NULL || function == NULL ||
+        function->imported || function->code == NULL)
+        return false;
+
+    type = turbowasm_validation_context_function_type(
+        validation, function_index);
+    if (type == NULL || !type->defined ||
+        type->result_count != 1u ||
+        !turbowasm_mir_integer_type(type->results[0]) ||
+        type->param_count > 2u ||
+        function->local_count < type->param_count)
+        return false;
+
+    for (index = 0u; index < type->param_count; ++index) {
+        if (!turbowasm_mir_integer_type(type->params[index]))
+            return false;
+    }
+    for (index = 0u; index < function->local_count; ++index) {
+        if (!turbowasm_mir_integer_type(function->local_types[index]))
+            return false;
+    }
+
+    if (out_result_type != NULL)
+        *out_result_type = type->results[0];
+    return true;
+}
+
+static bool turbowasm_mir_scan_structured_integer(
+    const turbowasm_validation_context *validation,
+    uint32_t function_index,
+    const turbowasm_validation_function *function,
+    uint8_t *out_result_type) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_mir_scan_control *controls = NULL;
+    turbowasm_reader reader;
+    uint32_t control_size = 0u;
+    uint8_t result_type = 0u;
+    bool saw_structured = false;
+    bool ok = false;
+
+    if (!turbowasm_mir_integer_function_shape(
+            validation, function_index, function, &result_type) ||
+        function->code_size == 0u)
+        return false;
+
+    type = turbowasm_validation_context_function_type(
+        validation, function_index);
+    if (type == NULL)
+        return false;
+
+    if (function->control_count != 0u) {
+        controls = (turbowasm_mir_scan_control *)calloc(
+            (size_t)function->control_count, sizeof(*controls));
+        if (controls == NULL)
+            return false;
+    }
+
+    turbowasm_reader_init(
+        &reader, function->code, function->code_size);
+
+    while (turbowasm_reader_remaining(&reader) != 0u) {
+        uint8_t opcode;
+        uint32_t opcode_offset;
+
+        if (!turbowasm_reader_u8(&reader, &opcode) ||
+            reader.cursor <= function->code ||
+            (size_t)(reader.cursor - function->code - 1u) > UINT32_MAX)
+            goto done;
+
+        opcode_offset =
+            (uint32_t)(reader.cursor - function->code - 1u);
+
+        switch (opcode) {
+            case 0x01u: /* nop */
+                break;
+
+            case 0x02u: /* block */
+            case 0x03u: /* loop */
+            case 0x04u: { /* if */
+                const turbowasm_validation_control *annotation;
+                uint8_t blocktype;
+
+                annotation =
+                    turbowasm_validation_function_control_at(
+                        function, opcode_offset);
+                if (annotation == NULL ||
+                    annotation->end_offset == UINT32_MAX ||
+                    control_size >= function->control_count ||
+                    !turbowasm_reader_u8(&reader, &blocktype) ||
+                    blocktype != 0x40u ||
+                    (uint32_t)(reader.cursor - function->code) !=
+                        annotation->body_offset)
+                    goto done;
+
+                if ((opcode == 0x02u &&
+                     annotation->kind !=
+                         TURBOWASM_VALIDATION_CONTROL_BLOCK) ||
+                    (opcode == 0x03u &&
+                     annotation->kind !=
+                         TURBOWASM_VALIDATION_CONTROL_LOOP) ||
+                    (opcode == 0x04u &&
+                     annotation->kind !=
+                         TURBOWASM_VALIDATION_CONTROL_IF))
+                    goto done;
+
+                controls[control_size++].annotation = annotation;
+                saw_structured = true;
+                break;
+            }
+
+            case 0x05u: { /* else */
+                const turbowasm_validation_control *annotation;
+                if (control_size == 0u)
+                    goto done;
+                annotation = controls[control_size - 1u].annotation;
+                if (annotation == NULL ||
+                    annotation->kind !=
+                        TURBOWASM_VALIDATION_CONTROL_IF ||
+                    annotation->else_offset != opcode_offset)
+                    goto done;
+                break;
+            }
+
+            case 0x0bu: /* end */
+                if (control_size == 0u) {
+                    if (turbowasm_reader_remaining(&reader) != 0u ||
+                        !saw_structured) {
+                        goto done;
+                    }
+                    ok = true;
+                    goto done;
+                } else {
+                    const turbowasm_validation_control *annotation =
+                        controls[control_size - 1u].annotation;
+                    if (annotation == NULL ||
+                        annotation->end_offset != opcode_offset)
+                        goto done;
+                    --control_size;
+                }
+                break;
+
+            case 0x0cu: /* br */
+            case 0x0du: { /* br_if */
+                uint32_t depth;
+                if (!turbowasm_reader_uleb32(&reader, &depth) ||
+                    depth > control_size)
+                    goto done;
+                break;
+            }
+
+            case 0x0fu: /* return */
+                break;
+
+            case 0x10u: { /* call */
+                uint32_t callee_index;
+                const turbowasm_validation_function *callee;
+                const turbowasm_validation_func_type *callee_type;
+                if (!turbowasm_reader_uleb32(
+                        &reader, &callee_index))
+                    goto done;
+                callee = turbowasm_validation_context_function(
+                    validation, callee_index);
+                callee_type =
+                    turbowasm_validation_context_function_type(
+                        validation, callee_index);
+                if (callee == NULL || callee->imported ||
+                    !turbowasm_mir_call_signature_supported(callee_type) ||
+                    !turbowasm_mir_integer_type(callee_type->results[0]))
+                    goto done;
+                break;
+            }
+
+            case 0x1au: /* drop */
+                break;
+
+            case 0x20u: /* local.get */
+            case 0x21u: /* local.set */
+            case 0x22u: { /* local.tee */
+                uint32_t local_index;
+                if (!turbowasm_reader_uleb32(
+                        &reader, &local_index) ||
+                    local_index >= function->local_count)
+                    goto done;
+                break;
+            }
+
+            case 0x41u: {
+                int32_t value;
+                if (!turbowasm_reader_sleb32(&reader, &value))
+                    goto done;
+                (void)value;
+                break;
+            }
+
+            case 0x42u: {
+                int64_t value;
+                if (!turbowasm_reader_sleb64(&reader, &value))
+                    goto done;
+                (void)value;
+                break;
+            }
+
+            case 0x6au: case 0x6bu: case 0x6cu:
+            case 0x7cu: case 0x7du: case 0x7eu:
+                break;
+
+            default:
+                goto done;
+        }
+    }
+
+done:
+    free(controls);
+    if (ok && out_result_type != NULL)
+        *out_result_type = result_type;
+    return ok;
+}
+
 static bool turbowasm_mir_is_function_eligible(
     void *context,
     const struct turbowasm_validation_context *validation,
@@ -734,7 +965,9 @@ static bool turbowasm_mir_is_function_eligible(
     const struct turbowasm_validation_function *function) {
     (void)context;
     return turbowasm_mir_scan_scalar_locals(
-        validation, function_index, function, NULL, NULL);
+               validation, function_index, function, NULL, NULL) ||
+           turbowasm_mir_scan_structured_integer(
+               validation, function_index, function, NULL);
 }
 
 static const char *turbowasm_mir_binary_name(uint8_t opcode) {
@@ -755,6 +988,750 @@ static const char *turbowasm_mir_binary_name(uint8_t opcode) {
         case 0xa3u: return "ddiv";
         default: return NULL;
     }
+}
+
+
+typedef enum turbowasm_mir_control_kind {
+    TURBOWASM_MIR_CONTROL_FUNCTION = 0,
+    TURBOWASM_MIR_CONTROL_BLOCK,
+    TURBOWASM_MIR_CONTROL_LOOP,
+    TURBOWASM_MIR_CONTROL_IF
+} turbowasm_mir_control_kind;
+
+typedef struct turbowasm_mir_control_frame {
+    turbowasm_mir_control_kind kind;
+    const turbowasm_validation_control *annotation;
+    uint32_t height;
+    bool else_seen;
+    bool end_incoming;
+    bool end_opcode_incoming;
+} turbowasm_mir_control_frame;
+
+static bool turbowasm_mir_emit_checkpoint_text(
+    turbowasm_mir_text *text) {
+    return turbowasm_mir_text_appendf(
+        text,
+        "call tw_checkpoint_p, tw_jit_checkpoint, "
+        "jit_status, jit_ctx\n"
+        "bne jit_fail, jit_status, 0\n");
+}
+
+static bool turbowasm_mir_emit_control_label(
+    turbowasm_mir_text *text,
+    uint32_t opcode_offset,
+    const char *suffix) {
+    return text != NULL && suffix != NULL &&
+           turbowasm_mir_text_appendf(
+               text, "c_%u_%s:\n", opcode_offset, suffix);
+}
+
+static bool turbowasm_mir_emit_control_jump(
+    turbowasm_mir_text *text,
+    uint32_t opcode_offset,
+    const char *suffix) {
+    return text != NULL && suffix != NULL &&
+           turbowasm_mir_text_appendf(
+               text, "jmp c_%u_%s\n", opcode_offset, suffix);
+}
+
+static bool turbowasm_mir_emit_control_branch_true(
+    turbowasm_mir_text *text,
+    uint32_t opcode_offset,
+    const char *suffix,
+    uint32_t condition_reg) {
+    return text != NULL && suffix != NULL &&
+           turbowasm_mir_text_appendf(
+               text, "bt c_%u_%s, r%u\n",
+               opcode_offset, suffix, condition_reg);
+}
+
+static bool turbowasm_mir_emit_control_branch_false(
+    turbowasm_mir_text *text,
+    uint32_t opcode_offset,
+    const char *suffix,
+    uint32_t condition_reg) {
+    return text != NULL && suffix != NULL &&
+           turbowasm_mir_text_appendf(
+               text, "bf c_%u_%s, r%u\n",
+               opcode_offset, suffix, condition_reg);
+}
+
+static turbowasm_mir_control_kind turbowasm_mir_control_kind_from_annotation(
+    const turbowasm_validation_control *annotation) {
+    if (annotation == NULL)
+        return TURBOWASM_MIR_CONTROL_FUNCTION;
+    switch (annotation->kind) {
+        case TURBOWASM_VALIDATION_CONTROL_BLOCK:
+            return TURBOWASM_MIR_CONTROL_BLOCK;
+        case TURBOWASM_VALIDATION_CONTROL_LOOP:
+            return TURBOWASM_MIR_CONTROL_LOOP;
+        case TURBOWASM_VALIDATION_CONTROL_IF:
+            return TURBOWASM_MIR_CONTROL_IF;
+        default:
+            return TURBOWASM_MIR_CONTROL_FUNCTION;
+    }
+}
+
+static bool turbowasm_mir_structured_emit_call(
+    turbowasm_mir_text *text,
+    const turbowasm_validation_context *validation,
+    uint32_t callee_index,
+    turbowasm_mir_stack_value *stack,
+    uint32_t *stack_size,
+    uint32_t *next_reg) {
+    const turbowasm_validation_function *callee;
+    const turbowasm_validation_func_type *callee_type;
+    const char *proto_name = NULL;
+    const char *external_name = NULL;
+    uint32_t arg_index;
+    uint32_t base;
+
+    if (text == NULL || validation == NULL || stack == NULL ||
+        stack_size == NULL || next_reg == NULL)
+        return false;
+
+    callee = turbowasm_validation_context_function(
+        validation, callee_index);
+    callee_type = turbowasm_validation_context_function_type(
+        validation, callee_index);
+    if (callee == NULL || callee->imported ||
+        !turbowasm_mir_call_signature_supported(callee_type) ||
+        !turbowasm_mir_integer_type(callee_type->results[0]) ||
+        *stack_size < callee_type->param_count)
+        return false;
+
+    base = *stack_size - callee_type->param_count;
+    for (arg_index = 0u;
+         arg_index < callee_type->param_count;
+         ++arg_index) {
+        if (stack[base + arg_index].type !=
+            callee_type->params[arg_index])
+            return false;
+    }
+
+    if (callee_type->param_count == 0u) {
+        proto_name = "tw_call_i64_0_p";
+        external_name = "tw_jit_call_i64_0";
+    } else if (callee_type->param_count == 1u) {
+        proto_name = "tw_call_i64_1_p";
+        external_name = "tw_jit_call_i64_1";
+    } else if (callee_type->param_count == 2u) {
+        proto_name = "tw_call_i64_2_p";
+        external_name = "tw_jit_call_i64_2";
+    } else {
+        return false;
+    }
+
+    if (!turbowasm_mir_text_appendf(
+            text,
+            "call %s, %s, r%u, jit_ctx, %u",
+            proto_name, external_name,
+            *next_reg, callee_index))
+        return false;
+
+    for (arg_index = 0u;
+         arg_index < callee_type->param_count;
+         ++arg_index) {
+        if (!turbowasm_mir_text_appendf(
+                text, ", r%u",
+                stack[base + arg_index].reg))
+            return false;
+    }
+
+    if (!turbowasm_mir_text_appendf(
+            text,
+            "\n"
+            "call tw_call_status_p, tw_jit_call_status, "
+            "jit_status, jit_ctx\n"
+            "bne jit_fail, jit_status, 0\n"))
+        return false;
+
+    *stack_size = base;
+    stack[*stack_size].reg = (*next_reg)++;
+    stack[*stack_size].type = callee_type->results[0];
+    ++*stack_size;
+    return true;
+}
+
+static bool turbowasm_mir_structured_branch_target(
+    turbowasm_mir_text *text,
+    turbowasm_mir_control_frame *controls,
+    uint32_t control_size,
+    uint32_t depth,
+    turbowasm_mir_stack_value *stack,
+    uint32_t stack_size,
+    uint8_t function_result_type,
+    bool conditional,
+    uint32_t condition_reg) {
+    uint32_t target_index;
+    turbowasm_mir_control_frame *target;
+
+    if (text == NULL || controls == NULL || depth >= control_size)
+        return false;
+
+    target_index = control_size - 1u - depth;
+    target = &controls[target_index];
+
+    if (target->kind == TURBOWASM_MIR_CONTROL_FUNCTION) {
+        if (stack_size == 0u ||
+            stack[stack_size - 1u].type != function_result_type ||
+            !turbowasm_mir_text_appendf(
+                text, "mov jit_return_value, r%u\n",
+                stack[stack_size - 1u].reg))
+            return false;
+
+        return conditional
+            ? turbowasm_mir_text_appendf(
+                  text, "bt jit_return, r%u\n", condition_reg)
+            : turbowasm_mir_text_appendf(text, "jmp jit_return\n");
+    }
+
+    if (target->annotation == NULL)
+        return false;
+
+    if (target->kind == TURBOWASM_MIR_CONTROL_LOOP) {
+        return conditional
+            ? turbowasm_mir_emit_control_branch_true(
+                  text, target->annotation->opcode_offset,
+                  "body", condition_reg)
+            : turbowasm_mir_emit_control_jump(
+                  text, target->annotation->opcode_offset, "body");
+    }
+
+    target->end_incoming = true;
+    return conditional
+        ? turbowasm_mir_emit_control_branch_true(
+              text, target->annotation->opcode_offset,
+              "end", condition_reg)
+        : turbowasm_mir_emit_control_jump(
+              text, target->annotation->opcode_offset, "end");
+}
+
+static turbowasm_status turbowasm_mir_compile_structured_integer(
+    turbowasm_mir_backend_context *backend,
+    const turbowasm_validation_context *validation,
+    uint32_t function_index,
+    const turbowasm_validation_function *function,
+    turbowasm_compiled_function *out) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_mir_compiled *compiled = NULL;
+    turbowasm_mir_stack_value *stack = NULL;
+    turbowasm_mir_control_frame *controls = NULL;
+    turbowasm_mir_text text = {0};
+    turbowasm_reader reader;
+    MIR_module_t module;
+    MIR_item_t function_item;
+    uint32_t register_count;
+    uint32_t next_reg = 0u;
+    uint32_t stack_size = 0u;
+    uint32_t control_size = 0u;
+    uint32_t index;
+    uint8_t result_type = 0u;
+    uint32_t module_id;
+    char function_name[64];
+    bool reachable = true;
+    bool finished = false;
+    turbowasm_status status = TURBOWASM_UNSUPPORTED;
+
+    if (backend == NULL || backend->mir == NULL ||
+        validation == NULL || function == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    out->impl = NULL;
+
+    if (!turbowasm_mir_scan_structured_integer(
+            validation, function_index, function, &result_type))
+        return TURBOWASM_UNSUPPORTED;
+
+    type = turbowasm_validation_context_function_type(
+        validation, function_index);
+    if (type == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    register_count = function->code_size + 1u;
+    stack = (turbowasm_mir_stack_value *)calloc(
+        (size_t)register_count + 1u, sizeof(*stack));
+    controls = (turbowasm_mir_control_frame *)calloc(
+        (size_t)function->control_count + 1u, sizeof(*controls));
+    if (stack == NULL || controls == NULL) {
+        status = TURBOWASM_OUT_OF_MEMORY;
+        goto done;
+    }
+
+    controls[0].kind = TURBOWASM_MIR_CONTROL_FUNCTION;
+    controls[0].height = 0u;
+    control_size = 1u;
+
+    module_id = backend->next_module_id++;
+    if (snprintf(
+            function_name, sizeof(function_name),
+            "tw_jit_f_%u", module_id) <= 0)
+        goto done;
+
+    if (!turbowasm_mir_text_appendf(
+            &text,
+            "tw_jit_m_%u: module\n"
+            "tw_call_i64_0_p: proto i64, p:ctx, i64:index\n"
+            "tw_call_i64_1_p: proto i64, p:ctx, i64:index, i64:a0\n"
+            "tw_call_i64_2_p: proto i64, p:ctx, i64:index, i64:a0, i64:a1\n"
+            "tw_call_status_p: proto i64, p:ctx\n"
+            "tw_checkpoint_p: proto i64, p:ctx\n"
+            "import tw_jit_call_i64_0, tw_jit_call_i64_1, "
+            "tw_jit_call_i64_2, tw_jit_call_status, "
+            "tw_jit_checkpoint\n"
+            "export %s\n"
+            "%s: func i64, p:jit_ctx",
+            module_id, function_name, function_name))
+        goto oom;
+
+    for (index = 0u; index < type->param_count; ++index) {
+        if (!turbowasm_mir_text_appendf(
+                &text, ", i64:l%u", index))
+            goto oom;
+    }
+    if (!turbowasm_mir_text_appendf(&text, "\n"))
+        goto oom;
+
+    for (index = type->param_count;
+         index < function->local_count;
+         ++index) {
+        if (!turbowasm_mir_text_appendf(
+                &text, "local i64:l%u\n", index))
+            goto oom;
+    }
+    for (index = 0u; index < register_count; ++index) {
+        if (!turbowasm_mir_text_appendf(
+                &text, "local i64:r%u\n", index))
+            goto oom;
+    }
+    if (!turbowasm_mir_text_appendf(
+            &text,
+            "local i64:jit_status\n"
+            "local i64:jit_return_value\n"
+            "local i64:jit_fail_value\n"))
+        goto oom;
+
+    for (index = type->param_count;
+         index < function->local_count;
+         ++index) {
+        if (!turbowasm_mir_text_appendf(
+                &text, "mov l%u, 0\n", index))
+            goto oom;
+    }
+
+    turbowasm_reader_init(
+        &reader, function->code, function->code_size);
+
+    while (turbowasm_reader_remaining(&reader) != 0u) {
+        uint8_t opcode;
+        uint32_t opcode_offset;
+
+        if (!reachable) {
+            if (control_size <= 1u) {
+                if (function->code_size == 0u)
+                    goto done;
+                reader.cursor =
+                    function->code + function->code_size - 1u;
+            } else {
+                turbowasm_mir_control_frame *frame =
+                    &controls[control_size - 1u];
+                uint32_t boundary;
+                uint32_t current =
+                    (uint32_t)(reader.cursor - function->code);
+
+                if (frame->annotation == NULL ||
+                    frame->annotation->end_offset == UINT32_MAX)
+                    goto done;
+
+                if (frame->kind == TURBOWASM_MIR_CONTROL_IF &&
+                    !frame->else_seen &&
+                    frame->annotation->else_offset != UINT32_MAX &&
+                    current <= frame->annotation->else_offset) {
+                    boundary = frame->annotation->else_offset;
+                } else {
+                    boundary = frame->annotation->end_offset;
+                }
+
+                if (boundary > function->code_size)
+                    goto done;
+                reader.cursor = function->code + boundary;
+            }
+        }
+
+        if (!turbowasm_reader_u8(&reader, &opcode) ||
+            reader.cursor <= function->code ||
+            (size_t)(reader.cursor - function->code - 1u) > UINT32_MAX)
+            goto done;
+
+        opcode_offset =
+            (uint32_t)(reader.cursor - function->code - 1u);
+
+        if (opcode == 0x05u) { /* else */
+            turbowasm_mir_control_frame *frame;
+
+            if (control_size <= 1u)
+                goto done;
+            frame = &controls[control_size - 1u];
+            if (frame->kind != TURBOWASM_MIR_CONTROL_IF ||
+                frame->annotation == NULL ||
+                frame->annotation->else_offset != opcode_offset)
+                goto done;
+
+            if (reachable) {
+                if (!turbowasm_mir_emit_checkpoint_text(&text) ||
+                    !turbowasm_mir_emit_control_jump(
+                        &text, frame->annotation->opcode_offset,
+                        "end_opcode"))
+                    goto oom;
+                frame->end_opcode_incoming = true;
+            }
+
+            if (!turbowasm_mir_emit_control_label(
+                    &text, frame->annotation->opcode_offset,
+                    "else_body"))
+                goto oom;
+
+            stack_size = frame->height;
+            frame->else_seen = true;
+            reachable = true;
+            continue;
+        }
+
+        if (opcode == 0x0bu) { /* end */
+            if (control_size == 1u) {
+                if (turbowasm_reader_remaining(&reader) != 0u)
+                    goto done;
+
+                if (reachable) {
+                    if (!turbowasm_mir_emit_checkpoint_text(&text) ||
+                        stack_size != 1u ||
+                        stack[0].type != result_type ||
+                        !turbowasm_mir_text_appendf(
+                            &text,
+                            "mov jit_return_value, r%u\n",
+                            stack[0].reg))
+                        goto done;
+                }
+
+                if (!turbowasm_mir_text_appendf(
+                        &text,
+                        "jit_return:\n"
+                        "ret jit_return_value\n"
+                        "jit_fail:\n"
+                        "mov jit_fail_value, 0\n"
+                        "ret jit_fail_value\n"
+                        "endfunc\n"
+                        "endmodule\n"))
+                    goto oom;
+
+                finished = true;
+                break;
+            } else {
+                turbowasm_mir_control_frame *frame =
+                    &controls[control_size - 1u];
+                bool end_opcode_reachable;
+                bool next_reachable;
+
+                if (frame->annotation == NULL ||
+                    frame->annotation->end_offset != opcode_offset)
+                    goto done;
+
+                end_opcode_reachable =
+                    reachable || frame->end_opcode_incoming;
+
+                if (!turbowasm_mir_emit_control_label(
+                        &text, frame->annotation->opcode_offset,
+                        "end_opcode"))
+                    goto oom;
+
+                if (end_opcode_reachable &&
+                    !turbowasm_mir_emit_checkpoint_text(&text))
+                    goto oom;
+
+                stack_size = frame->height;
+
+                if (!turbowasm_mir_emit_control_label(
+                        &text, frame->annotation->opcode_offset,
+                        "end"))
+                    goto oom;
+
+                next_reachable =
+                    end_opcode_reachable || frame->end_incoming;
+                --control_size;
+                reachable = next_reachable;
+                continue;
+            }
+        }
+
+        if (!reachable)
+            goto done;
+
+        if (!turbowasm_mir_emit_checkpoint_text(&text))
+            goto oom;
+
+        switch (opcode) {
+            case 0x01u: /* nop */
+                break;
+
+            case 0x02u: /* block */
+            case 0x03u: /* loop */
+            case 0x04u: { /* if */
+                const turbowasm_validation_control *annotation;
+                turbowasm_mir_control_frame *frame;
+                uint8_t blocktype;
+                uint32_t condition_reg = 0u;
+
+                annotation =
+                    turbowasm_validation_function_control_at(
+                        function, opcode_offset);
+                if (annotation == NULL ||
+                    annotation->end_offset == UINT32_MAX ||
+                    !turbowasm_reader_u8(&reader, &blocktype) ||
+                    blocktype != 0x40u ||
+                    (uint32_t)(reader.cursor - function->code) !=
+                        annotation->body_offset ||
+                    control_size > function->control_count)
+                    goto done;
+
+                if (opcode == 0x04u) {
+                    if (stack_size == 0u ||
+                        stack[stack_size - 1u].type != 0x7fu)
+                        goto done;
+                    condition_reg = stack[--stack_size].reg;
+                }
+
+                frame = &controls[control_size++];
+                memset(frame, 0, sizeof(*frame));
+                frame->kind =
+                    turbowasm_mir_control_kind_from_annotation(
+                        annotation);
+                frame->annotation = annotation;
+                frame->height = stack_size;
+
+                if (opcode == 0x03u) {
+                    if (!turbowasm_mir_emit_control_label(
+                            &text, annotation->opcode_offset,
+                            "body"))
+                        goto oom;
+                } else if (opcode == 0x04u) {
+                    if (annotation->else_offset != UINT32_MAX) {
+                        if (!turbowasm_mir_emit_control_branch_false(
+                                &text, annotation->opcode_offset,
+                                "else_body", condition_reg))
+                            goto oom;
+                    } else {
+                        if (!turbowasm_mir_emit_control_branch_false(
+                                &text, annotation->opcode_offset,
+                                "end_opcode", condition_reg))
+                            goto oom;
+                        frame->end_opcode_incoming = true;
+                    }
+                }
+                break;
+            }
+
+            case 0x0cu: /* br */
+            case 0x0du: { /* br_if */
+                uint32_t depth;
+                uint32_t condition_reg = 0u;
+                bool conditional = opcode == 0x0du;
+
+                if (!turbowasm_reader_uleb32(&reader, &depth) ||
+                    depth >= control_size)
+                    goto done;
+
+                if (conditional) {
+                    if (stack_size == 0u ||
+                        stack[stack_size - 1u].type != 0x7fu)
+                        goto done;
+                    condition_reg = stack[--stack_size].reg;
+                }
+
+                if (!turbowasm_mir_structured_branch_target(
+                        &text, controls, control_size, depth,
+                        stack, stack_size, result_type,
+                        conditional, condition_reg))
+                    goto oom;
+
+                if (!conditional) {
+                    stack_size =
+                        controls[control_size - 1u].height;
+                    reachable = false;
+                }
+                break;
+            }
+
+            case 0x0fu: /* return */
+                if (stack_size == 0u ||
+                    stack[stack_size - 1u].type != result_type ||
+                    !turbowasm_mir_text_appendf(
+                        &text,
+                        "mov jit_return_value, r%u\n"
+                        "jmp jit_return\n",
+                        stack[stack_size - 1u].reg))
+                    goto done;
+                reachable = false;
+                break;
+
+            case 0x10u: { /* call */
+                uint32_t callee_index;
+                if (!turbowasm_reader_uleb32(
+                        &reader, &callee_index) ||
+                    !turbowasm_mir_structured_emit_call(
+                        &text, validation, callee_index,
+                        stack, &stack_size, &next_reg))
+                    goto done;
+                break;
+            }
+
+            case 0x1au: /* drop */
+                if (stack_size == 0u)
+                    goto done;
+                --stack_size;
+                break;
+
+            case 0x20u: { /* local.get */
+                uint32_t local_index;
+                uint8_t local_type;
+                if (!turbowasm_reader_uleb32(
+                        &reader, &local_index) ||
+                    local_index >= function->local_count)
+                    goto done;
+                local_type = function->local_types[local_index];
+                if (!turbowasm_mir_text_appendf(
+                        &text, "mov r%u, l%u\n",
+                        next_reg, local_index))
+                    goto oom;
+                stack[stack_size].reg = next_reg++;
+                stack[stack_size].type = local_type;
+                ++stack_size;
+                break;
+            }
+
+            case 0x21u: /* local.set */
+            case 0x22u: { /* local.tee */
+                uint32_t local_index;
+                turbowasm_mir_stack_value value;
+                if (!turbowasm_reader_uleb32(
+                        &reader, &local_index) ||
+                    local_index >= function->local_count ||
+                    stack_size == 0u)
+                    goto done;
+                value = stack[stack_size - 1u];
+                if (value.type != function->local_types[local_index] ||
+                    !turbowasm_mir_text_appendf(
+                        &text, "mov l%u, r%u\n",
+                        local_index, value.reg))
+                    goto done;
+                if (opcode == 0x21u)
+                    --stack_size;
+                break;
+            }
+
+            case 0x41u: {
+                int32_t value;
+                if (!turbowasm_reader_sleb32(&reader, &value) ||
+                    !turbowasm_mir_text_appendf(
+                        &text, "mov r%u, %lld\n",
+                        next_reg, (long long)value))
+                    goto done;
+                stack[stack_size].reg = next_reg++;
+                stack[stack_size].type = 0x7fu;
+                ++stack_size;
+                break;
+            }
+
+            case 0x42u: {
+                int64_t value;
+                if (!turbowasm_reader_sleb64(&reader, &value) ||
+                    !turbowasm_mir_text_appendf(
+                        &text, "mov r%u, %lld\n",
+                        next_reg, (long long)value))
+                    goto done;
+                stack[stack_size].reg = next_reg++;
+                stack[stack_size].type = 0x7eu;
+                ++stack_size;
+                break;
+            }
+
+            case 0x6au: case 0x6bu: case 0x6cu:
+            case 0x7cu: case 0x7du: case 0x7eu: {
+                const char *name = turbowasm_mir_binary_name(opcode);
+                uint8_t expected = turbowasm_mir_binary_type(opcode);
+                turbowasm_mir_stack_value right;
+                turbowasm_mir_stack_value left;
+
+                if (name == NULL || expected == 0u ||
+                    stack_size < 2u)
+                    goto done;
+                right = stack[--stack_size];
+                left = stack[--stack_size];
+                if (left.type != expected || right.type != expected)
+                    goto done;
+                if (!turbowasm_mir_text_appendf(
+                        &text, "%s r%u, r%u, r%u\n",
+                        name, next_reg,
+                        left.reg, right.reg))
+                    goto oom;
+                stack[stack_size].reg = next_reg++;
+                stack[stack_size].type = expected;
+                ++stack_size;
+                break;
+            }
+
+            default:
+                goto done;
+        }
+    }
+
+    if (!finished || text.data == NULL)
+        goto done;
+
+    MIR_scan_string(backend->mir, text.data);
+
+    module = DLIST_TAIL(
+        MIR_module_t, *MIR_get_module_list(backend->mir));
+    if (module == NULL)
+        goto done;
+
+    function_item = DLIST_TAIL(MIR_item_t, module->items);
+    if (function_item == NULL ||
+        strcmp(
+            MIR_item_name(backend->mir, function_item),
+            function_name) != 0)
+        goto done;
+
+    MIR_load_module(backend->mir, module);
+    MIR_link(backend->mir, MIR_set_gen_interface, NULL);
+
+    compiled = (turbowasm_mir_compiled *)calloc(
+        1u, sizeof(*compiled));
+    if (compiled == NULL)
+        goto oom;
+
+    compiled->generated = MIR_gen(backend->mir, function_item);
+    if (compiled->generated == NULL)
+        goto done;
+
+    compiled->result_type = result_type;
+    compiled->param_count = (uint8_t)type->param_count;
+    for (index = 0u; index < type->param_count; ++index)
+        compiled->param_types[index] = type->params[index];
+
+    out->impl = compiled;
+    compiled = NULL;
+    status = TURBOWASM_OK;
+    goto done;
+
+oom:
+    status = TURBOWASM_OUT_OF_MEMORY;
+
+done:
+    free(compiled);
+    free(controls);
+    free(stack);
+    free(text.data);
+    return status;
 }
 
 static turbowasm_status turbowasm_mir_compile_function(
@@ -795,8 +1772,10 @@ static turbowasm_status turbowasm_mir_compile_function(
 
     if (!turbowasm_mir_scan_scalar_locals(
             validation, function_index, function,
-            &register_count, &result_type))
-        return TURBOWASM_UNSUPPORTED;
+            &register_count, &result_type)) {
+        return turbowasm_mir_compile_structured_integer(
+            backend, validation, function_index, function, out);
+    }
 
     result_name = turbowasm_mir_type_name(result_type);
     if (result_name == NULL)
