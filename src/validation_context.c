@@ -365,6 +365,46 @@ turbowasm_validation_function_control_at(
     return NULL;
 }
 
+bool turbowasm_validation_control_signature(
+    const turbowasm_validation_context *context,
+    const turbowasm_validation_control *control,
+    const uint8_t **out_start_types,
+    uint32_t *out_start_count,
+    const uint8_t **out_end_types,
+    uint32_t *out_end_count) {
+    const turbowasm_validation_func_type *type = NULL;
+
+    if (context == NULL || control == NULL ||
+        out_start_types == NULL || out_start_count == NULL ||
+        out_end_types == NULL || out_end_count == NULL)
+        return false;
+
+    *out_start_types = NULL;
+    *out_start_count = 0u;
+    *out_end_types = NULL;
+    *out_end_count = 0u;
+
+    if (control->type_index != UINT32_MAX) {
+        type = turbowasm_validation_context_type(
+            context, control->type_index);
+        if (type == NULL || !type->defined)
+            return false;
+
+        *out_start_types = type->params;
+        *out_start_count = type->param_count;
+        *out_end_types = type->results;
+        *out_end_count = type->result_count;
+        return true;
+    }
+
+    if (control->inline_result_type != 0u) {
+        *out_end_types = &control->inline_result_type;
+        *out_end_count = 1u;
+    }
+
+    return true;
+}
+
 const turbowasm_validation_func_type *
 turbowasm_validation_context_function_type(
     const turbowasm_validation_context *context,
