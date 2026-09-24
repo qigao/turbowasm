@@ -486,3 +486,16 @@ if(TURBOWASM_ENABLE_MIR_JIT)
   add_test(NAME turbowasm_mir_tiering_test
            COMMAND turbowasm_mir_tiering_test)
 endif()
+
+add_executable(turbowasm_jit_simd_helper_test
+  jit_simd_helper_test.c)
+target_link_libraries(turbowasm_jit_simd_helper_test
+  PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_jit_simd_helper_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_jit_simd_helper_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_jit_simd_helper_test
+         COMMAND turbowasm_jit_simd_helper_test)
