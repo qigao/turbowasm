@@ -119,3 +119,14 @@ jobs:
           targets="$RUNNER_TEMP/turbowasm-sdk/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
           test -f "$targets"
           ! grep -qi 'MIR::\|mir_backend' "$targets"
+
+      - name: Qualify installed consumer without MIR
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S tests/installed_consumer -B build/installed-consumer-jit -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/turbowasm-sdk;$SALTS_ROOT"
+          cmake --build build/installed-consumer-jit -j2
+          ctest --test-dir build/installed-consumer-jit \
+            --no-tests=error --output-on-failure
