@@ -27,6 +27,8 @@ struct turbowasm_validation_function;
  */
 typedef struct turbowasm_jit_execution_control
     turbowasm_jit_execution_control;
+typedef struct turbowasm_jit_invocation_context
+    turbowasm_jit_invocation_context;
 
 typedef struct turbowasm_compiled_function {
     void *impl;
@@ -34,14 +36,13 @@ typedef struct turbowasm_compiled_function {
 
 typedef turbowasm_status (*turbowasm_compiled_invoke_fn)(
     const turbowasm_compiled_function *compiled,
-    struct turbowasm_instance_impl *instance,
+    turbowasm_jit_invocation_context *context,
     const turbowasm_value *arguments,
     size_t argument_count,
     turbowasm_value *results,
     size_t result_capacity,
     size_t *result_count,
-    turbowasm_trap *trap,
-    turbowasm_jit_execution_control *execution);
+    turbowasm_trap *trap);
 
 typedef struct turbowasm_jit_backend {
     void *context;
@@ -74,6 +75,8 @@ typedef struct turbowasm_jit_backend {
  * - eligibility is per function, never per module;
  * - compile failure must not invalidate the interpreter fallback path;
  * - a backend may reject any validated function it cannot lower safely;
+ * - compiled invocation receives one private hidden invocation context
+ *   carrying instance/execution/depth state;
  * - compiled invocation must preserve TurboWasm trap/status semantics;
  * - fuel/interruption is owned by TurboWasm, not delegated implicitly to
  *   backend-specific runtime state;
