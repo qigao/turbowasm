@@ -1431,17 +1431,37 @@ static bool turbowasm_mir_structured_branch_target(
     uint32_t stack_size,
     uint8_t function_result_type,
     bool conditional,
-    uint32_t condition_reg) {
+    uint32_t condition_reg,
+    uint32_t branch_opcode_offset) {
     turbowasm_mir_control_frame *target = NULL;
+
+    if (conditional) {
+        /*
+         * Materializing a loop branch can overwrite start registers that are
+         * still live on the false fallthrough path.  Keep all merge writes on
+         * a taken-only path.
+         */
+        if (!turbowasm_mir_text_appendf(
+                text, "bf br_if_%u_fallthrough, r%u\n",
+                branch_opcode_offset, condition_reg))
+            return false;
+    }
 
     if (!turbowasm_mir_materialize_branch_target(
             text, controls, control_size, depth,
             stack, stack_size, function_result_type,
-            &target))
+            &target) ||
+        !turbowasm_mir_emit_target_jump(
+            text, target, false, 0u))
         return false;
 
-    return turbowasm_mir_emit_target_jump(
-        text, target, conditional, condition_reg);
+    if (conditional &&
+        !turbowasm_mir_text_appendf(
+            text, "br_if_%u_fallthrough:\n",
+            branch_opcode_offset))
+        return false;
+
+    return true;
 }
 
 static bool turbowasm_mir_emit_br_table_target(
