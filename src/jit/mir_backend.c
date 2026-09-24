@@ -1949,6 +1949,49 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
                 break;
             }
 
+            case 0x0eu: { /* br_table */
+                uint32_t count;
+                uint32_t case_index;
+                uint32_t depth;
+                uint32_t selector_reg;
+                turbowasm_mir_control_frame *target = NULL;
+
+                if (!turbowasm_reader_uleb32(&reader, &count) ||
+                    stack_size == 0u ||
+                    stack[stack_size - 1u].type != 0x7fu)
+                    goto done;
+
+                selector_reg = stack[--stack_size].reg;
+
+                for (case_index = 0u; case_index < count; ++case_index) {
+                    if (!turbowasm_reader_uleb32(&reader, &depth) ||
+                        depth >= control_size ||
+                        !turbowasm_mir_materialize_branch_target(
+                            &text, controls, control_size, depth,
+                            stack, stack_size, result_type,
+                            &target) ||
+                        !turbowasm_mir_emit_br_table_target(
+                            &text, target, selector_reg,
+                            case_index, false))
+                        goto done;
+                }
+
+                if (!turbowasm_reader_uleb32(&reader, &depth) ||
+                    depth >= control_size ||
+                    !turbowasm_mir_materialize_branch_target(
+                        &text, controls, control_size, depth,
+                        stack, stack_size, result_type,
+                        &target) ||
+                    !turbowasm_mir_emit_br_table_target(
+                        &text, target, selector_reg,
+                        0u, true))
+                    goto done;
+
+                stack_size = controls[control_size - 1u].height;
+                reachable = false;
+                break;
+            }
+
             case 0x0fu: /* return */
                 if (stack_size == 0u ||
                     stack[stack_size - 1u].type != result_type ||
