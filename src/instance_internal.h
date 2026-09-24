@@ -4,6 +4,7 @@
 #include <turbowasm/instance.h>
 
 #include "module_internal.h"
+#include "jit_backend.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -33,6 +34,13 @@ typedef struct turbowasm_instance_table {
     uint8_t reference_type;
 } turbowasm_instance_table;
 
+typedef struct turbowasm_jit_execution_control {
+    uint64_t fuel_remaining;
+    bool fuel_limited;
+    turbowasm_interrupt_check_fn should_interrupt;
+    void *interrupt_context;
+} turbowasm_jit_execution_control;
+
 typedef struct turbowasm_instance_impl {
     const turbowasm_module *module;
 
@@ -51,6 +59,22 @@ typedef struct turbowasm_instance_impl {
     uint8_t *element_segment_dropped;
     uint32_t element_segment_count;
 } turbowasm_instance_impl;
+
+typedef struct turbowasm_jit_invocation_context {
+    turbowasm_instance_impl *instance;
+    turbowasm_jit_execution_control *execution;
+    uint32_t depth;
+} turbowasm_jit_invocation_context;
+
+turbowasm_status turbowasm_jit_direct_call(
+    turbowasm_jit_invocation_context *context,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap);
 
 turbowasm_status turbowasm_instance_state_init(
     turbowasm_instance_impl *instance,
