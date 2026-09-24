@@ -102,6 +102,103 @@ jobs:
             --no-tests=error --output-on-failure
 
 
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    steps:
+      - name: Checkout TurboWasm
+        uses: actions/checkout@v4
+
+      - name: Checkout Salts master
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: master
+          path: deps/salts
+          persist-credentials: false
+
+      - name: Restore Salts build dependencies
+        uses: ./deps/salts/.github/actions/setup-re2c-tools
+
+      - name: Resolve MSVC environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ([string]::IsNullOrWhiteSpace($vsInstall)) {
+            throw "Visual Studio x64 C++ toolchain was not found"
+          }
+          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
+
+      - name: Build and install Salts master
+        shell: cmd
+        working-directory: deps/salts
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          cmake --preset win-release-user -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF
+          if errorlevel 1 exit /b 1
+          cmake --build --preset win-release-user --parallel 2
+          if errorlevel 1 exit /b 1
+          cmake --install build\Msvc-Release --prefix "%RUNNER_TEMP%\salts-sdk-windows" --config Release
+          if errorlevel 1 exit /b 1
+
+      - name: Record Salts master provenance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $saltsRoot = Join-Path $env:RUNNER_TEMP "salts-sdk-windows"
+          if (-not (Test-Path -LiteralPath (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake") -PathType Leaf)) {
+            throw "installed SaltsConfig.cmake is missing"
+          }
+          $targets = Join-Path $saltsRoot "lib\cmake\Salts\SaltsTargets.cmake"
+          if (-not (Select-String -LiteralPath $targets -SimpleMatch "Salts::SIMD" -Quiet)) {
+            throw "installed Salts SDK does not export Salts::SIMD"
+          }
+          $head = git -C deps/salts rev-parse HEAD
+          $branch = git -C deps/salts branch --show-current
+          if ($branch -ne "master") { throw "expected Salts master, got $branch at $head" }
+          "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
+
+      - name: Configure, build and test TurboWasm
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "PATH=%SALTS_ROOT%\bin;%PATH%"
+          cmake -S . -B build\turbowasm-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="%RUNNER_TEMP%\turbowasm-sdk-windows" -DTURBOWASM_BUILD_TESTS=ON -DTURBOWASM_BUILD_TOOLS=ON -DTURBOWASM_ENABLE_MIR_JIT=OFF
+          if errorlevel 1 exit /b 1
+          cmake --build build\turbowasm-windows --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --test-dir build\turbowasm-windows --no-tests=error --output-on-failure
+          if errorlevel 1 exit /b 1
+          cmake --install build\turbowasm-windows
+          if errorlevel 1 exit /b 1
+
+      - name: Qualify installed package consumer
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "PATH=%SALTS_ROOT%\bin;%RUNNER_TEMP%\turbowasm-sdk-windows\bin;%PATH%"
+          cmake -S tests\installed_consumer -B build\installed-consumer-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="%RUNNER_TEMP%\turbowasm-sdk-windows;%SALTS_ROOT%"
+          if errorlevel 1 exit /b 1
+          cmake --build build\installed-consumer-windows --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --test-dir build\installed-consumer-windows --no-tests=error --output-on-failure
+          if errorlevel 1 exit /b 1
+
+      - name: Verify Runtime export is MIR-free
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $targets = Join-Path $env:RUNNER_TEMP "turbowasm-sdk-windows\lib\cmake\TurboWasm\TurboWasmTargets.cmake"
+          if (-not (Test-Path -LiteralPath $targets -PathType Leaf)) { throw "missing $targets" }
+          $text = Get-Content -LiteralPath $targets -Raw
+          if ($text -match "MIR::MIR|mir-jit") { throw "MIR leaked into Windows Runtime export" }
+
+
   linux-mir:
     name: Linux x64 + MIR JIT
     runs-on: ubuntu-latest
