@@ -1754,6 +1754,56 @@ static turbowasm_status turbowasm_exec_simd_generic(
             }
             break;
 
+        case TURBOWASM_SIMD_EXEC_NARROW:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &right);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &left);
+            if (status != TURBOWASM_OK) return status;
+            supported = salts_simd_narrow(
+                descriptor->vector_desc,
+                &out.as.v128.bits,
+                &left.as.v128.bits,
+                &right.as.v128.bits);
+            break;
+
+        case TURBOWASM_SIMD_EXEC_EXTEND_HALF:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &left);
+            if (status != TURBOWASM_OK) return status;
+            supported = salts_simd_extend_half(
+                descriptor->vector_desc,
+                (salts_simd_half)descriptor->op,
+                &out.as.v128.bits,
+                &left.as.v128.bits);
+            break;
+
+        case TURBOWASM_SIMD_EXEC_EXTMUL_HALF:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &right);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &left);
+            if (status != TURBOWASM_OK) return status;
+            supported = salts_simd_extmul_half(
+                descriptor->vector_desc,
+                (salts_simd_half)descriptor->op,
+                &out.as.v128.bits,
+                &left.as.v128.bits,
+                &right.as.v128.bits);
+            break;
+
+        case TURBOWASM_SIMD_EXEC_EXTADD_PAIRWISE:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &left);
+            if (status != TURBOWASM_OK) return status;
+            supported = salts_simd_extadd_pairwise(
+                descriptor->vector_desc,
+                &out.as.v128.bits,
+                &left.as.v128.bits);
+            break;
+
         case TURBOWASM_SIMD_EXEC_SPLAT:
         default:
             return TURBOWASM_UNSUPPORTED;
