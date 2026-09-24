@@ -1728,8 +1728,11 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
         goto oom;
 
     for (index = 0u; index < type->param_count; ++index) {
-        if (!turbowasm_mir_text_appendf(
-                &text, ", i64:l%u", index))
+        const char *param_name =
+            turbowasm_mir_type_name(type->params[index]);
+        if (param_name == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, ", %s:l%u", param_name, index))
             goto oom;
     }
     if (!turbowasm_mir_text_appendf(&text, "\n"))
@@ -1738,27 +1741,44 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     for (index = type->param_count;
          index < function->local_count;
          ++index) {
-        if (!turbowasm_mir_text_appendf(
-                &text, "local i64:l%u\n", index))
+        const char *local_name =
+            turbowasm_mir_type_name(function->local_types[index]);
+        if (local_name == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, "local %s:l%u\n",
+                local_name, index))
             goto oom;
     }
     for (index = 0u; index < register_count; ++index) {
         if (!turbowasm_mir_text_appendf(
-                &text, "local i64:r%u\n", index))
+                &text,
+                "local i64:r%u\n"
+                "local f:f%u\n"
+                "local d:d%u\n",
+                index, index, index))
             goto oom;
     }
     if (!turbowasm_mir_text_appendf(
             &text,
             "local i64:jit_status\n"
-            "local i64:jit_return_value\n"
-            "local i64:jit_fail_value\n"))
+            "local %s:jit_return_value\n"
+            "local %s:jit_fail_value\n",
+            structured_result_name,
+            structured_result_name))
         goto oom;
 
     for (index = type->param_count;
          index < function->local_count;
          ++index) {
-        if (!turbowasm_mir_text_appendf(
-                &text, "mov l%u, 0\n", index))
+        uint8_t local_type = function->local_types[index];
+        const char *move_name =
+            turbowasm_mir_move_name(local_type);
+        const char *zero =
+            turbowasm_mir_zero_literal(local_type);
+        if (move_name == NULL || zero == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, "%s l%u, %s\n",
+                move_name, index, zero))
             goto oom;
     }
 
