@@ -47,6 +47,14 @@
     { (opcode_), TURBOWASM_SIMD_EXEC_EXTADD_PAIRWISE, &(desc_), \
       0u, (shape_), 0u }
 
+#define Q15(opcode_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_Q15MULR, &cmeta_vector_i16x8, \
+      0u, TURBOWASM_V128_I16X8, 0u }
+
+#define DOT(opcode_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_DOT_PAIRWISE, &cmeta_vector_i32x4, \
+      0u, TURBOWASM_V128_I32X4, 0u }
+
 #define MEXT(opcode_, desc_, width_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_EXTEND, &(desc_), \
       0u, (shape_), (width_) }
@@ -304,6 +312,7 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
        TURBOWASM_V128_I16X8),
     UN(0x81u, cmeta_vector_i16x8, SALTS_SIMD_UNARY_NEG,
        TURBOWASM_V128_I16X8),
+    Q15(0x82u),
     RED(0x83u, cmeta_vector_i16x8, SALTS_SIMD_REDUCE_ALL_TRUE),
     RED(0x84u, cmeta_vector_i16x8, SALTS_SIMD_REDUCE_BITMASK),
     NAR(0x85u, cmeta_vector_i16x8, TURBOWASM_V128_I16X8),
@@ -389,6 +398,7 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_I32X4),
     BIN(0xb9u, cmeta_vector_u32x4, SALTS_SIMD_BINARY_MAX,
         TURBOWASM_V128_U32X4),
+    DOT(0xbau),
     EMH(0xbcu, cmeta_vector_i32x4, SALTS_SIMD_HALF_LOW,
         TURBOWASM_V128_I32X4),
     EMH(0xbdu, cmeta_vector_i32x4, SALTS_SIMD_HALF_HIGH,
@@ -505,6 +515,8 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
 #undef MZERO
 #undef MSPLAT
 #undef MEXT
+#undef DOT
+#undef Q15
 #undef PAIR
 #undef EMH
 #undef EXH
