@@ -10,6 +10,7 @@
 #endif
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #define WASM_HEADER \
@@ -79,18 +80,31 @@ static void compile_function(
 }
 
 static int32_t invoke_interpreter(
+    const char *case_name,
     turbowasm_instance *instance,
     const turbowasm_value *argument) {
     turbowasm_value result = {0};
     size_t result_count = 0u;
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
 
-    assert(turbowasm_instance_invoke(
-               instance, 0u,
-               argument, argument == NULL ? 0u : 1u,
-               &result, 1u,
-               &result_count,
-               &trap) == TURBOWASM_OK);
+    {
+        turbowasm_status status = turbowasm_instance_invoke(
+            instance, 0u,
+            argument, argument == NULL ? 0u : 1u,
+            &result, 1u,
+            &result_count,
+            &trap);
+        if (status != TURBOWASM_OK) {
+            fprintf(
+                stderr,
+                "%s interpreter status=%s (%d), trap=%d\n",
+                case_name,
+                turbowasm_status_string(status),
+                (int)status,
+                (int)trap);
+        }
+        assert(status == TURBOWASM_OK);
+    }
     assert(result_count == 1u);
     assert(result.kind == TURBOWASM_VALUE_I32);
     assert(trap == TURBOWASM_TRAP_NONE);
@@ -137,6 +151,7 @@ static turbowasm_status invoke_compiled(
 }
 
 static void compare_case(
+    const char *case_name,
     const uint8_t *bytes,
     size_t size,
     const turbowasm_value *argument,
@@ -153,7 +168,7 @@ static void compare_case(
                &module, bytes, size) == TURBOWASM_OK);
     assert(turbowasm_instance_create(
                &instance, &module) == TURBOWASM_OK);
-    assert(invoke_interpreter(&instance, argument) == expected);
+    assert(invoke_interpreter(case_name, &instance, argument) == expected);
 
     assert(turbowasm_mir_backend_create(
                &backend) == TURBOWASM_OK);
@@ -264,14 +279,14 @@ static void test_if_else_v128_merge(void) {
     turbowasm_value zero = i32_value(0);
 
     compare_case(
-        if_v128_module, sizeof(if_v128_module), &one, 15);
+        "if-v128-true", if_v128_module, sizeof(if_v128_module), &one, 15);
     compare_case(
-        if_v128_module, sizeof(if_v128_module), &zero, 0);
+        "if-v128-false", if_v128_module, sizeof(if_v128_module), &zero, 0);
 }
 
 static void test_block_branch_v128_merge(void) {
     compare_case(
-        block_v128_module, sizeof(block_v128_module), NULL, 15);
+        "block-v128", block_v128_module, sizeof(block_v128_module), NULL, 15);
 }
 
 static void test_loop_v128_parameter_and_policy(void) {
@@ -292,7 +307,7 @@ static void test_loop_v128_parameter_and_policy(void) {
                sizeof(loop_v128_module)) == TURBOWASM_OK);
     assert(turbowasm_instance_create(
                &instance, &module) == TURBOWASM_OK);
-    assert(invoke_interpreter(&instance, &argument) == 15);
+    assert(invoke_interpreter("loop-v128", &instance, &argument) == 15);
 
     assert(turbowasm_mir_backend_create(
                &backend) == TURBOWASM_OK);
@@ -349,10 +364,10 @@ static void test_br_table_v128_forwarding(void) {
     turbowasm_value one = i32_value(1);
 
     compare_case(
-        br_table_v128_module, sizeof(br_table_v128_module),
+        "br-table-v128-case", br_table_v128_module, sizeof(br_table_v128_module),
         &zero, 15);
     compare_case(
-        br_table_v128_module, sizeof(br_table_v128_module),
+        "br-table-v128-default", br_table_v128_module, sizeof(br_table_v128_module),
         &one, 15);
 }
 
@@ -361,9 +376,9 @@ static void test_v128_select(void) {
     turbowasm_value zero = i32_value(0);
 
     compare_case(
-        select_v128_module, sizeof(select_v128_module), &one, 15);
+        "select-v128-true", select_v128_module, sizeof(select_v128_module), &one, 15);
     compare_case(
-        select_v128_module, sizeof(select_v128_module), &zero, 0);
+        "select-v128-false", select_v128_module, sizeof(select_v128_module), &zero, 0);
 }
 
 int main(void) {
