@@ -1547,6 +1547,8 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
 
     controls[0].kind = TURBOWASM_MIR_CONTROL_FUNCTION;
     controls[0].height = 0u;
+    controls[0].start_reg_base = UINT32_MAX;
+    controls[0].end_reg_base = UINT32_MAX;
     control_size = 1u;
 
     module_id = backend->next_module_id++;
