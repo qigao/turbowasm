@@ -18,6 +18,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum {
+    TURBOWASM_MIR_CODE_MEMORY_LIMIT = 8u * 1024u * 1024u
+};
+
 typedef struct turbowasm_mir_backend_context {
     MIR_context_t mir;
     uint32_t next_module_id;
@@ -4940,6 +4944,9 @@ turbowasm_status turbowasm_mir_backend_create(
 
     MIR_gen_init(context->mir);
     MIR_gen_set_optimize_level(context->mir, 0u);
+    MIR_set_code_limit(
+        context->mir,
+        (size_t)TURBOWASM_MIR_CODE_MEMORY_LIMIT);
 
     if (!turbowasm_mir_register_call_externals(context)) {
         MIR_gen_finish(context->mir);
@@ -4962,6 +4969,28 @@ turbowasm_status turbowasm_mir_backend_create(
         turbowasm_mir_destroy_backend;
 
     return TURBOWASM_OK;
+}
+
+size_t turbowasm_mir_backend_code_memory_limit(
+    const turbowasm_jit_backend *backend) {
+    return backend == NULL || backend->context == NULL
+        ? 0u
+        : (size_t)TURBOWASM_MIR_CODE_MEMORY_LIMIT;
+}
+
+size_t turbowasm_mir_backend_code_memory_used(
+    const turbowasm_jit_backend *backend) {
+    const turbowasm_mir_backend_context *context;
+
+    if (backend == NULL || backend->context == NULL)
+        return 0u;
+
+    context =
+        (const turbowasm_mir_backend_context *)backend->context;
+    if (context->mir == NULL)
+        return 0u;
+
+    return MIR_get_code_mapped_size(context->mir);
 }
 
 turbowasm_status turbowasm_mir_backend_smoke_constant(
