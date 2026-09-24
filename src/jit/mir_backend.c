@@ -393,6 +393,7 @@ static turbowasm_status turbowasm_mir_compile_function(
     char function_name[64];
     bool finished = false;
     turbowasm_status status = TURBOWASM_UNSUPPORTED;
+    const char *result_name;
 
     if (backend == NULL || backend->mir == NULL ||
         validation == NULL || function == NULL || out == NULL)
@@ -407,6 +408,10 @@ static turbowasm_status turbowasm_mir_compile_function(
     if (!turbowasm_mir_scan_scalar_locals(
             validation, function_index, function,
             &register_count, &result_type))
+        return TURBOWASM_UNSUPPORTED;
+
+    result_name = turbowasm_mir_type_name(result_type);
+    if (result_name == NULL)
         return TURBOWASM_UNSUPPORTED;
 
     stack = (turbowasm_mir_stack_value *)calloc(
@@ -425,13 +430,17 @@ static turbowasm_status turbowasm_mir_compile_function(
             &text,
             "tw_jit_m_%u: module\n"
             "export %s\n"
-            "%s: func i64",
-            module_id, function_name, function_name))
+            "%s: func %s",
+            module_id, function_name, function_name,
+            result_name))
         goto oom;
 
     for (index = 0u; index < type->param_count; ++index) {
-        if (!turbowasm_mir_text_appendf(
-                &text, ", i64:l%u", index))
+        const char *param_name =
+            turbowasm_mir_type_name(type->params[index]);
+        if (param_name == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, ", %s:l%u", param_name, index))
             goto oom;
     }
     if (!turbowasm_mir_text_appendf(&text, "\n"))
@@ -440,22 +449,35 @@ static turbowasm_status turbowasm_mir_compile_function(
     for (index = type->param_count;
          index < function->local_count;
          ++index) {
-        if (!turbowasm_mir_text_appendf(
-                &text, "local i64:l%u\n", index))
+        const char *local_name =
+            turbowasm_mir_type_name(function->local_types[index]);
+        if (local_name == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, "local %s:l%u\n",
+                local_name, index))
             goto oom;
     }
 
     for (index = 0u; index < register_count; ++index) {
         if (!turbowasm_mir_text_appendf(
-                &text, "local i64:r%u\n", index))
+                &text, "local %s:r%u\n",
+                result_name, index))
             goto oom;
     }
 
     for (index = type->param_count;
          index < function->local_count;
          ++index) {
-        if (!turbowasm_mir_text_appendf(
-                &text, "mov l%u, 0\n", index))
+        uint8_t local_type = function->local_types[index];
+        const char *move_name =
+            turbowasm_mir_move_name(local_type);
+        const char *zero =
+            local_type == 0x7du ? "0.0f" :
+            local_type == 0x7cu ? "0.0" : "0";
+        if (move_name == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, "%s l%u, %s\n",
+                move_name, index, zero))
             goto oom;
     }
 
@@ -470,17 +492,21 @@ static turbowasm_status turbowasm_mir_compile_function(
 
         if (opcode == 0x20u) {
             uint32_t local_index;
+            uint8_t local_type;
+            const char *move_name;
             if (!turbowasm_reader_uleb32(
                     &reader, &local_index) ||
                 local_index >= function->local_count)
                 goto done;
-            if (!turbowasm_mir_text_appendf(
-                    &text, "mov r%u, l%u\n",
-                    next_reg, local_index))
+            local_type = function->local_types[local_index];
+            move_name = turbowasm_mir_move_name(local_type);
+            if (move_name == NULL ||
+                !turbowasm_mir_text_appendf(
+                    &text, "%s r%u, l%u\n",
+                    move_name, next_reg, local_index))
                 goto oom;
             stack[stack_size].reg = next_reg++;
-            stack[stack_size].type =
-                function->local_types[local_index];
+            stack[stack_size].type = local_type;
             ++stack_size;
             continue;
         }
@@ -488,6 +514,7 @@ static turbowasm_status turbowasm_mir_compile_function(
         if (opcode == 0x21u || opcode == 0x22u) {
             uint32_t local_index;
             turbowasm_mir_stack_value value;
+            const char *move_name;
             if (!turbowasm_reader_uleb32(
                     &reader, &local_index) ||
                 local_index >= function->local_count ||
@@ -496,9 +523,11 @@ static turbowasm_status turbowasm_mir_compile_function(
             value = stack[stack_size - 1u];
             if (value.type != function->local_types[local_index])
                 goto done;
-            if (!turbowasm_mir_text_appendf(
-                    &text, "mov l%u, r%u\n",
-                    local_index, value.reg))
+            move_name = turbowasm_mir_move_name(value.type);
+            if (move_name == NULL ||
+                !turbowasm_mir_text_appendf(
+                    &text, "%s l%u, r%u\n",
+                    move_name, local_index, value.reg))
                 goto oom;
             if (opcode == 0x21u)
                 --stack_size;
@@ -533,14 +562,49 @@ static turbowasm_status turbowasm_mir_compile_function(
             continue;
         }
 
-        if (opcode == 0x6au || opcode == 0x6bu ||
-            opcode == 0x6cu || opcode == 0x7cu ||
-            opcode == 0x7du || opcode == 0x7eu) {
+        if (opcode == 0x43u) {
+            uint32_t bits;
+            float value;
+            if (!turbowasm_reader_u32le(&reader, &bits))
+                goto done;
+            memcpy(&value, &bits, sizeof(value));
+            if (!isfinite(value) ||
+                !turbowasm_mir_text_appendf(
+                    &text, "fmov r%u, %af\n",
+                    next_reg, (double)value))
+                goto done;
+            stack[stack_size].reg = next_reg++;
+            stack[stack_size].type = 0x7du;
+            ++stack_size;
+            continue;
+        }
+
+        if (opcode == 0x44u) {
+            turbowasm_reader bytes;
+            uint64_t bits = 0u;
+            double value;
+            if (!turbowasm_reader_slice(&reader, 8u, &bytes))
+                goto done;
+            for (index = 0u; index < 8u; ++index)
+                bits |= (uint64_t)bytes.cursor[index] << (8u * index);
+            memcpy(&value, &bits, sizeof(value));
+            if (!isfinite(value) ||
+                !turbowasm_mir_text_appendf(
+                    &text, "dmov r%u, %a\n",
+                    next_reg, value))
+                goto done;
+            stack[stack_size].reg = next_reg++;
+            stack[stack_size].type = 0x7cu;
+            ++stack_size;
+            continue;
+        }
+
+        if (turbowasm_mir_binary_type(opcode) != 0u) {
             const char *name = turbowasm_mir_binary_name(opcode);
             turbowasm_mir_stack_value right;
             turbowasm_mir_stack_value left;
             uint8_t expected =
-                opcode >= 0x7cu ? 0x7eu : 0x7fu;
+                turbowasm_mir_binary_type(opcode);
 
             if (name == NULL || stack_size < 2u)
                 goto done;
