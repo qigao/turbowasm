@@ -304,3 +304,15 @@ set_target_properties(turbowasm_execution_control_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_execution_control_test
          COMMAND turbowasm_execution_control_test)
+
+
+add_executable(turbowasm_jit_backend_contract_test
+  jit_backend_contract_test.c)
+target_link_libraries(turbowasm_jit_backend_contract_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_jit_backend_contract_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_jit_backend_contract_test
+         COMMAND turbowasm_jit_backend_contract_test)
