@@ -529,3 +529,17 @@ set_target_properties(turbowasm_jit_simd_helper_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_jit_simd_helper_test
          COMMAND turbowasm_jit_simd_helper_test)
+
+
+if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
+  add_executable(turbowasm_cflow_adapter_test
+    cflow_adapter_test.c)
+  target_link_libraries(turbowasm_cflow_adapter_test
+    PRIVATE TurboWasm::CFlow)
+  set_target_properties(turbowasm_cflow_adapter_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_cflow_adapter_test
+           COMMAND turbowasm_cflow_adapter_test)
+endif()
