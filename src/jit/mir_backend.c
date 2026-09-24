@@ -1215,6 +1215,103 @@ static void turbowasm_mir_destroy_function(
     compiled->impl = NULL;
 }
 
+
+static bool turbowasm_mir_register_call_externals(
+    turbowasm_mir_backend_context *backend) {
+    void *address = NULL;
+
+    if (backend == NULL || backend->mir == NULL)
+        return false;
+
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t) = turbowasm_mir_call_i64_0;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_call_i64_0", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t,
+            int64_t) = turbowasm_mir_call_i64_1;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_call_i64_1", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t,
+            int64_t,
+            int64_t) = turbowasm_mir_call_i64_2;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_call_i64_2", address);
+    }
+    {
+        float (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t) = turbowasm_mir_call_f32_0;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_call_f32_0", address);
+    }
+    {
+        float (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t,
+            float) = turbowasm_mir_call_f32_1;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_call_f32_1", address);
+    }
+    {
+        double (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t) = turbowasm_mir_call_f64_0;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_call_f64_0", address);
+    }
+    {
+        double (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t,
+            double) = turbowasm_mir_call_f64_1;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_call_f64_1", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *) =
+                turbowasm_mir_call_status;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_call_status", address);
+    }
+
+    return true;
+}
+
 static void turbowasm_mir_destroy_backend(void *context) {
     turbowasm_mir_backend_context *backend =
         (turbowasm_mir_backend_context *)context;
@@ -1252,6 +1349,13 @@ turbowasm_status turbowasm_mir_backend_create(
 
     MIR_gen_init(context->mir);
     MIR_gen_set_optimize_level(context->mir, 0u);
+
+    if (!turbowasm_mir_register_call_externals(context)) {
+        MIR_gen_finish(context->mir);
+        MIR_finish(context->mir);
+        free(context);
+        return TURBOWASM_UNSUPPORTED;
+    }
 
     out_backend->context = context;
     out_backend->is_function_eligible =
