@@ -13,8 +13,8 @@ static void test_execution_table_is_validation_subset(void) {
     size_t index;
     size_t other;
 
-    /* 90 generic + 20 memory + 16 lane/shuffle mappings. */
-    assert(count == 126u);
+    /* 126 prior mappings + 48 advanced numeric/reduction mappings. */
+    assert(count == 174u);
 
     for (index = 0u; index < count; ++index) {
         const turbowasm_simd_exec_descriptor *descriptor =
@@ -90,16 +90,33 @@ static void test_representative_semantics(void) {
     assert(descriptor->op == SALTS_SIMD_SHIFT_RIGHT);
     assert(descriptor->result_shape == TURBOWASM_V128_U32X4);
 
-    descriptor = turbowasm_simd_exec_descriptor_find(0xf3u);
+    descriptor = turbowasm_simd_exec_descriptor_find(0x53u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_REDUCE);
+    assert(descriptor->op == SALTS_SIMD_REDUCE_ANY_TRUE);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x6fu);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_SATURATING);
+    assert(descriptor->vector_desc == &cmeta_vector_i8x16);
+    assert(descriptor->op == SALTS_SIMD_SATURATING_ADD);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0xe3u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_UNARY);
+    assert(descriptor->vector_desc == &cmeta_vector_f32x4);
+    assert(descriptor->op == SALTS_SIMD_UNARY_SQRT);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0xf5u);
     assert(descriptor != NULL);
     assert(descriptor->kind == TURBOWASM_SIMD_EXEC_BINARY);
     assert(descriptor->vector_desc == &cmeta_vector_f64x2);
-    assert(descriptor->op == SALTS_SIMD_BINARY_DIV);
+    assert(descriptor->op == SALTS_SIMD_BINARY_MAX);
     assert(descriptor->result_shape == TURBOWASM_V128_F64X2);
 
-    /* Supported by validation but intentionally not by this execution slice. */
-    assert(turbowasm_simd_descriptor_find(0x60u) != NULL);
-    assert(turbowasm_simd_exec_descriptor_find(0x60u) == NULL);
+    /* Still validated but intentionally deferred to later #48 slices. */
+    assert(turbowasm_simd_descriptor_find(0x65u) != NULL);
+    assert(turbowasm_simd_exec_descriptor_find(0x65u) == NULL);
 }
 
 int main(void) {
