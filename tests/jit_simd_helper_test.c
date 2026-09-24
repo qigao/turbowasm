@@ -118,6 +118,39 @@ static void test_memory_helper_and_trap(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_invalid_slot_is_invalid_argument(void) {
+    salts_v128 slots[1] = {{{0}}};
+    turbowasm_jit_invocation_context context = {0};
+
+    context.simd_slots = slots;
+    context.simd_slot_count = 1u;
+    reset_status(&context);
+
+    assert(turbowasm_jit_simd_const(
+               &context, 1, 0, 0) ==
+           TURBOWASM_INVALID_ARGUMENT);
+    assert(context.call_status == TURBOWASM_INVALID_ARGUMENT);
+    assert(context.call_trap == TURBOWASM_TRAP_NONE);
+}
+
+static void test_success_does_not_set_trap(void) {
+    salts_v128 slots[2] = {{{0}}};
+    turbowasm_jit_invocation_context context = {0};
+
+    context.simd_slots = slots;
+    context.simd_slot_count = 2u;
+    reset_status(&context);
+
+    assert(turbowasm_jit_simd_splat_i64(
+               &context, 0x11, 0, 3) == TURBOWASM_OK);
+    assert(turbowasm_jit_simd_op(
+               &context, 0xae, 1, 0, 0, -1, 0) ==
+           TURBOWASM_OK);
+    assert(context.call_status == TURBOWASM_OK);
+    assert(context.call_trap == TURBOWASM_TRAP_NONE);
+}
+
 static void test_unsupported_kind_records_status(void) {
     salts_v128 slots[3] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
@@ -138,6 +171,8 @@ static void test_unsupported_kind_records_status(void) {
 int main(void) {
     test_slot_ops_and_reduce();
     test_memory_helper_and_trap();
+    test_invalid_slot_is_invalid_argument();
+    test_success_does_not_set_trap();
     test_unsupported_kind_records_status();
     return 0;
 }
