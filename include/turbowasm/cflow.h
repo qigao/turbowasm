@@ -1,6 +1,7 @@
 #ifndef TURBOWASM_CFLOW_H
 #define TURBOWASM_CFLOW_H
 
+#include <cflow/clock.h>
 #include <cflow/executor.h>
 #include <turbowasm/instance.h>
 
@@ -75,6 +76,32 @@ typedef struct turbowasm_cflow_call {
  * run/cancel + finalize lifecycle settles. On any other result, no callback is
  * invoked and ownership remains entirely with the caller.
  */
+typedef struct turbowasm_cflow_deadline {
+    cflow_clock *clock;
+    cflow_deadline deadline;
+} turbowasm_cflow_deadline;
+
+/*
+ * Bind a deadline to a CFlow clock. The clock is borrowed and must outlive
+ * every execution_options use of this deadline. System and virtual clocks use
+ * the same policy surface.
+ */
+bool turbowasm_cflow_deadline_init_after(
+    turbowasm_cflow_deadline *deadline,
+    cflow_clock *clock,
+    cflow_duration delay);
+
+/* Compatible with turbowasm_interrupt_check_fn. */
+bool turbowasm_cflow_deadline_should_interrupt(void *context);
+
+/*
+ * Install the deadline predicate without changing fuel fields. Any previously
+ * configured interrupt predicate/context is replaced.
+ */
+bool turbowasm_cflow_execution_options_set_deadline(
+    turbowasm_execution_options *options,
+    turbowasm_cflow_deadline *deadline);
+
 cflow_admission_status turbowasm_cflow_try_submit(
     cflow_executor *executor,
     turbowasm_cflow_call *call);
