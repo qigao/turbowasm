@@ -47,6 +47,10 @@ typedef turbowasm_status (*turbowasm_compiled_invoke_fn)(
 typedef struct turbowasm_jit_backend {
     void *context;
 
+    /* Backends opt in only after proving that compiled code consumes the
+     * TurboWasm execution-control contract at bounded safe points. */
+    bool supports_execution_control;
+
     bool (*is_function_eligible)(
         void *context,
         const struct turbowasm_validation_context *validation,
@@ -80,6 +84,8 @@ typedef struct turbowasm_jit_backend {
  * - compiled invocation must preserve TurboWasm trap/status semantics;
  * - fuel/interruption is owned by TurboWasm, not delegated implicitly to
  *   backend-specific runtime state;
+ * - supports_execution_control defaults false; Runtime interprets policy-
+ *   controlled calls unless the backend explicitly opts in;
  * - SIMD may call Salts::SIMD helpers instead of native-lowering V128;
  * - backend implementation types must never enter public TurboWasm headers.
  */
