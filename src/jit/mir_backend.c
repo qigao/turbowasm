@@ -727,6 +727,237 @@ done:
     return ok;
 }
 
+
+typedef struct turbowasm_mir_scan_control {
+    const turbowasm_validation_control *annotation;
+} turbowasm_mir_scan_control;
+
+static bool turbowasm_mir_integer_function_shape(
+    const turbowasm_validation_context *validation,
+    uint32_t function_index,
+    const turbowasm_validation_function *function,
+    uint8_t *out_result_type) {
+    const turbowasm_validation_func_type *type;
+    uint32_t index;
+
+    if (validation == NULL || function == NULL ||
+        function->imported || function->code == NULL)
+        return false;
+
+    type = turbowasm_validation_context_function_type(
+        validation, function_index);
+    if (type == NULL || !type->defined ||
+        type->result_count != 1u ||
+        !turbowasm_mir_integer_type(type->results[0]) ||
+        type->param_count > 2u ||
+        function->local_count < type->param_count)
+        return false;
+
+    for (index = 0u; index < type->param_count; ++index) {
+        if (!turbowasm_mir_integer_type(type->params[index]))
+            return false;
+    }
+    for (index = 0u; index < function->local_count; ++index) {
+        if (!turbowasm_mir_integer_type(function->local_types[index]))
+            return false;
+    }
+
+    if (out_result_type != NULL)
+        *out_result_type = type->results[0];
+    return true;
+}
+
+static bool turbowasm_mir_scan_structured_integer(
+    const turbowasm_validation_context *validation,
+    uint32_t function_index,
+    const turbowasm_validation_function *function,
+    uint8_t *out_result_type) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_mir_scan_control *controls = NULL;
+    turbowasm_reader reader;
+    uint32_t control_size = 0u;
+    uint8_t result_type = 0u;
+    bool saw_structured = false;
+    bool ok = false;
+
+    if (!turbowasm_mir_integer_function_shape(
+            validation, function_index, function, &result_type) ||
+        function->code_size == 0u)
+        return false;
+
+    type = turbowasm_validation_context_function_type(
+        validation, function_index);
+    if (type == NULL)
+        return false;
+
+    if (function->control_count != 0u) {
+        controls = (turbowasm_mir_scan_control *)calloc(
+            (size_t)function->control_count, sizeof(*controls));
+        if (controls == NULL)
+            return false;
+    }
+
+    turbowasm_reader_init(
+        &reader, function->code, function->code_size);
+
+    while (turbowasm_reader_remaining(&reader) != 0u) {
+        uint8_t opcode;
+        uint32_t opcode_offset;
+
+        if (!turbowasm_reader_u8(&reader, &opcode) ||
+            reader.cursor <= function->code ||
+            (size_t)(reader.cursor - function->code - 1u) > UINT32_MAX)
+            goto done;
+
+        opcode_offset =
+            (uint32_t)(reader.cursor - function->code - 1u);
+
+        switch (opcode) {
+            case 0x01u: /* nop */
+                break;
+
+            case 0x02u: /* block */
+            case 0x03u: /* loop */
+            case 0x04u: { /* if */
+                const turbowasm_validation_control *annotation;
+                uint8_t blocktype;
+
+                annotation =
+                    turbowasm_validation_function_control_at(
+                        function, opcode_offset);
+                if (annotation == NULL ||
+                    annotation->end_offset == UINT32_MAX ||
+                    control_size >= function->control_count ||
+                    !turbowasm_reader_u8(&reader, &blocktype) ||
+                    blocktype != 0x40u ||
+                    (uint32_t)(reader.cursor - function->code) !=
+                        annotation->body_offset)
+                    goto done;
+
+                if ((opcode == 0x02u &&
+                     annotation->kind !=
+                         TURBOWASM_VALIDATION_CONTROL_BLOCK) ||
+                    (opcode == 0x03u &&
+                     annotation->kind !=
+                         TURBOWASM_VALIDATION_CONTROL_LOOP) ||
+                    (opcode == 0x04u &&
+                     annotation->kind !=
+                         TURBOWASM_VALIDATION_CONTROL_IF))
+                    goto done;
+
+                controls[control_size++].annotation = annotation;
+                saw_structured = true;
+                break;
+            }
+
+            case 0x05u: { /* else */
+                const turbowasm_validation_control *annotation;
+                if (control_size == 0u)
+                    goto done;
+                annotation = controls[control_size - 1u].annotation;
+                if (annotation == NULL ||
+                    annotation->kind !=
+                        TURBOWASM_VALIDATION_CONTROL_IF ||
+                    annotation->else_offset != opcode_offset)
+                    goto done;
+                break;
+            }
+
+            case 0x0bu: /* end */
+                if (control_size == 0u) {
+                    if (turbowasm_reader_remaining(&reader) != 0u ||
+                        !saw_structured) {
+                        goto done;
+                    }
+                    ok = true;
+                    goto done;
+                } else {
+                    const turbowasm_validation_control *annotation =
+                        controls[control_size - 1u].annotation;
+                    if (annotation == NULL ||
+                        annotation->end_offset != opcode_offset)
+                        goto done;
+                    --control_size;
+                }
+                break;
+
+            case 0x0cu: /* br */
+            case 0x0du: { /* br_if */
+                uint32_t depth;
+                if (!turbowasm_reader_uleb32(&reader, &depth) ||
+                    depth > control_size)
+                    goto done;
+                break;
+            }
+
+            case 0x0fu: /* return */
+                break;
+
+            case 0x10u: { /* call */
+                uint32_t callee_index;
+                const turbowasm_validation_function *callee;
+                const turbowasm_validation_func_type *callee_type;
+                if (!turbowasm_reader_uleb32(
+                        &reader, &callee_index))
+                    goto done;
+                callee = turbowasm_validation_context_function(
+                    validation, callee_index);
+                callee_type =
+                    turbowasm_validation_context_function_type(
+                        validation, callee_index);
+                if (callee == NULL || callee->imported ||
+                    !turbowasm_mir_call_signature_supported(callee_type) ||
+                    !turbowasm_mir_integer_type(callee_type->results[0]))
+                    goto done;
+                break;
+            }
+
+            case 0x1au: /* drop */
+                break;
+
+            case 0x20u: /* local.get */
+            case 0x21u: /* local.set */
+            case 0x22u: { /* local.tee */
+                uint32_t local_index;
+                if (!turbowasm_reader_uleb32(
+                        &reader, &local_index) ||
+                    local_index >= function->local_count)
+                    goto done;
+                break;
+            }
+
+            case 0x41u: {
+                int32_t value;
+                if (!turbowasm_reader_sleb32(&reader, &value))
+                    goto done;
+                (void)value;
+                break;
+            }
+
+            case 0x42u: {
+                int64_t value;
+                if (!turbowasm_reader_sleb64(&reader, &value))
+                    goto done;
+                (void)value;
+                break;
+            }
+
+            case 0x6au: case 0x6bu: case 0x6cu:
+            case 0x7cu: case 0x7du: case 0x7eu:
+                break;
+
+            default:
+                goto done;
+        }
+    }
+
+done:
+    free(controls);
+    if (ok && out_result_type != NULL)
+        *out_result_type = result_type;
+    return ok;
+}
+
 static bool turbowasm_mir_is_function_eligible(
     void *context,
     const struct turbowasm_validation_context *validation,
@@ -734,7 +965,9 @@ static bool turbowasm_mir_is_function_eligible(
     const struct turbowasm_validation_function *function) {
     (void)context;
     return turbowasm_mir_scan_scalar_locals(
-        validation, function_index, function, NULL, NULL);
+               validation, function_index, function, NULL, NULL) ||
+           turbowasm_mir_scan_structured_integer(
+               validation, function_index, function, NULL);
 }
 
 static const char *turbowasm_mir_binary_name(uint8_t opcode) {
