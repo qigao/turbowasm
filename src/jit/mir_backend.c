@@ -3614,6 +3614,85 @@ static bool turbowasm_mir_register_call_externals(
             backend->mir, "tw_jit_checkpoint", address);
     }
 
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, int64_t, int64_t) =
+                turbowasm_jit_simd_const;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_const", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, int64_t) =
+                turbowasm_jit_simd_splat_i64;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_splat_i64", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, float) =
+                turbowasm_jit_simd_splat_f32;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_splat_f32", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, double) =
+                turbowasm_jit_simd_splat_f64;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_splat_f64", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, int64_t, int64_t,
+            int64_t, int64_t) =
+                turbowasm_jit_simd_op;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_op", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t) =
+                turbowasm_jit_simd_reduce;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_reduce", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, int64_t, int64_t) =
+                turbowasm_jit_simd_memory;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_memory", address);
+    }
+
     return true;
 }
 
