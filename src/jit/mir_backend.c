@@ -148,6 +148,332 @@ static uint8_t turbowasm_mir_binary_type(uint8_t opcode) {
     return 0u;
 }
 
+
+static bool turbowasm_mir_call_signature_supported(
+    const turbowasm_validation_func_type *type) {
+    uint32_t index;
+
+    if (type == NULL || !type->defined ||
+        type->result_count != 1u)
+        return false;
+
+    if (turbowasm_mir_integer_type(type->results[0])) {
+        if (type->param_count > 2u)
+            return false;
+        for (index = 0u; index < type->param_count; ++index) {
+            if (!turbowasm_mir_integer_type(type->params[index]))
+                return false;
+        }
+        return true;
+    }
+
+    if (turbowasm_mir_float_type(type->results[0])) {
+        if (type->param_count > 1u)
+            return false;
+        for (index = 0u; index < type->param_count; ++index) {
+            if (type->params[index] != type->results[0])
+                return false;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+static void turbowasm_mir_record_call(
+    turbowasm_jit_invocation_context *context,
+    turbowasm_status status,
+    turbowasm_trap trap) {
+    if (context == NULL)
+        return;
+    context->call_status = status;
+    context->call_trap = trap;
+}
+
+static const turbowasm_validation_func_type *
+turbowasm_mir_context_function_type(
+    turbowasm_jit_invocation_context *context,
+    uint32_t function_index) {
+    const turbowasm_module_impl *module;
+
+    if (context == NULL || context->instance == NULL)
+        return NULL;
+
+    module = turbowasm_module_impl_get(context->instance->module);
+    if (module == NULL)
+        return NULL;
+
+    return turbowasm_validation_context_function_type(
+        &module->validation, function_index);
+}
+
+static int64_t turbowasm_mir_call_integer(
+    turbowasm_jit_invocation_context *context,
+    uint32_t function_index,
+    const int64_t *raw_arguments,
+    uint32_t raw_count) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_value arguments[2] = {{0}};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_status status;
+    uint32_t index;
+    int64_t raw_result = 0;
+
+    type = turbowasm_mir_context_function_type(
+        context, function_index);
+    if (!turbowasm_mir_call_signature_supported(type) ||
+        !turbowasm_mir_integer_type(type->results[0]) ||
+        type->param_count != raw_count) {
+        turbowasm_mir_record_call(
+            context, TURBOWASM_UNSUPPORTED,
+            TURBOWASM_TRAP_NONE);
+        return 0;
+    }
+
+    for (index = 0u; index < type->param_count; ++index) {
+        if (type->params[index] == 0x7fu) {
+            arguments[index].kind = TURBOWASM_VALUE_I32;
+            arguments[index].as.i32 =
+                (int32_t)(uint32_t)raw_arguments[index];
+        } else {
+            arguments[index].kind = TURBOWASM_VALUE_I64;
+            arguments[index].as.i64 = raw_arguments[index];
+        }
+    }
+
+    status = turbowasm_jit_direct_call(
+        context,
+        function_index,
+        arguments,
+        type->param_count,
+        &result,
+        1u,
+        &result_count,
+        &trap);
+    turbowasm_mir_record_call(context, status, trap);
+
+    if (status != TURBOWASM_OK || result_count != 1u)
+        return 0;
+
+    if (type->results[0] == 0x7fu &&
+        result.kind == TURBOWASM_VALUE_I32) {
+        raw_result = (int64_t)result.as.i32;
+    } else if (type->results[0] == 0x7eu &&
+               result.kind == TURBOWASM_VALUE_I64) {
+        raw_result = result.as.i64;
+    } else {
+        turbowasm_mir_record_call(
+            context, TURBOWASM_TYPE_MISMATCH,
+            TURBOWASM_TRAP_NONE);
+        return 0;
+    }
+
+    return raw_result;
+}
+
+static int64_t turbowasm_mir_call_i64_0(
+    turbowasm_jit_invocation_context *context,
+    int64_t function_index) {
+    return turbowasm_mir_call_integer(
+        context, (uint32_t)function_index, NULL, 0u);
+}
+
+static int64_t turbowasm_mir_call_i64_1(
+    turbowasm_jit_invocation_context *context,
+    int64_t function_index,
+    int64_t a0) {
+    const int64_t args[1] = {a0};
+    return turbowasm_mir_call_integer(
+        context, (uint32_t)function_index, args, 1u);
+}
+
+static int64_t turbowasm_mir_call_i64_2(
+    turbowasm_jit_invocation_context *context,
+    int64_t function_index,
+    int64_t a0,
+    int64_t a1) {
+    const int64_t args[2] = {a0, a1};
+    return turbowasm_mir_call_integer(
+        context, (uint32_t)function_index, args, 2u);
+}
+
+static float turbowasm_mir_call_f32_0(
+    turbowasm_jit_invocation_context *context,
+    int64_t function_index) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_status status;
+
+    type = turbowasm_mir_context_function_type(
+        context, (uint32_t)function_index);
+    if (!turbowasm_mir_call_signature_supported(type) ||
+        type->result_count != 1u ||
+        type->results[0] != 0x7du ||
+        type->param_count != 0u) {
+        turbowasm_mir_record_call(
+            context, TURBOWASM_UNSUPPORTED,
+            TURBOWASM_TRAP_NONE);
+        return 0.0f;
+    }
+
+    status = turbowasm_jit_direct_call(
+        context, (uint32_t)function_index,
+        NULL, 0u,
+        &result, 1u,
+        &result_count, &trap);
+    turbowasm_mir_record_call(context, status, trap);
+
+    if (status != TURBOWASM_OK || result_count != 1u ||
+        result.kind != TURBOWASM_VALUE_F32) {
+        if (status == TURBOWASM_OK)
+            turbowasm_mir_record_call(
+                context, TURBOWASM_TYPE_MISMATCH,
+                TURBOWASM_TRAP_NONE);
+        return 0.0f;
+    }
+    return result.as.f32;
+}
+
+static float turbowasm_mir_call_f32_1(
+    turbowasm_jit_invocation_context *context,
+    int64_t function_index,
+    float a0) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_value argument = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_status status;
+
+    type = turbowasm_mir_context_function_type(
+        context, (uint32_t)function_index);
+    if (!turbowasm_mir_call_signature_supported(type) ||
+        type->result_count != 1u ||
+        type->results[0] != 0x7du ||
+        type->param_count != 1u ||
+        type->params[0] != 0x7du) {
+        turbowasm_mir_record_call(
+            context, TURBOWASM_UNSUPPORTED,
+            TURBOWASM_TRAP_NONE);
+        return 0.0f;
+    }
+
+    argument.kind = TURBOWASM_VALUE_F32;
+    argument.as.f32 = a0;
+
+    status = turbowasm_jit_direct_call(
+        context, (uint32_t)function_index,
+        &argument, 1u,
+        &result, 1u,
+        &result_count, &trap);
+    turbowasm_mir_record_call(context, status, trap);
+
+    if (status != TURBOWASM_OK || result_count != 1u ||
+        result.kind != TURBOWASM_VALUE_F32) {
+        if (status == TURBOWASM_OK)
+            turbowasm_mir_record_call(
+                context, TURBOWASM_TYPE_MISMATCH,
+                TURBOWASM_TRAP_NONE);
+        return 0.0f;
+    }
+    return result.as.f32;
+}
+
+static double turbowasm_mir_call_f64_0(
+    turbowasm_jit_invocation_context *context,
+    int64_t function_index) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_status status;
+
+    type = turbowasm_mir_context_function_type(
+        context, (uint32_t)function_index);
+    if (!turbowasm_mir_call_signature_supported(type) ||
+        type->result_count != 1u ||
+        type->results[0] != 0x7cu ||
+        type->param_count != 0u) {
+        turbowasm_mir_record_call(
+            context, TURBOWASM_UNSUPPORTED,
+            TURBOWASM_TRAP_NONE);
+        return 0.0;
+    }
+
+    status = turbowasm_jit_direct_call(
+        context, (uint32_t)function_index,
+        NULL, 0u,
+        &result, 1u,
+        &result_count, &trap);
+    turbowasm_mir_record_call(context, status, trap);
+
+    if (status != TURBOWASM_OK || result_count != 1u ||
+        result.kind != TURBOWASM_VALUE_F64) {
+        if (status == TURBOWASM_OK)
+            turbowasm_mir_record_call(
+                context, TURBOWASM_TYPE_MISMATCH,
+                TURBOWASM_TRAP_NONE);
+        return 0.0;
+    }
+    return result.as.f64;
+}
+
+static double turbowasm_mir_call_f64_1(
+    turbowasm_jit_invocation_context *context,
+    int64_t function_index,
+    double a0) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_value argument = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_status status;
+
+    type = turbowasm_mir_context_function_type(
+        context, (uint32_t)function_index);
+    if (!turbowasm_mir_call_signature_supported(type) ||
+        type->result_count != 1u ||
+        type->results[0] != 0x7cu ||
+        type->param_count != 1u ||
+        type->params[0] != 0x7cu) {
+        turbowasm_mir_record_call(
+            context, TURBOWASM_UNSUPPORTED,
+            TURBOWASM_TRAP_NONE);
+        return 0.0;
+    }
+
+    argument.kind = TURBOWASM_VALUE_F64;
+    argument.as.f64 = a0;
+
+    status = turbowasm_jit_direct_call(
+        context, (uint32_t)function_index,
+        &argument, 1u,
+        &result, 1u,
+        &result_count, &trap);
+    turbowasm_mir_record_call(context, status, trap);
+
+    if (status != TURBOWASM_OK || result_count != 1u ||
+        result.kind != TURBOWASM_VALUE_F64) {
+        if (status == TURBOWASM_OK)
+            turbowasm_mir_record_call(
+                context, TURBOWASM_TYPE_MISMATCH,
+                TURBOWASM_TRAP_NONE);
+        return 0.0;
+    }
+    return result.as.f64;
+}
+
+static int64_t turbowasm_mir_call_status(
+    turbowasm_jit_invocation_context *context) {
+    return context == NULL
+        ? (int64_t)TURBOWASM_INVALID_ARGUMENT
+        : (int64_t)context->call_status;
+}
+
 static bool turbowasm_mir_scan_scalar_locals(
     const turbowasm_validation_context *validation,
     uint32_t function_index,
