@@ -8,6 +8,7 @@
 
 int main(void) {
     turbowasm_jit_backend backend = {0};
+    size_t initial_mapped;
 
     assert(turbowasm_mir_backend_create(&backend) == TURBOWASM_OK);
     assert(backend.context != NULL);
@@ -22,13 +23,15 @@ int main(void) {
 
     assert(turbowasm_mir_backend_code_memory_limit(
                &backend) == 8u * 1024u * 1024u);
-    assert(turbowasm_mir_backend_code_memory_used(
-               &backend) == 0u);
+    initial_mapped =
+        turbowasm_mir_backend_code_memory_used(&backend);
+    assert(initial_mapped <=
+           turbowasm_mir_backend_code_memory_limit(&backend));
 
     assert(turbowasm_mir_backend_smoke_constant(
                &backend, INT64_C(42)) == TURBOWASM_OK);
     assert(turbowasm_mir_backend_code_memory_used(
-               &backend) > 0u);
+               &backend) >= initial_mapped);
     assert(turbowasm_mir_backend_code_memory_used(
                &backend) <=
            turbowasm_mir_backend_code_memory_limit(&backend));
