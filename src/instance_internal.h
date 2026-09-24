@@ -64,6 +64,8 @@ typedef struct turbowasm_jit_invocation_context {
     turbowasm_instance_impl *instance;
     turbowasm_jit_execution_control *execution;
     uint32_t depth;
+    turbowasm_status call_status;
+    turbowasm_trap call_trap;
 } turbowasm_jit_invocation_context;
 
 turbowasm_status turbowasm_jit_direct_call(
