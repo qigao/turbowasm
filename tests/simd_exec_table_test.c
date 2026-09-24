@@ -13,8 +13,8 @@ static void test_execution_table_is_validation_subset(void) {
     size_t index;
     size_t other;
 
-    /* 126 prior mappings + 48 advanced numeric/reduction mappings. */
-    assert(count == 174u);
+    /* 174 prior mappings + 4 floating pseudo min/max mappings. */
+    assert(count == 178u);
 
     for (index = 0u; index < count; ++index) {
         const turbowasm_simd_exec_descriptor *descriptor =
@@ -107,11 +107,18 @@ static void test_representative_semantics(void) {
     assert(descriptor->vector_desc == &cmeta_vector_f32x4);
     assert(descriptor->op == SALTS_SIMD_UNARY_SQRT);
 
-    descriptor = turbowasm_simd_exec_descriptor_find(0xf5u);
+    descriptor = turbowasm_simd_exec_descriptor_find(0xeau);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_BINARY);
+    assert(descriptor->vector_desc == &cmeta_vector_f32x4);
+    assert(descriptor->op == SALTS_SIMD_BINARY_PSEUDO_MIN);
+    assert(descriptor->result_shape == TURBOWASM_V128_F32X4);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0xf7u);
     assert(descriptor != NULL);
     assert(descriptor->kind == TURBOWASM_SIMD_EXEC_BINARY);
     assert(descriptor->vector_desc == &cmeta_vector_f64x2);
-    assert(descriptor->op == SALTS_SIMD_BINARY_MAX);
+    assert(descriptor->op == SALTS_SIMD_BINARY_PSEUDO_MAX);
     assert(descriptor->result_shape == TURBOWASM_V128_F64X2);
 
     /* Still validated but intentionally deferred to later #48 slices. */
