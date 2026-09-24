@@ -61,11 +61,27 @@ target_link_libraries(turbowasm PUBLIC Salts::SIMD)
 
 if(TURBOWASM_ENABLE_MIR_JIT)
   find_package(MIR CONFIG REQUIRED)
-  target_sources(turbowasm PRIVATE
+
+  # Keep MIR out of the installed TurboWasm::Runtime link interface.
+  # The backend is an internal, non-installed component until the tiering
+  # integration defines its explicit runtime/plugin ownership.
+  add_library(turbowasm_mir_backend STATIC
     src/jit/mir_backend.c)
-  target_link_libraries(turbowasm PRIVATE MIR::MIR)
-  target_compile_definitions(turbowasm PRIVATE
+  target_compile_features(turbowasm_mir_backend PRIVATE c_std_11)
+  target_include_directories(turbowasm_mir_backend
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(turbowasm_mir_backend PRIVATE MIR::MIR)
+  target_compile_definitions(turbowasm_mir_backend PRIVATE
     TURBOWASM_ENABLE_MIR_JIT=1)
+
+  if(MSVC)
+    target_compile_options(turbowasm_mir_backend PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_mir_backend PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
 endif()
 
 if(MSVC)
