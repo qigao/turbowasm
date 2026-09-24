@@ -31,6 +31,22 @@
     { (opcode_), TURBOWASM_SIMD_EXEC_REDUCE, &(desc_), \
       (uint8_t)(op_), TURBOWASM_V128_RAW, 0u }
 
+#define NAR(opcode_, desc_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_NARROW, &(desc_), \
+      0u, (shape_), 0u }
+
+#define EXH(opcode_, desc_, half_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_EXTEND_HALF, &(desc_), \
+      (uint8_t)(half_), (shape_), 0u }
+
+#define EMH(opcode_, desc_, half_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_EXTMUL_HALF, &(desc_), \
+      (uint8_t)(half_), (shape_), 0u }
+
+#define PAIR(opcode_, desc_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_EXTADD_PAIRWISE, &(desc_), \
+      0u, (shape_), 0u }
+
 #define MEXT(opcode_, desc_, width_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_EXTEND, &(desc_), \
       0u, (shape_), (width_) }
@@ -249,6 +265,8 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
        TURBOWASM_V128_I8X16),
     RED(0x63u, cmeta_vector_i8x16, SALTS_SIMD_REDUCE_ALL_TRUE),
     RED(0x64u, cmeta_vector_i8x16, SALTS_SIMD_REDUCE_BITMASK),
+    NAR(0x65u, cmeta_vector_i8x16, TURBOWASM_V128_I8X16),
+    NAR(0x66u, cmeta_vector_u8x16, TURBOWASM_V128_U8X16),
 
     /* integer shifts and wrapping arithmetic */
     SH(0x6bu, cmeta_vector_i8x16, SALTS_SIMD_SHIFT_LEFT,
@@ -277,6 +295,10 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_I8X16),
     BIN(0x79u, cmeta_vector_u8x16, SALTS_SIMD_BINARY_MAX,
         TURBOWASM_V128_U8X16),
+    PAIR(0x7cu, cmeta_vector_i16x8, TURBOWASM_V128_I16X8),
+    PAIR(0x7du, cmeta_vector_u16x8, TURBOWASM_V128_U16X8),
+    PAIR(0x7eu, cmeta_vector_i32x4, TURBOWASM_V128_I32X4),
+    PAIR(0x7fu, cmeta_vector_u32x4, TURBOWASM_V128_U32X4),
 
     UN(0x80u, cmeta_vector_i16x8, SALTS_SIMD_UNARY_ABS,
        TURBOWASM_V128_I16X8),
@@ -284,6 +306,16 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
        TURBOWASM_V128_I16X8),
     RED(0x83u, cmeta_vector_i16x8, SALTS_SIMD_REDUCE_ALL_TRUE),
     RED(0x84u, cmeta_vector_i16x8, SALTS_SIMD_REDUCE_BITMASK),
+    NAR(0x85u, cmeta_vector_i16x8, TURBOWASM_V128_I16X8),
+    NAR(0x86u, cmeta_vector_u16x8, TURBOWASM_V128_U16X8),
+    EXH(0x87u, cmeta_vector_i16x8, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_I16X8),
+    EXH(0x88u, cmeta_vector_i16x8, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_I16X8),
+    EXH(0x89u, cmeta_vector_u16x8, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_U16X8),
+    EXH(0x8au, cmeta_vector_u16x8, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_U16X8),
 
     SH(0x8bu, cmeta_vector_i16x8, SALTS_SIMD_SHIFT_LEFT,
        TURBOWASM_V128_I16X8),
@@ -313,6 +345,14 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_I16X8),
     BIN(0x99u, cmeta_vector_u16x8, SALTS_SIMD_BINARY_MAX,
         TURBOWASM_V128_U16X8),
+    EMH(0x9cu, cmeta_vector_i16x8, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_I16X8),
+    EMH(0x9du, cmeta_vector_i16x8, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_I16X8),
+    EMH(0x9eu, cmeta_vector_u16x8, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_U16X8),
+    EMH(0x9fu, cmeta_vector_u16x8, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_U16X8),
 
     UN(0xa0u, cmeta_vector_i32x4, SALTS_SIMD_UNARY_ABS,
        TURBOWASM_V128_I32X4),
@@ -320,6 +360,14 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
        TURBOWASM_V128_I32X4),
     RED(0xa3u, cmeta_vector_i32x4, SALTS_SIMD_REDUCE_ALL_TRUE),
     RED(0xa4u, cmeta_vector_i32x4, SALTS_SIMD_REDUCE_BITMASK),
+    EXH(0xa7u, cmeta_vector_i32x4, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_I32X4),
+    EXH(0xa8u, cmeta_vector_i32x4, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_I32X4),
+    EXH(0xa9u, cmeta_vector_u32x4, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_U32X4),
+    EXH(0xaau, cmeta_vector_u32x4, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_U32X4),
 
     SH(0xabu, cmeta_vector_i32x4, SALTS_SIMD_SHIFT_LEFT,
        TURBOWASM_V128_I32X4),
@@ -341,6 +389,14 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_I32X4),
     BIN(0xb9u, cmeta_vector_u32x4, SALTS_SIMD_BINARY_MAX,
         TURBOWASM_V128_U32X4),
+    EMH(0xbcu, cmeta_vector_i32x4, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_I32X4),
+    EMH(0xbdu, cmeta_vector_i32x4, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_I32X4),
+    EMH(0xbeu, cmeta_vector_u32x4, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_U32X4),
+    EMH(0xbfu, cmeta_vector_u32x4, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_U32X4),
 
     UN(0xc0u, cmeta_vector_i64x2, SALTS_SIMD_UNARY_ABS,
        TURBOWASM_V128_I64X2),
@@ -348,6 +404,14 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
        TURBOWASM_V128_I64X2),
     RED(0xc3u, cmeta_vector_i64x2, SALTS_SIMD_REDUCE_ALL_TRUE),
     RED(0xc4u, cmeta_vector_i64x2, SALTS_SIMD_REDUCE_BITMASK),
+    EXH(0xc7u, cmeta_vector_i64x2, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_I64X2),
+    EXH(0xc8u, cmeta_vector_i64x2, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_I64X2),
+    EXH(0xc9u, cmeta_vector_u64x2, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_U64X2),
+    EXH(0xcau, cmeta_vector_u64x2, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_U64X2),
 
     SH(0xcbu, cmeta_vector_i64x2, SALTS_SIMD_SHIFT_LEFT,
        TURBOWASM_V128_I64X2),
@@ -374,6 +438,14 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_B64X2),
     CMP(0xdbu, cmeta_vector_i64x2, SALTS_SIMD_COMPARE_GE,
         TURBOWASM_V128_B64X2),
+    EMH(0xdcu, cmeta_vector_i64x2, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_I64X2),
+    EMH(0xddu, cmeta_vector_i64x2, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_I64X2),
+    EMH(0xdeu, cmeta_vector_u64x2, SALTS_SIMD_HALF_LOW,
+        TURBOWASM_V128_U64X2),
+    EMH(0xdfu, cmeta_vector_u64x2, SALTS_SIMD_HALF_HIGH,
+        TURBOWASM_V128_U64X2),
 
     /* floating-point arithmetic */
     UN(0xe0u, cmeta_vector_f32x4, SALTS_SIMD_UNARY_ABS,
@@ -433,6 +505,10 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
 #undef MZERO
 #undef MSPLAT
 #undef MEXT
+#undef PAIR
+#undef EMH
+#undef EXH
+#undef NAR
 #undef RED
 #undef SAT
 #undef SEL
