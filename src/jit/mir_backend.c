@@ -1667,8 +1667,19 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
                 goto done;
 
             if (reachable) {
-                if (!turbowasm_mir_emit_checkpoint_text(&text) ||
-                    !turbowasm_mir_emit_control_jump(
+                /*
+                 * The else opcode is executed only on the natural then path.
+                 * Pay its checkpoint first, then materialize the then result
+                 * into the shared end registers before transferring control.
+                 */
+                if (!turbowasm_mir_emit_checkpoint_text(&text))
+                    goto oom;
+                if (!turbowasm_mir_emit_stack_to_regs(
+                        &text, stack, stack_size,
+                        frame->end_types, frame->end_count,
+                        frame->end_reg_base))
+                    goto done;
+                if (!turbowasm_mir_emit_control_jump(
                         &text, frame->annotation->opcode_offset,
                         "end_opcode"))
                     goto oom;
@@ -1681,6 +1692,12 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
                 goto oom;
 
             stack_size = frame->height;
+            if (!turbowasm_mir_push_regs(
+                    stack, &stack_size,
+                    frame->start_types, frame->start_count,
+                    frame->start_reg_base))
+                goto done;
+
             frame->else_seen = true;
             reachable = true;
             continue;
@@ -1725,6 +1742,18 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
                     frame->annotation->end_offset != opcode_offset)
                     goto done;
 
+                /*
+                 * Natural fallthrough materializes before the end label so a
+                 * direct br-to-end skips these moves and keeps its own branch
+                 * arguments in the same merge registers.
+                 */
+                if (reachable &&
+                    !turbowasm_mir_emit_stack_to_regs(
+                        &text, stack, stack_size,
+                        frame->end_types, frame->end_count,
+                        frame->end_reg_base))
+                    goto done;
+
                 end_opcode_reachable =
                     reachable || frame->end_opcode_incoming;
 
@@ -1737,8 +1766,6 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
                     !turbowasm_mir_emit_checkpoint_text(&text))
                     goto oom;
 
-                stack_size = frame->height;
-
                 if (!turbowasm_mir_emit_control_label(
                         &text, frame->annotation->opcode_offset,
                         "end"))
@@ -1746,6 +1773,15 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
 
                 next_reachable =
                     end_opcode_reachable || frame->end_incoming;
+
+                stack_size = frame->height;
+                if (next_reachable &&
+                    !turbowasm_mir_push_regs(
+                        stack, &stack_size,
+                        frame->end_types, frame->end_count,
+                        frame->end_reg_base))
+                    goto done;
+
                 --control_size;
                 reachable = next_reachable;
                 continue;
@@ -1767,19 +1803,28 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
             case 0x04u: { /* if */
                 const turbowasm_validation_control *annotation;
                 turbowasm_mir_control_frame *frame;
-                uint8_t blocktype;
+                const uint8_t *start_types = NULL;
+                const uint8_t *end_types = NULL;
+                uint32_t start_count = 0u;
+                uint32_t end_count = 0u;
+                uint32_t current_offset;
                 uint32_t condition_reg = 0u;
 
                 annotation =
                     turbowasm_validation_function_control_at(
                         function, opcode_offset);
+                current_offset =
+                    (uint32_t)(reader.cursor - function->code);
+
                 if (annotation == NULL ||
                     annotation->end_offset == UINT32_MAX ||
-                    !turbowasm_reader_u8(&reader, &blocktype) ||
-                    blocktype != 0x40u ||
-                    (uint32_t)(reader.cursor - function->code) !=
-                        annotation->body_offset ||
-                    control_size > function->control_count)
+                    annotation->body_offset < current_offset ||
+                    annotation->body_offset > function->code_size ||
+                    control_size > function->control_count ||
+                    !turbowasm_mir_integer_control_signature(
+                        validation, annotation,
+                        &start_types, &start_count,
+                        &end_types, &end_count))
                     goto done;
 
                 if (opcode == 0x04u) {
@@ -1789,13 +1834,52 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
                     condition_reg = stack[--stack_size].reg;
                 }
 
+                if (!turbowasm_mir_stack_matches_types(
+                        stack, stack_size,
+                        start_types, start_count))
+                    goto done;
+
                 frame = &controls[control_size++];
                 memset(frame, 0, sizeof(*frame));
                 frame->kind =
                     turbowasm_mir_control_kind_from_annotation(
                         annotation);
                 frame->annotation = annotation;
-                frame->height = stack_size;
+                frame->start_types = start_types;
+                frame->start_count = start_count;
+                frame->end_types = end_types;
+                frame->end_count = end_count;
+                frame->start_reg_base =
+                    start_count == 0u ? UINT32_MAX : next_reg;
+                next_reg += start_count;
+                frame->end_reg_base =
+                    end_count == 0u ? UINT32_MAX : next_reg;
+                next_reg += end_count;
+
+                if (next_reg > register_count)
+                    goto done;
+
+                frame->height = stack_size - start_count;
+
+                if (start_count != 0u &&
+                    !turbowasm_mir_emit_stack_to_regs(
+                        &text, stack, stack_size,
+                        start_types, start_count,
+                        frame->start_reg_base))
+                    goto done;
+
+                stack_size = frame->height;
+                if (!turbowasm_mir_push_regs(
+                        stack, &stack_size,
+                        start_types, start_count,
+                        frame->start_reg_base))
+                    goto done;
+
+                /*
+                 * Skip the blocktype bytes using validator-retained metadata.
+                 */
+                reader.cursor =
+                    function->code + annotation->body_offset;
 
                 if (opcode == 0x03u) {
                     if (!turbowasm_mir_emit_control_label(
@@ -1809,6 +1893,21 @@ static turbowasm_status turbowasm_mir_compile_structured_integer(
                                 "else_body", condition_reg))
                             goto oom;
                     } else {
+                        /*
+                         * Validator guarantees start/end types are equal for
+                         * an if without else. Seed the false-path result before
+                         * branching to the shared end-opcode checkpoint.
+                         */
+                        if (start_count != end_count ||
+                            (start_count != 0u &&
+                             memcmp(start_types, end_types, start_count) != 0))
+                            goto done;
+                        if (end_count != 0u &&
+                            !turbowasm_mir_emit_stack_to_regs(
+                                &text, stack, stack_size,
+                                end_types, end_count,
+                                frame->end_reg_base))
+                            goto done;
                         if (!turbowasm_mir_emit_control_branch_false(
                                 &text, annotation->opcode_offset,
                                 "end_opcode", condition_reg))
