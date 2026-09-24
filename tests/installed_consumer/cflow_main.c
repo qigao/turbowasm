@@ -42,6 +42,32 @@ int main(void) {
     if (turbowasm_instance_create(
             &instance, &module) != TURBOWASM_OK)
         return 2;
+
+    {
+        cflow_clock clock = {0};
+        turbowasm_cflow_deadline deadline = {0};
+        turbowasm_execution_options options = {0};
+
+        if (!cflow_clock_virtual_init(
+                &clock, (cflow_instant){100u}))
+            return 8;
+        if (!turbowasm_cflow_deadline_init_after(
+                &deadline, &clock, cflow_duration_from_ns(1u)))
+            return 9;
+        if (!turbowasm_cflow_execution_options_set_deadline(
+                &options, &deadline))
+            return 10;
+        if (turbowasm_cflow_deadline_should_interrupt(
+                &deadline))
+            return 11;
+        if (!cflow_clock_advance(
+                &clock, cflow_duration_from_ns(1u)))
+            return 12;
+        if (!turbowasm_cflow_deadline_should_interrupt(
+                &deadline))
+            return 13;
+        cflow_clock_destroy(&clock);
+    }
     if (!cflow_executor_manual_init_with_capacity(&executor, 1u))
         return 3;
 

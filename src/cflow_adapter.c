@@ -79,3 +79,44 @@ cflow_admission_status turbowasm_cflow_try_submit(
 
     return cflow_executor_try_post_task(executor, &task);
 }
+
+
+bool turbowasm_cflow_deadline_init_after(
+    turbowasm_cflow_deadline *deadline,
+    cflow_clock *clock,
+    cflow_duration delay) {
+    cflow_instant now;
+
+    if (deadline == NULL || clock == NULL)
+        return false;
+
+    now = cflow_clock_now(clock);
+    deadline->clock = clock;
+    deadline->deadline = cflow_deadline_after(now, delay);
+    return true;
+}
+
+bool turbowasm_cflow_deadline_should_interrupt(void *context) {
+    turbowasm_cflow_deadline *deadline =
+        (turbowasm_cflow_deadline *)context;
+    cflow_instant now;
+
+    if (deadline == NULL || deadline->clock == NULL)
+        return true;
+
+    now = cflow_clock_now(deadline->clock);
+    return now.ns >= deadline->deadline.ns;
+}
+
+bool turbowasm_cflow_execution_options_set_deadline(
+    turbowasm_execution_options *options,
+    turbowasm_cflow_deadline *deadline) {
+    if (options == NULL || deadline == NULL ||
+        deadline->clock == NULL)
+        return false;
+
+    options->should_interrupt =
+        turbowasm_cflow_deadline_should_interrupt;
+    options->interrupt_context = deadline;
+    return true;
+}
