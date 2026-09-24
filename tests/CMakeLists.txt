@@ -112,6 +112,20 @@ set_target_properties(turbowasm_code_metadata_test PROPERTIES
 add_test(NAME turbowasm_code_metadata_test
          COMMAND turbowasm_code_metadata_test)
 
+
+add_executable(turbowasm_control_signature_metadata_test
+  control_signature_metadata_test.c)
+target_link_libraries(turbowasm_control_signature_metadata_test
+  PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_control_signature_metadata_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_control_signature_metadata_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_control_signature_metadata_test
+         COMMAND turbowasm_control_signature_metadata_test)
+
 add_executable(turbowasm_instance_test
   instance_test.c)
 target_link_libraries(turbowasm_instance_test
