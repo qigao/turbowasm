@@ -1,6 +1,8 @@
 #include "mir_backend.h"
 
 #include "../instance_internal.h"
+#include "../jit_simd_helper.h"
+#include "../simd_exec_table.h"
 
 #include "../reader.h"
 #include "../validation_context.h"
@@ -26,6 +28,7 @@ typedef struct turbowasm_mir_compiled {
     uint8_t result_type;
     uint8_t param_count;
     uint8_t param_types[2];
+    uint32_t simd_slot_count;
 } turbowasm_mir_compiled;
 
 typedef struct turbowasm_mir_stack_value {
@@ -761,6 +764,323 @@ done:
 }
 
 
+
+static uint8_t turbowasm_mir_simd_splat_scalar_type(
+    const turbowasm_simd_exec_descriptor *descriptor) {
+    if (descriptor == NULL || descriptor->vector_desc == NULL)
+        return 0u;
+
+    switch (descriptor->vector_desc->lane_kind) {
+        case CMETA_VECTOR_I8:
+        case CMETA_VECTOR_U8:
+        case CMETA_VECTOR_I16:
+        case CMETA_VECTOR_U16:
+        case CMETA_VECTOR_I32:
+        case CMETA_VECTOR_U32:
+            return 0x7fu;
+        case CMETA_VECTOR_I64:
+        case CMETA_VECTOR_U64:
+            return 0x7eu;
+        case CMETA_VECTOR_F32:
+            return 0x7du;
+        case CMETA_VECTOR_F64:
+            return 0x7cu;
+        default:
+            return 0u;
+    }
+}
+
+static bool turbowasm_mir_simd_kind_unary(
+    turbowasm_simd_exec_kind kind) {
+    return kind == TURBOWASM_SIMD_EXEC_UNARY ||
+           kind == TURBOWASM_SIMD_EXEC_EXTEND_HALF ||
+           kind == TURBOWASM_SIMD_EXEC_EXTADD_PAIRWISE ||
+           kind == TURBOWASM_SIMD_EXEC_CONVERT;
+}
+
+static bool turbowasm_mir_simd_kind_binary(
+    turbowasm_simd_exec_kind kind) {
+    return kind == TURBOWASM_SIMD_EXEC_BINARY ||
+           kind == TURBOWASM_SIMD_EXEC_COMPARE ||
+           kind == TURBOWASM_SIMD_EXEC_SATURATING ||
+           kind == TURBOWASM_SIMD_EXEC_NARROW ||
+           kind == TURBOWASM_SIMD_EXEC_EXTMUL_HALF ||
+           kind == TURBOWASM_SIMD_EXEC_Q15MULR ||
+           kind == TURBOWASM_SIMD_EXEC_DOT_PAIRWISE ||
+           kind == TURBOWASM_SIMD_EXEC_SWIZZLE;
+}
+
+static bool turbowasm_mir_simd_stack_pop(
+    uint8_t *types,
+    uint32_t *size,
+    uint8_t expected) {
+    if (types == NULL || size == NULL || *size == 0u)
+        return false;
+    if (types[*size - 1u] != expected)
+        return false;
+    --*size;
+    return true;
+}
+
+static bool turbowasm_mir_scan_simd_straightline(
+    const turbowasm_validation_context *validation,
+    uint32_t function_index,
+    const turbowasm_validation_function *function,
+    uint32_t *out_register_count,
+    uint32_t *out_slot_count,
+    uint8_t *out_result_type) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_reader reader;
+    uint8_t *types = NULL;
+    uint32_t stack_size = 0u;
+    uint32_t register_count = 0u;
+    uint32_t slot_count = 0u;
+    uint32_t index;
+    bool saw_simd = false;
+    bool ok = false;
+
+    if (validation == NULL || function == NULL ||
+        function->imported || function->code == NULL ||
+        function->code_size == 0u)
+        return false;
+
+    type = turbowasm_validation_context_function_type(
+        validation, function_index);
+    if (!turbowasm_mir_call_signature_supported(type))
+        return false;
+
+    for (index = 0u; index < function->local_count; ++index) {
+        if (!turbowasm_mir_scalar_type(function->local_types[index]))
+            return false;
+    }
+
+    types = (uint8_t *)calloc(
+        (size_t)function->code_size + 1u, sizeof(*types));
+    if (types == NULL)
+        return false;
+
+    turbowasm_reader_init(
+        &reader, function->code, function->code_size);
+
+    while (turbowasm_reader_remaining(&reader) != 0u) {
+        uint8_t opcode;
+
+        if (!turbowasm_reader_u8(&reader, &opcode))
+            goto done;
+
+        if (opcode == 0x20u) { /* local.get */
+            uint32_t local_index;
+            if (!turbowasm_reader_uleb32(&reader, &local_index) ||
+                local_index >= function->local_count)
+                goto done;
+            types[stack_size++] = function->local_types[local_index];
+            ++register_count;
+            continue;
+        }
+
+        if (opcode == 0x41u) {
+            int32_t value;
+            if (!turbowasm_reader_sleb32(&reader, &value))
+                goto done;
+            (void)value;
+            types[stack_size++] = 0x7fu;
+            ++register_count;
+            continue;
+        }
+
+        if (opcode == 0x42u) {
+            int64_t value;
+            if (!turbowasm_reader_sleb64(&reader, &value))
+                goto done;
+            (void)value;
+            types[stack_size++] = 0x7eu;
+            ++register_count;
+            continue;
+        }
+
+        if (opcode == 0x43u) {
+            uint32_t bits;
+            float value;
+            if (!turbowasm_reader_u32le(&reader, &bits))
+                goto done;
+            memcpy(&value, &bits, sizeof(value));
+            if (!isfinite(value))
+                goto done;
+            types[stack_size++] = 0x7du;
+            ++register_count;
+            continue;
+        }
+
+        if (opcode == 0x44u) {
+            turbowasm_reader bytes;
+            uint64_t bits = 0u;
+            double value;
+            if (!turbowasm_reader_slice(&reader, 8u, &bytes))
+                goto done;
+            for (index = 0u; index < 8u; ++index)
+                bits |= (uint64_t)bytes.cursor[index] << (8u * index);
+            memcpy(&value, &bits, sizeof(value));
+            if (!isfinite(value))
+                goto done;
+            types[stack_size++] = 0x7cu;
+            ++register_count;
+            continue;
+        }
+
+        if (turbowasm_mir_binary_type(opcode) != 0u) {
+            uint8_t expected = turbowasm_mir_binary_type(opcode);
+            if (!turbowasm_mir_simd_stack_pop(
+                    types, &stack_size, expected) ||
+                !turbowasm_mir_simd_stack_pop(
+                    types, &stack_size, expected))
+                goto done;
+            types[stack_size++] = expected;
+            ++register_count;
+            continue;
+        }
+
+        if (opcode == 0xfdu) {
+            uint32_t subopcode;
+            const turbowasm_simd_exec_descriptor *descriptor;
+
+            if (!turbowasm_reader_uleb32(&reader, &subopcode))
+                goto done;
+
+            saw_simd = true;
+
+            if (subopcode == 0x0cu) { /* v128.const */
+                turbowasm_reader bytes;
+                if (!turbowasm_reader_slice(&reader, 16u, &bytes))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (subopcode == 0x00u || subopcode == 0x0bu) {
+                uint32_t alignment;
+                uint32_t offset;
+                if (!turbowasm_reader_uleb32(
+                        &reader, &alignment) ||
+                    !turbowasm_reader_uleb32(
+                        &reader, &offset))
+                    goto done;
+                (void)alignment;
+                (void)offset;
+
+                if (subopcode == 0x00u) {
+                    if (!turbowasm_mir_simd_stack_pop(
+                            types, &stack_size, 0x7fu))
+                        goto done;
+                    types[stack_size++] = 0x7bu;
+                    ++slot_count;
+                } else {
+                    if (!turbowasm_mir_simd_stack_pop(
+                            types, &stack_size, 0x7bu) ||
+                        !turbowasm_mir_simd_stack_pop(
+                            types, &stack_size, 0x7fu))
+                        goto done;
+                }
+                continue;
+            }
+
+            descriptor =
+                turbowasm_simd_exec_descriptor_find(subopcode);
+            if (descriptor == NULL)
+                goto done;
+
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_SPLAT) {
+                uint8_t scalar_type =
+                    turbowasm_mir_simd_splat_scalar_type(descriptor);
+                if (scalar_type == 0u ||
+                    !turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, scalar_type))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (turbowasm_mir_simd_kind_unary(descriptor->kind)) {
+                if (!turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (turbowasm_mir_simd_kind_binary(descriptor->kind)) {
+                if (!turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu) ||
+                    !turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_SHIFT) {
+                if (!turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7fu) ||
+                    !turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_SELECT) {
+                if (!turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu) ||
+                    !turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu) ||
+                    !turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu))
+                    goto done;
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_REDUCE) {
+                if (!turbowasm_mir_simd_stack_pop(
+                        types, &stack_size, 0x7bu))
+                    goto done;
+                types[stack_size++] = 0x7fu;
+                ++register_count;
+                continue;
+            }
+
+            goto done;
+        }
+
+        if (opcode == 0x0bu) { /* end */
+            if (turbowasm_reader_remaining(&reader) != 0u ||
+                stack_size != 1u ||
+                types[0] != type->results[0] ||
+                !saw_simd)
+                goto done;
+            if (out_register_count != NULL)
+                *out_register_count = register_count;
+            if (out_slot_count != NULL)
+                *out_slot_count = slot_count;
+            if (out_result_type != NULL)
+                *out_result_type = type->results[0];
+            ok = true;
+            goto done;
+        }
+
+        goto done;
+    }
+
+done:
+    free(types);
+    return ok;
+}
+
 typedef struct turbowasm_mir_scan_control {
     const turbowasm_validation_control *annotation;
 } turbowasm_mir_scan_control;
@@ -1156,7 +1476,10 @@ static bool turbowasm_mir_is_function_eligible(
     return turbowasm_mir_scan_scalar_locals(
                validation, function_index, function, NULL, NULL) ||
            turbowasm_mir_scan_structured_scalar(
-               validation, function_index, function, NULL);
+               validation, function_index, function, NULL) ||
+           turbowasm_mir_scan_simd_straightline(
+               validation, function_index, function,
+               NULL, NULL, NULL);
 }
 
 static const char *turbowasm_mir_binary_name(uint8_t opcode) {
@@ -2459,6 +2782,668 @@ done:
     return status;
 }
 
+
+static bool turbowasm_mir_simd_emit_status_guard(
+    turbowasm_mir_text *text) {
+    return turbowasm_mir_text_appendf(
+        text, "bne jit_fail, jit_status, 0\n");
+}
+
+static bool turbowasm_mir_simd_emit_helper_header(
+    turbowasm_mir_text *text,
+    uint32_t module_id,
+    const char *function_name,
+    const char *result_name) {
+    return turbowasm_mir_text_appendf(
+        text,
+        "tw_jit_simd_m_%u: module\n"
+        "tw_simd_const_p: proto i64, p:ctx, i64:slot, "
+            "i64:low, i64:high\n"
+        "tw_simd_splat_i64_p: proto i64, p:ctx, i64:opcode, "
+            "i64:slot, i64:value\n"
+        "tw_simd_splat_f32_p: proto i64, p:ctx, i64:opcode, "
+            "i64:slot, f:value\n"
+        "tw_simd_splat_f64_p: proto i64, p:ctx, i64:opcode, "
+            "i64:slot, d:value\n"
+        "tw_simd_op_p: proto i64, p:ctx, i64:opcode, "
+            "i64:out_slot, i64:a_slot, i64:b_slot, "
+            "i64:c_slot, i64:count\n"
+        "tw_simd_reduce_p: proto i64, p:ctx, i64:opcode, "
+            "i64:slot\n"
+        "tw_simd_memory_p: proto i64, p:ctx, i64:opcode, "
+            "i64:slot, i64:address, i64:offset\n"
+        "tw_call_status_p: proto i64, p:ctx\n"
+        "tw_checkpoint_p: proto i64, p:ctx\n"
+        "import tw_jit_simd_const, tw_jit_simd_splat_i64, "
+            "tw_jit_simd_splat_f32, tw_jit_simd_splat_f64, "
+            "tw_jit_simd_op, tw_jit_simd_reduce, "
+            "tw_jit_simd_memory, tw_jit_call_status, "
+            "tw_jit_checkpoint\n"
+        "export %s\n"
+        "%s: func %s, p:jit_ctx",
+        module_id, function_name, function_name, result_name);
+}
+
+static turbowasm_status turbowasm_mir_compile_simd_straightline(
+    turbowasm_mir_backend_context *backend,
+    const turbowasm_validation_context *validation,
+    uint32_t function_index,
+    const turbowasm_validation_function *function,
+    turbowasm_compiled_function *out) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_mir_compiled *compiled = NULL;
+    turbowasm_mir_stack_value *stack = NULL;
+    turbowasm_mir_text text = {0};
+    turbowasm_reader reader;
+    MIR_module_t module;
+    MIR_item_t function_item;
+    uint32_t register_count = 0u;
+    uint32_t slot_count = 0u;
+    uint32_t next_reg = 0u;
+    uint32_t next_slot = 0u;
+    uint32_t stack_size = 0u;
+    uint32_t index;
+    uint8_t result_type = 0u;
+    uint32_t module_id;
+    char function_name[64];
+    bool finished = false;
+    turbowasm_status status = TURBOWASM_UNSUPPORTED;
+    const char *result_name;
+
+    if (backend == NULL || backend->mir == NULL ||
+        validation == NULL || function == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!turbowasm_mir_scan_simd_straightline(
+            validation, function_index, function,
+            &register_count, &slot_count, &result_type))
+        return TURBOWASM_UNSUPPORTED;
+
+    type = turbowasm_validation_context_function_type(
+        validation, function_index);
+    if (type == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    result_name = turbowasm_mir_type_name(result_type);
+    if (result_name == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    out->impl = NULL;
+    stack = (turbowasm_mir_stack_value *)calloc(
+        (size_t)function->code_size + 1u, sizeof(*stack));
+    if (stack == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    module_id = backend->next_module_id++;
+    if (snprintf(
+            function_name, sizeof(function_name),
+            "tw_jit_simd_f_%u", module_id) <= 0)
+        goto done;
+
+    if (!turbowasm_mir_simd_emit_helper_header(
+            &text, module_id, function_name, result_name))
+        goto oom;
+
+    for (index = 0u; index < type->param_count; ++index) {
+        const char *param_name =
+            turbowasm_mir_type_name(type->params[index]);
+        if (param_name == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, ", %s:l%u", param_name, index))
+            goto oom;
+    }
+    if (!turbowasm_mir_text_appendf(&text, "\n"))
+        goto oom;
+
+    for (index = type->param_count;
+         index < function->local_count;
+         ++index) {
+        const char *local_name =
+            turbowasm_mir_type_name(function->local_types[index]);
+        if (local_name == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, "local %s:l%u\n",
+                local_name, index))
+            goto oom;
+    }
+
+    /*
+     * A scalar temporary may be i64/f32/f64 depending on the Wasm
+     * instruction.  Declare all three MIR register views for each logical
+     * scalar register index, matching the structured scalar compiler.
+     */
+    for (index = 0u; index < register_count + 1u; ++index) {
+        if (!turbowasm_mir_text_appendf(
+                &text,
+                "local i64:r%u\n"
+                "local f:f%u\n"
+                "local d:d%u\n",
+                index, index, index))
+            goto oom;
+    }
+
+    if (!turbowasm_mir_text_appendf(
+            &text,
+            "local i64:jit_status\n"
+            "local %s:jit_fail_value\n",
+            result_name))
+        goto oom;
+
+    for (index = type->param_count;
+         index < function->local_count;
+         ++index) {
+        uint8_t local_type = function->local_types[index];
+        const char *move_name =
+            turbowasm_mir_move_name(local_type);
+        const char *zero =
+            turbowasm_mir_zero_literal(local_type);
+        if (move_name == NULL || zero == NULL ||
+            !turbowasm_mir_text_appendf(
+                &text, "%s l%u, %s\n",
+                move_name, index, zero))
+            goto oom;
+    }
+
+    turbowasm_reader_init(
+        &reader, function->code, function->code_size);
+
+    while (turbowasm_reader_remaining(&reader) != 0u) {
+        uint8_t opcode;
+
+        if (!turbowasm_reader_u8(&reader, &opcode))
+            goto done;
+
+        if (!turbowasm_mir_emit_checkpoint_text(&text))
+            goto oom;
+
+        if (opcode == 0x20u) { /* local.get */
+            uint32_t local_index;
+            uint8_t local_type;
+            const char *move_name;
+            const char *prefix;
+
+            if (!turbowasm_reader_uleb32(
+                    &reader, &local_index) ||
+                local_index >= function->local_count ||
+                next_reg > register_count)
+                goto done;
+
+            local_type = function->local_types[local_index];
+            move_name = turbowasm_mir_move_name(local_type);
+            prefix = turbowasm_mir_reg_prefix(local_type);
+            if (move_name == NULL || prefix == NULL ||
+                !turbowasm_mir_text_appendf(
+                    &text, "%s %s%u, l%u\n",
+                    move_name, prefix, next_reg, local_index))
+                goto oom;
+
+            stack[stack_size].reg = next_reg++;
+            stack[stack_size].type = local_type;
+            ++stack_size;
+            continue;
+        }
+
+        if (opcode == 0x41u) {
+            int32_t value;
+            if (!turbowasm_reader_sleb32(&reader, &value) ||
+                next_reg > register_count)
+                goto done;
+            if (!turbowasm_mir_text_appendf(
+                    &text, "mov r%u, %lld\n",
+                    next_reg, (long long)value))
+                goto oom;
+            stack[stack_size].reg = next_reg++;
+            stack[stack_size].type = 0x7fu;
+            ++stack_size;
+            continue;
+        }
+
+        if (opcode == 0x42u) {
+            int64_t value;
+            if (!turbowasm_reader_sleb64(&reader, &value) ||
+                next_reg > register_count)
+                goto done;
+            if (!turbowasm_mir_text_appendf(
+                    &text, "mov r%u, %lld\n",
+                    next_reg, (long long)value))
+                goto oom;
+            stack[stack_size].reg = next_reg++;
+            stack[stack_size].type = 0x7eu;
+            ++stack_size;
+            continue;
+        }
+
+        if (opcode == 0x43u) {
+            uint32_t bits;
+            float value;
+            if (!turbowasm_reader_u32le(&reader, &bits) ||
+                next_reg > register_count)
+                goto done;
+            memcpy(&value, &bits, sizeof(value));
+            if (!isfinite(value) ||
+                !turbowasm_mir_text_appendf(
+                    &text, "fmov f%u, %.*ef\n",
+                    next_reg,
+                    FLT_DECIMAL_DIG - 1,
+                    (double)value))
+                goto done;
+            stack[stack_size].reg = next_reg++;
+            stack[stack_size].type = 0x7du;
+            ++stack_size;
+            continue;
+        }
+
+        if (opcode == 0x44u) {
+            turbowasm_reader bytes;
+            uint64_t bits = 0u;
+            double value;
+            if (!turbowasm_reader_slice(&reader, 8u, &bytes) ||
+                next_reg > register_count)
+                goto done;
+            for (index = 0u; index < 8u; ++index)
+                bits |= (uint64_t)bytes.cursor[index] << (8u * index);
+            memcpy(&value, &bits, sizeof(value));
+            if (!isfinite(value) ||
+                !turbowasm_mir_text_appendf(
+                    &text, "dmov d%u, %.*e\n",
+                    next_reg,
+                    DBL_DECIMAL_DIG - 1,
+                    value))
+                goto done;
+            stack[stack_size].reg = next_reg++;
+            stack[stack_size].type = 0x7cu;
+            ++stack_size;
+            continue;
+        }
+
+        if (turbowasm_mir_binary_type(opcode) != 0u) {
+            uint8_t expected = turbowasm_mir_binary_type(opcode);
+            const char *name = turbowasm_mir_binary_name(opcode);
+            const char *prefix = turbowasm_mir_reg_prefix(expected);
+            turbowasm_mir_stack_value right;
+            turbowasm_mir_stack_value left;
+
+            if (name == NULL || prefix == NULL ||
+                stack_size < 2u ||
+                next_reg > register_count)
+                goto done;
+
+            right = stack[--stack_size];
+            left = stack[--stack_size];
+            if (left.type != expected || right.type != expected)
+                goto done;
+
+            if (!turbowasm_mir_text_appendf(
+                    &text, "%s %s%u, %s%u, %s%u\n",
+                    name,
+                    prefix, next_reg,
+                    prefix, left.reg,
+                    prefix, right.reg))
+                goto oom;
+
+            stack[stack_size].reg = next_reg++;
+            stack[stack_size].type = expected;
+            ++stack_size;
+            continue;
+        }
+
+        if (opcode == 0xfdu) {
+            uint32_t subopcode;
+            const turbowasm_simd_exec_descriptor *descriptor;
+
+            if (!turbowasm_reader_uleb32(&reader, &subopcode))
+                goto done;
+
+            if (subopcode == 0x0cu) { /* v128.const */
+                turbowasm_reader bytes;
+                uint64_t low = 0u;
+                uint64_t high = 0u;
+                int64_t low_signed;
+                int64_t high_signed;
+
+                if (!turbowasm_reader_slice(
+                        &reader, 16u, &bytes) ||
+                    next_slot >= slot_count)
+                    goto done;
+
+                for (index = 0u; index < 8u; ++index) {
+                    low |= (uint64_t)bytes.cursor[index] <<
+                           (8u * index);
+                    high |= (uint64_t)bytes.cursor[8u + index] <<
+                            (8u * index);
+                }
+                memcpy(&low_signed, &low, sizeof(low_signed));
+                memcpy(&high_signed, &high, sizeof(high_signed));
+
+                if (!turbowasm_mir_text_appendf(
+                        &text,
+                        "call tw_simd_const_p, tw_jit_simd_const, "
+                        "jit_status, jit_ctx, %u, %lld, %lld\n",
+                        next_slot,
+                        (long long)low_signed,
+                        (long long)high_signed) ||
+                    !turbowasm_mir_simd_emit_status_guard(&text))
+                    goto oom;
+
+                stack[stack_size].reg = next_slot++;
+                stack[stack_size].type = 0x7bu;
+                ++stack_size;
+                continue;
+            }
+
+            if (subopcode == 0x00u || subopcode == 0x0bu) {
+                uint32_t alignment;
+                uint32_t offset;
+                turbowasm_mir_stack_value address;
+                turbowasm_mir_stack_value vector_value;
+
+                if (!turbowasm_reader_uleb32(
+                        &reader, &alignment) ||
+                    !turbowasm_reader_uleb32(
+                        &reader, &offset))
+                    goto done;
+                (void)alignment;
+
+                if (subopcode == 0x00u) {
+                    if (stack_size < 1u || next_slot >= slot_count)
+                        goto done;
+                    address = stack[--stack_size];
+                    if (address.type != 0x7fu)
+                        goto done;
+
+                    if (!turbowasm_mir_text_appendf(
+                            &text,
+                            "call tw_simd_memory_p, "
+                            "tw_jit_simd_memory, jit_status, "
+                            "jit_ctx, 0, %u, r%u, %u\n",
+                            next_slot, address.reg, offset) ||
+                        !turbowasm_mir_simd_emit_status_guard(&text))
+                        goto oom;
+
+                    stack[stack_size].reg = next_slot++;
+                    stack[stack_size].type = 0x7bu;
+                    ++stack_size;
+                } else {
+                    if (stack_size < 2u)
+                        goto done;
+                    vector_value = stack[--stack_size];
+                    address = stack[--stack_size];
+                    if (vector_value.type != 0x7bu ||
+                        address.type != 0x7fu)
+                        goto done;
+
+                    if (!turbowasm_mir_text_appendf(
+                            &text,
+                            "call tw_simd_memory_p, "
+                            "tw_jit_simd_memory, jit_status, "
+                            "jit_ctx, 11, %u, r%u, %u\n",
+                            vector_value.reg, address.reg, offset) ||
+                        !turbowasm_mir_simd_emit_status_guard(&text))
+                        goto oom;
+                }
+                continue;
+            }
+
+            descriptor =
+                turbowasm_simd_exec_descriptor_find(subopcode);
+            if (descriptor == NULL)
+                goto done;
+
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_SPLAT) {
+                uint8_t scalar_type =
+                    turbowasm_mir_simd_splat_scalar_type(descriptor);
+                turbowasm_mir_stack_value scalar;
+                const char *prefix;
+
+                if (stack_size < 1u || scalar_type == 0u ||
+                    next_slot >= slot_count)
+                    goto done;
+                scalar = stack[--stack_size];
+                if (scalar.type != scalar_type)
+                    goto done;
+                prefix = turbowasm_mir_reg_prefix(scalar_type);
+                if (prefix == NULL)
+                    goto done;
+
+                if (scalar_type == 0x7du) {
+                    if (!turbowasm_mir_text_appendf(
+                            &text,
+                            "call tw_simd_splat_f32_p, "
+                            "tw_jit_simd_splat_f32, jit_status, "
+                            "jit_ctx, %u, %u, f%u\n",
+                            subopcode, next_slot, scalar.reg))
+                        goto oom;
+                } else if (scalar_type == 0x7cu) {
+                    if (!turbowasm_mir_text_appendf(
+                            &text,
+                            "call tw_simd_splat_f64_p, "
+                            "tw_jit_simd_splat_f64, jit_status, "
+                            "jit_ctx, %u, %u, d%u\n",
+                            subopcode, next_slot, scalar.reg))
+                        goto oom;
+                } else {
+                    if (!turbowasm_mir_text_appendf(
+                            &text,
+                            "call tw_simd_splat_i64_p, "
+                            "tw_jit_simd_splat_i64, jit_status, "
+                            "jit_ctx, %u, %u, r%u\n",
+                            subopcode, next_slot, scalar.reg))
+                        goto oom;
+                }
+
+                if (!turbowasm_mir_simd_emit_status_guard(&text))
+                    goto oom;
+
+                stack[stack_size].reg = next_slot++;
+                stack[stack_size].type = 0x7bu;
+                ++stack_size;
+                continue;
+            }
+
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_REDUCE) {
+                turbowasm_mir_stack_value vector_value;
+
+                if (stack_size < 1u ||
+                    next_reg > register_count)
+                    goto done;
+                vector_value = stack[--stack_size];
+                if (vector_value.type != 0x7bu)
+                    goto done;
+
+                if (!turbowasm_mir_text_appendf(
+                        &text,
+                        "call tw_simd_reduce_p, "
+                        "tw_jit_simd_reduce, r%u, "
+                        "jit_ctx, %u, %u\n"
+                        "call tw_call_status_p, "
+                        "tw_jit_call_status, jit_status, jit_ctx\n",
+                        next_reg, subopcode, vector_value.reg) ||
+                    !turbowasm_mir_simd_emit_status_guard(&text))
+                    goto oom;
+
+                stack[stack_size].reg = next_reg++;
+                stack[stack_size].type = 0x7fu;
+                ++stack_size;
+                continue;
+            }
+
+            {
+                turbowasm_mir_stack_value a = {0};
+                turbowasm_mir_stack_value b = {0};
+                turbowasm_mir_stack_value c = {0};
+                turbowasm_mir_stack_value count = {0};
+                int64_t a_slot = -1;
+                int64_t b_slot = -1;
+                int64_t c_slot = -1;
+                uint32_t count_reg = UINT32_MAX;
+
+                if (next_slot >= slot_count)
+                    goto done;
+
+                if (turbowasm_mir_simd_kind_unary(
+                        descriptor->kind)) {
+                    if (stack_size < 1u)
+                        goto done;
+                    a = stack[--stack_size];
+                    if (a.type != 0x7bu)
+                        goto done;
+                    a_slot = (int64_t)a.reg;
+                } else if (turbowasm_mir_simd_kind_binary(
+                               descriptor->kind)) {
+                    if (stack_size < 2u)
+                        goto done;
+                    b = stack[--stack_size];
+                    a = stack[--stack_size];
+                    if (a.type != 0x7bu || b.type != 0x7bu)
+                        goto done;
+                    a_slot = (int64_t)a.reg;
+                    b_slot = (int64_t)b.reg;
+                } else if (
+                    descriptor->kind == TURBOWASM_SIMD_EXEC_SHIFT) {
+                    if (stack_size < 2u)
+                        goto done;
+                    count = stack[--stack_size];
+                    a = stack[--stack_size];
+                    if (count.type != 0x7fu || a.type != 0x7bu)
+                        goto done;
+                    a_slot = (int64_t)a.reg;
+                    count_reg = count.reg;
+                } else if (
+                    descriptor->kind == TURBOWASM_SIMD_EXEC_SELECT) {
+                    if (stack_size < 3u)
+                        goto done;
+                    c = stack[--stack_size];
+                    b = stack[--stack_size];
+                    a = stack[--stack_size];
+                    if (a.type != 0x7bu ||
+                        b.type != 0x7bu ||
+                        c.type != 0x7bu)
+                        goto done;
+                    a_slot = (int64_t)a.reg;
+                    b_slot = (int64_t)b.reg;
+                    c_slot = (int64_t)c.reg;
+                } else {
+                    goto done;
+                }
+
+                if (count_reg != UINT32_MAX) {
+                    if (!turbowasm_mir_text_appendf(
+                            &text,
+                            "call tw_simd_op_p, tw_jit_simd_op, "
+                            "jit_status, jit_ctx, %u, %u, "
+                            "%lld, %lld, %lld, r%u\n",
+                            subopcode, next_slot,
+                            (long long)a_slot,
+                            (long long)b_slot,
+                            (long long)c_slot,
+                            count_reg))
+                        goto oom;
+                } else {
+                    if (!turbowasm_mir_text_appendf(
+                            &text,
+                            "call tw_simd_op_p, tw_jit_simd_op, "
+                            "jit_status, jit_ctx, %u, %u, "
+                            "%lld, %lld, %lld, 0\n",
+                            subopcode, next_slot,
+                            (long long)a_slot,
+                            (long long)b_slot,
+                            (long long)c_slot))
+                        goto oom;
+                }
+
+                if (!turbowasm_mir_simd_emit_status_guard(&text))
+                    goto oom;
+
+                stack[stack_size].reg = next_slot++;
+                stack[stack_size].type = 0x7bu;
+                ++stack_size;
+                continue;
+            }
+        }
+
+        if (opcode == 0x0bu) {
+            const char *prefix;
+            const char *fail_move;
+            const char *fail_zero;
+
+            if (turbowasm_reader_remaining(&reader) != 0u ||
+                stack_size != 1u ||
+                stack[0].type != result_type)
+                goto done;
+
+            prefix = turbowasm_mir_reg_prefix(result_type);
+            fail_move = turbowasm_mir_move_name(result_type);
+            fail_zero = turbowasm_mir_zero_literal(result_type);
+            if (prefix == NULL || fail_move == NULL || fail_zero == NULL ||
+                !turbowasm_mir_text_appendf(
+                    &text,
+                    "ret %s%u\n"
+                    "jit_fail:\n"
+                    "%s jit_fail_value, %s\n"
+                    "ret jit_fail_value\n"
+                    "endfunc\n"
+                    "endmodule\n",
+                    prefix, stack[0].reg,
+                    fail_move, fail_zero))
+                goto oom;
+
+            finished = true;
+            break;
+        }
+
+        goto done;
+    }
+
+    if (!finished || text.data == NULL)
+        goto done;
+
+    MIR_scan_string(backend->mir, text.data);
+
+    module = DLIST_TAIL(
+        MIR_module_t, *MIR_get_module_list(backend->mir));
+    if (module == NULL)
+        goto done;
+
+    function_item = DLIST_TAIL(MIR_item_t, module->items);
+    if (function_item == NULL ||
+        strcmp(
+            MIR_item_name(backend->mir, function_item),
+            function_name) != 0)
+        goto done;
+
+    MIR_load_module(backend->mir, module);
+    MIR_link(backend->mir, MIR_set_gen_interface, NULL);
+
+    compiled = (turbowasm_mir_compiled *)calloc(
+        1u, sizeof(*compiled));
+    if (compiled == NULL)
+        goto oom;
+
+    compiled->generated = MIR_gen(backend->mir, function_item);
+    if (compiled->generated == NULL)
+        goto done;
+
+    compiled->result_type = result_type;
+    compiled->param_count = (uint8_t)type->param_count;
+    compiled->simd_slot_count = slot_count;
+    for (index = 0u; index < type->param_count; ++index)
+        compiled->param_types[index] = type->params[index];
+
+    out->impl = compiled;
+    compiled = NULL;
+    status = TURBOWASM_OK;
+    goto done;
+
+oom:
+    status = TURBOWASM_OUT_OF_MEMORY;
+
+done:
+    free(compiled);
+    free(stack);
+    free(text.data);
+    return status;
+}
+
 static turbowasm_status turbowasm_mir_compile_function(
     void *context,
     const struct turbowasm_validation_context *validation,
@@ -2498,6 +3483,11 @@ static turbowasm_status turbowasm_mir_compile_function(
     if (!turbowasm_mir_scan_scalar_locals(
             validation, function_index, function,
             &register_count, &result_type)) {
+        turbowasm_status simd_status =
+            turbowasm_mir_compile_simd_straightline(
+                backend, validation, function_index, function, out);
+        if (simd_status != TURBOWASM_UNSUPPORTED)
+            return simd_status;
         return turbowasm_mir_compile_structured_scalar(
             backend, validation, function_index, function, out);
     }
@@ -2971,7 +3961,7 @@ static bool turbowasm_mir_argument_matches(
     }
 }
 
-static turbowasm_status turbowasm_mir_invoke_compiled(
+static turbowasm_status turbowasm_mir_invoke_compiled_inner(
     const turbowasm_compiled_function *compiled,
     turbowasm_jit_invocation_context *context,
     const turbowasm_value *arguments,
@@ -3138,6 +4128,56 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
     return TURBOWASM_OK;
 }
 
+
+static turbowasm_status turbowasm_mir_invoke_compiled(
+    const turbowasm_compiled_function *compiled,
+    turbowasm_jit_invocation_context *context,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    const turbowasm_mir_compiled *function;
+    salts_v128 *saved_slots;
+    uint32_t saved_count;
+    salts_v128 *slots = NULL;
+    turbowasm_status status;
+
+    if (compiled == NULL || compiled->impl == NULL ||
+        context == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    function = (const turbowasm_mir_compiled *)compiled->impl;
+    saved_slots = context->simd_slots;
+    saved_count = context->simd_slot_count;
+
+    if (function->simd_slot_count != 0u) {
+        if ((uint64_t)function->simd_slot_count *
+                sizeof(*slots) > (uint64_t)SIZE_MAX)
+            return TURBOWASM_OUT_OF_MEMORY;
+        slots = (salts_v128 *)calloc(
+            (size_t)function->simd_slot_count,
+            sizeof(*slots));
+        if (slots == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    context->simd_slots = slots;
+    context->simd_slot_count = function->simd_slot_count;
+
+    status = turbowasm_mir_invoke_compiled_inner(
+        compiled, context,
+        arguments, argument_count,
+        results, result_capacity,
+        result_count, trap);
+
+    context->simd_slots = saved_slots;
+    context->simd_slot_count = saved_count;
+    free(slots);
+    return status;
+}
+
 static void turbowasm_mir_destroy_function(
     void *context,
     turbowasm_compiled_function *compiled) {
@@ -3250,6 +4290,85 @@ static bool turbowasm_mir_register_call_externals(
         memcpy(&address, &fn, sizeof(address));
         MIR_load_external(
             backend->mir, "tw_jit_checkpoint", address);
+    }
+
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, int64_t, int64_t) =
+                turbowasm_jit_simd_const;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_const", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, int64_t) =
+                turbowasm_jit_simd_splat_i64;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_splat_i64", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, float) =
+                turbowasm_jit_simd_splat_f32;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_splat_f32", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, double) =
+                turbowasm_jit_simd_splat_f64;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_splat_f64", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, int64_t, int64_t,
+            int64_t, int64_t) =
+                turbowasm_jit_simd_op;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_op", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t) =
+                turbowasm_jit_simd_reduce;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_reduce", address);
+    }
+    {
+        int64_t (*fn)(
+            turbowasm_jit_invocation_context *,
+            int64_t, int64_t, int64_t, int64_t) =
+                turbowasm_jit_simd_memory;
+        _Static_assert(sizeof(fn) == sizeof(address),
+                       "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(
+            backend->mir, "tw_jit_simd_memory", address);
     }
 
     return true;
