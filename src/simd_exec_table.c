@@ -231,6 +231,8 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
        TURBOWASM_V128_RAW),
     BIN(0x4eu, cmeta_vector_i8x16, SALTS_SIMD_BINARY_AND,
         TURBOWASM_V128_RAW),
+    BIN(0x4fu, cmeta_vector_i8x16, SALTS_SIMD_BINARY_AND_NOT,
+        TURBOWASM_V128_RAW),
     BIN(0x50u, cmeta_vector_i8x16, SALTS_SIMD_BINARY_OR,
         TURBOWASM_V128_RAW),
     BIN(0x51u, cmeta_vector_i8x16, SALTS_SIMD_BINARY_XOR,
@@ -249,6 +251,16 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
        TURBOWASM_V128_I8X16),
     RED(0x63u, cmeta_vector_i8x16, SALTS_SIMD_REDUCE_ALL_TRUE),
     RED(0x64u, cmeta_vector_i8x16, SALTS_SIMD_REDUCE_BITMASK),
+
+    /* floating rounding opcodes occupy the 0x67-0x6a SIMD slots */
+    UN(0x67u, cmeta_vector_f32x4, SALTS_SIMD_UNARY_CEIL,
+       TURBOWASM_V128_F32X4),
+    UN(0x68u, cmeta_vector_f32x4, SALTS_SIMD_UNARY_FLOOR,
+       TURBOWASM_V128_F32X4),
+    UN(0x69u, cmeta_vector_f32x4, SALTS_SIMD_UNARY_TRUNC,
+       TURBOWASM_V128_F32X4),
+    UN(0x6au, cmeta_vector_f32x4, SALTS_SIMD_UNARY_NEAREST,
+       TURBOWASM_V128_F32X4),
 
     /* integer shifts and wrapping arithmetic */
     SH(0x6bu, cmeta_vector_i8x16, SALTS_SIMD_SHIFT_LEFT,
@@ -276,6 +288,15 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
     BIN(0x78u, cmeta_vector_i8x16, SALTS_SIMD_BINARY_MAX,
         TURBOWASM_V128_I8X16),
     BIN(0x79u, cmeta_vector_u8x16, SALTS_SIMD_BINARY_MAX,
+        TURBOWASM_V128_U8X16),
+    UN(0x74u, cmeta_vector_f64x2, SALTS_SIMD_UNARY_CEIL,
+       TURBOWASM_V128_F64X2),
+    UN(0x75u, cmeta_vector_f64x2, SALTS_SIMD_UNARY_FLOOR,
+       TURBOWASM_V128_F64X2),
+    UN(0x7au, cmeta_vector_f64x2, SALTS_SIMD_UNARY_TRUNC,
+       TURBOWASM_V128_F64X2),
+    BIN(0x7bu, cmeta_vector_u8x16,
+        SALTS_SIMD_BINARY_AVERAGE_ROUND_UNSIGNED,
         TURBOWASM_V128_U8X16),
 
     UN(0x80u, cmeta_vector_i16x8, SALTS_SIMD_UNARY_ABS,
@@ -312,6 +333,11 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
     BIN(0x98u, cmeta_vector_i16x8, SALTS_SIMD_BINARY_MAX,
         TURBOWASM_V128_I16X8),
     BIN(0x99u, cmeta_vector_u16x8, SALTS_SIMD_BINARY_MAX,
+        TURBOWASM_V128_U16X8),
+    UN(0x94u, cmeta_vector_f64x2, SALTS_SIMD_UNARY_NEAREST,
+       TURBOWASM_V128_F64X2),
+    BIN(0x9bu, cmeta_vector_u16x8,
+        SALTS_SIMD_BINARY_AVERAGE_ROUND_UNSIGNED,
         TURBOWASM_V128_U16X8),
 
     UN(0xa0u, cmeta_vector_i32x4, SALTS_SIMD_UNARY_ABS,
