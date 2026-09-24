@@ -23,6 +23,14 @@
     { (opcode_), TURBOWASM_SIMD_EXEC_SELECT, &cmeta_vector_i8x16, \
       0u, TURBOWASM_V128_RAW, 0u }
 
+#define SAT(opcode_, desc_, op_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_SATURATING, &(desc_), \
+      (uint8_t)(op_), (shape_), 0u }
+
+#define RED(opcode_, desc_, op_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_REDUCE, &(desc_), \
+      (uint8_t)(op_), TURBOWASM_V128_RAW, 0u }
+
 #define MEXT(opcode_, desc_, width_, shape_) \
     { (opcode_), TURBOWASM_SIMD_EXEC_MEMORY_EXTEND, &(desc_), \
       0u, (shape_), (width_) }
@@ -229,6 +237,19 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_RAW),
     SEL(0x52u),
 
+    /* reductions */
+    RED(0x53u, cmeta_vector_i8x16, SALTS_SIMD_REDUCE_ANY_TRUE),
+
+    /* advanced i8x16 numeric */
+    UN(0x60u, cmeta_vector_i8x16, SALTS_SIMD_UNARY_ABS,
+       TURBOWASM_V128_I8X16),
+    UN(0x61u, cmeta_vector_i8x16, SALTS_SIMD_UNARY_NEG,
+       TURBOWASM_V128_I8X16),
+    UN(0x62u, cmeta_vector_i8x16, SALTS_SIMD_UNARY_POPCOUNT,
+       TURBOWASM_V128_I8X16),
+    RED(0x63u, cmeta_vector_i8x16, SALTS_SIMD_REDUCE_ALL_TRUE),
+    RED(0x64u, cmeta_vector_i8x16, SALTS_SIMD_REDUCE_BITMASK),
+
     /* integer shifts and wrapping arithmetic */
     SH(0x6bu, cmeta_vector_i8x16, SALTS_SIMD_SHIFT_LEFT,
        TURBOWASM_V128_I8X16),
@@ -238,8 +259,31 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
        TURBOWASM_V128_U8X16),
     BIN(0x6eu, cmeta_vector_i8x16, SALTS_SIMD_BINARY_ADD,
         TURBOWASM_V128_I8X16),
+    SAT(0x6fu, cmeta_vector_i8x16, SALTS_SIMD_SATURATING_ADD,
+        TURBOWASM_V128_I8X16),
+    SAT(0x70u, cmeta_vector_u8x16, SALTS_SIMD_SATURATING_ADD,
+        TURBOWASM_V128_U8X16),
     BIN(0x71u, cmeta_vector_i8x16, SALTS_SIMD_BINARY_SUB,
         TURBOWASM_V128_I8X16),
+    SAT(0x72u, cmeta_vector_i8x16, SALTS_SIMD_SATURATING_SUB,
+        TURBOWASM_V128_I8X16),
+    SAT(0x73u, cmeta_vector_u8x16, SALTS_SIMD_SATURATING_SUB,
+        TURBOWASM_V128_U8X16),
+    BIN(0x76u, cmeta_vector_i8x16, SALTS_SIMD_BINARY_MIN,
+        TURBOWASM_V128_I8X16),
+    BIN(0x77u, cmeta_vector_u8x16, SALTS_SIMD_BINARY_MIN,
+        TURBOWASM_V128_U8X16),
+    BIN(0x78u, cmeta_vector_i8x16, SALTS_SIMD_BINARY_MAX,
+        TURBOWASM_V128_I8X16),
+    BIN(0x79u, cmeta_vector_u8x16, SALTS_SIMD_BINARY_MAX,
+        TURBOWASM_V128_U8X16),
+
+    UN(0x80u, cmeta_vector_i16x8, SALTS_SIMD_UNARY_ABS,
+       TURBOWASM_V128_I16X8),
+    UN(0x81u, cmeta_vector_i16x8, SALTS_SIMD_UNARY_NEG,
+       TURBOWASM_V128_I16X8),
+    RED(0x83u, cmeta_vector_i16x8, SALTS_SIMD_REDUCE_ALL_TRUE),
+    RED(0x84u, cmeta_vector_i16x8, SALTS_SIMD_REDUCE_BITMASK),
 
     SH(0x8bu, cmeta_vector_i16x8, SALTS_SIMD_SHIFT_LEFT,
        TURBOWASM_V128_I16X8),
@@ -249,10 +293,33 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
        TURBOWASM_V128_U16X8),
     BIN(0x8eu, cmeta_vector_i16x8, SALTS_SIMD_BINARY_ADD,
         TURBOWASM_V128_I16X8),
+    SAT(0x8fu, cmeta_vector_i16x8, SALTS_SIMD_SATURATING_ADD,
+        TURBOWASM_V128_I16X8),
+    SAT(0x90u, cmeta_vector_u16x8, SALTS_SIMD_SATURATING_ADD,
+        TURBOWASM_V128_U16X8),
     BIN(0x91u, cmeta_vector_i16x8, SALTS_SIMD_BINARY_SUB,
         TURBOWASM_V128_I16X8),
+    SAT(0x92u, cmeta_vector_i16x8, SALTS_SIMD_SATURATING_SUB,
+        TURBOWASM_V128_I16X8),
+    SAT(0x93u, cmeta_vector_u16x8, SALTS_SIMD_SATURATING_SUB,
+        TURBOWASM_V128_U16X8),
     BIN(0x95u, cmeta_vector_i16x8, SALTS_SIMD_BINARY_MUL,
         TURBOWASM_V128_I16X8),
+    BIN(0x96u, cmeta_vector_i16x8, SALTS_SIMD_BINARY_MIN,
+        TURBOWASM_V128_I16X8),
+    BIN(0x97u, cmeta_vector_u16x8, SALTS_SIMD_BINARY_MIN,
+        TURBOWASM_V128_U16X8),
+    BIN(0x98u, cmeta_vector_i16x8, SALTS_SIMD_BINARY_MAX,
+        TURBOWASM_V128_I16X8),
+    BIN(0x99u, cmeta_vector_u16x8, SALTS_SIMD_BINARY_MAX,
+        TURBOWASM_V128_U16X8),
+
+    UN(0xa0u, cmeta_vector_i32x4, SALTS_SIMD_UNARY_ABS,
+       TURBOWASM_V128_I32X4),
+    UN(0xa1u, cmeta_vector_i32x4, SALTS_SIMD_UNARY_NEG,
+       TURBOWASM_V128_I32X4),
+    RED(0xa3u, cmeta_vector_i32x4, SALTS_SIMD_REDUCE_ALL_TRUE),
+    RED(0xa4u, cmeta_vector_i32x4, SALTS_SIMD_REDUCE_BITMASK),
 
     SH(0xabu, cmeta_vector_i32x4, SALTS_SIMD_SHIFT_LEFT,
        TURBOWASM_V128_I32X4),
@@ -266,6 +333,21 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_I32X4),
     BIN(0xb5u, cmeta_vector_i32x4, SALTS_SIMD_BINARY_MUL,
         TURBOWASM_V128_I32X4),
+    BIN(0xb6u, cmeta_vector_i32x4, SALTS_SIMD_BINARY_MIN,
+        TURBOWASM_V128_I32X4),
+    BIN(0xb7u, cmeta_vector_u32x4, SALTS_SIMD_BINARY_MIN,
+        TURBOWASM_V128_U32X4),
+    BIN(0xb8u, cmeta_vector_i32x4, SALTS_SIMD_BINARY_MAX,
+        TURBOWASM_V128_I32X4),
+    BIN(0xb9u, cmeta_vector_u32x4, SALTS_SIMD_BINARY_MAX,
+        TURBOWASM_V128_U32X4),
+
+    UN(0xc0u, cmeta_vector_i64x2, SALTS_SIMD_UNARY_ABS,
+       TURBOWASM_V128_I64X2),
+    UN(0xc1u, cmeta_vector_i64x2, SALTS_SIMD_UNARY_NEG,
+       TURBOWASM_V128_I64X2),
+    RED(0xc3u, cmeta_vector_i64x2, SALTS_SIMD_REDUCE_ALL_TRUE),
+    RED(0xc4u, cmeta_vector_i64x2, SALTS_SIMD_REDUCE_BITMASK),
 
     SH(0xcbu, cmeta_vector_i64x2, SALTS_SIMD_SHIFT_LEFT,
        TURBOWASM_V128_I64X2),
@@ -294,6 +376,12 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_B64X2),
 
     /* floating-point arithmetic */
+    UN(0xe0u, cmeta_vector_f32x4, SALTS_SIMD_UNARY_ABS,
+       TURBOWASM_V128_F32X4),
+    UN(0xe1u, cmeta_vector_f32x4, SALTS_SIMD_UNARY_NEG,
+       TURBOWASM_V128_F32X4),
+    UN(0xe3u, cmeta_vector_f32x4, SALTS_SIMD_UNARY_SQRT,
+       TURBOWASM_V128_F32X4),
     BIN(0xe4u, cmeta_vector_f32x4, SALTS_SIMD_BINARY_ADD,
         TURBOWASM_V128_F32X4),
     BIN(0xe5u, cmeta_vector_f32x4, SALTS_SIMD_BINARY_SUB,
@@ -302,6 +390,17 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
         TURBOWASM_V128_F32X4),
     BIN(0xe7u, cmeta_vector_f32x4, SALTS_SIMD_BINARY_DIV,
         TURBOWASM_V128_F32X4),
+    BIN(0xe8u, cmeta_vector_f32x4, SALTS_SIMD_BINARY_MIN,
+        TURBOWASM_V128_F32X4),
+    BIN(0xe9u, cmeta_vector_f32x4, SALTS_SIMD_BINARY_MAX,
+        TURBOWASM_V128_F32X4),
+
+    UN(0xecu, cmeta_vector_f64x2, SALTS_SIMD_UNARY_ABS,
+       TURBOWASM_V128_F64X2),
+    UN(0xedu, cmeta_vector_f64x2, SALTS_SIMD_UNARY_NEG,
+       TURBOWASM_V128_F64X2),
+    UN(0xefu, cmeta_vector_f64x2, SALTS_SIMD_UNARY_SQRT,
+       TURBOWASM_V128_F64X2),
 
     BIN(0xf0u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_ADD,
         TURBOWASM_V128_F64X2),
@@ -310,6 +409,10 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
     BIN(0xf2u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_MUL,
         TURBOWASM_V128_F64X2),
     BIN(0xf3u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_DIV,
+        TURBOWASM_V128_F64X2),
+    BIN(0xf4u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_MIN,
+        TURBOWASM_V128_F64X2),
+    BIN(0xf5u, cmeta_vector_f64x2, SALTS_SIMD_BINARY_MAX,
         TURBOWASM_V128_F64X2)
 };
 
@@ -322,6 +425,8 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
 #undef MZERO
 #undef MSPLAT
 #undef MEXT
+#undef RED
+#undef SAT
 #undef SEL
 #undef SH
 #undef CMP
