@@ -1804,6 +1804,34 @@ static turbowasm_status turbowasm_exec_simd_generic(
                 &left.as.v128.bits);
             break;
 
+        case TURBOWASM_SIMD_EXEC_Q15MULR:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &right);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &left);
+            if (status != TURBOWASM_OK) return status;
+            supported = salts_simd_q15mulr_sat(
+                descriptor->vector_desc,
+                &out.as.v128.bits,
+                &left.as.v128.bits,
+                &right.as.v128.bits);
+            break;
+
+        case TURBOWASM_SIMD_EXEC_DOT_PAIRWISE:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &right);
+            if (status != TURBOWASM_OK) return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &left);
+            if (status != TURBOWASM_OK) return status;
+            supported = salts_simd_dot_pairwise(
+                descriptor->vector_desc,
+                &out.as.v128.bits,
+                &left.as.v128.bits,
+                &right.as.v128.bits);
+            break;
+
         case TURBOWASM_SIMD_EXEC_SPLAT:
         default:
             return TURBOWASM_UNSUPPORTED;
