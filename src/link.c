@@ -197,7 +197,9 @@ turbowasm_status turbowasm_linker_bind_instance(
     const turbowasm_module_impl *module,
     const turbowasm_linker *linker) {
     const turbowasm_linker_impl *linker_impl;
-    turbowasm_linked_function *bindings = NULL;
+    turbowasm_linked_function *function_bindings = NULL;
+    turbowasm_linked_global *global_bindings = NULL;
+    turbowasm_status result = TURBOWASM_OK;
     uint32_t import_index;
 
     if (instance == NULL || module == NULL ||
@@ -207,11 +209,21 @@ turbowasm_status turbowasm_linker_bind_instance(
     linker_impl = (const turbowasm_linker_impl *)linker->impl;
 
     if (module->summary.imported_function_count != 0u) {
-        bindings = (turbowasm_linked_function *)calloc(
+        function_bindings = (turbowasm_linked_function *)calloc(
             (size_t)module->summary.imported_function_count,
-            sizeof(*bindings));
-        if (bindings == NULL)
+            sizeof(*function_bindings));
+        if (function_bindings == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    if (module->summary.imported_global_count != 0u) {
+        global_bindings = (turbowasm_linked_global *)calloc(
+            (size_t)module->summary.imported_global_count,
+            sizeof(*global_bindings));
+        if (global_bindings == NULL) {
+            free(function_bindings);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
     }
 
     for (import_index = 0u;
@@ -222,88 +234,146 @@ turbowasm_status turbowasm_linker_bind_instance(
         const turbowasm_linker_entry *provider_entry;
         const turbowasm_module_impl *provider_module;
         const turbowasm_export_desc *export_desc;
-        const turbowasm_validation_func_type *expected_type;
-        const turbowasm_validation_func_type *actual_type;
-        const turbowasm_validation_function *provider_function;
 
-        if (import_desc->kind != TURBOWASM_EXTERN_FUNCTION) {
-            free(bindings);
-            return TURBOWASM_UNSUPPORTED;
-        }
-
-        if (import_desc->item_index >=
-            module->summary.imported_function_count) {
-            free(bindings);
-            return TURBOWASM_MALFORMED_MODULE;
+        if (import_desc->kind == TURBOWASM_EXTERN_MEMORY ||
+            import_desc->kind == TURBOWASM_EXTERN_TABLE) {
+            result = TURBOWASM_UNSUPPORTED;
+            goto fail;
         }
 
         provider_entry = turbowasm_linker_find_module(
             linker_impl, import_desc->module_name);
         if (provider_entry == NULL ||
             provider_entry->instance == NULL) {
-            free(bindings);
-            return TURBOWASM_LINK_ERROR;
+            result = TURBOWASM_LINK_ERROR;
+            goto fail;
         }
 
         provider_module = turbowasm_module_impl_get(
             provider_entry->instance->module);
         if (provider_module == NULL) {
-            free(bindings);
-            return TURBOWASM_LINK_ERROR;
+            result = TURBOWASM_LINK_ERROR;
+            goto fail;
         }
 
         export_desc = turbowasm_linker_find_export(
             provider_entry->instance->module,
             import_desc->name);
         if (export_desc == NULL) {
-            free(bindings);
-            return TURBOWASM_LINK_ERROR;
+            result = TURBOWASM_LINK_ERROR;
+            goto fail;
         }
-        if (export_desc->kind != TURBOWASM_EXTERN_FUNCTION) {
-            free(bindings);
-            return TURBOWASM_TYPE_MISMATCH;
-        }
-
-        expected_type =
-            turbowasm_validation_context_function_type(
-                &module->validation,
-                import_desc->item_index);
-        actual_type =
-            turbowasm_validation_context_function_type(
-                &provider_module->validation,
-                export_desc->item_index);
-        if (!turbowasm_validation_func_type_equal(
-                expected_type, actual_type)) {
-            free(bindings);
-            return TURBOWASM_TYPE_MISMATCH;
+        if (export_desc->kind != import_desc->kind) {
+            result = TURBOWASM_TYPE_MISMATCH;
+            goto fail;
         }
 
-        provider_function =
-            turbowasm_validation_context_function(
-                &provider_module->validation,
-                export_desc->item_index);
-        if (provider_function == NULL) {
-            free(bindings);
-            return TURBOWASM_LINK_ERROR;
-        }
-        if (provider_function->imported &&
-            (export_desc->item_index >=
-                 provider_entry->instance->linked_function_count ||
-             provider_entry->instance
-                     ->linked_functions[export_desc->item_index]
-                     .provider == NULL)) {
-            free(bindings);
-            return TURBOWASM_LINK_ERROR;
+        if (import_desc->kind == TURBOWASM_EXTERN_FUNCTION) {
+            const turbowasm_validation_func_type *expected_type;
+            const turbowasm_validation_func_type *actual_type;
+            const turbowasm_validation_function *provider_function;
+
+            if (import_desc->item_index >=
+                module->summary.imported_function_count) {
+                result = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+
+            expected_type =
+                turbowasm_validation_context_function_type(
+                    &module->validation,
+                    import_desc->item_index);
+            actual_type =
+                turbowasm_validation_context_function_type(
+                    &provider_module->validation,
+                    export_desc->item_index);
+            if (!turbowasm_validation_func_type_equal(
+                    expected_type, actual_type)) {
+                result = TURBOWASM_TYPE_MISMATCH;
+                goto fail;
+            }
+
+            provider_function =
+                turbowasm_validation_context_function(
+                    &provider_module->validation,
+                    export_desc->item_index);
+            if (provider_function == NULL) {
+                result = TURBOWASM_LINK_ERROR;
+                goto fail;
+            }
+            if (provider_function->imported &&
+                (export_desc->item_index >=
+                     provider_entry->instance->linked_function_count ||
+                 provider_entry->instance
+                         ->linked_functions[export_desc->item_index]
+                         .provider == NULL)) {
+                result = TURBOWASM_LINK_ERROR;
+                goto fail;
+            }
+
+            function_bindings[import_desc->item_index].provider =
+                provider_entry->instance;
+            function_bindings[import_desc->item_index].function_index =
+                export_desc->item_index;
+            continue;
         }
 
-        bindings[import_desc->item_index].provider =
-            provider_entry->instance;
-        bindings[import_desc->item_index].function_index =
-            export_desc->item_index;
+        if (import_desc->kind == TURBOWASM_EXTERN_GLOBAL) {
+            const turbowasm_validation_global *expected_global;
+            const turbowasm_validation_global *actual_global;
+
+            if (import_desc->item_index >=
+                    module->summary.imported_global_count ||
+                export_desc->item_index >=
+                    provider_module->validation.global_count) {
+                result = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+
+            expected_global =
+                &module->validation.globals[import_desc->item_index];
+            actual_global =
+                &provider_module->validation.globals[
+                    export_desc->item_index];
+
+            if (expected_global->value_type != actual_global->value_type ||
+                expected_global->mutable_value !=
+                    actual_global->mutable_value) {
+                result = TURBOWASM_TYPE_MISMATCH;
+                goto fail;
+            }
+
+            if (actual_global->imported &&
+                (export_desc->item_index >=
+                     provider_entry->instance->linked_global_count ||
+                 provider_entry->instance
+                         ->linked_globals[export_desc->item_index]
+                         .provider == NULL)) {
+                result = TURBOWASM_LINK_ERROR;
+                goto fail;
+            }
+
+            global_bindings[import_desc->item_index].provider =
+                provider_entry->instance;
+            global_bindings[import_desc->item_index].global_index =
+                export_desc->item_index;
+            continue;
+        }
+
+        result = TURBOWASM_UNSUPPORTED;
+        goto fail;
     }
 
-    instance->linked_functions = bindings;
+    instance->linked_functions = function_bindings;
     instance->linked_function_count =
         module->summary.imported_function_count;
+    instance->linked_globals = global_bindings;
+    instance->linked_global_count =
+        module->summary.imported_global_count;
     return TURBOWASM_OK;
+
+fail:
+    free(function_bindings);
+    free(global_bindings);
+    return result;
 }

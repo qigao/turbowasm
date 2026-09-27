@@ -20,6 +20,7 @@ static turbowasm_value_kind turbowasm_state_kind_from_valtype(
 }
 
 static turbowasm_status turbowasm_eval_value_expr(
+    const turbowasm_instance_impl *instance,
     const turbowasm_validation_expr_span *expression,
     turbowasm_value *out) {
     turbowasm_reader reader;
@@ -87,9 +88,21 @@ static turbowasm_status turbowasm_eval_value_expr(
                 &out->as.v128.bits, bytes.cursor);
             break;
         }
-        case 0x23u:
-            /* Imported immutable global.get needs host binding. */
-            return TURBOWASM_UNSUPPORTED;
+        case 0x23u: {
+            uint32_t global_index;
+            turbowasm_status status;
+
+            if (instance == NULL ||
+                !turbowasm_reader_uleb32(
+                    &reader, &global_index))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            status = turbowasm_instance_global_get(
+                instance, global_index, out);
+            if (status != TURBOWASM_OK)
+                return status;
+            break;
+        }
         case 0xd0u: {
             uint8_t reference_type;
             if (!turbowasm_reader_u8(&reader, &reference_type))
@@ -121,11 +134,12 @@ static turbowasm_status turbowasm_eval_value_expr(
 }
 
 static turbowasm_status turbowasm_eval_i32_expr(
+    const turbowasm_instance_impl *instance,
     const turbowasm_validation_expr_span *expression,
     uint32_t *out) {
     turbowasm_value value;
     turbowasm_status status = turbowasm_eval_value_expr(
-        expression, &value);
+        instance, expression, &value);
 
     if (status != TURBOWASM_OK)
         return status;
@@ -136,6 +150,7 @@ static turbowasm_status turbowasm_eval_i32_expr(
 }
 
 static turbowasm_status turbowasm_eval_funcref_expr(
+    const turbowasm_instance_impl *instance,
     const turbowasm_validation_expr_span *expression,
     turbowasm_instance_table_entry *out) {
     turbowasm_reader reader;
@@ -165,7 +180,25 @@ static turbowasm_status turbowasm_eval_funcref_expr(
             return TURBOWASM_MALFORMED_MODULE;
         out->is_null = false;
     } else if (opcode == 0x23u) {
-        return TURBOWASM_UNSUPPORTED;
+        uint32_t global_index;
+        turbowasm_value value;
+        turbowasm_status status;
+
+        if (instance == NULL ||
+            !turbowasm_reader_uleb32(
+                &reader, &global_index))
+            return TURBOWASM_MALFORMED_MODULE;
+
+        status = turbowasm_instance_global_get(
+            instance, global_index, &value);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (value.kind != TURBOWASM_VALUE_FUNCREF)
+            return TURBOWASM_UNSUPPORTED;
+
+        out->is_null = value.as.funcref.is_null;
+        out->function_index =
+            value.as.funcref.function_index;
     } else {
         return TURBOWASM_UNSUPPORTED;
     }
@@ -203,14 +236,19 @@ static turbowasm_status turbowasm_allocate_globals(
         turbowasm_validation_expr_span expression;
         turbowasm_status status;
 
-        if (global->imported)
-            return TURBOWASM_UNSUPPORTED;
+        if (global->imported) {
+            if (index >= instance->linked_global_count ||
+                instance->linked_globals[index].provider == NULL)
+                return TURBOWASM_UNSUPPORTED;
+            continue;
+        }
 
         expression.bytes = global->initializer;
         expression.size = global->initializer_size;
         expression.result_type = global->value_type;
         status = turbowasm_eval_value_expr(
-            &expression, &instance->globals[index]);
+            instance, &expression,
+            &instance->globals[index]);
         if (status != TURBOWASM_OK)
             return status;
         if (instance->globals[index].kind !=
@@ -371,7 +409,7 @@ static turbowasm_status turbowasm_apply_data_segments(
             continue;
 
         status = turbowasm_eval_i32_expr(
-            &segment->offset, &offset);
+            instance, &segment->offset, &offset);
         if (status != TURBOWASM_OK)
             return status;
         status = turbowasm_instance_memory_bounds(
@@ -393,6 +431,7 @@ static turbowasm_status turbowasm_apply_data_segments(
 }
 
 static turbowasm_status turbowasm_element_item_value(
+    const turbowasm_instance_impl *instance,
     const turbowasm_validation_element_item *item,
     turbowasm_instance_table_entry *out) {
     if (item == NULL || out == NULL)
@@ -407,7 +446,7 @@ static turbowasm_status turbowasm_element_item_value(
     }
 
     return turbowasm_eval_funcref_expr(
-        &item->expression, out);
+        instance, &item->expression, out);
 }
 
 static turbowasm_status turbowasm_apply_element_segments(
@@ -437,7 +476,7 @@ static turbowasm_status turbowasm_apply_element_segments(
             return TURBOWASM_MALFORMED_MODULE;
 
         status = turbowasm_eval_i32_expr(
-            &segment->offset, &offset);
+            instance, &segment->offset, &offset);
         if (status != TURBOWASM_OK)
             return status;
 
@@ -451,7 +490,9 @@ static turbowasm_status turbowasm_apply_element_segments(
             turbowasm_instance_table_entry value;
 
             status = turbowasm_element_item_value(
-                &segment->items[item_index], &value);
+                instance,
+                &segment->items[item_index],
+                &value);
             if (status != TURBOWASM_OK)
                 return status;
             table->entries[offset + item_index] = value;
@@ -542,9 +583,34 @@ turbowasm_status turbowasm_instance_global_get(
     const turbowasm_instance_impl *instance,
     uint32_t index,
     turbowasm_value *out) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_global *global;
+
     if (instance == NULL || out == NULL ||
         index >= instance->global_count)
         return TURBOWASM_INVALID_ARGUMENT;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL ||
+        index >= module->validation.global_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+    global = &module->validation.globals[index];
+
+    if (global->imported) {
+        const turbowasm_linked_global *binding;
+
+        if (index >= instance->linked_global_count)
+            return TURBOWASM_UNSUPPORTED;
+        binding = &instance->linked_globals[index];
+        if (binding->provider == NULL)
+            return TURBOWASM_UNSUPPORTED;
+
+        return turbowasm_instance_global_get(
+            binding->provider,
+            binding->global_index,
+            out);
+    }
+
     *out = instance->globals[index];
     return TURBOWASM_OK;
 }
@@ -563,6 +629,21 @@ turbowasm_status turbowasm_instance_global_set(
     if (module == NULL || index >= module->validation.global_count)
         return TURBOWASM_INVALID_ARGUMENT;
     global = &module->validation.globals[index];
+
+    if (global->imported) {
+        const turbowasm_linked_global *binding;
+
+        if (index >= instance->linked_global_count)
+            return TURBOWASM_UNSUPPORTED;
+        binding = &instance->linked_globals[index];
+        if (binding->provider == NULL)
+            return TURBOWASM_UNSUPPORTED;
+
+        return turbowasm_instance_global_set(
+            binding->provider,
+            binding->global_index,
+            value);
+    }
 
     if (!global->mutable_value)
         return TURBOWASM_TYPE_MISMATCH;
@@ -908,6 +989,7 @@ turbowasm_status turbowasm_instance_table_init(
 
         for (index = 0u; index < length; ++index) {
             status = turbowasm_element_item_value(
+                instance,
                 &segment->items[source + index],
                 &values[index]);
             if (status != TURBOWASM_OK)

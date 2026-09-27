@@ -358,6 +358,280 @@ static void test_non_function_import_fails_closed(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static const uint8_t mutable_global_provider_bytes[] = {
+    WASM_HEADER,
+
+    /* type 0: () -> i32 */
+    0x01, 0x05,
+    0x01, 0x60, 0x00, 0x01, 0x7f,
+
+    /* local function 0 uses type 0 */
+    0x03, 0x02,
+    0x01, 0x00,
+
+    /* mutable i32 global 0 = 5 */
+    0x06, 0x06,
+    0x01, 0x7f, 0x01, 0x41, 0x05, 0x0b,
+
+    /* export global "g" and function "read" */
+    0x07, 0x0c,
+    0x02,
+    0x01, 0x67, 0x03, 0x00,
+    0x04, 0x72, 0x65, 0x61, 0x64, 0x00, 0x00,
+
+    /* read(): global.get 0 */
+    0x0a, 0x06,
+    0x01, 0x04,
+    0x00, 0x23, 0x00, 0x0b
+};
+
+static const uint8_t mutable_global_consumer_bytes[] = {
+    WASM_HEADER,
+
+    /* type 0: () -> i32 */
+    0x01, 0x05,
+    0x01, 0x60, 0x00, 0x01, 0x7f,
+
+    /* import mutable i32 math.g as global 0 */
+    0x02, 0x0b,
+    0x01,
+    0x04, 0x6d, 0x61, 0x74, 0x68,
+    0x01, 0x67,
+    0x03, 0x7f, 0x01,
+
+    /* local function 0 uses type 0 */
+    0x03, 0x02,
+    0x01, 0x00,
+
+    /*
+     * global.get 0; i32.const 1; i32.add;
+     * global.set 0; global.get 0
+     */
+    0x0a, 0x0d,
+    0x01, 0x0b,
+    0x00,
+    0x23, 0x00,
+    0x41, 0x01,
+    0x6a,
+    0x24, 0x00,
+    0x23, 0x00,
+    0x0b
+};
+
+static const uint8_t immutable_global_provider_bytes[] = {
+    WASM_HEADER,
+
+    /* immutable i32 global 0 = 9 */
+    0x06, 0x06,
+    0x01, 0x7f, 0x00, 0x41, 0x09, 0x0b,
+
+    /* export global "g" */
+    0x07, 0x05,
+    0x01, 0x01, 0x67, 0x03, 0x00
+};
+
+static const uint8_t immutable_global_consumer_bytes[] = {
+    WASM_HEADER,
+
+    /* type 0: () -> i32 */
+    0x01, 0x05,
+    0x01, 0x60, 0x00, 0x01, 0x7f,
+
+    /* import immutable i32 math.g as global 0 */
+    0x02, 0x0b,
+    0x01,
+    0x04, 0x6d, 0x61, 0x74, 0x68,
+    0x01, 0x67,
+    0x03, 0x7f, 0x00,
+
+    /* local function 0 uses type 0 */
+    0x03, 0x02,
+    0x01, 0x00,
+
+    /* local immutable global 1 = global.get 0 */
+    0x06, 0x06,
+    0x01, 0x7f, 0x00, 0x23, 0x00, 0x0b,
+
+    /* read local global 1 */
+    0x0a, 0x06,
+    0x01, 0x04,
+    0x00, 0x23, 0x01, 0x0b
+};
+
+static void test_mutable_global_is_live_shared_state(void) {
+    static const uint8_t math_name[] = {
+        (uint8_t)'m', (uint8_t)'a',
+        (uint8_t)'t', (uint8_t)'h'
+    };
+    turbowasm_module provider_module = {0};
+    turbowasm_module consumer_module = {0};
+    turbowasm_instance provider = {0};
+    turbowasm_instance consumer = {0};
+    turbowasm_linker linker = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &provider_module,
+               mutable_global_provider_bytes,
+               sizeof(mutable_global_provider_bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &provider, &provider_module) == TURBOWASM_OK);
+
+    assert(turbowasm_module_load_borrowed(
+               &consumer_module,
+               mutable_global_consumer_bytes,
+               sizeof(mutable_global_consumer_bytes)) == TURBOWASM_OK);
+    assert(turbowasm_linker_init(&linker) == TURBOWASM_OK);
+    assert(turbowasm_linker_define_instance(
+               &linker,
+               name_span(math_name, 4u),
+               &provider) == TURBOWASM_OK);
+    assert(turbowasm_instance_create_linked(
+               &consumer,
+               &consumer_module,
+               &linker) == TURBOWASM_OK);
+
+    assert(turbowasm_instance_invoke(
+               &consumer, 0u,
+               NULL, 0u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_I32);
+    assert(result.as.i32 == 6);
+
+    result_count = 0u;
+    trap = TURBOWASM_TRAP_NONE;
+    assert(turbowasm_instance_invoke(
+               &provider, 0u,
+               NULL, 0u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_I32);
+    assert(result.as.i32 == 6);
+
+    result_count = 0u;
+    assert(turbowasm_instance_invoke(
+               &consumer, 0u,
+               NULL, 0u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result.as.i32 == 7);
+
+    result_count = 0u;
+    assert(turbowasm_instance_invoke(
+               &provider, 0u,
+               NULL, 0u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result.as.i32 == 7);
+
+    turbowasm_linker_destroy(&linker);
+    turbowasm_instance_destroy(&consumer);
+    turbowasm_instance_destroy(&provider);
+    turbowasm_module_destroy(&consumer_module);
+    turbowasm_module_destroy(&provider_module);
+}
+
+static void test_immutable_global_initializes_local_state(void) {
+    static const uint8_t math_name[] = {
+        (uint8_t)'m', (uint8_t)'a',
+        (uint8_t)'t', (uint8_t)'h'
+    };
+    turbowasm_module provider_module = {0};
+    turbowasm_module consumer_module = {0};
+    turbowasm_instance provider = {0};
+    turbowasm_instance consumer = {0};
+    turbowasm_linker linker = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &provider_module,
+               immutable_global_provider_bytes,
+               sizeof(immutable_global_provider_bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &provider, &provider_module) == TURBOWASM_OK);
+
+    assert(turbowasm_module_load_borrowed(
+               &consumer_module,
+               immutable_global_consumer_bytes,
+               sizeof(immutable_global_consumer_bytes)) == TURBOWASM_OK);
+    assert(turbowasm_linker_init(&linker) == TURBOWASM_OK);
+    assert(turbowasm_linker_define_instance(
+               &linker,
+               name_span(math_name, 4u),
+               &provider) == TURBOWASM_OK);
+    assert(turbowasm_instance_create_linked(
+               &consumer,
+               &consumer_module,
+               &linker) == TURBOWASM_OK);
+
+    assert(turbowasm_instance_invoke(
+               &consumer, 0u,
+               NULL, 0u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_I32);
+    assert(result.as.i32 == 9);
+
+    turbowasm_linker_destroy(&linker);
+    turbowasm_instance_destroy(&consumer);
+    turbowasm_instance_destroy(&provider);
+    turbowasm_module_destroy(&consumer_module);
+    turbowasm_module_destroy(&provider_module);
+}
+
+static void test_global_mutability_mismatch_rejected(void) {
+    static const uint8_t math_name[] = {
+        (uint8_t)'m', (uint8_t)'a',
+        (uint8_t)'t', (uint8_t)'h'
+    };
+    turbowasm_module provider_module = {0};
+    turbowasm_module consumer_module = {0};
+    turbowasm_instance provider = {0};
+    turbowasm_instance consumer = {0};
+    turbowasm_linker linker = {0};
+
+    assert(turbowasm_module_load_borrowed(
+               &provider_module,
+               immutable_global_provider_bytes,
+               sizeof(immutable_global_provider_bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &provider, &provider_module) == TURBOWASM_OK);
+    assert(turbowasm_module_load_borrowed(
+               &consumer_module,
+               mutable_global_consumer_bytes,
+               sizeof(mutable_global_consumer_bytes)) == TURBOWASM_OK);
+
+    assert(turbowasm_linker_init(&linker) == TURBOWASM_OK);
+    assert(turbowasm_linker_define_instance(
+               &linker,
+               name_span(math_name, 4u),
+               &provider) == TURBOWASM_OK);
+    assert(turbowasm_instance_create_linked(
+               &consumer,
+               &consumer_module,
+               &linker) == TURBOWASM_TYPE_MISMATCH);
+    assert(consumer.impl == NULL);
+
+    turbowasm_linker_destroy(&linker);
+    turbowasm_instance_destroy(&provider);
+    turbowasm_module_destroy(&consumer_module);
+    turbowasm_module_destroy(&provider_module);
+}
+
 int main(void) {
     test_typed_cross_module_call();
     test_missing_module_rejected();
@@ -365,5 +639,8 @@ int main(void) {
     test_duplicate_namespace_rejected();
     test_unresolved_provider_export_rejected();
     test_non_function_import_fails_closed();
+    test_mutable_global_is_live_shared_state();
+    test_immutable_global_initializes_local_state();
+    test_global_mutability_mismatch_rejected();
     return 0;
 }
