@@ -92,3 +92,28 @@ composition-layer unsupported coverage.
 The converter uses only `--enable-function-references`, not
 `--enable-all`, so proposal syntax is enabled narrowly rather than turning
 unrelated proposals into accidental test inputs.
+
+
+## Wave 3
+
+The third gate isolates baseline memory semantics:
+
+- `address.wast`
+- `align.wast`
+- `endianness.wast`
+- `memory.wast`
+- `memory_trap.wast`
+- `memory_redundancy.wast`
+- `float_memory.wast`
+
+This wave focuses on address arithmetic, memory bounds, alignment hints,
+little-endian layout, memory declarations/traps, redundant memory operations,
+and scalar float load/store bit preservation.
+
+Large arithmetic suites such as `f32.wast`, `f64.wast` and
+`conversions.wast` remain a separate numeric wave so memory failures are not
+mixed with NaN/result-policy coverage.
+
+`memory.wast` contains a small number of import cases. Those remain subject
+to the existing explicit unsupported accounting; this wave does not broaden
+the host-linking scope tracked by #122.
