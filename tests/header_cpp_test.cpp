@@ -11,6 +11,8 @@ static_assert(std::is_standard_layout<turbowasm_import_desc>::value,
               "TurboWasm import descriptors must remain standard-layout");
 static_assert(std::is_standard_layout<turbowasm_export_desc>::value,
               "TurboWasm export descriptors must remain standard-layout");
+static_assert(std::is_standard_layout<turbowasm_linker>::value,
+              "TurboWasm linker handle must remain standard-layout");
 
 int main() {
     turbowasm_module module{};

@@ -38,6 +38,7 @@ add_library(turbowasm
   src/instance.c
   src/instance_state.c
   src/jit_simd_helper.c
+  src/link.c
   src/module.c
   src/reader.c
   src/simd.c

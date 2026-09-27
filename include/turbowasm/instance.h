@@ -29,6 +29,8 @@ typedef struct turbowasm_instance {
     void *impl;
 } turbowasm_instance;
 
+struct turbowasm_linker;
+
 typedef bool (*turbowasm_interrupt_check_fn)(void *context);
 
 typedef struct turbowasm_execution_options {
@@ -43,6 +45,20 @@ typedef struct turbowasm_execution_options {
 turbowasm_status turbowasm_instance_create(
     turbowasm_instance *instance,
     const turbowasm_module *module);
+
+/*
+ * Resolve function imports through an explicit linker before executing the
+ * module start function. Provider instances and their modules are borrowed and
+ * must outlive the linked consumer instance.
+ *
+ * This first linker slice resolves function imports only. Imported memories,
+ * tables and globals remain explicitly unsupported until their shared
+ * ownership/lifetime model lands.
+ */
+turbowasm_status turbowasm_instance_create_linked(
+    turbowasm_instance *instance,
+    const turbowasm_module *module,
+    const struct turbowasm_linker *linker);
 
 void turbowasm_instance_destroy(turbowasm_instance *instance);
 

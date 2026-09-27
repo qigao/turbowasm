@@ -1,6 +1,7 @@
 #include <turbowasm/instance.h>
 
 #include "instance_internal.h"
+#include "link_internal.h"
 #include "module_internal.h"
 #include "reader.h"
 #include "simd_exec_table.h"
@@ -627,23 +628,17 @@ static turbowasm_status turbowasm_exec_function(
     turbowasm_jit_execution_control *execution,
     uint32_t depth);
 
-static bool turbowasm_exec_type_equal(
-    const turbowasm_validation_func_type *left,
-    const turbowasm_validation_func_type *right) {
-    if (left == NULL || right == NULL ||
-        left->param_count != right->param_count ||
-        left->result_count != right->result_count)
-        return false;
-    if (left->param_count != 0u &&
-        memcmp(left->params, right->params,
-               (size_t)left->param_count) != 0)
-        return false;
-    if (left->result_count != 0u &&
-        memcmp(left->results, right->results,
-               (size_t)left->result_count) != 0)
-        return false;
-    return true;
-}
+static turbowasm_status turbowasm_dispatch_function(
+    turbowasm_instance_impl *instance,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap,
+    turbowasm_jit_execution_control *execution,
+    uint32_t depth);
 
 static turbowasm_status turbowasm_exec_call_index(
     turbowasm_instance_impl *instance,
@@ -798,7 +793,8 @@ static turbowasm_status turbowasm_exec_indirect_call(
 
     actual_type = turbowasm_validation_context_function_type(
         &module->validation, entry.function_index);
-    if (!turbowasm_exec_type_equal(expected_type, actual_type)) {
+    if (!turbowasm_validation_func_type_equal(
+            expected_type, actual_type)) {
         *trap = TURBOWASM_TRAP_INDIRECT_CALL_TYPE_MISMATCH;
         return TURBOWASM_TRAPPED;
     }
@@ -2393,8 +2389,27 @@ static turbowasm_status turbowasm_exec_function(
 
     if (function == NULL || type == NULL || !type->defined)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (function->imported)
-        return TURBOWASM_UNSUPPORTED;
+    if (function->imported) {
+        const turbowasm_linked_function *binding;
+
+        if (function_index >= instance->linked_function_count)
+            return TURBOWASM_UNSUPPORTED;
+        binding = &instance->linked_functions[function_index];
+        if (binding->provider == NULL)
+            return TURBOWASM_UNSUPPORTED;
+
+        return turbowasm_dispatch_function(
+            binding->provider,
+            binding->function_index,
+            arguments,
+            argument_count,
+            results,
+            result_capacity,
+            result_count,
+            trap,
+            execution,
+            depth);
+    }
 
     if (argument_count != type->param_count)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -3284,13 +3299,24 @@ turbowasm_status turbowasm_jit_direct_call(
         context->depth + 1u);
 }
 
-turbowasm_status turbowasm_instance_create(
+static turbowasm_status turbowasm_instance_create_internal(
     turbowasm_instance *instance,
-    const turbowasm_module *module) {
+    const turbowasm_module *module,
+    const turbowasm_linker *linker,
+    bool resolve_imports) {
+    const turbowasm_module_impl *module_impl;
     turbowasm_instance_impl *impl;
+    turbowasm_status status;
 
     if (instance == NULL || module == NULL ||
         module->impl == NULL || instance->impl != NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (resolve_imports &&
+        (linker == NULL || linker->impl == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    module_impl = turbowasm_module_impl_get(module);
+    if (module_impl == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     impl = (turbowasm_instance_impl *)calloc(1u, sizeof(*impl));
@@ -3298,44 +3324,59 @@ turbowasm_status turbowasm_instance_create(
         return TURBOWASM_OUT_OF_MEMORY;
 
     impl->module = module;
-    {
-        const turbowasm_module_impl *module_impl =
-            turbowasm_module_impl_get(module);
-        turbowasm_status status;
-        if (module_impl == NULL) {
-            free(impl);
-            return TURBOWASM_INVALID_ARGUMENT;
-        }
-        status = turbowasm_instance_state_init(impl, module_impl);
+
+    if (resolve_imports) {
+        status = turbowasm_linker_bind_instance(
+            impl, module_impl, linker);
         if (status != TURBOWASM_OK) {
+            free(impl->linked_functions);
             free(impl);
             return status;
         }
     }
+
+    status = turbowasm_instance_state_init(impl, module_impl);
+    if (status != TURBOWASM_OK) {
+        free(impl->linked_functions);
+        free(impl);
+        return status;
+    }
+
     instance->impl = impl;
 
-    {
-        const turbowasm_module_impl *module_impl =
-            turbowasm_module_impl_get(module);
-        if (module_impl != NULL &&
-            module_impl->summary.has_start) {
-            size_t result_count = 0u;
-            turbowasm_trap trap = TURBOWASM_TRAP_NONE;
-            turbowasm_status status = turbowasm_instance_invoke(
-                instance,
-                module_impl->summary.start_function_index,
-                NULL, 0u,
-                NULL, 0u,
-                &result_count,
-                &trap);
-            if (status != TURBOWASM_OK) {
-                turbowasm_instance_destroy(instance);
-                return status;
-            }
+    if (module_impl->summary.has_start) {
+        size_t result_count = 0u;
+        turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+        status = turbowasm_instance_invoke(
+            instance,
+            module_impl->summary.start_function_index,
+            NULL, 0u,
+            NULL, 0u,
+            &result_count,
+            &trap);
+        if (status != TURBOWASM_OK) {
+            turbowasm_instance_destroy(instance);
+            return status;
         }
     }
 
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_create(
+    turbowasm_instance *instance,
+    const turbowasm_module *module) {
+    return turbowasm_instance_create_internal(
+        instance, module, NULL, false);
+}
+
+turbowasm_status turbowasm_instance_create_linked(
+    turbowasm_instance *instance,
+    const turbowasm_module *module,
+    const struct turbowasm_linker *linker) {
+    return turbowasm_instance_create_internal(
+        instance, module, linker, true);
 }
 
 void turbowasm_instance_destroy(turbowasm_instance *instance) {
@@ -3345,6 +3386,9 @@ void turbowasm_instance_destroy(turbowasm_instance *instance) {
     impl = (turbowasm_instance_impl *)instance->impl;
     turbowasm_jit_instance_detach_backend(impl);
     turbowasm_instance_state_destroy(impl);
+    free(impl->linked_functions);
+    impl->linked_functions = NULL;
+    impl->linked_function_count = 0u;
     free(impl);
     instance->impl = NULL;
 }

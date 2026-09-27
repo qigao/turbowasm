@@ -9,6 +9,9 @@ const char *turbowasm_status_string(turbowasm_status status) {
         case TURBOWASM_OUT_OF_MEMORY: return "out_of_memory";
         case TURBOWASM_TYPE_MISMATCH: return "type_mismatch";
         case TURBOWASM_TRAPPED: return "trapped";
+        case TURBOWASM_FUEL_EXHAUSTED: return "fuel_exhausted";
+        case TURBOWASM_INTERRUPTED: return "interrupted";
+        case TURBOWASM_LINK_ERROR: return "link_error";
         default: return "unknown";
     }
 }

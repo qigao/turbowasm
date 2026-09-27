@@ -268,6 +268,10 @@ turbowasm_validation_context_function_type(
     const turbowasm_validation_context *context,
     uint32_t function_index);
 
+bool turbowasm_validation_func_type_equal(
+    const turbowasm_validation_func_type *left,
+    const turbowasm_validation_func_type *right);
+
 const turbowasm_validation_global *
 turbowasm_validation_context_global(
     const turbowasm_validation_context *context,
