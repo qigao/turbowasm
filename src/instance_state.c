@@ -872,6 +872,27 @@ turbowasm_status turbowasm_instance_memory_size(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_instance_memory_limits(
+    const turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    turbowasm_instance_limits *out_limits) {
+    const turbowasm_instance_memory *memory;
+
+    if (instance == NULL || out_limits == NULL ||
+        memory_index >= instance->memory_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memory = turbowasm_instance_memory_resolve_const(
+        instance, memory_index);
+    if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    out_limits->minimum = memory->pages;
+    out_limits->maximum = memory->maximum_pages;
+    out_limits->has_maximum = memory->has_maximum;
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_instance_memory_grow(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
@@ -1416,6 +1437,27 @@ turbowasm_status turbowasm_instance_table_size(
         return TURBOWASM_UNSUPPORTED;
 
     *out_size = table->size;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_table_limits(
+    const turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    turbowasm_instance_limits *out_limits) {
+    const turbowasm_instance_table *table;
+
+    if (instance == NULL || out_limits == NULL ||
+        table_index >= instance->table_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    table = turbowasm_instance_table_resolve_const(
+        instance, table_index);
+    if (table == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    out_limits->minimum = table->size;
+    out_limits->maximum = table->maximum;
+    out_limits->has_maximum = table->has_maximum;
     return TURBOWASM_OK;
 }
 
