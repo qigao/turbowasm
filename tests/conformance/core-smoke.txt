@@ -1,0 +1,16 @@
+# Pinned core smoke slice for the first #115 conformance landing.
+# Expand in reviewable waves; unsupported commands are counted explicitly.
+const.wast
+local_get.wast
+local_set.wast
+local_tee.wast
+nop.wast
+select.wast
+unreachable.wast
+block.wast
+br_if.wast
+if.wast
+loop.wast
+memory_size.wast
+table_size.wast
+global.wast
