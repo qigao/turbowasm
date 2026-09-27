@@ -260,7 +260,13 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
     manifest_path = os.path.join(case_dir, "case.twcf")
 
     convert = subprocess.run(
-        [wast2json, wast_path, "-o", json_path],
+        [
+            wast2json,
+            "--enable-function-references",
+            wast_path,
+            "-o",
+            json_path,
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

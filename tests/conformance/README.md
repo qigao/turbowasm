@@ -72,3 +72,23 @@ the narrow extended-const rule for reading a prior immutable local global.
 After #141, this foundation gate is expected to have zero Runtime failures
 for the current smoke slice while still reporting unsupported coverage
 separately.
+
+
+## Wave 2
+
+The next gate enables WABT typed function-reference parsing and adds core
+control/call/integer/memory families:
+
+- `br.wast`, `br_table.wast`, `return.wast`;
+- `call.wast`, `call_indirect.wast`;
+- `i32.wast`, `i64.wast`;
+- `load.wast`, `store.wast`, `memory_grow.wast`.
+
+This deliberately does not add `imports.wast` or `linking.wast` yet.
+Those files mix host/provider and lifecycle semantics that remain tracked by
+#122; adding them now would dilute execution-engine failures with known
+composition-layer unsupported coverage.
+
+The converter uses only `--enable-function-references`, not
+`--enable-all`, so proposal syntax is enabled narrowly rather than turning
+unrelated proposals into accidental test inputs.
