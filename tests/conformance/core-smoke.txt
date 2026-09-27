@@ -26,3 +26,12 @@ i64.wast
 load.wast
 store.wast
 memory_grow.wast
+
+# Wave 3: memory addressing, bounds, alignment and float-memory semantics.
+address.wast
+align.wast
+endianness.wast
+memory.wast
+memory_trap.wast
+memory_redundancy.wast
+float_memory.wast
