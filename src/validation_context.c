@@ -460,6 +460,29 @@ turbowasm_validation_context_function_type(
     return turbowasm_validation_context_type(context, type_index);
 }
 
+
+bool turbowasm_validation_func_type_equal(
+    const turbowasm_validation_func_type *left,
+    const turbowasm_validation_func_type *right) {
+    if (left == NULL || right == NULL ||
+        !left->defined || !right->defined ||
+        left->param_count != right->param_count ||
+        left->result_count != right->result_count)
+        return false;
+
+    if (left->param_count != 0u &&
+        memcmp(left->params, right->params,
+               (size_t)left->param_count) != 0)
+        return false;
+
+    if (left->result_count != 0u &&
+        memcmp(left->results, right->results,
+               (size_t)left->result_count) != 0)
+        return false;
+
+    return true;
+}
+
 const turbowasm_validation_global *
 turbowasm_validation_context_global(
     const turbowasm_validation_context *context,

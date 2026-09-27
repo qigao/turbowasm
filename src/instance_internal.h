@@ -34,6 +34,13 @@ typedef struct turbowasm_instance_table {
     uint8_t reference_type;
 } turbowasm_instance_table;
 
+struct turbowasm_instance_impl;
+
+typedef struct turbowasm_linked_function {
+    struct turbowasm_instance_impl *provider;
+    uint32_t function_index;
+} turbowasm_linked_function;
+
 typedef struct turbowasm_jit_execution_control {
     uint64_t fuel_remaining;
     bool fuel_limited;
@@ -55,6 +62,9 @@ typedef struct turbowasm_jit_function_state {
 
 typedef struct turbowasm_instance_impl {
     const turbowasm_module *module;
+
+    turbowasm_linked_function *linked_functions;
+    uint32_t linked_function_count;
 
     turbowasm_value *globals;
     uint32_t global_count;

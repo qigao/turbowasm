@@ -16,6 +16,17 @@ add_test(NAME turbowasm_installed_consumer
          COMMAND turbowasm_installed_consumer)
 
 
+add_executable(turbowasm_installed_linker_consumer link_main.c)
+target_link_libraries(turbowasm_installed_linker_consumer
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_installed_linker_consumer PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_installed_linker_consumer
+         COMMAND turbowasm_installed_linker_consumer)
+
+
 get_target_property(_turbowasm_runtime_links
   TurboWasm::Runtime INTERFACE_LINK_LIBRARIES)
 if(NOT "Salts::CMeta" IN_LIST _turbowasm_runtime_links)

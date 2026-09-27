@@ -14,7 +14,8 @@ typedef enum turbowasm_status {
     TURBOWASM_TYPE_MISMATCH,
     TURBOWASM_TRAPPED,
     TURBOWASM_FUEL_EXHAUSTED,
-    TURBOWASM_INTERRUPTED
+    TURBOWASM_INTERRUPTED,
+    TURBOWASM_LINK_ERROR
 } turbowasm_status;
 
 const char *turbowasm_status_string(turbowasm_status status);
