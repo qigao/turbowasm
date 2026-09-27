@@ -21,6 +21,12 @@ typedef struct turbowasm_instance_memory {
     bool has_maximum;
 } turbowasm_instance_memory;
 
+typedef struct turbowasm_instance_limits {
+    uint32_t minimum;
+    uint32_t maximum;
+    bool has_maximum;
+} turbowasm_instance_limits;
+
 struct turbowasm_instance_impl;
 
 typedef struct turbowasm_instance_table_entry {
@@ -177,6 +183,11 @@ turbowasm_status turbowasm_instance_memory_size(
     uint32_t memory_index,
     uint32_t *out_pages);
 
+turbowasm_status turbowasm_instance_memory_limits(
+    const turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    turbowasm_instance_limits *out_limits);
+
 turbowasm_status turbowasm_instance_memory_grow(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
@@ -259,6 +270,11 @@ turbowasm_status turbowasm_instance_table_size(
     const turbowasm_instance_impl *instance,
     uint32_t table_index,
     uint32_t *out_size);
+
+turbowasm_status turbowasm_instance_table_limits(
+    const turbowasm_instance_impl *instance,
+    uint32_t table_index,
+    turbowasm_instance_limits *out_limits);
 
 turbowasm_status turbowasm_instance_table_fill(
     turbowasm_instance_impl *instance,

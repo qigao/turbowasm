@@ -177,7 +177,7 @@ turbowasm_linker_find_module(
 
 static bool turbowasm_link_limits_match(
     turbowasm_validation_limits expected,
-    turbowasm_validation_limits actual) {
+    turbowasm_instance_limits actual) {
     if (actual.minimum < expected.minimum)
         return false;
     if (expected.has_maximum) {
@@ -370,13 +370,6 @@ turbowasm_status turbowasm_linker_bind_instance(
                 &provider_module->validation.memories[
                     export_desc->item_index];
 
-            if (!turbowasm_link_limits_match(
-                    expected_memory->limits,
-                    actual_memory->limits)) {
-                result = TURBOWASM_TYPE_MISMATCH;
-                goto fail;
-            }
-
             if (actual_memory->imported &&
                 (export_desc->item_index >=
                      provider_entry->instance->linked_memory_count ||
@@ -385,6 +378,25 @@ turbowasm_status turbowasm_linker_bind_instance(
                          .provider == NULL)) {
                 result = TURBOWASM_LINK_ERROR;
                 goto fail;
+            }
+
+            {
+                turbowasm_instance_limits actual_limits;
+                result = turbowasm_instance_memory_limits(
+                    provider_entry->instance,
+                    export_desc->item_index,
+                    &actual_limits);
+                if (result != TURBOWASM_OK) {
+                    result = TURBOWASM_LINK_ERROR;
+                    goto fail;
+                }
+
+                if (!turbowasm_link_limits_match(
+                        expected_memory->limits,
+                        actual_limits)) {
+                    result = TURBOWASM_TYPE_MISMATCH;
+                    goto fail;
+                }
             }
 
             memory_bindings[import_desc->item_index].provider =
@@ -423,10 +435,7 @@ turbowasm_status turbowasm_linker_bind_instance(
             }
 
             if (expected_table->reference_type !=
-                    actual_table->reference_type ||
-                !turbowasm_link_limits_match(
-                    expected_table->limits,
-                    actual_table->limits)) {
+                    actual_table->reference_type) {
                 result = TURBOWASM_TYPE_MISMATCH;
                 goto fail;
             }
@@ -439,6 +448,25 @@ turbowasm_status turbowasm_linker_bind_instance(
                          .provider == NULL)) {
                 result = TURBOWASM_LINK_ERROR;
                 goto fail;
+            }
+
+            {
+                turbowasm_instance_limits actual_limits;
+                result = turbowasm_instance_table_limits(
+                    provider_entry->instance,
+                    export_desc->item_index,
+                    &actual_limits);
+                if (result != TURBOWASM_OK) {
+                    result = TURBOWASM_LINK_ERROR;
+                    goto fail;
+                }
+
+                if (!turbowasm_link_limits_match(
+                        expected_table->limits,
+                        actual_limits)) {
+                    result = TURBOWASM_TYPE_MISMATCH;
+                    goto fail;
+                }
             }
 
             table_bindings[import_desc->item_index].provider =

@@ -245,6 +245,70 @@ static void test_shared_table_is_one_live_object(void) {
     turbowasm_module_destroy(&provider_module);
 }
 
+static void test_table_link_uses_runtime_current_minimum(void) {
+    turbowasm_module provider_module = {0};
+    turbowasm_module grower_module = {0};
+    turbowasm_module second_consumer_module = {0};
+    turbowasm_instance provider = {0};
+    turbowasm_instance grower = {0};
+    turbowasm_instance second_consumer = {0};
+    turbowasm_linker linker = {0};
+
+    assert(turbowasm_module_load_borrowed(
+               &provider_module,
+               provider_bytes,
+               sizeof(provider_bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &provider, &provider_module) == TURBOWASM_OK);
+
+    assert(turbowasm_module_load_borrowed(
+               &grower_module,
+               consumer_bytes,
+               sizeof(consumer_bytes)) == TURBOWASM_OK);
+    assert(turbowasm_module_load_borrowed(
+               &second_consumer_module,
+               min_mismatch_consumer_bytes,
+               sizeof(min_mismatch_consumer_bytes)) == TURBOWASM_OK);
+
+    assert(turbowasm_linker_init(&linker) == TURBOWASM_OK);
+    assert(turbowasm_linker_define_instance(
+               &linker, provider_name(),
+               &provider) == TURBOWASM_OK);
+
+    assert(turbowasm_instance_create_linked(
+               &second_consumer,
+               &second_consumer_module,
+               &linker) == TURBOWASM_TYPE_MISMATCH);
+    assert(second_consumer.impl == NULL);
+
+    assert(turbowasm_instance_create_linked(
+               &grower,
+               &grower_module,
+               &linker) == TURBOWASM_OK);
+
+    /* table.grow mutates the provider-owned table from size 1 to size 2. */
+    assert(invoke_i32(&grower, 3u) == 1);
+    assert(invoke_i32(&provider, 2u) == 2);
+
+    turbowasm_instance_destroy(&grower);
+
+    /*
+     * Provider declaration remains min=1, while the exported external table
+     * now has current minimum 2. Import min=2 must therefore be admitted.
+     */
+    assert(turbowasm_instance_create_linked(
+               &second_consumer,
+               &second_consumer_module,
+               &linker) == TURBOWASM_OK);
+
+    turbowasm_instance_destroy(&second_consumer);
+    turbowasm_linker_destroy(&linker);
+    turbowasm_instance_destroy(&provider);
+    turbowasm_module_destroy(&second_consumer_module);
+    turbowasm_module_destroy(&grower_module);
+    turbowasm_module_destroy(&provider_module);
+}
+
 static void test_table_limits_mismatch_rejected(void) {
     turbowasm_module provider_module = {0};
     turbowasm_module consumer_module = {0};
@@ -322,6 +386,7 @@ static void test_active_element_initializes_imported_table(void) {
 
 int main(void) {
     test_shared_table_is_one_live_object();
+    test_table_link_uses_runtime_current_minimum();
     test_table_limits_mismatch_rejected();
     test_active_element_initializes_imported_table();
     return 0;

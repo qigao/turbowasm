@@ -566,6 +566,89 @@ static void test_memory_import_is_one_live_growable_object(void) {
     turbowasm_module_destroy(&provider_module);
 }
 
+static void test_memory_link_uses_runtime_current_minimum(void) {
+    static const uint8_t math_name[] = {
+        (uint8_t)'m', (uint8_t)'a',
+        (uint8_t)'t', (uint8_t)'h'
+    };
+    turbowasm_module provider_module = {0};
+    turbowasm_module grower_module = {0};
+    turbowasm_module second_consumer_module = {0};
+    turbowasm_instance provider = {0};
+    turbowasm_instance grower = {0};
+    turbowasm_instance second_consumer = {0};
+    turbowasm_linker linker = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &provider_module,
+               memory_provider_bytes,
+               sizeof(memory_provider_bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &provider, &provider_module) == TURBOWASM_OK);
+
+    assert(turbowasm_module_load_borrowed(
+               &grower_module,
+               memory_consumer_bytes,
+               sizeof(memory_consumer_bytes)) == TURBOWASM_OK);
+    assert(turbowasm_module_load_borrowed(
+               &second_consumer_module,
+               memory_consumer_min_too_large_bytes,
+               sizeof(memory_consumer_min_too_large_bytes)) == TURBOWASM_OK);
+
+    assert(turbowasm_linker_init(&linker) == TURBOWASM_OK);
+    assert(turbowasm_linker_define_instance(
+               &linker,
+               name_span(math_name, 4u),
+               &provider) == TURBOWASM_OK);
+
+    /*
+     * The second consumer requires min=2. It must not link while the
+     * provider-owned memory is still at its declared/current size 1.
+     */
+    assert(turbowasm_instance_create_linked(
+               &second_consumer,
+               &second_consumer_module,
+               &linker) == TURBOWASM_TYPE_MISMATCH);
+    assert(second_consumer.impl == NULL);
+
+    assert(turbowasm_instance_create_linked(
+               &grower,
+               &grower_module,
+               &linker) == TURBOWASM_OK);
+
+    /* Grow the provider-owned memory from 1 to 2 through the first consumer. */
+    assert(turbowasm_instance_invoke(
+               &grower, 2u,
+               NULL, 0u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_I32);
+    assert(result.as.i32 == 1);
+
+    turbowasm_instance_destroy(&grower);
+
+    /*
+     * The provider module still declares min=1, but the exported external
+     * memory's current minimum is now 2, so min=2 import admission succeeds.
+     */
+    assert(turbowasm_instance_create_linked(
+               &second_consumer,
+               &second_consumer_module,
+               &linker) == TURBOWASM_OK);
+
+    turbowasm_instance_destroy(&second_consumer);
+    turbowasm_linker_destroy(&linker);
+    turbowasm_instance_destroy(&provider);
+    turbowasm_module_destroy(&second_consumer_module);
+    turbowasm_module_destroy(&grower_module);
+    turbowasm_module_destroy(&provider_module);
+}
+
 static void test_memory_limits_mismatch_rejected(void) {
     static const uint8_t math_name[] = {
         (uint8_t)'m', (uint8_t)'a',
@@ -887,6 +970,7 @@ int main(void) {
     test_legacy_unlinked_memory_fails_closed();
     test_legacy_unlinked_table_fails_closed();
     test_memory_import_is_one_live_growable_object();
+    test_memory_link_uses_runtime_current_minimum();
     test_memory_limits_mismatch_rejected();
     test_mutable_global_is_live_shared_state();
     test_immutable_global_initializes_local_state();
