@@ -52,6 +52,11 @@ typedef struct turbowasm_linked_memory {
     uint32_t memory_index;
 } turbowasm_linked_memory;
 
+typedef struct turbowasm_linked_table {
+    struct turbowasm_instance_impl *provider;
+    uint32_t table_index;
+} turbowasm_linked_table;
+
 typedef struct turbowasm_jit_execution_control {
     uint64_t fuel_remaining;
     bool fuel_limited;
@@ -82,6 +87,9 @@ typedef struct turbowasm_instance_impl {
 
     turbowasm_linked_memory *linked_memories;
     uint32_t linked_memory_count;
+
+    turbowasm_linked_table *linked_tables;
+    uint32_t linked_table_count;
 
     turbowasm_value *globals;
     uint32_t global_count;

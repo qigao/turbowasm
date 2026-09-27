@@ -338,8 +338,12 @@ static turbowasm_status turbowasm_allocate_tables(
             &instance->tables[index];
         uint32_t item;
 
-        if (source->imported)
-            return TURBOWASM_UNSUPPORTED;
+        if (source->imported) {
+            if (index >= instance->linked_table_count ||
+                instance->linked_tables[index].provider == NULL)
+                return TURBOWASM_UNSUPPORTED;
+            continue;
+        }
         if (source->reference_type != 0x70u)
             return TURBOWASM_UNSUPPORTED;
 
@@ -368,6 +372,68 @@ static turbowasm_status turbowasm_allocate_tables(
     }
 
     return TURBOWASM_OK;
+}
+
+static const turbowasm_instance_table *
+turbowasm_instance_table_resolve_const(
+    const turbowasm_instance_impl *instance,
+    uint32_t table_index) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_table *table;
+    const turbowasm_linked_table *binding;
+
+    if (instance == NULL || table_index >= instance->table_count)
+        return NULL;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL ||
+        table_index >= module->validation.table_count)
+        return NULL;
+
+    table = &module->validation.tables[table_index];
+    if (!table->imported)
+        return &instance->tables[table_index];
+
+    if (table_index >= instance->linked_table_count)
+        return NULL;
+    binding = &instance->linked_tables[table_index];
+    if (binding->provider == NULL)
+        return NULL;
+
+    return turbowasm_instance_table_resolve_const(
+        binding->provider,
+        binding->table_index);
+}
+
+static turbowasm_instance_table *
+turbowasm_instance_table_resolve(
+    turbowasm_instance_impl *instance,
+    uint32_t table_index) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_table *table;
+    const turbowasm_linked_table *binding;
+
+    if (instance == NULL || table_index >= instance->table_count)
+        return NULL;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL ||
+        table_index >= module->validation.table_count)
+        return NULL;
+
+    table = &module->validation.tables[table_index];
+    if (!table->imported)
+        return &instance->tables[table_index];
+
+    if (table_index >= instance->linked_table_count)
+        return NULL;
+    binding = &instance->linked_tables[table_index];
+    if (binding->provider == NULL)
+        return NULL;
+
+    return turbowasm_instance_table_resolve(
+        binding->provider,
+        binding->table_index);
 }
 
 static turbowasm_status turbowasm_allocate_segment_lifecycle(
@@ -484,7 +550,10 @@ static turbowasm_status turbowasm_apply_element_segments(
         if (segment->table_index >= instance->table_count)
             return TURBOWASM_TRAPPED;
 
-        table = &instance->tables[segment->table_index];
+        table = turbowasm_instance_table_resolve(
+            instance, segment->table_index);
+        if (table == NULL)
+            return TURBOWASM_UNSUPPORTED;
         if (table->reference_type != segment->reference_type)
             return TURBOWASM_MALFORMED_MODULE;
 
@@ -587,8 +656,18 @@ void turbowasm_instance_state_destroy(
     instance->memories = NULL;
     instance->memory_count = 0u;
 
-    for (index = 0u; index < instance->table_count; ++index)
-        free(instance->tables[index].entries);
+    {
+        const turbowasm_module_impl *module =
+            turbowasm_module_impl_get(instance->module);
+
+        for (index = 0u; index < instance->table_count; ++index) {
+            if (module != NULL &&
+                index < module->validation.table_count &&
+                module->validation.tables[index].imported)
+                continue;
+            free(instance->tables[index].entries);
+        }
+    }
     free(instance->tables);
     instance->tables = NULL;
     instance->table_count = 0u;
@@ -875,6 +954,30 @@ static bool turbowasm_instance_funcref_owner_visible(
         if (instance->linked_memories[index].provider == owner)
             return true;
     }
+    for (index = 0u; index < instance->linked_table_count; ++index) {
+        if (instance->linked_tables[index].provider == owner)
+            return true;
+    }
+
+    /*
+     * A runtime-produced foreign ref may already be observable through a
+     * shared/local table even when its owner is not a direct linker provider
+     * of this instance. Compare opaque tokens stored in trusted table entries
+     * before ever dereferencing the candidate owner.
+     */
+    for (index = 0u; index < instance->table_count; ++index) {
+        const turbowasm_instance_table *table =
+            turbowasm_instance_table_resolve_const(instance, index);
+        uint32_t element;
+
+        if (table == NULL)
+            continue;
+        for (element = 0u; element < table->size; ++element) {
+            if (!table->entries[element].is_null &&
+                table->entries[element].owner == owner)
+                return true;
+        }
+    }
 
     return false;
 }
@@ -925,12 +1028,20 @@ turbowasm_status turbowasm_instance_table_lookup(
     uint32_t table_index,
     uint32_t element_index,
     turbowasm_instance_table_entry *out) {
+    const turbowasm_instance_table *table;
+
     if (instance == NULL || out == NULL ||
         table_index >= instance->table_count)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (element_index >= instance->tables[table_index].size)
+
+    table = turbowasm_instance_table_resolve_const(
+        instance, table_index);
+    if (table == NULL)
+        return TURBOWASM_UNSUPPORTED;
+    if (element_index >= table->size)
         return TURBOWASM_TRAPPED;
-    *out = instance->tables[table_index].entries[element_index];
+
+    *out = table->entries[element_index];
     return TURBOWASM_OK;
 }
 
@@ -942,10 +1053,17 @@ turbowasm_status turbowasm_instance_table_get_value(
     turbowasm_instance_table_entry entry;
     turbowasm_status status;
 
+    const turbowasm_instance_table *table;
+
     if (instance == NULL || out == NULL ||
         table_index >= instance->table_count)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (instance->tables[table_index].reference_type != 0x70u)
+
+    table = turbowasm_instance_table_resolve_const(
+        instance, table_index);
+    if (table == NULL)
+        return TURBOWASM_UNSUPPORTED;
+    if (table->reference_type != 0x70u)
         return TURBOWASM_UNSUPPORTED;
 
     status = turbowasm_instance_table_lookup(
@@ -973,7 +1091,10 @@ turbowasm_status turbowasm_instance_table_set_value(
     if (instance == NULL || table_index >= instance->table_count)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    table = &instance->tables[table_index];
+    table = turbowasm_instance_table_resolve(
+        instance, table_index);
+    if (table == NULL)
+        return TURBOWASM_UNSUPPORTED;
     if (table->reference_type != 0x70u)
         return TURBOWASM_UNSUPPORTED;
     if (element_index >= table->size)
@@ -1127,7 +1248,10 @@ turbowasm_status turbowasm_instance_table_init(
         return TURBOWASM_INVALID_ARGUMENT;
 
     segment = &module->validation.element_segments[element_index];
-    table = &instance->tables[table_index];
+    table = turbowasm_instance_table_resolve(
+        instance, table_index);
+    if (table == NULL)
+        return TURBOWASM_UNSUPPORTED;
     if (segment->reference_type != table->reference_type)
         return TURBOWASM_TYPE_MISMATCH;
     if (table->reference_type != 0x70u)
@@ -1194,8 +1318,12 @@ turbowasm_status turbowasm_instance_table_copy(
         source_table >= instance->table_count)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    destination_object = &instance->tables[destination_table];
-    source_object = &instance->tables[source_table];
+    destination_object = turbowasm_instance_table_resolve(
+        instance, destination_table);
+    source_object = turbowasm_instance_table_resolve(
+        instance, source_table);
+    if (destination_object == NULL || source_object == NULL)
+        return TURBOWASM_UNSUPPORTED;
     if (destination_object->reference_type !=
         source_object->reference_type)
         return TURBOWASM_TYPE_MISMATCH;
@@ -1230,7 +1358,10 @@ turbowasm_status turbowasm_instance_table_grow(
         table_index >= instance->table_count)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    table = &instance->tables[table_index];
+    table = turbowasm_instance_table_resolve(
+        instance, table_index);
+    if (table == NULL)
+        return TURBOWASM_UNSUPPORTED;
     *out_previous_size = table->size;
 
     if (table->reference_type != 0x70u)
@@ -1273,10 +1404,18 @@ turbowasm_status turbowasm_instance_table_size(
     const turbowasm_instance_impl *instance,
     uint32_t table_index,
     uint32_t *out_size) {
+    const turbowasm_instance_table *table;
+
     if (instance == NULL || out_size == NULL ||
         table_index >= instance->table_count)
         return TURBOWASM_INVALID_ARGUMENT;
-    *out_size = instance->tables[table_index].size;
+
+    table = turbowasm_instance_table_resolve_const(
+        instance, table_index);
+    if (table == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    *out_size = table->size;
     return TURBOWASM_OK;
 }
 
@@ -1293,7 +1432,10 @@ turbowasm_status turbowasm_instance_table_fill(
     if (instance == NULL || table_index >= instance->table_count)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    table = &instance->tables[table_index];
+    table = turbowasm_instance_table_resolve(
+        instance, table_index);
+    if (table == NULL)
+        return TURBOWASM_UNSUPPORTED;
     if (table->reference_type != 0x70u)
         return TURBOWASM_UNSUPPORTED;
     if (!turbowasm_range_fits(destination, length, table->size))
