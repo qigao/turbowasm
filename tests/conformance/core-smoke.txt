@@ -14,3 +14,15 @@ loop.wast
 memory_size.wast
 table_size.wast
 global.wast
+
+# Wave 2: scalar/control/call/memory MVP execution families.
+br.wast
+br_table.wast
+return.wast
+call.wast
+call_indirect.wast
+i32.wast
+i64.wast
+load.wast
+store.wast
+memory_grow.wast
