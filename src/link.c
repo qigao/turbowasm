@@ -175,6 +175,20 @@ turbowasm_linker_find_module(
     return NULL;
 }
 
+static bool turbowasm_link_limits_match(
+    turbowasm_validation_limits expected,
+    turbowasm_validation_limits actual) {
+    if (actual.minimum < expected.minimum)
+        return false;
+    if (expected.has_maximum) {
+        if (!actual.has_maximum)
+            return false;
+        if (actual.maximum > expected.maximum)
+            return false;
+    }
+    return true;
+}
+
 static const turbowasm_export_desc *
 turbowasm_linker_find_export(
     const turbowasm_module *module,
@@ -199,6 +213,7 @@ turbowasm_status turbowasm_linker_bind_instance(
     const turbowasm_linker_impl *linker_impl;
     turbowasm_linked_function *function_bindings = NULL;
     turbowasm_linked_global *global_bindings = NULL;
+    turbowasm_linked_memory *memory_bindings = NULL;
     turbowasm_status result = TURBOWASM_OK;
     uint32_t import_index;
 
@@ -226,6 +241,17 @@ turbowasm_status turbowasm_linker_bind_instance(
         }
     }
 
+    if (module->summary.imported_memory_count != 0u) {
+        memory_bindings = (turbowasm_linked_memory *)calloc(
+            (size_t)module->summary.imported_memory_count,
+            sizeof(*memory_bindings));
+        if (memory_bindings == NULL) {
+            free(function_bindings);
+            free(global_bindings);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
+    }
+
     for (import_index = 0u;
          import_index < module->validation.import_count;
          ++import_index) {
@@ -235,8 +261,7 @@ turbowasm_status turbowasm_linker_bind_instance(
         const turbowasm_module_impl *provider_module;
         const turbowasm_export_desc *export_desc;
 
-        if (import_desc->kind == TURBOWASM_EXTERN_MEMORY ||
-            import_desc->kind == TURBOWASM_EXTERN_TABLE) {
+        if (import_desc->kind == TURBOWASM_EXTERN_TABLE) {
             result = TURBOWASM_UNSUPPORTED;
             goto fail;
         }
@@ -318,6 +343,49 @@ turbowasm_status turbowasm_linker_bind_instance(
             continue;
         }
 
+        if (import_desc->kind == TURBOWASM_EXTERN_MEMORY) {
+            const turbowasm_validation_memory *expected_memory;
+            const turbowasm_validation_memory *actual_memory;
+
+            if (import_desc->item_index >=
+                    module->summary.imported_memory_count ||
+                export_desc->item_index >=
+                    provider_module->validation.memory_count) {
+                result = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+
+            expected_memory =
+                &module->validation.memories[
+                    import_desc->item_index];
+            actual_memory =
+                &provider_module->validation.memories[
+                    export_desc->item_index];
+
+            if (!turbowasm_link_limits_match(
+                    expected_memory->limits,
+                    actual_memory->limits)) {
+                result = TURBOWASM_TYPE_MISMATCH;
+                goto fail;
+            }
+
+            if (actual_memory->imported &&
+                (export_desc->item_index >=
+                     provider_entry->instance->linked_memory_count ||
+                 provider_entry->instance
+                         ->linked_memories[export_desc->item_index]
+                         .provider == NULL)) {
+                result = TURBOWASM_LINK_ERROR;
+                goto fail;
+            }
+
+            memory_bindings[import_desc->item_index].provider =
+                provider_entry->instance;
+            memory_bindings[import_desc->item_index].memory_index =
+                export_desc->item_index;
+            continue;
+        }
+
         if (import_desc->kind == TURBOWASM_EXTERN_GLOBAL) {
             const turbowasm_validation_global *expected_global;
             const turbowasm_validation_global *actual_global;
@@ -370,10 +438,14 @@ turbowasm_status turbowasm_linker_bind_instance(
     instance->linked_globals = global_bindings;
     instance->linked_global_count =
         module->summary.imported_global_count;
+    instance->linked_memories = memory_bindings;
+    instance->linked_memory_count =
+        module->summary.imported_memory_count;
     return TURBOWASM_OK;
 
 fail:
     free(function_bindings);
     free(global_bindings);
+    free(memory_bindings);
     return result;
 }
