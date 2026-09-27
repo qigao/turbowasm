@@ -3330,6 +3330,7 @@ static turbowasm_status turbowasm_instance_create_internal(
             impl, module_impl, linker);
         if (status != TURBOWASM_OK) {
             free(impl->linked_functions);
+            free(impl->linked_globals);
             free(impl);
             return status;
         }
@@ -3338,6 +3339,7 @@ static turbowasm_status turbowasm_instance_create_internal(
     status = turbowasm_instance_state_init(impl, module_impl);
     if (status != TURBOWASM_OK) {
         free(impl->linked_functions);
+        free(impl->linked_globals);
         free(impl);
         return status;
     }
@@ -3389,6 +3391,9 @@ void turbowasm_instance_destroy(turbowasm_instance *instance) {
     free(impl->linked_functions);
     impl->linked_functions = NULL;
     impl->linked_function_count = 0u;
+    free(impl->linked_globals);
+    impl->linked_globals = NULL;
+    impl->linked_global_count = 0u;
     free(impl);
     instance->impl = NULL;
 }
