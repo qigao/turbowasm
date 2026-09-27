@@ -10,6 +10,9 @@ permissions:
   contents: read
   packages: read
 
+env:
+  SALTS_SDK_VERSION: 1.7.9
+
 jobs:
   linux:
     name: Linux x64
@@ -18,45 +21,11 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Checkout Salts master
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts
-          ref: master
-          path: deps/salts
-          persist-credentials: false
-
-      - name: Resolve Salts cache identity
-        id: salts-cache-meta
-        shell: bash
-        run: |
-          set -euo pipefail
-          sha="$(git -C deps/salts rev-parse HEAD)"
-          test -n "$sha"
-          image_family="${ImageOS:-ubuntu-latest}"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "image-family=$image_family" >> "$GITHUB_OUTPUT"
-
-      - name: Restore exact-master Salts SDK
-        id: salts-sdk-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/salts-sdk-linux
-          key: turbowasm-salts-sdk-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-cache-meta.outputs.image-family }}-${{ steps.salts-cache-meta.outputs.sha }}
-
-      - name: Validate restored Salts SDK
-        id: salts-sdk-restore
-        shell: bash
-        run: |
-          set -euo pipefail
-          salts_root="$RUNNER_TEMP/salts-sdk-linux"
-          valid=false
-          if test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake" &&
-             test -f "$salts_root/lib/cmake/Salts/SaltsTargets.cmake"; then
-            valid=true
-          fi
-          echo "valid=$valid" >> "$GITHUB_OUTPUT"
-          echo "Restored Salts SDK valid: $valid"
+      - name: Restore Salts 1.7.9 SDK
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./cmake/ci/restore-salts-sdk.ps1
 
       - name: Ensure Ninja
         shell: bash
@@ -66,46 +35,6 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y ninja-build
           fi
-
-      - name: Restore Salts build dependencies
-        if: steps.salts-sdk-restore.outputs.valid != 'true'
-        uses: ./deps/salts/.github/actions/setup-re2c-tools
-
-      - name: Build and install Salts master
-        if: steps.salts-sdk-restore.outputs.valid != 'true'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          salts_root="$RUNNER_TEMP/salts-sdk-linux"
-          vcpkg_installed="$GITHUB_WORKSPACE/build/salts-vcpkg"
-          cmake -S deps/salts -B build/salts -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_INSTALLED_DIR="$vcpkg_installed" \
-            -DVCPKG_OVERLAY_PORTS="$VCPKG_OVERLAY_PORTS" \
-            -DCMAKE_INSTALL_PREFIX="$salts_root" \
-            -DENABLE_TESTS=OFF \
-            -DBUILD_TESTS=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_BENCHMARKS=OFF
-          cmake --build build/salts -j2
-          cmake --install build/salts
-
-      - name: Record Salts master provenance
-        shell: bash
-        run: |
-          set -euxo pipefail
-          salts_root="$RUNNER_TEMP/salts-sdk-linux"
-          head="$(git -C deps/salts rev-parse HEAD)"
-          test "$(git -C deps/salts branch --show-current)" = "master"
-          test "$head" = "${{ steps.salts-cache-meta.outputs.sha }}"
-          test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
-          grep -q "Salts::SIMD" "$salts_root/lib/cmake/Salts/SaltsTargets.cmake"
-          echo "Salts SDK exact-key hit: ${{ steps.salts-sdk-cache.outputs.cache-hit }}"
-          echo "Salts SDK restored valid: ${{ steps.salts-sdk-restore.outputs.valid }}"
-          echo "Salts master: $head"
-          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
 
       - name: Configure TurboWasm
         shell: bash
@@ -149,64 +78,19 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Checkout Salts master
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts
-          ref: master
-          path: deps/salts
-          persist-credentials: false
-
-      - name: Resolve Salts cache identity
-        id: salts-cache-meta
+      - name: Restore Salts 1.7.9 SDK
         shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $sha = (git -C deps/salts rev-parse HEAD).Trim()
-          if ([string]::IsNullOrWhiteSpace($sha)) { throw "unable to resolve Salts master SHA" }
-          $imageFamily = $env:ImageOS
-          if ([string]::IsNullOrWhiteSpace($imageFamily)) {
-            $imageFamily = "windows-2022"
-          }
-          $legacyImage = "$imageFamily-$env:ImageVersion"
-          "sha=$sha" >> $env:GITHUB_OUTPUT
-          "image-family=$imageFamily" >> $env:GITHUB_OUTPUT
-          "legacy-image=$legacyImage" >> $env:GITHUB_OUTPUT
-
-      - name: Restore exact-master Salts SDK
-        id: salts-sdk-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/salts-sdk-windows
-          key: turbowasm-salts-sdk-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-cache-meta.outputs.image-family }}-${{ steps.salts-cache-meta.outputs.sha }}
-          restore-keys: |
-            turbowasm-salts-sdk-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-cache-meta.outputs.legacy-image }}-${{ steps.salts-cache-meta.outputs.sha }}
-
-      - name: Validate restored Salts SDK
-        id: salts-sdk-restore
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $saltsRoot = Join-Path $env:RUNNER_TEMP "salts-sdk-windows"
-          $config = Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"
-          $targets = Join-Path $saltsRoot "lib\cmake\Salts\SaltsTargets.cmake"
-          $valid = (Test-Path -LiteralPath $config -PathType Leaf) -and
-                   (Test-Path -LiteralPath $targets -PathType Leaf)
-          "valid=$($valid.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          Write-Host "Restored Salts SDK valid: $valid"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./cmake/ci/restore-salts-sdk.ps1
 
       - name: Ensure Ninja
-        if: steps.salts-sdk-restore.outputs.valid == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           if ($null -eq (Get-Command ninja.exe -ErrorAction SilentlyContinue)) {
             choco install ninja -y --no-progress
           }
-
-      - name: Restore Salts build dependencies
-        if: steps.salts-sdk-restore.outputs.valid != 'true'
-        uses: ./deps/salts/.github/actions/setup-re2c-tools
 
       - name: Resolve MSVC environment
         shell: pwsh
@@ -218,43 +102,6 @@ jobs:
             throw "Visual Studio x64 C++ toolchain was not found"
           }
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
-
-      - name: Build and install Salts master
-        if: steps.salts-sdk-restore.outputs.valid != 'true'
-        shell: cmd
-        working-directory: deps/salts
-        run: |
-          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
-          if errorlevel 1 exit /b 1
-          cmake --preset win-release-user -DENABLE_TESTS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF
-          if errorlevel 1 exit /b 1
-          cmake --build --preset win-release-user --parallel 2
-          if errorlevel 1 exit /b 1
-          cmake --install build\Msvc-Release --prefix "%RUNNER_TEMP%\salts-sdk-windows" --config Release
-          if errorlevel 1 exit /b 1
-
-      - name: Record Salts master provenance
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $saltsRoot = Join-Path $env:RUNNER_TEMP "salts-sdk-windows"
-          if (-not (Test-Path -LiteralPath (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake") -PathType Leaf)) {
-            throw "installed SaltsConfig.cmake is missing"
-          }
-          $targets = Join-Path $saltsRoot "lib\cmake\Salts\SaltsTargets.cmake"
-          if (-not (Select-String -LiteralPath $targets -SimpleMatch "Salts::SIMD" -Quiet)) {
-            throw "installed Salts SDK does not export Salts::SIMD"
-          }
-          $head = (git -C deps/salts rev-parse HEAD).Trim()
-          $branch = (git -C deps/salts branch --show-current).Trim()
-          if ($branch -ne "master") { throw "expected Salts master, got $branch at $head" }
-          if ($head -ne "${{ steps.salts-cache-meta.outputs.sha }}") {
-            throw "Salts checkout moved after cache identity resolution"
-          }
-          Write-Host "Salts SDK exact-key hit: ${{ steps.salts-sdk-cache.outputs.cache-hit }}"
-          Write-Host "Salts SDK restored valid: ${{ steps.salts-sdk-restore.outputs.valid }}"
-          Write-Host "Salts master: $head"
-          "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
 
       - name: Configure, build and test TurboWasm
         shell: cmd
@@ -301,45 +148,11 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Checkout Salts master
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts
-          ref: master
-          path: deps/salts
-          persist-credentials: false
-
-      - name: Resolve Salts cache identity
-        id: salts-cache-meta
-        shell: bash
-        run: |
-          set -euo pipefail
-          sha="$(git -C deps/salts rev-parse HEAD)"
-          test -n "$sha"
-          image_family="${ImageOS:-ubuntu-latest}"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "image-family=$image_family" >> "$GITHUB_OUTPUT"
-
-      - name: Restore exact-master Salts SDK
-        id: salts-sdk-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/salts-sdk-linux
-          key: turbowasm-salts-sdk-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-cache-meta.outputs.image-family }}-${{ steps.salts-cache-meta.outputs.sha }}
-
-      - name: Validate restored Salts SDK
-        id: salts-sdk-restore
-        shell: bash
-        run: |
-          set -euo pipefail
-          salts_root="$RUNNER_TEMP/salts-sdk-linux"
-          valid=false
-          if test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake" &&
-             test -f "$salts_root/lib/cmake/Salts/SaltsTargets.cmake"; then
-            valid=true
-          fi
-          echo "valid=$valid" >> "$GITHUB_OUTPUT"
-          echo "Restored Salts SDK valid: $valid"
+      - name: Restore Salts 1.7.9 SDK
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./cmake/ci/restore-salts-sdk.ps1
 
       - name: Ensure Ninja
         shell: bash
@@ -350,51 +163,10 @@ jobs:
             sudo apt-get install -y ninja-build
           fi
 
-      - name: Restore Salts build dependencies
-        if: steps.salts-sdk-restore.outputs.valid != 'true'
-        uses: ./deps/salts/.github/actions/setup-re2c-tools
-
       - name: Configure shared vcpkg cache for MIR
-        if: steps.salts-sdk-restore.outputs.valid == 'true'
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
-
-      - name: Build and install Salts master
-        if: steps.salts-sdk-restore.outputs.valid != 'true'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          salts_root="$RUNNER_TEMP/salts-sdk-linux"
-          vcpkg_installed="$GITHUB_WORKSPACE/build/salts-vcpkg-mir"
-          cmake -S deps/salts -B build/salts-mir -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
-            -DVCPKG_INSTALLED_DIR="$vcpkg_installed" \
-            -DVCPKG_OVERLAY_PORTS="$VCPKG_OVERLAY_PORTS" \
-            -DCMAKE_INSTALL_PREFIX="$salts_root" \
-            -DENABLE_TESTS=OFF \
-            -DBUILD_TESTS=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_BENCHMARKS=OFF
-          cmake --build build/salts-mir -j2
-          cmake --install build/salts-mir
-
-      - name: Record Salts master provenance
-        shell: bash
-        run: |
-          set -euxo pipefail
-          salts_root="$RUNNER_TEMP/salts-sdk-linux"
-          head="$(git -C deps/salts rev-parse HEAD)"
-          test "$(git -C deps/salts branch --show-current)" = "master"
-          test "$head" = "${{ steps.salts-cache-meta.outputs.sha }}"
-          test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
-          grep -q "Salts::SIMD" "$salts_root/lib/cmake/Salts/SaltsTargets.cmake"
-          echo "Salts SDK exact-key hit: ${{ steps.salts-sdk-cache.outputs.cache-hit }}"
-          echo "Salts SDK restored valid: ${{ steps.salts-sdk-restore.outputs.valid }}"
-          echo "Salts master: $head"
-          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
 
       - name: Restore MIR from shared cache only
         shell: bash
@@ -454,45 +226,11 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Checkout Salts master
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts
-          ref: master
-          path: deps/salts
-          persist-credentials: false
-
-      - name: Resolve Salts cache identity
-        id: salts-cache-meta
-        shell: bash
-        run: |
-          set -euo pipefail
-          sha="$(git -C deps/salts rev-parse HEAD)"
-          test -n "$sha"
-          image_family="${ImageOS:-macos-15}"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "image-family=$image_family" >> "$GITHUB_OUTPUT"
-
-      - name: Restore exact-master Salts SDK
-        id: salts-sdk-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/salts-sdk-macos
-          key: turbowasm-salts-sdk-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-cache-meta.outputs.image-family }}-${{ steps.salts-cache-meta.outputs.sha }}
-
-      - name: Validate restored Salts SDK
-        id: salts-sdk-restore
-        shell: bash
-        run: |
-          set -euo pipefail
-          salts_root="$RUNNER_TEMP/salts-sdk-macos"
-          valid=false
-          if test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake" &&
-             test -f "$salts_root/lib/cmake/Salts/SaltsTargets.cmake"; then
-            valid=true
-          fi
-          echo "valid=$valid" >> "$GITHUB_OUTPUT"
-          echo "Restored Salts SDK valid: $valid"
+      - name: Restore Salts 1.7.9 SDK
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./cmake/ci/restore-salts-sdk.ps1
 
       - name: Prepare host build tools
         shell: bash
@@ -505,51 +243,10 @@ jobs:
             *) echo "unsupported macOS arch: $RUNNER_ARCH" >&2; exit 1 ;;
           esac
 
-      - name: Restore Salts build dependencies
-        if: steps.salts-sdk-restore.outputs.valid != 'true'
-        uses: ./deps/salts/.github/actions/setup-re2c-tools
-
       - name: Configure shared vcpkg cache for MIR
-        if: steps.salts-sdk-restore.outputs.valid == 'true'
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
-
-      - name: Build and install Salts master
-        if: steps.salts-sdk-restore.outputs.valid != 'true'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          salts_root="$RUNNER_TEMP/salts-sdk-macos"
-          vcpkg_installed="$GITHUB_WORKSPACE/build/salts-vcpkg-mir"
-          cmake -S deps/salts -B build/salts-mir -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET="$TURBOWASM_MIR_TRIPLET" \
-            -DVCPKG_INSTALLED_DIR="$vcpkg_installed" \
-            -DVCPKG_OVERLAY_PORTS="$VCPKG_OVERLAY_PORTS" \
-            -DCMAKE_INSTALL_PREFIX="$salts_root" \
-            -DENABLE_TESTS=OFF \
-            -DBUILD_TESTS=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_BENCHMARKS=OFF
-          cmake --build build/salts-mir -j2
-          cmake --install build/salts-mir
-
-      - name: Record Salts master provenance
-        shell: bash
-        run: |
-          set -euxo pipefail
-          salts_root="$RUNNER_TEMP/salts-sdk-macos"
-          head="$(git -C deps/salts rev-parse HEAD)"
-          test "$(git -C deps/salts branch --show-current)" = "master"
-          test "$head" = "${{ steps.salts-cache-meta.outputs.sha }}"
-          test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
-          grep -q "Salts::SIMD" "$salts_root/lib/cmake/Salts/SaltsTargets.cmake"
-          echo "Salts SDK exact-key hit: ${{ steps.salts-sdk-cache.outputs.cache-hit }}"
-          echo "Salts SDK restored valid: ${{ steps.salts-sdk-restore.outputs.valid }}"
-          echo "Salts master: $head"
-          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
 
       - name: Restore MIR from shared cache only
         shell: bash

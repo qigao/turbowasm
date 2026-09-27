@@ -140,6 +140,39 @@ static void test_cancel_pending(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_reflected_signature_rejects_bad_argument_count(void) {
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    cflow_executor executor = {0};
+    lifecycle_probe probe = {0};
+    turbowasm_value argument = {0};
+    turbowasm_cflow_call call = {0};
+
+    load_constant_module(&module, &instance);
+    assert(cflow_executor_manual_init_with_capacity(&executor, 1u));
+
+    argument.kind = TURBOWASM_VALUE_I32;
+    argument.as.i32 = 1;
+    call.instance = &instance;
+    call.function_index = 0u;
+    call.arguments = &argument;
+    call.argument_count = 1u;
+    call.complete = on_complete;
+    call.finalize = on_finalize;
+    call.user = &probe;
+
+    assert(turbowasm_cflow_try_submit(
+               &executor, &call) == CFLOW_ADMISSION_INVALID_ARGUMENT);
+    assert(probe.complete_count == 0u);
+    assert(probe.finalize_count == 0u);
+    assert(cflow_executor_run_ready(&executor) == 0u);
+
+    assert(cflow_executor_shutdown(&executor));
+    cflow_executor_destroy(&executor);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 static void test_rejected_admission_has_no_callbacks(void) {
     turbowasm_module module = {0};
     turbowasm_instance instance = {0};
@@ -184,6 +217,7 @@ static void test_rejected_admission_has_no_callbacks(void) {
 int main(void) {
     test_manual_execution();
     test_cancel_pending();
+    test_reflected_signature_rejects_bad_argument_count();
     test_rejected_admission_has_no_callbacks();
     return 0;
 }

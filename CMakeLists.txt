@@ -19,14 +19,19 @@ if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
 endif()
 
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTS_ROOT_PATH)
-find_package(Salts 1.3.0 CONFIG REQUIRED
+find_package(Salts 1.7.9 CONFIG REQUIRED
   PATHS "${SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
 
+if(NOT TARGET Salts::CMeta)
+  message(FATAL_ERROR
+    "TurboWasm requires Salts 1.7.9 with the canonical Salts::CMeta target")
+endif()
+
 if(NOT TARGET Salts::SIMD)
   message(FATAL_ERROR
-    "TurboWasm requires a Salts SDK that exports Salts::SIMD (qigao/salts#343)")
+    "TurboWasm requires Salts 1.7.9 with the canonical Salts::SIMD target")
 endif()
 
 add_library(turbowasm
@@ -59,7 +64,7 @@ target_include_directories(turbowasm
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
-target_link_libraries(turbowasm PUBLIC Salts::SIMD)
+target_link_libraries(turbowasm PUBLIC Salts::CMeta Salts::SIMD)
 
 if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
   if(NOT TARGET Salts::CFlow)

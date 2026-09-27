@@ -65,6 +65,17 @@ typedef struct turbowasm_value {
     } as;
 } turbowasm_value;
 
+/*
+ * Canonical CMeta reflection for TurboWasm host value carriers.
+ *
+ * Scalar kinds reuse Salts-owned semantic identities. v128 and funcref use
+ * TurboWasm-owned descriptors because their host carriers are TurboWasm
+ * structs. Wasm binary type bytes remain the parser/validator source of truth;
+ * this is a read-only semantic projection for higher layers.
+ */
+const cmeta_type_desc *
+turbowasm_value_type_descriptor(turbowasm_value_kind kind);
+
 const cmeta_vector_desc *turbowasm_v128_descriptor(turbowasm_v128_shape shape);
 turbowasm_status turbowasm_v128_load(turbowasm_v128 *out,
                                      turbowasm_v128_shape shape,

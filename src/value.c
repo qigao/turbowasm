@@ -1,5 +1,43 @@
 #include <turbowasm/value.h>
 
+static const cmeta_type_identity turbowasm_v128_type_identity =
+    CMETA_TYPE_ID_ATOM_INIT("turbowasm.value.v128");
+static const cmeta_type_identity turbowasm_funcref_type_identity =
+    CMETA_TYPE_ID_ATOM_INIT("turbowasm.value.funcref");
+
+static const cmeta_type_desc turbowasm_v128_type = {
+    .name = "turbowasm_v128",
+    .size = sizeof(turbowasm_v128),
+    .align = _Alignof(turbowasm_v128),
+    .kind = CMETA_T_OBJECT,
+    .pointee = NULL,
+    .traits = NULL,
+    .identity = &turbowasm_v128_type_identity
+};
+
+static const cmeta_type_desc turbowasm_funcref_type = {
+    .name = "turbowasm_funcref",
+    .size = sizeof(turbowasm_funcref),
+    .align = _Alignof(turbowasm_funcref),
+    .kind = CMETA_T_OBJECT,
+    .pointee = NULL,
+    .traits = NULL,
+    .identity = &turbowasm_funcref_type_identity
+};
+
+const cmeta_type_desc *
+turbowasm_value_type_descriptor(turbowasm_value_kind kind) {
+    switch (kind) {
+        case TURBOWASM_VALUE_I32: return &cmeta_type_int32;
+        case TURBOWASM_VALUE_I64: return &cmeta_type_int64;
+        case TURBOWASM_VALUE_F32: return &cmeta_type_float;
+        case TURBOWASM_VALUE_F64: return &cmeta_type_double;
+        case TURBOWASM_VALUE_V128: return &turbowasm_v128_type;
+        case TURBOWASM_VALUE_FUNCREF: return &turbowasm_funcref_type;
+        default: return NULL;
+    }
+}
+
 const cmeta_vector_desc *turbowasm_v128_descriptor(turbowasm_v128_shape shape) {
     switch (shape) {
         case TURBOWASM_V128_I8X16: return &cmeta_vector_i8x16;

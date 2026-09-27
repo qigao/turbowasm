@@ -38,6 +38,7 @@ static void test_imported_and_local_metadata(void) {
     const turbowasm_module_impl *impl;
     const turbowasm_validation_function *imported;
     const turbowasm_validation_function *local;
+    turbowasm_function_signature signature = {0};
 
     assert(turbowasm_module_load_borrowed(
                &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
@@ -70,6 +71,26 @@ static void test_imported_and_local_metadata(void) {
     assert(local->code[0] == 0x20u);
     assert(local->code[1] == 0x00u);
     assert(local->code[2] == 0x0bu);
+
+    assert(turbowasm_module_function_signature_get(
+        &module, 0u, &signature));
+    assert(signature.param_count == 0u);
+    assert(signature.result_count == 0u);
+
+    assert(turbowasm_module_function_signature_get(
+        &module, 1u, &signature));
+    assert(signature.param_count == 1u);
+    assert(signature.result_count == 1u);
+    assert(cmeta_type_equal(
+        turbowasm_module_function_param_type(&module, 1u, 0u),
+        &cmeta_type_int32));
+    assert(cmeta_type_equal(
+        turbowasm_module_function_result_type(&module, 1u, 0u),
+        &cmeta_type_int32));
+    assert(turbowasm_module_function_param_type(
+        &module, 1u, 1u) == NULL);
+    assert(turbowasm_module_function_result_type(
+        &module, 1u, 1u) == NULL);
 
     assert(local->code >= bytes);
     assert(local->code + local->code_size <= bytes + sizeof(bytes));

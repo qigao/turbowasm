@@ -11,6 +11,12 @@ int main(void) {
     turbowasm_v128 left = {0};
     turbowasm_v128 right = {0};
     turbowasm_v128 result = {0};
+    const cmeta_type_desc *i32_type =
+        turbowasm_value_type_descriptor(TURBOWASM_VALUE_I32);
+
+    if (i32_type == NULL ||
+        !cmeta_type_equal(i32_type, &cmeta_type_int32))
+        return 7;
 
     if (turbowasm_v128_load(
             &left, TURBOWASM_V128_I32X4, left_data) != TURBOWASM_OK)
