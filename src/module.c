@@ -1,4 +1,5 @@
 #include <turbowasm/module.h>
+#include <turbowasm/value.h>
 
 #include "module_internal.h"
 #include "reader.h"
@@ -83,4 +84,61 @@ bool turbowasm_module_summary_get(const turbowasm_module *module,
     impl = (const turbowasm_module_impl *)module->impl;
     *out = impl->summary;
     return true;
+}
+
+
+static const turbowasm_validation_func_type *
+turbowasm_module_reflected_function_type(
+    const turbowasm_module *module,
+    uint32_t function_index) {
+    const turbowasm_module_impl *impl = turbowasm_module_impl_get(module);
+
+    if (impl == NULL)
+        return NULL;
+    return turbowasm_validation_context_function_type(
+        &impl->validation, function_index);
+}
+
+bool turbowasm_module_function_signature_get(
+    const turbowasm_module *module,
+    uint32_t function_index,
+    turbowasm_function_signature *out) {
+    const turbowasm_validation_func_type *type;
+
+    if (out == NULL)
+        return false;
+
+    type = turbowasm_module_reflected_function_type(module, function_index);
+    if (type == NULL || !type->defined)
+        return false;
+
+    out->param_count = type->param_count;
+    out->result_count = type->result_count;
+    return true;
+}
+
+const cmeta_type_desc *turbowasm_module_function_param_type(
+    const turbowasm_module *module,
+    uint32_t function_index,
+    uint32_t param_index) {
+    const turbowasm_validation_func_type *type =
+        turbowasm_module_reflected_function_type(module, function_index);
+
+    if (type == NULL || !type->defined || param_index >= type->param_count)
+        return NULL;
+    return turbowasm_value_type_descriptor(
+        (turbowasm_value_kind)type->params[param_index]);
+}
+
+const cmeta_type_desc *turbowasm_module_function_result_type(
+    const turbowasm_module *module,
+    uint32_t function_index,
+    uint32_t result_index) {
+    const turbowasm_validation_func_type *type =
+        turbowasm_module_reflected_function_type(module, function_index);
+
+    if (type == NULL || !type->defined || result_index >= type->result_count)
+        return NULL;
+    return turbowasm_value_type_descriptor(
+        (turbowasm_value_kind)type->results[result_index]);
 }

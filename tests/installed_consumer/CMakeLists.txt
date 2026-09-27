@@ -18,6 +18,10 @@ add_test(NAME turbowasm_installed_consumer
 
 get_target_property(_turbowasm_runtime_links
   TurboWasm::Runtime INTERFACE_LINK_LIBRARIES)
+if(NOT "Salts::CMeta" IN_LIST _turbowasm_runtime_links)
+  message(FATAL_ERROR
+    "TurboWasm::Runtime must expose its canonical Salts::CMeta dependency")
+endif()
 if("Salts::CFlow" IN_LIST _turbowasm_runtime_links)
   message(FATAL_ERROR
     "TurboWasm::Runtime must remain CFlow-free")

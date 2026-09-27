@@ -8,6 +8,28 @@
 #include <string.h>
 
 
+static void test_value_type_reflection(void) {
+    const cmeta_type_desc *v128 =
+        turbowasm_value_type_descriptor(TURBOWASM_VALUE_V128);
+    const cmeta_type_desc *funcref =
+        turbowasm_value_type_descriptor(TURBOWASM_VALUE_FUNCREF);
+
+    assert(turbowasm_value_type_descriptor(
+               TURBOWASM_VALUE_I32) == &cmeta_type_int32);
+    assert(turbowasm_value_type_descriptor(
+               TURBOWASM_VALUE_I64) == &cmeta_type_int64);
+    assert(turbowasm_value_type_descriptor(
+               TURBOWASM_VALUE_F32) == &cmeta_type_float);
+    assert(turbowasm_value_type_descriptor(
+               TURBOWASM_VALUE_F64) == &cmeta_type_double);
+    assert(cmeta_type_desc_valid(v128));
+    assert(cmeta_type_desc_valid(funcref));
+    assert(v128->size == sizeof(turbowasm_v128));
+    assert(funcref->size == sizeof(turbowasm_funcref));
+    assert(turbowasm_value_type_descriptor(
+               (turbowasm_value_kind)0) == NULL);
+}
+
 static void test_raw_v128_roundtrip(void) {
     static const uint8_t expected[16] = {
         0x00, 0x11, 0x22, 0x33,
@@ -110,6 +132,7 @@ static void test_shape_mismatch_rejected(void) {
 }
 
 int main(void) {
+    test_value_type_reflection();
     test_raw_v128_roundtrip();
     test_i32x4_add();
     test_i32x4_eq_mask();

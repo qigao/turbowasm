@@ -2,12 +2,37 @@
 
 static bool turbowasm_cflow_call_valid(
     const turbowasm_cflow_call *call) {
+    const turbowasm_module *module;
+    turbowasm_function_signature signature;
+    size_t index;
+
     if (call == NULL || call->instance == NULL)
         return false;
     if (call->argument_count != 0u && call->arguments == NULL)
         return false;
     if (call->result_capacity != 0u && call->results == NULL)
         return false;
+
+    module = turbowasm_instance_module(call->instance);
+    if (module == NULL ||
+        !turbowasm_module_function_signature_get(
+            module, call->function_index, &signature))
+        return false;
+    if (call->argument_count != signature.param_count)
+        return false;
+
+    for (index = 0u; index < call->argument_count; ++index) {
+        const cmeta_type_desc *expected =
+            turbowasm_module_function_param_type(
+                module, call->function_index, (uint32_t)index);
+        const cmeta_type_desc *actual =
+            turbowasm_value_type_descriptor(call->arguments[index].kind);
+
+        if (expected == NULL || actual == NULL ||
+            (expected != actual && !cmeta_type_equal(expected, actual)))
+            return false;
+    }
+
     return true;
 }
 
