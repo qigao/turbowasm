@@ -35,3 +35,10 @@ memory.wast
 memory_trap.wast
 memory_redundancy.wast
 float_memory.wast
+
+# Wave 4: scalar floating-point arithmetic/comparison/conversion semantics.
+f32.wast
+f64.wast
+f32_cmp.wast
+f64_cmp.wast
+conversions.wast

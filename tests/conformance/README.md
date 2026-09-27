@@ -117,3 +117,23 @@ mixed with NaN/result-policy coverage.
 `memory.wast` contains a small number of import cases. Those remain subject
 to the existing explicit unsupported accounting; this wave does not broaden
 the host-linking scope tracked by #122.
+
+
+## Wave 4
+
+The fourth gate isolates scalar floating-point and conversion semantics:
+
+- `f32.wast`
+- `f64.wast`
+- `f32_cmp.wast`
+- `f64_cmp.wast`
+- `conversions.wast`
+
+Exact non-NaN f32/f64 results continue to compare raw IEEE-754 bits. Upstream
+`nan:canonical` / `nan:arithmetic` result classes are still reported as
+unsupported by the manifest converter until the harness models permitted NaN
+sets explicitly; they are never counted as passes.
+
+Keeping NaN-policy work explicit lets this wave expose ordinary arithmetic,
+comparison, truncation, reinterpretation and conversion bugs without weakening
+the gate.
