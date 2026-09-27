@@ -1,6 +1,8 @@
 #ifndef TURBOWASM_VALIDATION_CONTEXT_H
 #define TURBOWASM_VALIDATION_CONTEXT_H
 
+#include <turbowasm/module.h>
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -123,6 +125,14 @@ typedef struct turbowasm_validation_element_segment {
 } turbowasm_validation_element_segment;
 
 typedef struct turbowasm_validation_context {
+    turbowasm_import_desc *imports;
+    uint32_t import_count;
+    uint32_t import_capacity;
+
+    turbowasm_export_desc *exports;
+    uint32_t export_count;
+    uint32_t export_capacity;
+
     turbowasm_validation_func_type *types;
     uint32_t type_count;
 
@@ -159,6 +169,14 @@ typedef struct turbowasm_validation_context {
 
 void turbowasm_validation_context_destroy(
     turbowasm_validation_context *context);
+
+bool turbowasm_validation_context_append_import(
+    turbowasm_validation_context *context,
+    turbowasm_import_desc import_desc);
+
+bool turbowasm_validation_context_append_export(
+    turbowasm_validation_context *context,
+    turbowasm_export_desc export_desc);
 
 bool turbowasm_validation_context_allocate_types(
     turbowasm_validation_context *context,

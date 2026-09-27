@@ -87,6 +87,45 @@ bool turbowasm_module_summary_get(const turbowasm_module *module,
 }
 
 
+size_t turbowasm_module_import_count(
+    const turbowasm_module *module) {
+    const turbowasm_module_impl *impl =
+        turbowasm_module_impl_get(module);
+    return impl == NULL ? 0u : (size_t)impl->validation.import_count;
+}
+
+const turbowasm_import_desc *turbowasm_module_import_at(
+    const turbowasm_module *module,
+    size_t index) {
+    const turbowasm_module_impl *impl =
+        turbowasm_module_impl_get(module);
+
+    if (impl == NULL ||
+        index >= (size_t)impl->validation.import_count)
+        return NULL;
+    return &impl->validation.imports[index];
+}
+
+size_t turbowasm_module_export_count(
+    const turbowasm_module *module) {
+    const turbowasm_module_impl *impl =
+        turbowasm_module_impl_get(module);
+    return impl == NULL ? 0u : (size_t)impl->validation.export_count;
+}
+
+const turbowasm_export_desc *turbowasm_module_export_at(
+    const turbowasm_module *module,
+    size_t index) {
+    const turbowasm_module_impl *impl =
+        turbowasm_module_impl_get(module);
+
+    if (impl == NULL ||
+        index >= (size_t)impl->validation.export_count)
+        return NULL;
+    return &impl->validation.exports[index];
+}
+
+
 static const turbowasm_validation_func_type *
 turbowasm_module_reflected_function_type(
     const turbowasm_module *module,

@@ -30,6 +30,42 @@ typedef struct turbowasm_function_signature {
     uint32_t result_count;
 } turbowasm_function_signature;
 
+/*
+ * UTF-8 names borrow immutable bytes from the loaded module. They are not
+ * NUL-terminated and remain valid only while the module and its source bytes
+ * remain alive.
+ */
+typedef struct turbowasm_name {
+    const uint8_t *bytes;
+    uint32_t size;
+} turbowasm_name;
+
+typedef enum turbowasm_external_kind {
+    TURBOWASM_EXTERN_FUNCTION = 0,
+    TURBOWASM_EXTERN_TABLE = 1,
+    TURBOWASM_EXTERN_MEMORY = 2,
+    TURBOWASM_EXTERN_GLOBAL = 3
+} turbowasm_external_kind;
+
+/*
+ * item_index is the index in the corresponding Wasm function/table/memory/
+ * global index space. Function imports additionally retain their Wasm type
+ * index. For non-function imports type_index is UINT32_MAX.
+ */
+typedef struct turbowasm_import_desc {
+    turbowasm_name module_name;
+    turbowasm_name name;
+    turbowasm_external_kind kind;
+    uint32_t item_index;
+    uint32_t type_index;
+} turbowasm_import_desc;
+
+typedef struct turbowasm_export_desc {
+    turbowasm_name name;
+    turbowasm_external_kind kind;
+    uint32_t item_index;
+} turbowasm_export_desc;
+
 typedef struct turbowasm_module_summary {
     uint32_t standard_section_mask;
     size_t custom_section_count;
@@ -80,6 +116,16 @@ const cmeta_type_desc *turbowasm_module_function_result_type(
     const turbowasm_module *module,
     uint32_t function_index,
     uint32_t result_index);
+
+size_t turbowasm_module_import_count(const turbowasm_module *module);
+const turbowasm_import_desc *turbowasm_module_import_at(
+    const turbowasm_module *module,
+    size_t index);
+
+size_t turbowasm_module_export_count(const turbowasm_module *module);
+const turbowasm_export_desc *turbowasm_module_export_at(
+    const turbowasm_module *module,
+    size_t index);
 
 #ifdef __cplusplus
 }
