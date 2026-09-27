@@ -1,0 +1,74 @@
+# TurboWasm WebAssembly spec conformance harness
+
+This directory is test infrastructure only. It is not installed with
+`TurboWasm::Runtime`.
+
+## Data flow
+
+```
+pinned WebAssembly/spec .wast
+        |
+        v
+wast2json (WABT from qigao/vcpkg-cache)
+        |
+        v
+run_core.py
+  JSON -> TWCF1 line manifest
+        |
+        v
+turbowasm_spec_runner
+  persistent modules / instances / linker
+        |
+        +-- pass
+        +-- fail
+        '-- unsupported
+```
+
+The Python layer does not execute WebAssembly. It only converts WABT's JSON
+format into a deliberately small manifest. The C runner is the semantic test
+surface and uses only public TurboWasm APIs.
+
+## First slice
+
+The initial `core-smoke.txt` suite intentionally covers a small, pinned set
+of upstream core files. The harness currently executes:
+
+- valid modules and persistent instances;
+- module registration through `turbowasm_linker`;
+- invoke actions;
+- exact scalar i32/i64/f32/f64 results;
+- multi-value exact results;
+- null funcref results;
+- mapped TurboWasm trap kinds;
+- binary assert_invalid / assert_malformed;
+- binary assert_unlinkable / assert_uninstantiable.
+
+Unsupported WAST shapes are reported separately rather than counted as passes.
+Current deliberate unsupported cases include text-only negative modules,
+`get` actions, NaN result patterns, v128 result comparison, externref/exnref,
+and non-null reference literals.
+
+The suite should expand in small reviewable waves. A new upstream family should
+not be added to the gate until its result semantics are represented correctly
+by the harness.
+
+
+## First baseline findings
+
+The first pinned smoke run produced:
+
+```
+pass        1475
+fail           5
+unsupported  332
+total       1812
+```
+
+Three failures were WABT 1.0.41 conversion gaps on newer typed-reference
+syntax and are now classified as tooling-unsupported. The two remaining
+failures were real Runtime validation gaps in `global.wast`; #141 added
+the narrow extended-const rule for reading a prior immutable local global.
+
+After #141, this foundation gate is expected to have zero Runtime failures
+for the current smoke slice while still reporting unsupported coverage
+separately.

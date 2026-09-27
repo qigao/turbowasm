@@ -11,6 +11,8 @@ include(CTest)
 
 option(TURBOWASM_BUILD_TOOLS "Build TurboWasm command-line tools" ON)
 option(TURBOWASM_BUILD_TESTS "Build TurboWasm tests" ON)
+option(TURBOWASM_BUILD_CONFORMANCE_RUNNER
+  "Build the non-installed WebAssembly spec conformance runner" OFF)
 option(TURBOWASM_ENABLE_MIR_JIT "Enable optional MIR JIT backend" OFF)
 option(TURBOWASM_ENABLE_CFLOW_ADAPTER "Build optional CFlow execution adapter" ON)
 
@@ -140,6 +142,10 @@ endif()
 if(TURBOWASM_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+endif()
+
+if(TURBOWASM_BUILD_CONFORMANCE_RUNNER)
+  add_subdirectory(tests/conformance)
 endif()
 
 install(

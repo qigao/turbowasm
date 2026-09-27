@@ -1,0 +1,952 @@
+#include <turbowasm/turbowasm.h>
+
+#include <errno.h>
+#include <inttypes.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct spec_slot {
+    uint8_t *bytes;
+    size_t size;
+    turbowasm_module module;
+    turbowasm_instance instance;
+    bool loaded;
+    bool ready;
+    bool unsupported;
+} spec_slot;
+
+typedef struct spec_state {
+    spec_slot *slots;
+    size_t slot_count;
+    turbowasm_linker linker;
+    int64_t current_slot;
+    size_t passed;
+    size_t failed;
+    size_t unsupported;
+    bool printed_first_failure;
+    bool printed_first_unsupported;
+} spec_state;
+
+static void spec_note_failure(spec_state *state,
+                              unsigned line,
+                              const char *message) {
+    ++state->failed;
+    if (!state->printed_first_failure) {
+        fprintf(stderr, "FIRST_FAIL line=%u %s\n", line, message);
+        state->printed_first_failure = true;
+    }
+}
+
+static void spec_note_unsupported(spec_state *state,
+                                  unsigned line,
+                                  const char *message) {
+    ++state->unsupported;
+    if (!state->printed_first_unsupported) {
+        fprintf(stderr, "FIRST_UNSUPPORTED line=%u %s\n",
+                line, message);
+        state->printed_first_unsupported = true;
+    }
+}
+
+static void spec_note_pass(spec_state *state) {
+    ++state->passed;
+}
+
+static unsigned char *spec_read_file(const char *path,
+                                     size_t *size_out) {
+    FILE *file;
+    long length;
+    unsigned char *bytes;
+
+    if (path == NULL || size_out == NULL)
+        return NULL;
+
+    file = fopen(path, "rb");
+    if (file == NULL)
+        return NULL;
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return NULL;
+    }
+    length = ftell(file);
+    if (length < 0 || fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return NULL;
+    }
+
+    bytes = (unsigned char *)malloc(
+        length == 0 ? 1u : (size_t)length);
+    if (bytes == NULL) {
+        fclose(file);
+        return NULL;
+    }
+
+    if (length != 0 &&
+        fread(bytes, 1u, (size_t)length, file) !=
+            (size_t)length) {
+        free(bytes);
+        fclose(file);
+        return NULL;
+    }
+
+    fclose(file);
+    *size_out = (size_t)length;
+    return bytes;
+}
+
+static void spec_slot_destroy(spec_slot *slot) {
+    if (slot == NULL)
+        return;
+    turbowasm_instance_destroy(&slot->instance);
+    turbowasm_module_destroy(&slot->module);
+    free(slot->bytes);
+    memset(slot, 0, sizeof(*slot));
+}
+
+static bool spec_ensure_slot(spec_state *state, size_t slot_index) {
+    spec_slot *grown;
+    size_t next;
+
+    if (slot_index < state->slot_count)
+        return true;
+
+    next = state->slot_count == 0u ? 8u : state->slot_count;
+    while (next <= slot_index) {
+        if (next > SIZE_MAX / 2u)
+            return false;
+        next *= 2u;
+    }
+
+    if (next > SIZE_MAX / sizeof(*grown))
+        return false;
+
+    grown = (spec_slot *)realloc(
+        state->slots, next * sizeof(*grown));
+    if (grown == NULL)
+        return false;
+
+    memset(grown + state->slot_count, 0,
+           (next - state->slot_count) * sizeof(*grown));
+    state->slots = grown;
+    state->slot_count = next;
+    return true;
+}
+
+static int spec_hex_nibble(char ch) {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return 10 + ch - 'a';
+    if (ch >= 'A' && ch <= 'F') return 10 + ch - 'A';
+    return -1;
+}
+
+static uint8_t *spec_decode_hex(const char *text,
+                                size_t *size_out) {
+    size_t length;
+    size_t index;
+    uint8_t *bytes;
+
+    if (text == NULL || size_out == NULL)
+        return NULL;
+
+    length = strlen(text);
+    if ((length & 1u) != 0u)
+        return NULL;
+
+    bytes = (uint8_t *)malloc(length == 0u ? 1u : length / 2u);
+    if (bytes == NULL)
+        return NULL;
+
+    for (index = 0u; index < length; index += 2u) {
+        int hi = spec_hex_nibble(text[index]);
+        int lo = spec_hex_nibble(text[index + 1u]);
+        if (hi < 0 || lo < 0) {
+            free(bytes);
+            return NULL;
+        }
+        bytes[index / 2u] = (uint8_t)((hi << 4) | lo);
+    }
+
+    *size_out = length / 2u;
+    return bytes;
+}
+
+static bool spec_parse_u64(const char *text, uint64_t *out) {
+    char *end = NULL;
+    unsigned long long value;
+
+    if (text == NULL || out == NULL || *text == '\0')
+        return false;
+
+    errno = 0;
+    value = strtoull(text, &end, 10);
+    if (errno != 0 || end == NULL || *end != '\0')
+        return false;
+
+    *out = (uint64_t)value;
+    return true;
+}
+
+static bool spec_parse_value(const char *token,
+                             turbowasm_value *out) {
+    const char *colon;
+    size_t type_size;
+    uint64_t bits;
+
+    if (token == NULL || out == NULL)
+        return false;
+
+    memset(out, 0, sizeof(*out));
+    colon = strchr(token, ':');
+    if (colon == NULL)
+        return false;
+    type_size = (size_t)(colon - token);
+
+    if (type_size == 3u &&
+        memcmp(token, "i32", 3u) == 0) {
+        if (!spec_parse_u64(colon + 1u, &bits))
+            return false;
+        out->kind = TURBOWASM_VALUE_I32;
+        out->as.i32 = (int32_t)(uint32_t)bits;
+        return true;
+    }
+    if (type_size == 3u &&
+        memcmp(token, "i64", 3u) == 0) {
+        if (!spec_parse_u64(colon + 1u, &bits))
+            return false;
+        out->kind = TURBOWASM_VALUE_I64;
+        out->as.i64 = (int64_t)bits;
+        return true;
+    }
+    if (type_size == 3u &&
+        memcmp(token, "f32", 3u) == 0) {
+        uint32_t raw;
+        if (!spec_parse_u64(colon + 1u, &bits) ||
+            bits > UINT32_MAX)
+            return false;
+        raw = (uint32_t)bits;
+        out->kind = TURBOWASM_VALUE_F32;
+        memcpy(&out->as.f32, &raw, sizeof(raw));
+        return true;
+    }
+    if (type_size == 3u &&
+        memcmp(token, "f64", 3u) == 0) {
+        if (!spec_parse_u64(colon + 1u, &bits))
+            return false;
+        out->kind = TURBOWASM_VALUE_F64;
+        memcpy(&out->as.f64, &bits, sizeof(bits));
+        return true;
+    }
+    if (type_size == 7u &&
+        memcmp(token, "funcref", 7u) == 0 &&
+        strcmp(colon + 1u, "null") == 0) {
+        out->kind = TURBOWASM_VALUE_FUNCREF;
+        out->as.funcref.is_null = true;
+        out->as.funcref.function_index = UINT32_MAX;
+        out->as.funcref.owner = NULL;
+        return true;
+    }
+
+    return false;
+}
+
+static bool spec_values_equal(const turbowasm_value *actual,
+                              const turbowasm_value *expected) {
+    uint32_t f32_actual;
+    uint32_t f32_expected;
+    uint64_t f64_actual;
+    uint64_t f64_expected;
+
+    if (actual == NULL || expected == NULL ||
+        actual->kind != expected->kind)
+        return false;
+
+    switch (actual->kind) {
+        case TURBOWASM_VALUE_I32:
+            return actual->as.i32 == expected->as.i32;
+        case TURBOWASM_VALUE_I64:
+            return actual->as.i64 == expected->as.i64;
+        case TURBOWASM_VALUE_F32:
+            memcpy(&f32_actual, &actual->as.f32, sizeof(f32_actual));
+            memcpy(&f32_expected, &expected->as.f32,
+                   sizeof(f32_expected));
+            return f32_actual == f32_expected;
+        case TURBOWASM_VALUE_F64:
+            memcpy(&f64_actual, &actual->as.f64, sizeof(f64_actual));
+            memcpy(&f64_expected, &expected->as.f64,
+                   sizeof(f64_expected));
+            return f64_actual == f64_expected;
+        case TURBOWASM_VALUE_FUNCREF:
+            return actual->as.funcref.is_null &&
+                   expected->as.funcref.is_null;
+        default:
+            return false;
+    }
+}
+
+static size_t spec_count_tokens(const char *text) {
+    size_t count = 1u;
+    const char *cursor;
+
+    if (text == NULL || strcmp(text, "-") == 0 ||
+        *text == '\0')
+        return 0u;
+
+    for (cursor = text; *cursor != '\0'; ++cursor) {
+        if (*cursor == ',')
+            ++count;
+    }
+    return count;
+}
+
+static bool spec_parse_values(const char *text,
+                              turbowasm_value **out_values,
+                              size_t *out_count) {
+    size_t count;
+    size_t index = 0u;
+    char *copy = NULL;
+    char *cursor;
+    turbowasm_value *values = NULL;
+
+    if (out_values == NULL || out_count == NULL)
+        return false;
+    *out_values = NULL;
+    *out_count = 0u;
+
+    count = spec_count_tokens(text);
+    if (count == 0u)
+        return true;
+
+    values = (turbowasm_value *)calloc(count, sizeof(*values));
+    if (values == NULL)
+        return false;
+
+    copy = (char *)malloc(strlen(text) + 1u);
+    if (copy == NULL) {
+        free(values);
+        return false;
+    }
+    strcpy(copy, text);
+
+    cursor = copy;
+    while (cursor != NULL && *cursor != '\0') {
+        char *comma = strchr(cursor, ',');
+        if (comma != NULL)
+            *comma = '\0';
+
+        if (index >= count ||
+            !spec_parse_value(cursor, &values[index])) {
+            free(copy);
+            free(values);
+            return false;
+        }
+        ++index;
+        cursor = comma == NULL ? NULL : comma + 1u;
+    }
+
+    free(copy);
+    if (index != count) {
+        free(values);
+        return false;
+    }
+
+    *out_values = values;
+    *out_count = count;
+    return true;
+}
+
+static int64_t spec_resolve_slot(const spec_state *state,
+                                 const char *text) {
+    char *end = NULL;
+    long long parsed;
+
+    if (strcmp(text, "-") == 0)
+        return state->current_slot;
+
+    errno = 0;
+    parsed = strtoll(text, &end, 10);
+    if (errno != 0 || end == NULL || *end != '\0' || parsed < 0)
+        return -1;
+    return (int64_t)parsed;
+}
+
+static bool spec_export_function(const spec_slot *slot,
+                                 const uint8_t *name,
+                                 size_t name_size,
+                                 uint32_t *out_index) {
+    size_t index;
+    size_t count;
+
+    if (slot == NULL || !slot->loaded || out_index == NULL)
+        return false;
+
+    count = turbowasm_module_export_count(&slot->module);
+    for (index = 0u; index < count; ++index) {
+        const turbowasm_export_desc *desc =
+            turbowasm_module_export_at(&slot->module, index);
+        if (desc == NULL ||
+            desc->kind != TURBOWASM_EXTERN_FUNCTION ||
+            desc->name.size != name_size)
+            continue;
+        if (name_size == 0u ||
+            memcmp(desc->name.bytes, name, name_size) == 0) {
+            *out_index = desc->item_index;
+            return true;
+        }
+    }
+    return false;
+}
+
+static turbowasm_status spec_invoke(spec_state *state,
+                                    int64_t slot_index,
+                                    const char *field_hex,
+                                    const char *args_text,
+                                    turbowasm_value **out_results,
+                                    size_t *out_result_count,
+                                    turbowasm_trap *out_trap,
+                                    bool *out_unsupported) {
+    spec_slot *slot;
+    uint8_t *field = NULL;
+    size_t field_size = 0u;
+    uint32_t function_index;
+    turbowasm_function_signature signature;
+    turbowasm_value *arguments = NULL;
+    size_t argument_count = 0u;
+    turbowasm_value *results = NULL;
+    size_t result_count = 0u;
+    turbowasm_status status;
+
+    *out_results = NULL;
+    *out_result_count = 0u;
+    *out_trap = TURBOWASM_TRAP_NONE;
+    *out_unsupported = false;
+
+    if (slot_index < 0 ||
+        (size_t)slot_index >= state->slot_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    slot = &state->slots[(size_t)slot_index];
+    if (slot->unsupported || !slot->ready) {
+        *out_unsupported = true;
+        return TURBOWASM_UNSUPPORTED;
+    }
+
+    field = spec_decode_hex(field_hex, &field_size);
+    if (field == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!spec_export_function(
+            slot, field, field_size, &function_index)) {
+        free(field);
+        return TURBOWASM_INVALID_ARGUMENT;
+    }
+    free(field);
+
+    if (!turbowasm_module_function_signature_get(
+            &slot->module, function_index, &signature))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!spec_parse_values(
+            args_text, &arguments, &argument_count))
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (argument_count != signature.param_count) {
+        free(arguments);
+        return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    if (signature.result_count != 0u) {
+        results = (turbowasm_value *)calloc(
+            signature.result_count, sizeof(*results));
+        if (results == NULL) {
+            free(arguments);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
+    }
+
+    status = turbowasm_instance_invoke(
+        &slot->instance,
+        function_index,
+        arguments,
+        argument_count,
+        results,
+        signature.result_count,
+        &result_count,
+        out_trap);
+
+    free(arguments);
+
+    if (status == TURBOWASM_UNSUPPORTED) {
+        *out_unsupported = true;
+        free(results);
+        return status;
+    }
+    if (status != TURBOWASM_OK && status != TURBOWASM_TRAPPED) {
+        free(results);
+        return status;
+    }
+
+    *out_results = results;
+    *out_result_count = result_count;
+    return status;
+}
+
+static void spec_command_module(spec_state *state,
+                                unsigned line,
+                                size_t slot_index,
+                                const char *path) {
+    spec_slot *slot;
+    turbowasm_status status;
+
+    if (!spec_ensure_slot(state, slot_index)) {
+        spec_note_failure(state, line, "slot allocation failed");
+        return;
+    }
+
+    slot = &state->slots[slot_index];
+    spec_slot_destroy(slot);
+    slot->bytes = spec_read_file(path, &slot->size);
+    if (slot->bytes == NULL) {
+        spec_note_failure(state, line, "cannot read module file");
+        return;
+    }
+
+    status = turbowasm_module_load_borrowed(
+        &slot->module, slot->bytes, slot->size);
+    if (status == TURBOWASM_UNSUPPORTED) {
+        slot->unsupported = true;
+        state->current_slot = (int64_t)slot_index;
+        spec_note_unsupported(state, line, "module validation unsupported");
+        return;
+    }
+    if (status != TURBOWASM_OK) {
+        spec_note_failure(state, line, "valid module rejected");
+        return;
+    }
+
+    slot->loaded = true;
+    status = turbowasm_instance_create_linked(
+        &slot->instance, &slot->module, &state->linker);
+    if (status == TURBOWASM_UNSUPPORTED ||
+        status == TURBOWASM_LINK_ERROR) {
+        slot->unsupported = true;
+        state->current_slot = (int64_t)slot_index;
+        spec_note_unsupported(state, line, "module host/link feature unsupported");
+        return;
+    }
+    if (status != TURBOWASM_OK) {
+        spec_note_failure(state, line, "valid module failed instantiation");
+        return;
+    }
+
+    slot->ready = true;
+    state->current_slot = (int64_t)slot_index;
+    spec_note_pass(state);
+}
+
+static void spec_command_register(spec_state *state,
+                                  unsigned line,
+                                  int64_t slot_index,
+                                  const char *name_hex) {
+    size_t name_size = 0u;
+    uint8_t *name_bytes;
+    turbowasm_name name;
+    turbowasm_status status;
+
+    if (slot_index < 0 ||
+        (size_t)slot_index >= state->slot_count ||
+        state->slots[(size_t)slot_index].unsupported ||
+        !state->slots[(size_t)slot_index].ready) {
+        spec_note_unsupported(state, line, "register target unavailable");
+        return;
+    }
+
+    name_bytes = spec_decode_hex(name_hex, &name_size);
+    if (name_bytes == NULL) {
+        spec_note_failure(state, line, "invalid register name");
+        return;
+    }
+    name.bytes = name_bytes;
+    name.size = (uint32_t)name_size;
+
+    status = turbowasm_linker_define_instance(
+        &state->linker, name,
+        &state->slots[(size_t)slot_index].instance);
+    free(name_bytes);
+
+    if (status != TURBOWASM_OK) {
+        spec_note_failure(state, line, "register failed");
+        return;
+    }
+    spec_note_pass(state);
+}
+
+static void spec_command_negative_module(spec_state *state,
+                                         unsigned line,
+                                         const char *kind,
+                                         const char *path) {
+    size_t size = 0u;
+    uint8_t *bytes = spec_read_file(path, &size);
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_status status;
+
+    if (bytes == NULL) {
+        spec_note_failure(state, line, "cannot read assertion module");
+        return;
+    }
+
+    status = turbowasm_module_load_borrowed(&module, bytes, size);
+
+    if (strcmp(kind, "assert_invalid") == 0 ||
+        strcmp(kind, "assert_malformed") == 0) {
+        if (status == TURBOWASM_MALFORMED_MODULE) {
+            spec_note_pass(state);
+        } else if (status == TURBOWASM_UNSUPPORTED) {
+            spec_note_unsupported(state, line,
+                                  "negative module feature unsupported");
+        } else {
+            spec_note_failure(state, line,
+                              "negative module unexpectedly admitted");
+        }
+        turbowasm_module_destroy(&module);
+        free(bytes);
+        return;
+    }
+
+    if (status == TURBOWASM_UNSUPPORTED) {
+        spec_note_unsupported(state, line,
+                              "assertion module validation unsupported");
+        free(bytes);
+        return;
+    }
+    if (status != TURBOWASM_OK) {
+        spec_note_failure(state, line,
+                          "assertion module failed before expected phase");
+        free(bytes);
+        return;
+    }
+
+    status = turbowasm_instance_create_linked(
+        &instance, &module, &state->linker);
+
+    if (strcmp(kind, "assert_unlinkable") == 0) {
+        if (status == TURBOWASM_LINK_ERROR ||
+            status == TURBOWASM_TYPE_MISMATCH) {
+            spec_note_pass(state);
+        } else if (status == TURBOWASM_UNSUPPORTED) {
+            spec_note_unsupported(state, line,
+                                  "unlinkable feature unsupported");
+        } else {
+            spec_note_failure(state, line,
+                              "module did not fail linking");
+        }
+    } else if (strcmp(kind, "assert_uninstantiable") == 0) {
+        if (status == TURBOWASM_TRAPPED) {
+            spec_note_pass(state);
+        } else if (status == TURBOWASM_UNSUPPORTED ||
+                   status == TURBOWASM_LINK_ERROR) {
+            spec_note_unsupported(state, line,
+                                  "uninstantiable precondition unsupported");
+        } else {
+            spec_note_failure(state, line,
+                              "module did not trap during instantiation");
+        }
+    } else {
+        spec_note_failure(state, line, "unknown negative module command");
+    }
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+    free(bytes);
+}
+
+static void spec_command_action(spec_state *state,
+                                unsigned line,
+                                int64_t slot_index,
+                                const char *field_hex,
+                                const char *args_text) {
+    turbowasm_value *results = NULL;
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    bool unsupported = false;
+    turbowasm_status status = spec_invoke(
+        state, slot_index, field_hex, args_text,
+        &results, &result_count, &trap, &unsupported);
+
+    free(results);
+    if (unsupported) {
+        spec_note_unsupported(state, line, "invoke unsupported");
+    } else if (status != TURBOWASM_OK) {
+        spec_note_failure(state, line, "action did not complete");
+    } else {
+        spec_note_pass(state);
+    }
+}
+
+static void spec_command_assert_return(spec_state *state,
+                                       unsigned line,
+                                       int64_t slot_index,
+                                       const char *field_hex,
+                                       const char *args_text,
+                                       const char *expected_text) {
+    turbowasm_value *results = NULL;
+    turbowasm_value *expected = NULL;
+    size_t result_count = 0u;
+    size_t expected_count = 0u;
+    size_t index;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    bool unsupported = false;
+    turbowasm_status status;
+
+    if (!spec_parse_values(
+            expected_text, &expected, &expected_count)) {
+        spec_note_failure(state, line, "invalid expected value encoding");
+        return;
+    }
+
+    status = spec_invoke(
+        state, slot_index, field_hex, args_text,
+        &results, &result_count, &trap, &unsupported);
+
+    if (unsupported) {
+        spec_note_unsupported(state, line, "assert_return invoke unsupported");
+        goto done;
+    }
+    if (status != TURBOWASM_OK) {
+        spec_note_failure(state, line, "assert_return did not complete");
+        goto done;
+    }
+    if (result_count != expected_count) {
+        spec_note_failure(state, line, "assert_return result count mismatch");
+        goto done;
+    }
+
+    for (index = 0u; index < result_count; ++index) {
+        if (!spec_values_equal(&results[index], &expected[index])) {
+            spec_note_failure(state, line, "assert_return value mismatch");
+            goto done;
+        }
+    }
+
+    spec_note_pass(state);
+
+done:
+    free(results);
+    free(expected);
+}
+
+static void spec_command_assert_trap(spec_state *state,
+                                     unsigned line,
+                                     int64_t slot_index,
+                                     const char *field_hex,
+                                     const char *args_text,
+                                     int expected_trap) {
+    turbowasm_value *results = NULL;
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    bool unsupported = false;
+    turbowasm_status status = spec_invoke(
+        state, slot_index, field_hex, args_text,
+        &results, &result_count, &trap, &unsupported);
+
+    free(results);
+
+    if (unsupported) {
+        spec_note_unsupported(state, line, "assert_trap invoke unsupported");
+        return;
+    }
+    if (status != TURBOWASM_TRAPPED) {
+        spec_note_failure(state, line, "expected Wasm trap");
+        return;
+    }
+    if ((int)trap != expected_trap) {
+        spec_note_failure(state, line, "trap kind mismatch");
+        return;
+    }
+    spec_note_pass(state);
+}
+
+static size_t spec_split_tabs(char *line,
+                              char **fields,
+                              size_t capacity) {
+    size_t count = 0u;
+    char *cursor = line;
+
+    while (cursor != NULL && count < capacity) {
+        char *tab = strchr(cursor, '\t');
+        fields[count++] = cursor;
+        if (tab == NULL)
+            break;
+        *tab = '\0';
+        cursor = tab + 1u;
+    }
+    return count;
+}
+
+static bool spec_parse_unsigned(const char *text, unsigned *out) {
+    char *end = NULL;
+    unsigned long value;
+
+    errno = 0;
+    value = strtoul(text, &end, 10);
+    if (errno != 0 || end == NULL || *end != '\0' ||
+        value > UINT32_MAX)
+        return false;
+    *out = (unsigned)value;
+    return true;
+}
+
+static int spec_run_manifest(spec_state *state, const char *path) {
+    FILE *file = fopen(path, "rb");
+    char buffer[65536];
+    bool first = true;
+
+    if (file == NULL) {
+        fprintf(stderr, "cannot open manifest: %s\n", path);
+        return 2;
+    }
+
+    while (fgets(buffer, sizeof(buffer), file) != NULL) {
+        char *fields[8] = {0};
+        size_t field_count;
+        size_t length = strlen(buffer);
+        unsigned line = 0u;
+
+        while (length != 0u &&
+               (buffer[length - 1u] == '\n' ||
+                buffer[length - 1u] == '\r')) {
+            buffer[--length] = '\0';
+        }
+        if (length == 0u)
+            continue;
+
+        if (first) {
+            first = false;
+            if (strcmp(buffer, "TWCF1") != 0) {
+                fprintf(stderr, "unsupported manifest version\n");
+                fclose(file);
+                return 2;
+            }
+            continue;
+        }
+
+        field_count = spec_split_tabs(
+            buffer, fields, sizeof(fields) / sizeof(fields[0]));
+        if (field_count < 3u ||
+            !spec_parse_unsigned(fields[1], &line)) {
+            spec_note_failure(state, 0u, "malformed manifest line");
+            continue;
+        }
+
+        if (strcmp(fields[0], "unsupported") == 0) {
+            spec_note_unsupported(state, line, fields[2]);
+            continue;
+        }
+
+        if (strcmp(fields[0], "module") == 0 && field_count == 4u) {
+            unsigned slot = 0u;
+            if (!spec_parse_unsigned(fields[2], &slot)) {
+                spec_note_failure(state, line, "bad module slot");
+                continue;
+            }
+            spec_command_module(state, line, (size_t)slot, fields[3]);
+            continue;
+        }
+
+        if (strcmp(fields[0], "register") == 0 && field_count == 4u) {
+            int64_t slot = spec_resolve_slot(state, fields[2]);
+            spec_command_register(state, line, slot, fields[3]);
+            continue;
+        }
+
+        if ((strcmp(fields[0], "assert_invalid") == 0 ||
+             strcmp(fields[0], "assert_malformed") == 0 ||
+             strcmp(fields[0], "assert_unlinkable") == 0 ||
+             strcmp(fields[0], "assert_uninstantiable") == 0) &&
+            field_count == 3u) {
+            spec_command_negative_module(
+                state, line, fields[0], fields[2]);
+            continue;
+        }
+
+        if (strcmp(fields[0], "action") == 0 && field_count == 5u) {
+            int64_t slot = spec_resolve_slot(state, fields[2]);
+            spec_command_action(
+                state, line, slot, fields[3], fields[4]);
+            continue;
+        }
+
+        if (strcmp(fields[0], "assert_return") == 0 &&
+            field_count == 6u) {
+            int64_t slot = spec_resolve_slot(state, fields[2]);
+            spec_command_assert_return(
+                state, line, slot, fields[3],
+                fields[4], fields[5]);
+            continue;
+        }
+
+        if (strcmp(fields[0], "assert_trap") == 0 &&
+            field_count == 6u) {
+            char *end = NULL;
+            long trap_value;
+            int64_t slot = spec_resolve_slot(state, fields[2]);
+            errno = 0;
+            trap_value = strtol(fields[5], &end, 10);
+            if (errno != 0 || end == NULL || *end != '\0') {
+                spec_note_failure(state, line, "bad trap encoding");
+                continue;
+            }
+            spec_command_assert_trap(
+                state, line, slot, fields[3],
+                fields[4], (int)trap_value);
+            continue;
+        }
+
+        spec_note_failure(state, line, "unknown manifest command");
+    }
+
+    fclose(file);
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    spec_state state;
+    size_t index;
+    int rc;
+
+    if (argc != 2) {
+        fprintf(stderr, "usage: turbowasm_spec_runner <manifest>\n");
+        return 2;
+    }
+
+    memset(&state, 0, sizeof(state));
+    state.current_slot = -1;
+
+    if (turbowasm_linker_init(&state.linker) != TURBOWASM_OK) {
+        fprintf(stderr, "failed to initialize linker\n");
+        return 2;
+    }
+
+    rc = spec_run_manifest(&state, argv[1]);
+
+    printf("CONFORMANCE pass=%zu fail=%zu unsupported=%zu total=%zu\n",
+           state.passed,
+           state.failed,
+           state.unsupported,
+           state.passed + state.failed + state.unsupported);
+
+    index = state.slot_count;
+    while (index != 0u) {
+        --index;
+        spec_slot_destroy(&state.slots[index]);
+    }
+    free(state.slots);
+    turbowasm_linker_destroy(&state.linker);
+
+    if (rc != 0)
+        return rc;
+    return state.failed == 0u ? 0 : 1;
+}
