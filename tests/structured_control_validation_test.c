@@ -255,6 +255,30 @@ static void test_invalid_branch_depth(void) {
     assert(module.impl == NULL);
 }
 
+static void test_br_table_rejects_zero_arity_loop_vs_value_block(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x12, 0x01, 0x10,
+        0x00,
+        0x02, 0x7f,
+        0x03, 0x7f,
+        0x41, 0x01,
+        0x20, 0x00,
+        0x0e, 0x01, 0x00, 0x01,
+        0x0b,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) ==
+           TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
 int main(void) {
     test_block_result();
     test_block_missing_result();
@@ -268,5 +292,6 @@ int main(void) {
     test_nested_unreachable_is_polymorphic();
     test_block_typeidx_s33_overflow_rejected();
     test_invalid_branch_depth();
+    test_br_table_rejects_zero_arity_loop_vs_value_block();
     return 0;
 }
