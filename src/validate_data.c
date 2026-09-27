@@ -155,7 +155,13 @@ turbowasm_status turbowasm_validate_const_expr(
                 context, global_index);
             if (global == NULL)
                 return TURBOWASM_MALFORMED_MODULE;
-            if (!global->imported || global->mutable_value)
+            /*
+             * Extended-const permits reading an already-declared immutable
+             * global. Because globals are appended only after their
+             * initializer validates, this admits imports and prior local
+             * immutable globals while still rejecting self/forward refs.
+             */
+            if (global->mutable_value)
                 return TURBOWASM_MALFORMED_MODULE;
             *out_type = global->value_type;
             break;
