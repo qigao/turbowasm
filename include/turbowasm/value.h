@@ -51,6 +51,17 @@ typedef struct turbowasm_v128 {
 typedef struct turbowasm_funcref {
     bool is_null;
     uint32_t function_index;
+
+    /*
+     * Opaque borrowed identity of the function's owning TurboWasm instance.
+     * Runtime-produced non-null refs always set this token. A host-supplied
+     * non-null ref may leave it NULL to mean "the receiving instance" for
+     * backward-compatible instance-relative construction.
+     *
+     * Do not dereference or manufacture this value. It becomes invalid when
+     * its owning instance is destroyed.
+     */
+    const void *owner;
 } turbowasm_funcref;
 
 typedef struct turbowasm_value {
