@@ -284,8 +284,12 @@ static turbowasm_status turbowasm_allocate_memories(
             (uint64_t)source->limits.minimum *
             TURBOWASM_WASM_PAGE_SIZE;
 
-        if (source->imported)
-            return TURBOWASM_UNSUPPORTED;
+        if (source->imported) {
+            if (index >= instance->linked_memory_count ||
+                instance->linked_memories[index].provider == NULL)
+                return TURBOWASM_UNSUPPORTED;
+            continue;
+        }
         if (bytes > (uint64_t)SIZE_MAX)
             return TURBOWASM_OUT_OF_MEMORY;
 
@@ -558,8 +562,18 @@ void turbowasm_instance_state_destroy(
     instance->globals = NULL;
     instance->global_count = 0u;
 
-    for (index = 0u; index < instance->memory_count; ++index)
-        free(instance->memories[index].data);
+    {
+        const turbowasm_module_impl *module =
+            turbowasm_module_impl_get(instance->module);
+
+        for (index = 0u; index < instance->memory_count; ++index) {
+            if (module != NULL &&
+                index < module->validation.memory_count &&
+                module->validation.memories[index].imported)
+                continue;
+            free(instance->memories[index].data);
+        }
+    }
     free(instance->memories);
     instance->memories = NULL;
     instance->memory_count = 0u;
@@ -655,6 +669,68 @@ turbowasm_status turbowasm_instance_global_set(
     return TURBOWASM_OK;
 }
 
+static const turbowasm_instance_memory *
+turbowasm_instance_memory_resolve_const(
+    const turbowasm_instance_impl *instance,
+    uint32_t memory_index) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_memory *memory;
+    const turbowasm_linked_memory *binding;
+
+    if (instance == NULL || memory_index >= instance->memory_count)
+        return NULL;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL ||
+        memory_index >= module->validation.memory_count)
+        return NULL;
+
+    memory = &module->validation.memories[memory_index];
+    if (!memory->imported)
+        return &instance->memories[memory_index];
+
+    if (memory_index >= instance->linked_memory_count)
+        return NULL;
+    binding = &instance->linked_memories[memory_index];
+    if (binding->provider == NULL)
+        return NULL;
+
+    return turbowasm_instance_memory_resolve_const(
+        binding->provider,
+        binding->memory_index);
+}
+
+static turbowasm_instance_memory *
+turbowasm_instance_memory_resolve(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_memory *memory;
+    const turbowasm_linked_memory *binding;
+
+    if (instance == NULL || memory_index >= instance->memory_count)
+        return NULL;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL ||
+        memory_index >= module->validation.memory_count)
+        return NULL;
+
+    memory = &module->validation.memories[memory_index];
+    if (!memory->imported)
+        return &instance->memories[memory_index];
+
+    if (memory_index >= instance->linked_memory_count)
+        return NULL;
+    binding = &instance->linked_memories[memory_index];
+    if (binding->provider == NULL)
+        return NULL;
+
+    return turbowasm_instance_memory_resolve(
+        binding->provider,
+        binding->memory_index);
+}
+
 turbowasm_status turbowasm_instance_memory_bounds(
     const turbowasm_instance_impl *instance,
     uint32_t memory_index,
@@ -670,7 +746,11 @@ turbowasm_status turbowasm_instance_memory_bounds(
         memory_index >= instance->memory_count)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    memory = &instance->memories[memory_index];
+    memory = turbowasm_instance_memory_resolve_const(
+        instance, memory_index);
+    if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
     effective = (uint64_t)address + offset;
     size = (uint64_t)memory->pages *
            TURBOWASM_WASM_PAGE_SIZE;
@@ -689,10 +769,18 @@ turbowasm_status turbowasm_instance_memory_size(
     const turbowasm_instance_impl *instance,
     uint32_t memory_index,
     uint32_t *out_pages) {
+    const turbowasm_instance_memory *memory;
+
     if (instance == NULL || out_pages == NULL ||
         memory_index >= instance->memory_count)
         return TURBOWASM_INVALID_ARGUMENT;
-    *out_pages = instance->memories[memory_index].pages;
+
+    memory = turbowasm_instance_memory_resolve_const(
+        instance, memory_index);
+    if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    *out_pages = memory->pages;
     return TURBOWASM_OK;
 }
 
@@ -711,7 +799,11 @@ turbowasm_status turbowasm_instance_memory_grow(
         memory_index >= instance->memory_count)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    memory = &instance->memories[memory_index];
+    memory = turbowasm_instance_memory_resolve(
+        instance, memory_index);
+    if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
     *out_previous_pages = memory->pages;
 
     next_pages = (uint64_t)memory->pages + delta_pages;
