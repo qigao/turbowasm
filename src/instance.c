@@ -3363,6 +3363,7 @@ static turbowasm_status turbowasm_instance_create_internal(
             free(impl->linked_functions);
             free(impl->linked_globals);
             free(impl->linked_memories);
+            free(impl->linked_tables);
             free(impl);
             return status;
         }
@@ -3373,6 +3374,7 @@ static turbowasm_status turbowasm_instance_create_internal(
         free(impl->linked_functions);
         free(impl->linked_globals);
         free(impl->linked_memories);
+        free(impl->linked_tables);
         free(impl);
         return status;
     }
@@ -3430,6 +3432,9 @@ void turbowasm_instance_destroy(turbowasm_instance *instance) {
     free(impl->linked_memories);
     impl->linked_memories = NULL;
     impl->linked_memory_count = 0u;
+    free(impl->linked_tables);
+    impl->linked_tables = NULL;
+    impl->linked_table_count = 0u;
     free(impl);
     instance->impl = NULL;
 }

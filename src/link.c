@@ -214,6 +214,7 @@ turbowasm_status turbowasm_linker_bind_instance(
     turbowasm_linked_function *function_bindings = NULL;
     turbowasm_linked_global *global_bindings = NULL;
     turbowasm_linked_memory *memory_bindings = NULL;
+    turbowasm_linked_table *table_bindings = NULL;
     turbowasm_status result = TURBOWASM_OK;
     uint32_t import_index;
 
@@ -252,6 +253,18 @@ turbowasm_status turbowasm_linker_bind_instance(
         }
     }
 
+    if (module->summary.imported_table_count != 0u) {
+        table_bindings = (turbowasm_linked_table *)calloc(
+            (size_t)module->summary.imported_table_count,
+            sizeof(*table_bindings));
+        if (table_bindings == NULL) {
+            free(function_bindings);
+            free(global_bindings);
+            free(memory_bindings);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
+    }
+
     for (import_index = 0u;
          import_index < module->validation.import_count;
          ++import_index) {
@@ -260,11 +273,6 @@ turbowasm_status turbowasm_linker_bind_instance(
         const turbowasm_linker_entry *provider_entry;
         const turbowasm_module_impl *provider_module;
         const turbowasm_export_desc *export_desc;
-
-        if (import_desc->kind == TURBOWASM_EXTERN_TABLE) {
-            result = TURBOWASM_UNSUPPORTED;
-            goto fail;
-        }
 
         provider_entry = turbowasm_linker_find_module(
             linker_impl, import_desc->module_name);
@@ -386,6 +394,60 @@ turbowasm_status turbowasm_linker_bind_instance(
             continue;
         }
 
+        if (import_desc->kind == TURBOWASM_EXTERN_TABLE) {
+            const turbowasm_validation_table *expected_table;
+            const turbowasm_validation_table *actual_table;
+
+            if (import_desc->item_index >=
+                    module->summary.imported_table_count ||
+                export_desc->item_index >=
+                    provider_module->validation.table_count) {
+                result = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+
+            expected_table =
+                &module->validation.tables[import_desc->item_index];
+            actual_table =
+                &provider_module->validation.tables[
+                    export_desc->item_index];
+
+            /*
+             * Runtime table execution currently supports funcref. Keep
+             * externref fail-closed until its value carrier lands.
+             */
+            if (expected_table->reference_type != 0x70u ||
+                actual_table->reference_type != 0x70u) {
+                result = TURBOWASM_UNSUPPORTED;
+                goto fail;
+            }
+
+            if (expected_table->reference_type !=
+                    actual_table->reference_type ||
+                !turbowasm_link_limits_match(
+                    expected_table->limits,
+                    actual_table->limits)) {
+                result = TURBOWASM_TYPE_MISMATCH;
+                goto fail;
+            }
+
+            if (actual_table->imported &&
+                (export_desc->item_index >=
+                     provider_entry->instance->linked_table_count ||
+                 provider_entry->instance
+                         ->linked_tables[export_desc->item_index]
+                         .provider == NULL)) {
+                result = TURBOWASM_LINK_ERROR;
+                goto fail;
+            }
+
+            table_bindings[import_desc->item_index].provider =
+                provider_entry->instance;
+            table_bindings[import_desc->item_index].table_index =
+                export_desc->item_index;
+            continue;
+        }
+
         if (import_desc->kind == TURBOWASM_EXTERN_GLOBAL) {
             const turbowasm_validation_global *expected_global;
             const turbowasm_validation_global *actual_global;
@@ -441,11 +503,15 @@ turbowasm_status turbowasm_linker_bind_instance(
     instance->linked_memories = memory_bindings;
     instance->linked_memory_count =
         module->summary.imported_memory_count;
+    instance->linked_tables = table_bindings;
+    instance->linked_table_count =
+        module->summary.imported_table_count;
     return TURBOWASM_OK;
 
 fail:
     free(function_bindings);
     free(global_bindings);
     free(memory_bindings);
+    free(table_bindings);
     return result;
 }

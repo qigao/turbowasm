@@ -365,24 +365,20 @@ static void test_legacy_unlinked_memory_fails_closed(void) {
     turbowasm_module_destroy(&module);
 }
 
-static void test_table_import_stays_explicitly_unsupported(void) {
+static void test_legacy_unlinked_table_fails_closed(void) {
     turbowasm_module module = {0};
     turbowasm_instance instance = {0};
-    turbowasm_linker linker = {0};
 
     assert(turbowasm_module_load_borrowed(
                &module,
                table_import_bytes,
                sizeof(table_import_bytes)) == TURBOWASM_OK);
-    assert(turbowasm_linker_init(&linker) == TURBOWASM_OK);
 
-    assert(turbowasm_instance_create_linked(
+    assert(turbowasm_instance_create(
                &instance,
-               &module,
-               &linker) == TURBOWASM_UNSUPPORTED);
+               &module) == TURBOWASM_UNSUPPORTED);
     assert(instance.impl == NULL);
 
-    turbowasm_linker_destroy(&linker);
     turbowasm_module_destroy(&module);
 }
 
@@ -889,7 +885,7 @@ int main(void) {
     test_duplicate_namespace_rejected();
     test_unresolved_provider_export_rejected();
     test_legacy_unlinked_memory_fails_closed();
-    test_table_import_stays_explicitly_unsupported();
+    test_legacy_unlinked_table_fails_closed();
     test_memory_import_is_one_live_growable_object();
     test_memory_limits_mismatch_rejected();
     test_mutable_global_is_live_shared_state();
