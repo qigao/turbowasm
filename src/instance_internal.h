@@ -21,9 +21,12 @@ typedef struct turbowasm_instance_memory {
     bool has_maximum;
 } turbowasm_instance_memory;
 
+struct turbowasm_instance_impl;
+
 typedef struct turbowasm_instance_table_entry {
     bool is_null;
     uint32_t function_index;
+    struct turbowasm_instance_impl *owner;
 } turbowasm_instance_table_entry;
 
 typedef struct turbowasm_instance_table {
@@ -33,8 +36,6 @@ typedef struct turbowasm_instance_table {
     bool has_maximum;
     uint8_t reference_type;
 } turbowasm_instance_table;
-
-struct turbowasm_instance_impl;
 
 typedef struct turbowasm_linked_function {
     struct turbowasm_instance_impl *provider;

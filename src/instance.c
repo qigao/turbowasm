@@ -119,6 +119,7 @@ static bool turbowasm_zero_value(uint8_t type, turbowasm_value *out) {
     } else if (kind == TURBOWASM_VALUE_FUNCREF) {
         out->as.funcref.is_null = true;
         out->as.funcref.function_index = UINT32_MAX;
+        out->as.funcref.owner = NULL;
     }
     return true;
 }
@@ -748,6 +749,8 @@ static turbowasm_status turbowasm_exec_indirect_call(
     const turbowasm_module_impl *module;
     const turbowasm_validation_func_type *expected_type;
     const turbowasm_validation_func_type *actual_type;
+    const turbowasm_module_impl *target_module;
+    turbowasm_instance_impl *target_instance;
     turbowasm_instance_table_entry entry;
     turbowasm_value selector;
     uint32_t type_index;
@@ -791,8 +794,16 @@ static turbowasm_status turbowasm_exec_indirect_call(
         return TURBOWASM_TRAPPED;
     }
 
+    target_instance = entry.owner != NULL
+        ? entry.owner
+        : instance;
+    target_module = turbowasm_module_impl_get(
+        target_instance->module);
+    if (target_module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
     actual_type = turbowasm_validation_context_function_type(
-        &module->validation, entry.function_index);
+        &target_module->validation, entry.function_index);
     if (!turbowasm_validation_func_type_equal(
             expected_type, actual_type)) {
         *trap = TURBOWASM_TRAP_INDIRECT_CALL_TYPE_MISMATCH;
@@ -800,7 +811,8 @@ static turbowasm_status turbowasm_exec_indirect_call(
     }
 
     return turbowasm_exec_call_index(
-        instance, entry.function_index, stack, trap, execution, depth);
+        target_instance, entry.function_index,
+        stack, trap, execution, depth);
 }
 
 static turbowasm_status turbowasm_exec_i32_binary(
@@ -2441,8 +2453,25 @@ static turbowasm_status turbowasm_exec_function(
         }
     }
 
-    for (index = 0u; index < type->param_count; ++index)
+    for (index = 0u; index < type->param_count; ++index) {
         locals[index] = arguments[index];
+
+        /*
+         * Normalize legacy host-created non-null refs at the execution
+         * boundary. From this point onward every non-null runtime ref carries
+         * an explicit function-instance owner.
+         */
+        if (locals[index].kind == TURBOWASM_VALUE_FUNCREF &&
+            !locals[index].as.funcref.is_null &&
+            locals[index].as.funcref.owner == NULL) {
+            if (locals[index].as.funcref.function_index >=
+                context->function_count) {
+                status = TURBOWASM_INVALID_ARGUMENT;
+                goto done;
+            }
+            locals[index].as.funcref.owner = instance;
+        }
+    }
 
     turbowasm_reader_init(&reader, function->code, function->code_size);
 
@@ -2949,6 +2978,7 @@ static turbowasm_status turbowasm_exec_function(
                 out.kind = TURBOWASM_VALUE_FUNCREF;
                 out.as.funcref.is_null = true;
                 out.as.funcref.function_index = UINT32_MAX;
+                out.as.funcref.owner = NULL;
                 status = turbowasm_stack_push(&stack, out);
                 if (status != TURBOWASM_OK)
                     goto done;
@@ -2987,6 +3017,7 @@ static turbowasm_status turbowasm_exec_function(
                 out.kind = TURBOWASM_VALUE_FUNCREF;
                 out.as.funcref.is_null = false;
                 out.as.funcref.function_index = function_ref;
+                out.as.funcref.owner = instance;
                 status = turbowasm_stack_push(&stack, out);
                 if (status != TURBOWASM_OK)
                     goto done;

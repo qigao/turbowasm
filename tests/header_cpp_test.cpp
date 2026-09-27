@@ -5,6 +5,8 @@
 static_assert(sizeof(salts_v128) == 16u, "Salts SIMD carrier must be 128 bits");
 static_assert(std::is_standard_layout<turbowasm_v128>::value,
               "TurboWasm v128 must remain standard-layout");
+static_assert(std::is_standard_layout<turbowasm_funcref>::value,
+              "TurboWasm funcref must remain standard-layout");
 static_assert(std::is_standard_layout<turbowasm_name>::value,
               "TurboWasm name spans must remain standard-layout");
 static_assert(std::is_standard_layout<turbowasm_import_desc>::value,
