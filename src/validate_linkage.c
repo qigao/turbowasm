@@ -2,22 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
-
-typedef struct turbowasm_name_span {
-    const uint8_t *bytes;
-    uint32_t size;
-} turbowasm_name_span;
-
-static bool turbowasm_validation_count_fits(
-    uint32_t count,
-    size_t element_size) {
-    if (element_size == 0u)
-        return false;
-    return (uint64_t)count <=
-           (uint64_t)SIZE_MAX / (uint64_t)element_size;
-}
 
 static bool turbowasm_utf8_cont(uint8_t byte) {
     return byte >= 0x80u && byte <= 0xbfu;
@@ -101,7 +86,7 @@ static bool turbowasm_utf8_valid(const uint8_t *bytes, size_t size) {
 
 static turbowasm_status turbowasm_read_name(
     turbowasm_reader *reader,
-    turbowasm_name_span *out) {
+    turbowasm_name *out) {
     uint32_t size;
     turbowasm_reader bytes;
 
@@ -236,16 +221,21 @@ turbowasm_status turbowasm_validate_import_section(
         return TURBOWASM_MALFORMED_MODULE;
 
     for (index = 0u; index < count; ++index) {
+        turbowasm_import_desc import_desc = {0};
         uint8_t kind;
         uint32_t type_index;
         turbowasm_status status;
 
-        status = turbowasm_read_name(section, NULL);
+        import_desc.type_index = UINT32_MAX;
+        status = turbowasm_read_name(
+            section, &import_desc.module_name);
         if (status != TURBOWASM_OK) return status;
-        status = turbowasm_read_name(section, NULL);
+        status = turbowasm_read_name(
+            section, &import_desc.name);
         if (status != TURBOWASM_OK) return status;
         if (!turbowasm_reader_u8(section, &kind))
             return TURBOWASM_MALFORMED_MODULE;
+        import_desc.kind = (turbowasm_external_kind)kind;
 
         switch (kind) {
             case 0x00u:
@@ -253,6 +243,9 @@ turbowasm_status turbowasm_validate_import_section(
                     return TURBOWASM_MALFORMED_MODULE;
                 if (type_index >= summary->type_count)
                     return TURBOWASM_MALFORMED_MODULE;
+                import_desc.item_index =
+                    summary->imported_function_count;
+                import_desc.type_index = type_index;
                 if (!turbowasm_validation_context_append_function(
                         context, type_index, true))
                     return TURBOWASM_OUT_OF_MEMORY;
@@ -261,6 +254,8 @@ turbowasm_status turbowasm_validate_import_section(
             case 0x01u: {
                 uint8_t reference_type;
                 turbowasm_validation_limits limits = {0};
+                import_desc.item_index =
+                    summary->imported_table_count;
                 status = turbowasm_read_table_type(
                     section, &reference_type, &limits);
                 if (status != TURBOWASM_OK) return status;
@@ -272,6 +267,8 @@ turbowasm_status turbowasm_validate_import_section(
             }
             case 0x02u: {
                 turbowasm_validation_limits limits = {0};
+                import_desc.item_index =
+                    summary->imported_memory_count;
                 status = turbowasm_read_memory_type(
                     section, &limits);
                 if (status != TURBOWASM_OK) return status;
@@ -284,6 +281,8 @@ turbowasm_status turbowasm_validate_import_section(
             case 0x03u: {
                 uint8_t value_type;
                 bool mutable_value;
+                import_desc.item_index =
+                    summary->imported_global_count;
                 status = turbowasm_read_global_type(
                     section, &value_type, &mutable_value);
                 if (status != TURBOWASM_OK) return status;
@@ -297,6 +296,10 @@ turbowasm_status turbowasm_validate_import_section(
             default:
                 return TURBOWASM_UNSUPPORTED;
         }
+
+        if (!turbowasm_validation_context_append_import(
+                context, import_desc))
+            return TURBOWASM_OUT_OF_MEMORY;
     }
 
     return turbowasm_reader_remaining(section) == 0u
@@ -393,78 +396,62 @@ turbowasm_status turbowasm_validate_export_section(
     turbowasm_validation_context *context) {
     uint32_t count;
     uint32_t index;
-    turbowasm_name_span *names = NULL;
-    turbowasm_status result = TURBOWASM_OK;
 
     if (section == NULL || summary == NULL || context == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(section, &count))
         return TURBOWASM_MALFORMED_MODULE;
 
-    if (count != 0u) {
-        if (!turbowasm_validation_count_fits(
-                count, sizeof(*names)))
-            return TURBOWASM_OUT_OF_MEMORY;
-        names = (turbowasm_name_span *)calloc(
-            (size_t)count, sizeof(*names));
-        if (names == NULL)
-            return TURBOWASM_OUT_OF_MEMORY;
-    }
-
     for (index = 0u; index < count; ++index) {
+        turbowasm_export_desc export_desc = {0};
         uint8_t kind;
         uint32_t item_index;
         uint32_t previous;
         turbowasm_status status = turbowasm_read_name(
-            section, &names[index]);
+            section, &export_desc.name);
 
-        if (status != TURBOWASM_OK) {
-            result = status;
-            goto done;
-        }
+        if (status != TURBOWASM_OK)
+            return status;
 
-        for (previous = 0u; previous < index; ++previous) {
-            if (names[previous].size == names[index].size &&
-                memcmp(names[previous].bytes, names[index].bytes,
-                       names[index].size) == 0) {
-                result = TURBOWASM_MALFORMED_MODULE;
-                goto done;
-            }
+        for (previous = 0u;
+             previous < context->export_count;
+             ++previous) {
+            const turbowasm_export_desc *retained =
+                &context->exports[previous];
+            if (retained->name.size == export_desc.name.size &&
+                memcmp(retained->name.bytes,
+                       export_desc.name.bytes,
+                       export_desc.name.size) == 0)
+                return TURBOWASM_MALFORMED_MODULE;
         }
 
         if (!turbowasm_reader_u8(section, &kind) ||
-            !turbowasm_reader_uleb32(section, &item_index)) {
-            result = TURBOWASM_MALFORMED_MODULE;
-            goto done;
-        }
-        if (kind > 0x03u) {
-            result = TURBOWASM_UNSUPPORTED;
-            goto done;
-        }
-        if (!turbowasm_export_index_valid(kind, item_index, summary)) {
-            result = TURBOWASM_MALFORMED_MODULE;
-            goto done;
-        }
+            !turbowasm_reader_uleb32(section, &item_index))
+            return TURBOWASM_MALFORMED_MODULE;
+        if (kind > 0x03u)
+            return TURBOWASM_UNSUPPORTED;
+        if (!turbowasm_export_index_valid(
+                kind, item_index, summary))
+            return TURBOWASM_MALFORMED_MODULE;
+
+        export_desc.kind = (turbowasm_external_kind)kind;
+        export_desc.item_index = item_index;
+        if (!turbowasm_validation_context_append_export(
+                context, export_desc))
+            return TURBOWASM_OUT_OF_MEMORY;
+
         if (kind == 0x00u &&
             !turbowasm_validation_context_declare_function_ref(
-                context, item_index)) {
-            result = TURBOWASM_OUT_OF_MEMORY;
-            goto done;
-        }
+                context, item_index))
+            return TURBOWASM_OUT_OF_MEMORY;
     }
 
-    if (turbowasm_reader_remaining(section) != 0u) {
-        result = TURBOWASM_MALFORMED_MODULE;
-        goto done;
-    }
+    if (turbowasm_reader_remaining(section) != 0u)
+        return TURBOWASM_MALFORMED_MODULE;
 
     summary->export_count = count;
-
-done:
-    free(names);
-    return result;
+    return TURBOWASM_OK;
 }
-
 turbowasm_status turbowasm_validate_start_section(
     turbowasm_reader *section,
     turbowasm_module_summary *summary,

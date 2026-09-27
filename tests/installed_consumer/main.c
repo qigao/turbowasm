@@ -31,5 +31,58 @@ int main(void) {
         return 4;
     if (turbowasm_v128_store(actual, &result) != TURBOWASM_OK)
         return 5;
-    return memcmp(actual, expected, sizeof(actual)) == 0 ? 0 : 6;
+    if (memcmp(actual, expected, sizeof(actual)) != 0)
+        return 6;
+
+    {
+        static const uint8_t module_bytes[] = {
+            0x00, 0x61, 0x73, 0x6d,
+            0x01, 0x00, 0x00, 0x00,
+            0x01, 0x04,
+            0x01, 0x60, 0x00, 0x00,
+            0x02, 0x07,
+            0x01,
+            0x01, 0x6d,
+            0x01, 0x66,
+            0x00, 0x00,
+            0x07, 0x05,
+            0x01,
+            0x01, 0x66,
+            0x00, 0x00
+        };
+        turbowasm_module module = {0};
+        const turbowasm_import_desc *import_desc;
+        const turbowasm_export_desc *export_desc;
+
+        if (turbowasm_module_load_borrowed(
+                &module, module_bytes,
+                sizeof(module_bytes)) != TURBOWASM_OK)
+            return 8;
+        if (turbowasm_module_import_count(&module) != 1u ||
+            turbowasm_module_export_count(&module) != 1u)
+            return 9;
+
+        import_desc = turbowasm_module_import_at(&module, 0u);
+        export_desc = turbowasm_module_export_at(&module, 0u);
+        if (import_desc == NULL || export_desc == NULL)
+            return 10;
+        if (import_desc->kind != TURBOWASM_EXTERN_FUNCTION ||
+            import_desc->item_index != 0u ||
+            import_desc->type_index != 0u)
+            return 11;
+        if (import_desc->module_name.size != 1u ||
+            import_desc->module_name.bytes[0] != (uint8_t)'m' ||
+            import_desc->name.size != 1u ||
+            import_desc->name.bytes[0] != (uint8_t)'f')
+            return 12;
+        if (export_desc->kind != TURBOWASM_EXTERN_FUNCTION ||
+            export_desc->item_index != 0u ||
+            export_desc->name.size != 1u ||
+            export_desc->name.bytes[0] != (uint8_t)'f')
+            return 13;
+
+        turbowasm_module_destroy(&module);
+    }
+
+    return 0;
 }

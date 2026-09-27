@@ -58,6 +58,8 @@ void turbowasm_validation_context_destroy(
         free(context->types[index].results);
     }
 
+    free(context->imports);
+    free(context->exports);
     free(context->types);
 
     for (index = 0u; index < context->function_count; ++index) {
@@ -74,6 +76,46 @@ void turbowasm_validation_context_destroy(
     free(context->element_segments);
     free(context->declared_refs);
     memset(context, 0, sizeof(*context));
+}
+
+bool turbowasm_validation_context_append_import(
+    turbowasm_validation_context *context,
+    turbowasm_import_desc import_desc) {
+    uint32_t required;
+
+    if (context == NULL || context->import_count == UINT32_MAX)
+        return false;
+
+    required = context->import_count + 1u;
+    if (!turbowasm_validation_reserve(
+            (void **)&context->imports,
+            &context->import_capacity,
+            required,
+            sizeof(*context->imports)))
+        return false;
+
+    context->imports[context->import_count++] = import_desc;
+    return true;
+}
+
+bool turbowasm_validation_context_append_export(
+    turbowasm_validation_context *context,
+    turbowasm_export_desc export_desc) {
+    uint32_t required;
+
+    if (context == NULL || context->export_count == UINT32_MAX)
+        return false;
+
+    required = context->export_count + 1u;
+    if (!turbowasm_validation_reserve(
+            (void **)&context->exports,
+            &context->export_capacity,
+            required,
+            sizeof(*context->exports)))
+        return false;
+
+    context->exports[context->export_count++] = export_desc;
+    return true;
 }
 
 bool turbowasm_validation_context_allocate_types(

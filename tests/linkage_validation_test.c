@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #define WASM_HEADER \
     0x00, 0x61, 0x73, 0x6d, \
@@ -19,6 +20,24 @@ static turbowasm_status load(const uint8_t *bytes, size_t size,
                              turbowasm_module *module) {
     return turbowasm_module_load_borrowed(module, bytes, size);
 }
+
+static bool name_is(
+    turbowasm_name name,
+    const char *expected) {
+    size_t size = strlen(expected);
+    return name.size == size &&
+           memcmp(name.bytes, expected, size) == 0;
+}
+
+static bool name_borrows_module(
+    turbowasm_name name,
+    const uint8_t *bytes,
+    size_t size) {
+    return name.bytes >= bytes &&
+           name.bytes <= bytes + size &&
+           (size_t)(bytes + size - name.bytes) >= name.size;
+}
+
 
 static void test_imported_function_and_export(void) {
     static const uint8_t bytes[] = {
@@ -43,6 +62,109 @@ static void test_imported_function_and_export(void) {
     assert(summary.imported_function_count == 1u);
     assert(summary.function_count == 0u);
     assert(summary.export_count == 1u);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_retained_linkage_metadata(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        TYPE_SECTION_EMPTY_FN,
+
+        /* imports: env.f, env.t, env.m, env.g */
+        0x02, 0x25,
+        0x04,
+        0x03, 0x65, 0x6e, 0x76,
+        0x01, 0x66,
+        0x00, 0x00,
+        0x03, 0x65, 0x6e, 0x76,
+        0x01, 0x74,
+        0x01, 0x70, 0x00, 0x01,
+        0x03, 0x65, 0x6e, 0x76,
+        0x01, 0x6d,
+        0x02, 0x00, 0x01,
+        0x03, 0x65, 0x6e, 0x76,
+        0x01, 0x67,
+        0x03, 0x7f, 0x00,
+
+        /* export the four imported index-space entries */
+        0x07, 0x11,
+        0x04,
+        0x01, 0x66, 0x00, 0x00,
+        0x01, 0x74, 0x01, 0x00,
+        0x01, 0x6d, 0x02, 0x00,
+        0x01, 0x67, 0x03, 0x00
+    };
+    turbowasm_module module = {0};
+    turbowasm_module_summary summary = {0};
+    turbowasm_function_signature signature = {0};
+    const turbowasm_import_desc *import_desc;
+    const turbowasm_export_desc *export_desc;
+    size_t index;
+
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_module_summary_get(&module, &summary));
+    assert(summary.imported_function_count == 1u);
+    assert(summary.imported_table_count == 1u);
+    assert(summary.imported_memory_count == 1u);
+    assert(summary.imported_global_count == 1u);
+    assert(summary.export_count == 4u);
+
+    assert(turbowasm_module_import_count(&module) == 4u);
+    assert(turbowasm_module_export_count(&module) == 4u);
+    assert(turbowasm_module_import_at(&module, 4u) == NULL);
+    assert(turbowasm_module_export_at(&module, 4u) == NULL);
+
+    for (index = 0u; index < 4u; ++index) {
+        import_desc = turbowasm_module_import_at(&module, index);
+        export_desc = turbowasm_module_export_at(&module, index);
+        assert(import_desc != NULL);
+        assert(export_desc != NULL);
+        assert(name_is(import_desc->module_name, "env"));
+        assert(name_borrows_module(
+            import_desc->module_name, bytes, sizeof(bytes)));
+        assert(name_borrows_module(
+            import_desc->name, bytes, sizeof(bytes)));
+        assert(name_borrows_module(
+            export_desc->name, bytes, sizeof(bytes)));
+        assert(import_desc->item_index == 0u);
+        assert(export_desc->item_index == 0u);
+        assert(import_desc->kind == (turbowasm_external_kind)index);
+        assert(export_desc->kind == (turbowasm_external_kind)index);
+    }
+
+    import_desc = turbowasm_module_import_at(&module, 0u);
+    assert(import_desc != NULL);
+    assert(name_is(import_desc->name, "f"));
+    assert(import_desc->type_index == 0u);
+    assert(turbowasm_module_function_signature_get(
+        &module, import_desc->item_index, &signature));
+    assert(signature.param_count == 0u);
+    assert(signature.result_count == 0u);
+
+    import_desc = turbowasm_module_import_at(&module, 1u);
+    assert(import_desc != NULL);
+    assert(name_is(import_desc->name, "t"));
+    assert(import_desc->type_index == UINT32_MAX);
+
+    import_desc = turbowasm_module_import_at(&module, 2u);
+    assert(import_desc != NULL);
+    assert(name_is(import_desc->name, "m"));
+    assert(import_desc->type_index == UINT32_MAX);
+
+    import_desc = turbowasm_module_import_at(&module, 3u);
+    assert(import_desc != NULL);
+    assert(name_is(import_desc->name, "g"));
+    assert(import_desc->type_index == UINT32_MAX);
+
+    assert(name_is(
+        turbowasm_module_export_at(&module, 0u)->name, "f"));
+    assert(name_is(
+        turbowasm_module_export_at(&module, 1u)->name, "t"));
+    assert(name_is(
+        turbowasm_module_export_at(&module, 2u)->name, "m"));
+    assert(name_is(
+        turbowasm_module_export_at(&module, 3u)->name, "g"));
+
     turbowasm_module_destroy(&module);
 }
 
@@ -251,6 +373,7 @@ static void test_start_local_empty_function(void) {
 
 int main(void) {
     test_imported_function_and_export();
+    test_retained_linkage_metadata();
     test_memory_export();
     test_table_section();
     test_duplicate_export_name();
