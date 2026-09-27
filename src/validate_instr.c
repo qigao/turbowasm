@@ -846,6 +846,7 @@ static turbowasm_status turbowasm_validate_br_table(
     uint32_t index;
     const uint8_t *label_types = NULL;
     uint32_t label_count = 0u;
+    bool have_label_types = false;
     turbowasm_status status;
 
     if (!turbowasm_reader_uleb32(body, &count))
@@ -864,9 +865,10 @@ static turbowasm_status turbowasm_validate_br_table(
             return TURBOWASM_MALFORMED_MODULE;
         turbowasm_control_label_types(target, &types, &type_count);
 
-        if (label_types == NULL) {
+        if (!have_label_types) {
             label_types = types;
             label_count = type_count;
+            have_label_types = true;
         } else if (!turbowasm_types_equal(
                        label_types, label_count,
                        types, type_count)) {
@@ -887,9 +889,10 @@ static turbowasm_status turbowasm_validate_br_table(
             return TURBOWASM_MALFORMED_MODULE;
         turbowasm_control_label_types(target, &types, &type_count);
 
-        if (label_types == NULL) {
+        if (!have_label_types) {
             label_types = types;
             label_count = type_count;
+            have_label_types = true;
         } else if (!turbowasm_types_equal(
                        label_types, label_count,
                        types, type_count)) {
@@ -1513,8 +1516,17 @@ turbowasm_status turbowasm_validate_function_body(
                     result = TURBOWASM_MALFORMED_MODULE;
                     goto done;
                 }
+                if (left == TW_ANY && right == TW_ANY) {
+                    /*
+                     * Unreachable stack polymorphism has no concrete select
+                     * result type to materialize. Leave the stack at its
+                     * unreachable floor so the next consumer may pop TW_ANY
+                     * as whatever type it requires.
+                     */
+                    break;
+                }
                 if (left == TW_ANY)
-                    left = right == TW_ANY ? TW_I32 : right;
+                    left = right;
                 if (left == TW_FUNCREF || left == TW_EXTERNREF) {
                     result = TURBOWASM_MALFORMED_MODULE;
                     goto done;
