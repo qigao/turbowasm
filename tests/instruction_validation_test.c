@@ -92,6 +92,84 @@ static void test_direct_call_uses_retained_signature(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_return_call_result_signature(void) {
+    static const uint8_t valid[] = {
+        WASM_HEADER,
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7f,
+        0x03, 0x03,
+        0x02, 0x00, 0x00,
+        0x0a, 0x0b,
+        0x02,
+        0x04, 0x00, 0x41, 0x07, 0x0b,
+        0x04, 0x00, 0x12, 0x00, 0x0b
+    };
+    static const uint8_t invalid[] = {
+        WASM_HEADER,
+        0x01, 0x09,
+        0x02,
+        0x60, 0x00, 0x01, 0x7f,
+        0x60, 0x00, 0x01, 0x7e,
+        0x03, 0x03,
+        0x02, 0x00, 0x01,
+        0x0a, 0x0b,
+        0x02,
+        0x04, 0x00, 0x41, 0x07, 0x0b,
+        0x04, 0x00, 0x12, 0x00, 0x0b
+    };
+    turbowasm_module module = {0};
+
+    assert(load(valid, sizeof(valid), &module) == TURBOWASM_OK);
+    turbowasm_module_destroy(&module);
+
+    assert(load(invalid, sizeof(invalid), &module) ==
+           TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
+static void test_return_call_indirect_result_signature(void) {
+    static const uint8_t valid[] = {
+        WASM_HEADER,
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7f,
+        0x03, 0x02,
+        0x01, 0x00,
+        0x04, 0x04,
+        0x01, 0x70, 0x00, 0x01,
+        0x0a, 0x09,
+        0x01,
+        0x07, 0x00,
+        0x41, 0x00,
+        0x13, 0x00, 0x00,
+        0x0b
+    };
+    static const uint8_t invalid[] = {
+        WASM_HEADER,
+        0x01, 0x09,
+        0x02,
+        0x60, 0x00, 0x01, 0x7f,
+        0x60, 0x00, 0x01, 0x7e,
+        0x03, 0x02,
+        0x01, 0x01,
+        0x04, 0x04,
+        0x01, 0x70, 0x00, 0x01,
+        0x0a, 0x09,
+        0x01,
+        0x07, 0x00,
+        0x41, 0x00,
+        0x13, 0x00, 0x00,
+        0x0b
+    };
+    turbowasm_module module = {0};
+
+    assert(load(valid, sizeof(valid), &module) == TURBOWASM_OK);
+    turbowasm_module_destroy(&module);
+
+    assert(load(invalid, sizeof(invalid), &module) ==
+           TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
 static void test_ref_func_declared_by_export(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -246,6 +324,8 @@ int main(void) {
     test_parameter_is_local_zero();
     test_local_set_type_mismatch();
     test_direct_call_uses_retained_signature();
+    test_return_call_result_signature();
+    test_return_call_indirect_result_signature();
     test_ref_func_declared_by_export();
     test_ref_func_requires_declaration();
     test_global_get_in_function();
