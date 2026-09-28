@@ -19,6 +19,10 @@ turbowasm_validation_value_type_legacy(uint8_t carrier) {
         type.is_reference = true;
         type.nullable = true;
         type.heap_kind = TURBOWASM_VALIDATION_HEAP_EXTERN;
+    } else if (carrier == 0x69u) {
+        type.is_reference = true;
+        type.nullable = true;
+        type.heap_kind = TURBOWASM_VALIDATION_HEAP_EXN;
     }
     return type;
 }
@@ -65,8 +69,12 @@ bool turbowasm_validation_value_type_matches(
         return true;
     }
 
-    return actual->heap_kind == TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
-           expected->heap_kind == TURBOWASM_VALIDATION_HEAP_FUNC;
+    if (actual->heap_kind == TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+        expected->heap_kind == TURBOWASM_VALIDATION_HEAP_FUNC)
+        return true;
+
+    return actual->heap_kind == TURBOWASM_VALIDATION_HEAP_NOEXN &&
+           expected->heap_kind == TURBOWASM_VALIDATION_HEAP_EXN;
 }
 
 static bool turbowasm_validation_reserve(
@@ -129,8 +137,13 @@ void turbowasm_validation_context_destroy(
     free(context->types);
 
     for (index = 0u; index < context->function_count; ++index) {
+        uint32_t control_index;
         free(context->functions[index].local_types);
         free(context->functions[index].local_semantics);
+        for (control_index = 0u;
+             control_index < context->functions[index].control_count;
+             ++control_index)
+            free(context->functions[index].controls[control_index].catches);
         free(context->functions[index].controls);
     }
     free(context->functions);
