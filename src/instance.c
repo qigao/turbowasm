@@ -815,13 +815,17 @@ static turbowasm_status turbowasm_exec_indirect_call(
     if (status != TURBOWASM_OK)
         return status;
 
-    if (entry.is_null) {
+    if (entry.value.kind != TURBOWASM_VALUE_FUNCREF)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    if (entry.value.as.funcref.is_null) {
         *trap = TURBOWASM_TRAP_INDIRECT_CALL_NULL;
         return TURBOWASM_TRAPPED;
     }
 
-    target_instance = entry.owner != NULL
-        ? entry.owner
+    target_instance = entry.value.as.funcref.owner != NULL
+        ? (turbowasm_instance_impl *)
+            entry.value.as.funcref.owner
         : instance;
     target_module = turbowasm_module_impl_get(
         target_instance->module);
@@ -829,7 +833,8 @@ static turbowasm_status turbowasm_exec_indirect_call(
         return TURBOWASM_INVALID_ARGUMENT;
 
     actual_type = turbowasm_validation_context_function_type(
-        &target_module->validation, entry.function_index);
+        &target_module->validation,
+        entry.value.as.funcref.function_index);
     if (!turbowasm_validation_func_type_equal(
             expected_type, actual_type)) {
         *trap = TURBOWASM_TRAP_INDIRECT_CALL_TYPE_MISMATCH;
@@ -837,7 +842,8 @@ static turbowasm_status turbowasm_exec_indirect_call(
     }
 
     return turbowasm_exec_call_index(
-        target_instance, entry.function_index,
+        target_instance,
+        entry.value.as.funcref.function_index,
         stack, trap, execution, depth);
 }
 

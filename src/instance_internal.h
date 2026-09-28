@@ -30,9 +30,7 @@ typedef struct turbowasm_instance_limits {
 struct turbowasm_instance_impl;
 
 typedef struct turbowasm_instance_table_entry {
-    bool is_null;
-    uint32_t function_index;
-    struct turbowasm_instance_impl *owner;
+    turbowasm_value value;
 } turbowasm_instance_table_entry;
 
 typedef struct turbowasm_instance_table {
