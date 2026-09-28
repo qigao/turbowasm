@@ -37,7 +37,8 @@ typedef struct spec_state {
 typedef enum spec_expected_pattern {
     SPEC_EXPECT_EXACT = 0,
     SPEC_EXPECT_NAN_CANONICAL,
-    SPEC_EXPECT_NAN_ARITHMETIC
+    SPEC_EXPECT_NAN_ARITHMETIC,
+    SPEC_EXPECT_FUNCREF_NONNULL
 } spec_expected_pattern;
 
 typedef struct spec_expected_value {
@@ -507,6 +508,11 @@ static bool spec_parse_expected_value(
         out->pattern = SPEC_EXPECT_NAN_ARITHMETIC;
         return true;
     }
+    if (strcmp(token, "funcref:nonnull") == 0) {
+        out->value.kind = TURBOWASM_VALUE_FUNCREF;
+        out->pattern = SPEC_EXPECT_FUNCREF_NONNULL;
+        return true;
+    }
 
     out->pattern = SPEC_EXPECT_EXACT;
     return spec_parse_value(token, &out->value);
@@ -583,6 +589,10 @@ static bool spec_expected_matches(
 
     if (actual->kind != expected->value.kind)
         return false;
+
+    if (expected->pattern == SPEC_EXPECT_FUNCREF_NONNULL)
+        return actual->kind == TURBOWASM_VALUE_FUNCREF &&
+               !actual->as.funcref.is_null;
 
     if (actual->kind == TURBOWASM_VALUE_F32) {
         memcpy(&f32_bits, &actual->as.f32, sizeof(f32_bits));
