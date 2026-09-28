@@ -50,8 +50,15 @@ def encode_value(value, expected=False):
             return None, f"{value_type} non-decimal encoding unsupported"
         return f"{value_type}:{raw}", None
 
-    if value_type == "funcref" and raw == "null":
-        return "funcref:null", None
+    if value_type == "funcref":
+        if raw == "null":
+            return "funcref:null", None
+        if expected and raw == "0":
+            # WABT's script expected (ref.func) pattern is encoded via
+            # Const::set_funcref(), which writes the sentinel payload 0.
+            # It means any non-null function reference, not function index 0.
+            return "funcref:nonnull", None
+        return None, "funcref non-null argument/payload unsupported"
 
     if value_type == "externref":
         if raw == "null":
@@ -63,8 +70,8 @@ def encode_value(value, expected=False):
     if value_type == "v128":
         return None, "v128 manifest comparison not yet qualified"
 
-    if value_type in ("exnref", "funcref"):
-        return None, f"{value_type} non-null/reference payload unsupported"
+    if value_type == "exnref":
+        return None, "exnref non-null/reference payload unsupported"
 
     return None, f"value type {value_type!r} unsupported"
 
