@@ -12,15 +12,23 @@ static bool is_direct_simd_opcode(uint32_t opcode) {
     return opcode == 0x00u || opcode == 0x0bu || opcode == 0x0cu;
 }
 
+static bool is_validation_only_relaxed_opcode(uint32_t opcode) {
+    return opcode >= 0x100u && opcode <= 0x113u;
+}
+
 static void test_execution_table_matches_validation_coverage(void) {
     size_t count = turbowasm_simd_exec_descriptor_count();
     size_t validation_count = turbowasm_simd_descriptor_count();
     size_t index;
     size_t other;
 
-    /* 233 descriptor-driven + v128.load/store/const direct interpreter paths. */
+    /*
+     * Execution still covers the 233 baseline descriptor-driven opcodes.
+     * Validation additionally retains the 20 relaxed-SIMD final subopcodes
+     * while their execution slice remains fail-closed.
+     */
     assert(count == 233u);
-    assert(validation_count == 236u);
+    assert(validation_count == 256u);
 
     for (index = 0u; index < count; ++index) {
         const turbowasm_simd_exec_descriptor *descriptor =
@@ -46,7 +54,8 @@ static void test_execution_table_matches_validation_coverage(void) {
         const turbowasm_simd_descriptor *validated =
             turbowasm_simd_descriptor_at(index);
         assert(validated != NULL);
-        if (is_direct_simd_opcode(validated->opcode)) {
+        if (is_direct_simd_opcode(validated->opcode) ||
+            is_validation_only_relaxed_opcode(validated->opcode)) {
             assert(turbowasm_simd_exec_descriptor_find(
                        validated->opcode) == NULL);
         } else {

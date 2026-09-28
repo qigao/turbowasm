@@ -278,7 +278,29 @@ static const turbowasm_simd_descriptor descriptors[] = {
     D(0xfcu, TURBOWASM_SIMD_V128_UNARY),
     D(0xfdu, TURBOWASM_SIMD_V128_UNARY),
     D(0xfeu, TURBOWASM_SIMD_V128_UNARY),
-    D(0xffu, TURBOWASM_SIMD_V128_UNARY)
+    D(0xffu, TURBOWASM_SIMD_V128_UNARY),
+
+    /* Relaxed SIMD final subopcode assignments (0x100-0x113). */
+    D(0x100u, TURBOWASM_SIMD_V128_BINARY),  /* i8x16.relaxed_swizzle */
+    D(0x101u, TURBOWASM_SIMD_V128_UNARY),   /* trunc f32x4 s */
+    D(0x102u, TURBOWASM_SIMD_V128_UNARY),   /* trunc f32x4 u */
+    D(0x103u, TURBOWASM_SIMD_V128_UNARY),   /* trunc f64x2 s zero */
+    D(0x104u, TURBOWASM_SIMD_V128_UNARY),   /* trunc f64x2 u zero */
+    D(0x105u, TURBOWASM_SIMD_V128_TERNARY), /* f32x4.relaxed_madd */
+    D(0x106u, TURBOWASM_SIMD_V128_TERNARY), /* f32x4.relaxed_nmadd */
+    D(0x107u, TURBOWASM_SIMD_V128_TERNARY), /* f64x2.relaxed_madd */
+    D(0x108u, TURBOWASM_SIMD_V128_TERNARY), /* f64x2.relaxed_nmadd */
+    D(0x109u, TURBOWASM_SIMD_V128_TERNARY), /* i8x16.laneselect */
+    D(0x10au, TURBOWASM_SIMD_V128_TERNARY), /* i16x8.laneselect */
+    D(0x10bu, TURBOWASM_SIMD_V128_TERNARY), /* i32x4.laneselect */
+    D(0x10cu, TURBOWASM_SIMD_V128_TERNARY), /* i64x2.laneselect */
+    D(0x10du, TURBOWASM_SIMD_V128_BINARY),  /* f32x4.relaxed_min */
+    D(0x10eu, TURBOWASM_SIMD_V128_BINARY),  /* f32x4.relaxed_max */
+    D(0x10fu, TURBOWASM_SIMD_V128_BINARY),  /* f64x2.relaxed_min */
+    D(0x110u, TURBOWASM_SIMD_V128_BINARY),  /* f64x2.relaxed_max */
+    D(0x111u, TURBOWASM_SIMD_V128_BINARY),  /* i16x8.relaxed_q15mulr_s */
+    D(0x112u, TURBOWASM_SIMD_V128_BINARY),  /* relaxed dot */
+    D(0x113u, TURBOWASM_SIMD_V128_TERNARY)  /* relaxed dot add */
 };
 
 #undef MSL
