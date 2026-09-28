@@ -3855,6 +3855,76 @@ turbowasm_instance *turbowasm_host_call_instance(
     return &impl->caller;
 }
 
+static turbowasm_status turbowasm_host_call_memory_bytes(
+    turbowasm_host_call *call,
+    uint32_t memory_index,
+    uint64_t address,
+    size_t length,
+    uint8_t **out) {
+    turbowasm_host_call_impl *impl;
+
+    if (call == NULL || call->impl == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (address > UINT32_MAX)
+        return TURBOWASM_TRAPPED;
+
+    impl = (turbowasm_host_call_impl *)call->impl;
+    if (impl->caller.impl == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    return turbowasm_instance_memory_bounds(
+        (turbowasm_instance_impl *)impl->caller.impl,
+        memory_index,
+        (uint32_t)address,
+        0u,
+        length,
+        out);
+}
+
+turbowasm_status turbowasm_host_call_memory_read(
+    turbowasm_host_call *call,
+    uint32_t memory_index,
+    uint64_t address,
+    void *destination,
+    size_t length) {
+    uint8_t *source;
+    turbowasm_status status;
+
+    if (length != 0u && destination == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = turbowasm_host_call_memory_bytes(
+        call, memory_index, address, length, &source);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (length != 0u)
+        memcpy(destination, source, length);
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_host_call_memory_write(
+    turbowasm_host_call *call,
+    uint32_t memory_index,
+    uint64_t address,
+    const void *source,
+    size_t length) {
+    uint8_t *destination;
+    turbowasm_status status;
+
+    if (length != 0u && source == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = turbowasm_host_call_memory_bytes(
+        call, memory_index, address, length, &destination);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (length != 0u)
+        memcpy(destination, source, length);
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status turbowasm_exec_host_function(
     turbowasm_instance_impl *instance,
     const turbowasm_linked_function *binding,
