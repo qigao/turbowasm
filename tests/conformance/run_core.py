@@ -13,6 +13,10 @@ SUMMARY_RE = re.compile(
 MIR_REPLAY_RE = re.compile(
     r"MIR_REPLAY compiled=(\d+) interpret_only=(\d+) cold=(\d+) calls=(\d+)"
 )
+RESULT_RE = re.compile(
+    r"^RESULT line=(\d+) command=([^ ]+) outcome=(pass|fail|unsupported|mixed|none)$",
+    re.MULTILINE,
+)
 
 TRAP_MAP = [
     ("unreachable", 1),
@@ -276,7 +280,14 @@ def convert_json(json_path, manifest_path):
         handle.write("\n")
 
 
-def run_file(wast2json, runner, core_dir, filename, temp_root):
+def run_file(
+    wast2json,
+    runner,
+    core_dir,
+    filename,
+    temp_root,
+    compare_runner=None,
+):
     wast_path = os.path.join(core_dir, filename)
     case_dir = os.path.join(
         temp_root, os.path.splitext(filename)[0].replace("/", "_")
@@ -301,9 +312,13 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
     if convert.returncode != 0:
         print(f"SPEC {filename} converter_unsupported")
         print(convert.stdout)
-        return 0, 0, 1, 1, None
+        return 0, 0, 1, 1, None, 0, 0, 0
 
     convert_json(json_path, manifest_path)
+
+    run_env = os.environ.copy()
+    if compare_runner is not None:
+        run_env["TURBOWASM_SPEC_RESULT_TRACE"] = "1"
 
     result = subprocess.run(
         [runner, manifest_path],
@@ -311,6 +326,7 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
         stderr=subprocess.STDOUT,
         text=True,
         check=False,
+        env=run_env,
     )
     match = SUMMARY_RE.search(result.stdout)
     if match is None:
@@ -337,7 +353,7 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
         )
         for trace_line in trace_lines[-80:]:
             print(trace_line)
-        return 0, 1, 0, 1, None
+        return 0, 1, 0, 1, None, 0, 0, 1
 
     passed, failed, unsupported, total = map(int, match.groups())
     mir_match = MIR_REPLAY_RE.search(result.stdout)
@@ -346,6 +362,83 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
         if mir_match is not None
         else None
     )
+    differential_files = 0
+    differential_commands = 0
+    differential_mismatches = 0
+
+    if compare_runner is not None:
+        compared = subprocess.run(
+            [compare_runner, manifest_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            env=run_env,
+        )
+        compared_summary = SUMMARY_RE.search(compared.stdout)
+        primary_trace = RESULT_RE.findall(result.stdout)
+        compared_trace = RESULT_RE.findall(compared.stdout)
+
+        differential_files = 1
+        differential_commands = max(
+            len(primary_trace), len(compared_trace)
+        )
+        trace_length = differential_commands
+        for index in range(trace_length):
+            left = (
+                primary_trace[index]
+                if index < len(primary_trace)
+                else None
+            )
+            right = (
+                compared_trace[index]
+                if index < len(compared_trace)
+                else None
+            )
+            if left != right:
+                differential_mismatches += 1
+                if differential_mismatches == 1:
+                    print(
+                        f"DIFFERENTIAL_FAIL {filename} index={index} "
+                        f"interpreter={left!r} mir={right!r}"
+                    )
+
+        if compared_summary is None:
+            differential_mismatches += 1
+            print(
+                f"DIFFERENTIAL_FAIL {filename} "
+                "MIR runner summary missing"
+            )
+        else:
+            compared_counts = tuple(
+                map(int, compared_summary.groups())
+            )
+            primary_counts = (
+                passed, failed, unsupported, total
+            )
+            if compared_counts != primary_counts:
+                differential_mismatches += 1
+                print(
+                    f"DIFFERENTIAL_FAIL {filename} "
+                    f"interpreter_counts={primary_counts} "
+                    f"mir_counts={compared_counts}"
+                )
+
+        if compared.returncode != 0:
+            differential_mismatches += 1
+            print(
+                f"DIFFERENTIAL_FAIL {filename} "
+                f"MIR returncode={compared.returncode}"
+            )
+
+        compared_mir = MIR_REPLAY_RE.search(compared.stdout)
+        if compared_mir is not None:
+            mir_stats = tuple(map(int, compared_mir.groups()))
+
+        if differential_mismatches:
+            failed += differential_mismatches
+            total += differential_mismatches
+
     print(
         f"SPEC {filename} pass={passed} fail={failed} "
         f"unsupported={unsupported} total={total}"
@@ -384,7 +477,16 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
         failed = 1
         total += 1
 
-    return passed, failed, unsupported, total, mir_stats
+    return (
+        passed,
+        failed,
+        unsupported,
+        total,
+        mir_stats,
+        differential_files,
+        differential_commands,
+        differential_mismatches,
+    )
 
 
 def load_suite(path):
@@ -406,6 +508,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--wast2json", required=True)
     parser.add_argument("--runner", required=True)
+    parser.add_argument("--compare-runner")
     parser.add_argument("--core-dir", required=True)
     parser.add_argument("--suite", required=True)
     args = parser.parse_args()
@@ -423,15 +526,22 @@ def main():
     mir_cold = 0
     mir_calls = 0
     mir_files = 0
+    differential_files = 0
+    differential_commands = 0
+    differential_mismatches = 0
 
     with tempfile.TemporaryDirectory(prefix="turbowasm-spec-") as temp_root:
         for filename in suite:
-            p, f, u, t, mir = run_file(
+            (
+                p, f, u, t, mir,
+                diff_files, diff_commands, diff_mismatches,
+            ) = run_file(
                 args.wast2json,
                 args.runner,
                 args.core_dir,
                 filename,
                 temp_root,
+                compare_runner=args.compare_runner,
             )
             passed += p
             failed += f
@@ -444,6 +554,9 @@ def main():
                 mir_cold += cold
                 mir_calls += calls
                 mir_files += 1
+            differential_files += diff_files
+            differential_commands += diff_commands
+            differential_mismatches += diff_mismatches
 
     print(
         f"CORE_CONFORMANCE pass={passed} fail={failed} "
@@ -455,6 +568,13 @@ def main():
             f"MIR_REPLAY compiled={mir_compiled} "
             f"interpret_only={mir_interpret_only} "
             f"cold={mir_cold} calls={mir_calls} files={mir_files}"
+        )
+
+    if args.compare_runner is not None:
+        print(
+            f"DIFFERENTIAL_REPLAY files={differential_files} "
+            f"commands={differential_commands} "
+            f"mismatches={differential_mismatches}"
         )
 
     if passed == 0:
