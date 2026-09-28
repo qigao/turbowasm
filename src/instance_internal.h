@@ -19,6 +19,7 @@ typedef struct turbowasm_instance_memory {
     uint8_t *data;
     uint32_t pages;
     uint32_t maximum_pages;
+    uint32_t page_size;
     bool has_maximum;
 } turbowasm_instance_memory;
 
