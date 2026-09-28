@@ -90,7 +90,13 @@ typedef turbowasm_status (*turbowasm_execution_suspend_fn)(
 typedef turbowasm_status (*turbowasm_execution_host_wait_fn)(
     void *context,
     uintptr_t operation_token,
+    turbowasm_host_wait *out_wait,
     int *out_status);
+
+typedef turbowasm_status (*turbowasm_execution_host_wait_complete_fn)(
+    void *context,
+    turbowasm_host_wait wait,
+    int status);
 
 typedef struct turbowasm_jit_execution_control {
     uint64_t fuel_remaining;
@@ -109,6 +115,7 @@ typedef struct turbowasm_jit_execution_control {
 
     /* Only resumable interpreter execution installs this hook. */
     turbowasm_execution_host_wait_fn host_wait;
+    turbowasm_execution_host_wait_complete_fn host_wait_complete;
     void *host_wait_context;
 } turbowasm_jit_execution_control;
 
