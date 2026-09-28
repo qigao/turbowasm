@@ -36,6 +36,40 @@ static turbowasm_status host_inc(
     return TURBOWASM_OK;
 }
 
+
+static turbowasm_status host_wait_once(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    int completion_status = 0;
+    turbowasm_status status;
+
+    (void)context;
+    if (call == NULL || argument_count != 0u || arguments != NULL ||
+        results == NULL || result_capacity < 1u ||
+        result_count == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!turbowasm_host_call_can_wait(call))
+        return TURBOWASM_UNSUPPORTED;
+
+    status = turbowasm_host_call_wait(
+        call, (uintptr_t)0x55u, &completion_status);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    results[0].kind = TURBOWASM_VALUE_I32;
+    results[0].as.i32 = completion_status;
+    *result_count = 1u;
+    *trap = TURBOWASM_TRAP_NONE;
+    return TURBOWASM_OK;
+}
+
 int main(void) {
     static const uint8_t provider_bytes[] = {
         WASM_HEADER,
@@ -230,6 +264,107 @@ int main(void) {
             goto done;
         }
     }
+
+    {
+        static const uint8_t wait_module_bytes[] = {
+            WASM_HEADER,
+            0x01, 0x05,
+            0x01, 0x60, 0x00, 0x01, 0x7f,
+            0x02, 0x0d,
+            0x01,
+            0x04, 0x68, 0x6f, 0x73, 0x74,
+            0x04, 0x77, 0x61, 0x69, 0x74,
+            0x00, 0x00
+        };
+        static const turbowasm_value_kind wait_results[] = {
+            TURBOWASM_VALUE_I32
+        };
+        const turbowasm_host_function_type wait_type = {
+            NULL, 0u, wait_results, 1u
+        };
+        const turbowasm_name host_name = {
+            (const uint8_t *)"host", 4u
+        };
+        const turbowasm_name wait_name = {
+            (const uint8_t *)"wait", 4u
+        };
+        turbowasm_module wait_module = {0};
+        turbowasm_instance wait_instance = {0};
+        turbowasm_linker wait_linker = {0};
+        turbowasm_execution wait_execution = {0};
+        turbowasm_host_wait wait = {0};
+        const turbowasm_value *wait_result = NULL;
+        int wait_error = 0;
+
+        if (turbowasm_module_load_borrowed(
+                &wait_module,
+                wait_module_bytes,
+                sizeof(wait_module_bytes)) != TURBOWASM_OK)
+            wait_error = 15;
+        else if (turbowasm_linker_init(
+                     &wait_linker) != TURBOWASM_OK)
+            wait_error = 16;
+        else if (turbowasm_linker_define_host_function(
+                     &wait_linker,
+                     host_name,
+                     wait_name,
+                     &wait_type,
+                     host_wait_once,
+                     NULL) != TURBOWASM_OK)
+            wait_error = 17;
+        else if (turbowasm_instance_create_linked(
+                     &wait_instance,
+                     &wait_module,
+                     &wait_linker) != TURBOWASM_OK)
+            wait_error = 18;
+        else if (turbowasm_execution_create(
+                     &wait_execution,
+                     &wait_instance,
+                     0u,
+                     NULL,
+                     0u) != TURBOWASM_OK)
+            wait_error = 19;
+
+        turbowasm_linker_destroy(&wait_linker);
+
+        if (wait_error == 0 &&
+            turbowasm_execution_resume(
+                &wait_execution, NULL) != TURBOWASM_YIELDED)
+            wait_error = 20;
+        if (wait_error == 0 &&
+            (!turbowasm_execution_pending_host_wait(
+                 &wait_execution, &wait) ||
+             wait.operation_token != (uintptr_t)0x55u))
+            wait_error = 21;
+        if (wait_error == 0 &&
+            turbowasm_execution_complete_host_wait(
+                &wait_execution, wait, 9) != TURBOWASM_OK)
+            wait_error = 22;
+        if (wait_error == 0 &&
+            turbowasm_execution_resume(
+                &wait_execution, NULL) != TURBOWASM_OK)
+            wait_error = 23;
+
+        if (wait_error == 0) {
+            wait_result =
+                turbowasm_execution_result_at(
+                    &wait_execution, 0u);
+            if (wait_result == NULL ||
+                wait_result->kind != TURBOWASM_VALUE_I32 ||
+                wait_result->as.i32 != 9)
+                wait_error = 24;
+        }
+
+        turbowasm_execution_destroy(&wait_execution);
+        turbowasm_instance_destroy(&wait_instance);
+        turbowasm_module_destroy(&wait_module);
+
+        if (wait_error != 0) {
+            exit_code = wait_error;
+            goto done;
+        }
+    }
+
 
 done:
     turbowasm_linker_destroy(&linker);
