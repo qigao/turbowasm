@@ -138,6 +138,7 @@ typedef struct turbowasm_validation_element_segment {
     turbowasm_validation_segment_mode mode;
     uint32_t table_index;
     uint8_t reference_type;
+    turbowasm_validation_value_type semantic_type;
     turbowasm_validation_expr_span offset;
     turbowasm_validation_element_item *items;
     uint32_t item_count;
@@ -193,6 +194,10 @@ bool turbowasm_validation_value_type_equal(
     const turbowasm_validation_value_type *left,
     const turbowasm_validation_value_type *right);
 
+bool turbowasm_validation_value_type_matches(
+    const turbowasm_validation_value_type *actual,
+    const turbowasm_validation_value_type *expected);
+
 void turbowasm_validation_context_destroy(
     turbowasm_validation_context *context);
 
@@ -240,6 +245,12 @@ bool turbowasm_validation_context_append_global(
 bool turbowasm_validation_context_append_table(
     turbowasm_validation_context *context,
     uint8_t reference_type,
+    turbowasm_validation_limits limits,
+    bool imported);
+
+bool turbowasm_validation_context_append_table_semantic(
+    turbowasm_validation_context *context,
+    turbowasm_validation_value_type reference_type,
     turbowasm_validation_limits limits,
     bool imported);
 
