@@ -303,15 +303,7 @@ turbowasm_status turbowasm_validate_const_expr_semantic(
                 }
                 global = turbowasm_validation_context_global(
                     context, global_index);
-                /*
-                 * Constant-expression global.get is limited to imported
-                 * immutable globals. Prior locally defined globals are
-                 * visible in the validation context, but are not valid
-                 * constant-expression dependencies.
-                 */
-                if (global == NULL ||
-                    !global->imported ||
-                    global->mutable_value) {
+                if (global == NULL || global->mutable_value) {
                     status = TURBOWASM_MALFORMED_MODULE;
                     break;
                 }
