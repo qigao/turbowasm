@@ -16,6 +16,7 @@ TRAP_MAP = [
     ("call stack exhausted", 2),
     ("integer divide by zero", 3),
     ("integer overflow", 4),
+    ("invalid conversion to integer", 9),
     ("out of bounds memory access", 5),
     ("out of bounds table access", 6),
     ("undefined element", 6),
