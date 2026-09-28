@@ -250,6 +250,65 @@ static void test_typed_funcref_br_table_meet(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_externref_table_round_trip(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: (externref) -> externref */
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x6f, 0x01, 0x6f,
+
+        /* one function, type0 */
+        0x03, 0x02,
+        0x01, 0x00,
+
+        /* table0 externref min=1 max=2 */
+        0x04, 0x05,
+        0x01, 0x6f, 0x01, 0x01, 0x02,
+
+        /* table[0] = arg0; return table[0] */
+        0x0a, 0x0e,
+        0x01, 0x0c,
+        0x00,
+        0x41, 0x00,
+        0x20, 0x00,
+        0x26, 0x00,
+        0x41, 0x00,
+        0x25, 0x00,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value argument = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    argument.kind = TURBOWASM_VALUE_EXTERNREF;
+    argument.as.externref.is_null = false;
+    argument.as.externref.token = (uintptr_t)42u;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    assert(turbowasm_instance_invoke(
+               &instance, 0u,
+               &argument, 1u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(trap == TURBOWASM_TRAP_NONE);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_EXTERNREF);
+    assert(!result.as.externref.is_null);
+    assert(result.as.externref.token == (uintptr_t)42u);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 static void test_externref_null_is_null_executes(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -291,6 +350,7 @@ int main(void) {
     test_table_get_out_of_bounds_traps();
     test_ref_func_table_set_and_call_indirect();
     test_typed_funcref_br_table_meet();
+    test_externref_table_round_trip();
     test_externref_null_is_null_executes();
     return 0;
 }
