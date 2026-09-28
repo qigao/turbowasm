@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #define WASM_HEADER \
     0x00, 0x61, 0x73, 0x6d, \
@@ -159,7 +160,16 @@ static void test_unknown_section_is_unsupported(void) {
     };
     turbowasm_module module = {0};
 
-    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_UNSUPPORTED);
+    {
+        turbowasm_status status = load(bytes, sizeof(bytes), &module);
+        if (status != TURBOWASM_UNSUPPORTED) {
+            fprintf(stderr,
+                    "unknown section status=%d (%s)\n",
+                    (int)status,
+                    turbowasm_status_string(status));
+        }
+        assert(status == TURBOWASM_UNSUPPORTED);
+    }
     assert(module.impl == NULL);
 }
 
