@@ -1102,6 +1102,185 @@ static double turbowasm_f64_minmax(double left,
     return out;
 }
 
+static uint32_t turbowasm_sign_extend_u32(uint32_t value,
+                                            unsigned width) {
+    uint32_t low_mask = width == 32u
+        ? UINT32_MAX
+        : (UINT32_C(1) << width) - 1u;
+    uint32_t sign_bit = UINT32_C(1) << (width - 1u);
+    uint32_t bits = value & low_mask;
+
+    if ((bits & sign_bit) != 0u)
+        bits |= ~low_mask;
+    return bits;
+}
+
+static uint64_t turbowasm_sign_extend_u64(uint64_t value,
+                                            unsigned width) {
+    uint64_t low_mask = width == 64u
+        ? UINT64_MAX
+        : (UINT64_C(1) << width) - 1u;
+    uint64_t sign_bit = UINT64_C(1) << (width - 1u);
+    uint64_t bits = value & low_mask;
+
+    if ((bits & sign_bit) != 0u)
+        bits |= ~low_mask;
+    return bits;
+}
+
+static turbowasm_status turbowasm_exec_nontrapping_conversion(
+    uint8_t opcode,
+    turbowasm_value_stack *stack) {
+    turbowasm_value in;
+    turbowasm_value out = {0};
+    turbowasm_status status;
+    uint32_t bits32;
+    uint64_t bits64;
+
+    switch (opcode) {
+        case 0xa7u: /* i32.wrap_i64 */
+        case 0xb4u: case 0xb5u: /* f32.convert_i64_* */
+        case 0xb9u: case 0xbau: /* f64.convert_i64_* */
+        case 0xbfu: /* f64.reinterpret_i64 */
+        case 0xc2u: case 0xc3u: case 0xc4u: /* i64.extend*_s */
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I64, &in);
+            break;
+        case 0xacu: case 0xadu: /* i64.extend_i32_* */
+        case 0xb2u: case 0xb3u: /* f32.convert_i32_* */
+        case 0xb7u: case 0xb8u: /* f64.convert_i32_* */
+        case 0xbeu: /* f32.reinterpret_i32 */
+        case 0xc0u: case 0xc1u: /* i32.extend*_s */
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &in);
+            break;
+        case 0xb6u: /* f32.demote_f64 */
+        case 0xbdu: /* i64.reinterpret_f64 */
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_F64, &in);
+            break;
+        case 0xbbu: /* f64.promote_f32 */
+        case 0xbcu: /* i32.reinterpret_f32 */
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_F32, &in);
+            break;
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+    if (status != TURBOWASM_OK)
+        return status;
+
+    switch (opcode) {
+        case 0xa7u:
+            bits32 = (uint32_t)(uint64_t)in.as.i64;
+            out.kind = TURBOWASM_VALUE_I32;
+            memcpy(&out.as.i32, &bits32, sizeof(bits32));
+            break;
+        case 0xacu:
+            out.kind = TURBOWASM_VALUE_I64;
+            out.as.i64 = (int64_t)in.as.i32;
+            break;
+        case 0xadu:
+            out.kind = TURBOWASM_VALUE_I64;
+            out.as.i64 = (int64_t)(uint32_t)in.as.i32;
+            break;
+        case 0xb2u:
+            out.kind = TURBOWASM_VALUE_F32;
+            out.as.f32 = (float)in.as.i32;
+            break;
+        case 0xb3u:
+            out.kind = TURBOWASM_VALUE_F32;
+            out.as.f32 = (float)(uint32_t)in.as.i32;
+            break;
+        case 0xb4u:
+            out.kind = TURBOWASM_VALUE_F32;
+            out.as.f32 = (float)in.as.i64;
+            break;
+        case 0xb5u:
+            out.kind = TURBOWASM_VALUE_F32;
+            out.as.f32 = (float)(uint64_t)in.as.i64;
+            break;
+        case 0xb6u:
+            out.kind = TURBOWASM_VALUE_F32;
+            out.as.f32 = (float)in.as.f64;
+            break;
+        case 0xb7u:
+            out.kind = TURBOWASM_VALUE_F64;
+            out.as.f64 = (double)in.as.i32;
+            break;
+        case 0xb8u:
+            out.kind = TURBOWASM_VALUE_F64;
+            out.as.f64 = (double)(uint32_t)in.as.i32;
+            break;
+        case 0xb9u:
+            out.kind = TURBOWASM_VALUE_F64;
+            out.as.f64 = (double)in.as.i64;
+            break;
+        case 0xbau:
+            out.kind = TURBOWASM_VALUE_F64;
+            out.as.f64 = (double)(uint64_t)in.as.i64;
+            break;
+        case 0xbbu:
+            out.kind = TURBOWASM_VALUE_F64;
+            out.as.f64 = (double)in.as.f32;
+            break;
+        case 0xbcu:
+            memcpy(&bits32, &in.as.f32, sizeof(bits32));
+            out.kind = TURBOWASM_VALUE_I32;
+            memcpy(&out.as.i32, &bits32, sizeof(bits32));
+            break;
+        case 0xbdu:
+            memcpy(&bits64, &in.as.f64, sizeof(bits64));
+            out.kind = TURBOWASM_VALUE_I64;
+            memcpy(&out.as.i64, &bits64, sizeof(bits64));
+            break;
+        case 0xbeu:
+            memcpy(&bits32, &in.as.i32, sizeof(bits32));
+            out.kind = TURBOWASM_VALUE_F32;
+            memcpy(&out.as.f32, &bits32, sizeof(bits32));
+            break;
+        case 0xbfu:
+            memcpy(&bits64, &in.as.i64, sizeof(bits64));
+            out.kind = TURBOWASM_VALUE_F64;
+            memcpy(&out.as.f64, &bits64, sizeof(bits64));
+            break;
+        case 0xc0u:
+            bits32 = turbowasm_sign_extend_u32(
+                (uint32_t)in.as.i32, 8u);
+            out.kind = TURBOWASM_VALUE_I32;
+            memcpy(&out.as.i32, &bits32, sizeof(bits32));
+            break;
+        case 0xc1u:
+            bits32 = turbowasm_sign_extend_u32(
+                (uint32_t)in.as.i32, 16u);
+            out.kind = TURBOWASM_VALUE_I32;
+            memcpy(&out.as.i32, &bits32, sizeof(bits32));
+            break;
+        case 0xc2u:
+            bits64 = turbowasm_sign_extend_u64(
+                (uint64_t)in.as.i64, 8u);
+            out.kind = TURBOWASM_VALUE_I64;
+            memcpy(&out.as.i64, &bits64, sizeof(bits64));
+            break;
+        case 0xc3u:
+            bits64 = turbowasm_sign_extend_u64(
+                (uint64_t)in.as.i64, 16u);
+            out.kind = TURBOWASM_VALUE_I64;
+            memcpy(&out.as.i64, &bits64, sizeof(bits64));
+            break;
+        case 0xc4u:
+            bits64 = turbowasm_sign_extend_u64(
+                (uint64_t)in.as.i64, 32u);
+            out.kind = TURBOWASM_VALUE_I64;
+            memcpy(&out.as.i64, &bits64, sizeof(bits64));
+            break;
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+
+    return turbowasm_stack_push(stack, out);
+}
+
 static turbowasm_status turbowasm_exec_f32_binary(
     uint8_t opcode,
     turbowasm_value_stack *stack) {
@@ -3122,6 +3301,20 @@ static turbowasm_status turbowasm_exec_function(
             case 0xa0u: case 0xa1u: case 0xa2u: case 0xa3u:
             case 0xa4u: case 0xa5u:
                 status = turbowasm_exec_f64_binary(
+                    opcode, &stack);
+                if (status != TURBOWASM_OK) goto done;
+                break;
+
+            case 0xa7u:
+            case 0xacu: case 0xadu:
+            case 0xb2u: case 0xb3u: case 0xb4u: case 0xb5u:
+            case 0xb6u:
+            case 0xb7u: case 0xb8u: case 0xb9u: case 0xbau:
+            case 0xbbu:
+            case 0xbcu: case 0xbdu: case 0xbeu: case 0xbfu:
+            case 0xc0u: case 0xc1u: case 0xc2u:
+            case 0xc3u: case 0xc4u:
+                status = turbowasm_exec_nontrapping_conversion(
                     opcode, &stack);
                 if (status != TURBOWASM_OK) goto done;
                 break;
