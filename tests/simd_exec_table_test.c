@@ -12,22 +12,14 @@ static bool is_direct_simd_opcode(uint32_t opcode) {
     return opcode == 0x00u || opcode == 0x0bu || opcode == 0x0cu;
 }
 
-static bool is_validation_only_relaxed_opcode(uint32_t opcode) {
-    return opcode >= 0x100u && opcode <= 0x113u;
-}
-
 static void test_execution_table_matches_validation_coverage(void) {
     size_t count = turbowasm_simd_exec_descriptor_count();
     size_t validation_count = turbowasm_simd_descriptor_count();
     size_t index;
     size_t other;
 
-    /*
-     * Execution still covers the 233 baseline descriptor-driven opcodes.
-     * Validation additionally retains the 20 relaxed-SIMD final subopcodes
-     * while their execution slice remains fail-closed.
-     */
-    assert(count == 233u);
+    /* 253 descriptor-driven + v128.load/store/const direct interpreter paths. */
+    assert(count == 253u);
     assert(validation_count == 256u);
 
     for (index = 0u; index < count; ++index) {
@@ -54,8 +46,7 @@ static void test_execution_table_matches_validation_coverage(void) {
         const turbowasm_simd_descriptor *validated =
             turbowasm_simd_descriptor_at(index);
         assert(validated != NULL);
-        if (is_direct_simd_opcode(validated->opcode) ||
-            is_validation_only_relaxed_opcode(validated->opcode)) {
+        if (is_direct_simd_opcode(validated->opcode)) {
             assert(turbowasm_simd_exec_descriptor_find(
                        validated->opcode) == NULL);
         } else {
@@ -223,6 +214,18 @@ static void test_representative_semantics(void) {
     assert(descriptor->source_desc == &cmeta_vector_u32x4);
     assert(descriptor->op == SALTS_SIMD_CONVERT_NUMERIC);
     assert(descriptor->lane_policy == SALTS_SIMD_LANES_LOW);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x100u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_RELAXED);
+    assert(descriptor->vector_desc == &cmeta_vector_i8x16);
+    assert(descriptor->result_shape == TURBOWASM_V128_I8X16);
+
+    descriptor = turbowasm_simd_exec_descriptor_find(0x113u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_SIMD_EXEC_RELAXED);
+    assert(descriptor->vector_desc == &cmeta_vector_i32x4);
+    assert(descriptor->result_shape == TURBOWASM_V128_I32X4);
 }
 
 int main(void) {
