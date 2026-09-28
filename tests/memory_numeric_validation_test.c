@@ -138,7 +138,7 @@ static void test_memory_grow(void) {
     turbowasm_module_destroy(&module);
 }
 
-static void test_memory_index_extension_fails_closed(void) {
+static void test_memory_index_out_of_range_rejected(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
         TYPE_I32_RESULT,
@@ -150,7 +150,7 @@ static void test_memory_index_extension_fails_closed(void) {
     turbowasm_module module = {0};
 
     assert(load(bytes, sizeof(bytes), &module) ==
-           TURBOWASM_UNSUPPORTED);
+           TURBOWASM_MALFORMED_MODULE);
     assert(module.impl == NULL);
 }
 
@@ -277,7 +277,7 @@ int main(void) {
     test_i32_store();
     test_memory_size();
     test_memory_grow();
-    test_memory_index_extension_fails_closed();
+    test_memory_index_out_of_range_rejected();
     test_i32_wrap_i64();
     test_conversion_type_mismatch();
     test_v128_load();
