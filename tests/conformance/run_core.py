@@ -341,6 +341,19 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
         f"SPEC {filename} pass={passed} fail={failed} "
         f"unsupported={unsupported} total={total}"
     )
+
+    if unsupported:
+        first_unsupported = next(
+            (
+                line
+                for line in result.stdout.splitlines()
+                if line.startswith("FIRST_UNSUPPORTED ")
+            ),
+            None,
+        )
+        if first_unsupported is not None:
+            print(f"SPEC_UNSUPPORTED_DETAIL {filename} {first_unsupported}")
+
     if failed or result.returncode != 0:
         print(result.stdout)
 
