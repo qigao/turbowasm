@@ -614,6 +614,188 @@ static turbowasm_status turbowasm_exec_branch(
         reader, function, target->annotation->end_offset + 1u);
 }
 
+static bool turbowasm_tag_identity_equal(
+    turbowasm_tag_identity left,
+    turbowasm_tag_identity right) {
+    return left.owner == right.owner &&
+           left.tag_index == right.tag_index;
+}
+
+static turbowasm_status turbowasm_exception_create(
+    turbowasm_instance_impl *instance,
+    const turbowasm_validation_context *context,
+    uint32_t tag_index,
+    turbowasm_value_stack *stack,
+    turbowasm_exception **out_exception) {
+    const turbowasm_validation_tag *tag;
+    const turbowasm_validation_func_type *type;
+    turbowasm_exception *exception;
+    uint32_t index;
+    turbowasm_status status;
+
+    if (instance == NULL || context == NULL ||
+        stack == NULL || out_exception == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *out_exception = NULL;
+    tag = turbowasm_validation_context_tag(context, tag_index);
+    if (tag == NULL)
+        return TURBOWASM_MALFORMED_MODULE;
+    type = turbowasm_validation_context_type(context, tag->type_index);
+    if (type == NULL || !type->defined || type->result_count != 0u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    exception = (turbowasm_exception *)calloc(1u, sizeof(*exception));
+    if (exception == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    status = turbowasm_instance_tag_identity(
+        instance, tag_index, &exception->tag);
+    if (status != TURBOWASM_OK) {
+        free(exception);
+        return status;
+    }
+
+    exception->payload_count = type->param_count;
+    if (type->param_count != 0u) {
+        exception->payload = (turbowasm_value *)calloc(
+            (size_t)type->param_count, sizeof(*exception->payload));
+        if (exception->payload == NULL) {
+            free(exception);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
+    }
+
+    index = type->param_count;
+    while (index != 0u) {
+        --index;
+        status = turbowasm_stack_pop(stack, &exception->payload[index]);
+        if (status != TURBOWASM_OK ||
+            !turbowasm_value_matches_type(
+                &exception->payload[index], type->params[index])) {
+            free(exception->payload);
+            free(exception);
+            return status == TURBOWASM_OK
+                ? TURBOWASM_TYPE_MISMATCH
+                : status;
+        }
+    }
+
+    exception->next = instance->exceptions;
+    instance->exceptions = exception;
+    *out_exception = exception;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_exception_push_handler_values(
+    turbowasm_value_stack *stack,
+    const turbowasm_exception *exception,
+    bool include_ref) {
+    uint32_t index;
+    turbowasm_status status;
+
+    if (stack == NULL || exception == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (index = 0u; index < exception->payload_count; ++index) {
+        status = turbowasm_stack_push(stack, exception->payload[index]);
+        if (status != TURBOWASM_OK)
+            return status;
+    }
+
+    if (include_ref) {
+        turbowasm_value reference = {0};
+        reference.kind = TURBOWASM_VALUE_EXNREF;
+        reference.as.exnref.is_null = false;
+        reference.as.exnref.exception = exception;
+        return turbowasm_stack_push(stack, reference);
+    }
+
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_exec_handle_exception(
+    turbowasm_instance_impl *instance,
+    turbowasm_exception *exception,
+    turbowasm_value_stack *stack,
+    turbowasm_exec_control_stack *controls,
+    turbowasm_reader *reader,
+    const turbowasm_validation_function *function,
+    bool *out_finished,
+    bool *out_returned) {
+    uint32_t cursor;
+
+    if (instance == NULL || exception == NULL || stack == NULL ||
+        controls == NULL || reader == NULL || function == NULL ||
+        out_finished == NULL || out_returned == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    cursor = controls->size;
+    while (cursor > 1u) {
+        uint32_t try_index = cursor - 1u;
+        turbowasm_exec_control_frame *frame =
+            &controls->frames[try_index];
+        uint32_t catch_index;
+
+        --cursor;
+        if (frame->kind != TURBOWASM_EXEC_CONTROL_TRY_TABLE ||
+            frame->annotation == NULL)
+            continue;
+
+        for (catch_index = 0u;
+             catch_index < frame->annotation->catch_count;
+             ++catch_index) {
+            const turbowasm_validation_catch *clause =
+                &frame->annotation->catches[catch_index];
+            bool matches =
+                clause->kind == TURBOWASM_VALIDATION_CATCH_ALL ||
+                clause->kind == TURBOWASM_VALIDATION_CATCH_ALL_REF;
+            bool include_ref =
+                clause->kind == TURBOWASM_VALIDATION_CATCH_REF ||
+                clause->kind == TURBOWASM_VALIDATION_CATCH_ALL_REF;
+            uint32_t target_index;
+            uint32_t branch_depth;
+            turbowasm_status status;
+
+            if (!matches) {
+                turbowasm_tag_identity catch_tag;
+                status = turbowasm_instance_tag_identity(
+                    instance, clause->tag_index, &catch_tag);
+                if (status != TURBOWASM_OK)
+                    return status;
+                matches = turbowasm_tag_identity_equal(
+                    catch_tag, exception->tag);
+            }
+
+            if (!matches)
+                continue;
+
+            if (clause->label_depth >= try_index)
+                return TURBOWASM_MALFORMED_MODULE;
+            target_index = try_index - 1u - clause->label_depth;
+
+            if (frame->height > stack->size)
+                return TURBOWASM_MALFORMED_MODULE;
+            stack->size = frame->height;
+
+            status = turbowasm_exception_push_handler_values(
+                stack, exception, include_ref);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            branch_depth =
+                controls->size - 1u - target_index;
+            instance->pending_exception = NULL;
+            return turbowasm_exec_branch(
+                stack, controls, reader, function,
+                branch_depth, out_finished, out_returned);
+        }
+    }
+
+    instance->pending_exception = exception;
+    return TURBOWASM_EXCEPTION;
+}
+
 static turbowasm_status turbowasm_exec_br_table(
     turbowasm_reader *reader,
     turbowasm_value_stack *stack,
