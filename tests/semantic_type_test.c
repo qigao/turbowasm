@@ -152,6 +152,74 @@ static void test_general_reference_global_retains_semantics(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_general_reference_local_semantics(void) {
+    static const uint8_t valid_bytes[] = {
+        0x00, 0x61, 0x73, 0x6d,
+        0x01, 0x00, 0x00, 0x00,
+
+        /* type0: () -> () */
+        0x01, 0x04,
+        0x01, 0x60, 0x00, 0x00,
+
+        /* func0 uses type0 */
+        0x03, 0x02,
+        0x01, 0x00,
+
+        /* one local: (ref null 0); end */
+        0x0a, 0x07,
+        0x01, 0x05,
+        0x01,
+        0x01, 0x63, 0x00,
+        0x0b
+    };
+    static const uint8_t invalid_bytes[] = {
+        0x00, 0x61, 0x73, 0x6d,
+        0x01, 0x00, 0x00, 0x00,
+
+        /* type0: () -> () */
+        0x01, 0x04,
+        0x01, 0x60, 0x00, 0x00,
+
+        /* func0 uses type0 */
+        0x03, 0x02,
+        0x01, 0x00,
+
+        /* local refers to undefined type1 */
+        0x0a, 0x07,
+        0x01, 0x05,
+        0x01,
+        0x01, 0x63, 0x01,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    const turbowasm_module_impl *impl;
+    const turbowasm_validation_function *function;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, valid_bytes, sizeof(valid_bytes)) ==
+           TURBOWASM_OK);
+
+    impl = turbowasm_module_impl_get(&module);
+    assert(impl != NULL);
+    assert(impl->validation.function_count == 1u);
+
+    function = &impl->validation.functions[0];
+    assert(function->local_count == 1u);
+    assert(function->local_types[0] == 0x70u);
+    assert(function->local_semantics[0].is_reference);
+    assert(function->local_semantics[0].nullable);
+    assert(function->local_semantics[0].heap_kind ==
+           TURBOWASM_VALIDATION_HEAP_TYPE_INDEX);
+    assert(function->local_semantics[0].type_index == 0u);
+
+    turbowasm_module_destroy(&module);
+
+    assert(turbowasm_module_load_borrowed(
+               &module, invalid_bytes, sizeof(invalid_bytes)) ==
+           TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
 static void test_unsupported_heap_type_stays_explicit(void) {
     static const uint8_t anyref[] = {0x63, 0x6e};
     turbowasm_validation_value_type type;
@@ -166,6 +234,7 @@ int main(void) {
     test_general_function_reference_types();
     test_legacy_function_type_retains_semantics();
     test_general_reference_global_retains_semantics();
+    test_general_reference_local_semantics();
     test_unsupported_heap_type_stays_explicit();
     return 0;
 }
