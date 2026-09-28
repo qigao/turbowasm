@@ -101,6 +101,17 @@ set_target_properties(turbowasm_memory_numeric_validation_test PROPERTIES
 add_test(NAME turbowasm_memory_numeric_validation_test
          COMMAND turbowasm_memory_numeric_validation_test)
 
+add_executable(turbowasm_multi_memory_scalar_test
+  multi_memory_scalar_test.c)
+target_link_libraries(turbowasm_multi_memory_scalar_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_multi_memory_scalar_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_multi_memory_scalar_test
+         COMMAND turbowasm_multi_memory_scalar_test)
+
 add_executable(turbowasm_bulk_validation_test
   bulk_validation_test.c)
 target_link_libraries(turbowasm_bulk_validation_test
