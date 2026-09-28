@@ -1,0 +1,8 @@
+{
+  "name": "qigao-turbowasm-mir-cache",
+  "version-string": "1",
+  "description": "Host MIR JIT dependency profile for TurboWasm optional JIT backend.",
+  "dependencies": [
+    "mir-jit"
+  ]
+}

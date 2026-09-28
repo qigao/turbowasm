@@ -7,6 +7,7 @@ on:
       - "include/**"
       - "src/**"
       - "tests/conformance/**"
+      - "cmake/vcpkg/spec-tools/**"
       - ".github/workflows/conformance.yml"
   push:
     branches: [master]
@@ -72,7 +73,7 @@ jobs:
           install_root="$RUNNER_TEMP/turbowasm-spec-tools"
           rm -rf "$install_root"
           "$VCPKG_ROOT/vcpkg" install \
-            --x-manifest-root="$VCPKG_CACHE_REPOSITORY_ROOT/manifests/turbowasm-spec-tools" \
+            --x-manifest-root="$GITHUB_WORKSPACE/cmake/vcpkg/spec-tools" \
             --x-install-root="$install_root" \
             --triplet x64-linux \
             --only-binarycaching 2>&1 | tee "$log"

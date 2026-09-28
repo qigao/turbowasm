@@ -177,7 +177,7 @@ jobs:
           mir_root="$GITHUB_WORKSPACE/build/mir-vcpkg"
           rm -rf "$mir_root"
           "$VCPKG_ROOT/vcpkg" install \
-            --x-manifest-root="$VCPKG_CACHE_REPOSITORY_ROOT/manifests/turbowasm-mir" \
+            --x-manifest-root="$GITHUB_WORKSPACE/cmake/vcpkg/mir" \
             --x-install-root="$mir_root" \
             --triplet x64-linux \
             --only-binarycaching 2>&1 | tee "$log"
@@ -257,7 +257,7 @@ jobs:
           mir_root="$GITHUB_WORKSPACE/build/mir-vcpkg"
           rm -rf "$mir_root"
           "$VCPKG_ROOT/vcpkg" install \
-            --x-manifest-root="$VCPKG_CACHE_REPOSITORY_ROOT/manifests/turbowasm-mir" \
+            --x-manifest-root="$GITHUB_WORKSPACE/cmake/vcpkg/mir" \
             --x-install-root="$mir_root" \
             --triplet "$TURBOWASM_MIR_TRIPLET" \
             --only-binarycaching 2>&1 | tee "$log"
