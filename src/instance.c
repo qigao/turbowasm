@@ -3330,12 +3330,25 @@ turbowasm_status turbowasm_jit_direct_call(
         context->depth + 1u);
 }
 
+void turbowasm_instance_create_options_init(
+    turbowasm_instance_create_options *options) {
+    if (options == NULL)
+        return;
+
+    options->max_memory_bytes =
+        TURBOWASM_DEFAULT_MAX_MEMORY_BYTES;
+    options->max_table_entries =
+        TURBOWASM_DEFAULT_MAX_TABLE_ENTRIES;
+}
+
 static turbowasm_status turbowasm_instance_create_internal(
     turbowasm_instance *instance,
     const turbowasm_module *module,
     const turbowasm_linker *linker,
-    bool resolve_imports) {
+    bool resolve_imports,
+    const turbowasm_instance_create_options *requested_options) {
     const turbowasm_module_impl *module_impl;
+    turbowasm_instance_create_options options;
     turbowasm_instance_impl *impl;
     turbowasm_status status;
 
@@ -3350,11 +3363,18 @@ static turbowasm_status turbowasm_instance_create_internal(
     if (module_impl == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
+    if (requested_options != NULL) {
+        options = *requested_options;
+    } else {
+        turbowasm_instance_create_options_init(&options);
+    }
+
     impl = (turbowasm_instance_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL)
         return TURBOWASM_OUT_OF_MEMORY;
 
     impl->module = module;
+    impl->create_options = options;
 
     if (resolve_imports) {
         status = turbowasm_linker_bind_instance(
@@ -3405,7 +3425,17 @@ turbowasm_status turbowasm_instance_create(
     turbowasm_instance *instance,
     const turbowasm_module *module) {
     return turbowasm_instance_create_internal(
-        instance, module, NULL, false);
+        instance, module, NULL, false, NULL);
+}
+
+turbowasm_status turbowasm_instance_create_with_options(
+    turbowasm_instance *instance,
+    const turbowasm_module *module,
+    const turbowasm_instance_create_options *options) {
+    if (options == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_instance_create_internal(
+        instance, module, NULL, false, options);
 }
 
 turbowasm_status turbowasm_instance_create_linked(
@@ -3413,7 +3443,18 @@ turbowasm_status turbowasm_instance_create_linked(
     const turbowasm_module *module,
     const struct turbowasm_linker *linker) {
     return turbowasm_instance_create_internal(
-        instance, module, linker, true);
+        instance, module, linker, true, NULL);
+}
+
+turbowasm_status turbowasm_instance_create_linked_with_options(
+    turbowasm_instance *instance,
+    const turbowasm_module *module,
+    const struct turbowasm_linker *linker,
+    const turbowasm_instance_create_options *options) {
+    if (options == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_instance_create_internal(
+        instance, module, linker, true, options);
 }
 
 void turbowasm_instance_destroy(turbowasm_instance *instance) {
