@@ -95,5 +95,62 @@ int main(void) {
         turbowasm_module_destroy(&module);
     }
 
+
+    {
+        static const uint8_t module_bytes[] = {
+            0x00, 0x61, 0x73, 0x6d,
+            0x01, 0x00, 0x00, 0x00,
+            0x01, 0x05,
+            0x01, 0x60, 0x00, 0x01, 0x7f,
+            0x03, 0x02,
+            0x01, 0x00,
+            0x0a, 0x06,
+            0x01, 0x04,
+            0x00, 0x41, 0x07, 0x0b
+        };
+        turbowasm_module module = {0};
+        turbowasm_instance instance = {0};
+        turbowasm_execution execution = {0};
+        turbowasm_execution_options options = {0};
+        const turbowasm_value *value;
+
+        if (turbowasm_module_load_borrowed(
+                &module, module_bytes,
+                sizeof(module_bytes)) != TURBOWASM_OK)
+            return 15;
+        if (turbowasm_instance_create(
+                &instance, &module) != TURBOWASM_OK)
+            return 16;
+        if (turbowasm_execution_create(
+                &execution, &instance, 0u, NULL, 0u) != TURBOWASM_OK)
+            return 17;
+
+        options.has_fuel_limit = true;
+        options.fuel = 1u;
+        if (turbowasm_execution_resume(
+                &execution, &options) != TURBOWASM_YIELDED)
+            return 18;
+        if (turbowasm_execution_yield_reason_get(&execution) !=
+                TURBOWASM_YIELD_FUEL)
+            return 19;
+
+        options.fuel = 4u;
+        if (turbowasm_execution_resume(
+                &execution, &options) != TURBOWASM_OK)
+            return 20;
+        if (turbowasm_execution_state_get(&execution) !=
+                TURBOWASM_EXECUTION_COMPLETED)
+            return 21;
+        value = turbowasm_execution_result_at(&execution, 0u);
+        if (value == NULL ||
+            value->kind != TURBOWASM_VALUE_I32 ||
+            value->as.i32 != 7)
+            return 22;
+
+        turbowasm_execution_destroy(&execution);
+        turbowasm_instance_destroy(&instance);
+        turbowasm_module_destroy(&module);
+    }
+
     return 0;
 }
