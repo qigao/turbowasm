@@ -53,7 +53,8 @@ add_library(turbowasm
   src/validate_element.c
   src/validate_instr.c
   src/validate_simd_table.c
-  src/validate_linkage.c)
+  src/validate_linkage.c
+  src/validate_type.c)
 
 add_library(TurboWasm::Runtime ALIAS turbowasm)
 
