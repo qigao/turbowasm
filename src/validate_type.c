@@ -78,6 +78,18 @@ turbowasm_status turbowasm_validation_read_heaptype(
             out->heap_kind = TURBOWASM_VALIDATION_HEAP_EXTERN;
             out->type_index = UINT32_MAX;
             return TURBOWASM_OK;
+        case -23:
+            out->carrier = 0x69u;
+            out->is_reference = true;
+            out->heap_kind = TURBOWASM_VALIDATION_HEAP_EXN;
+            out->type_index = UINT32_MAX;
+            return TURBOWASM_OK;
+        case -12:
+            out->carrier = 0x69u;
+            out->is_reference = true;
+            out->heap_kind = TURBOWASM_VALIDATION_HEAP_NOEXN;
+            out->type_index = UINT32_MAX;
+            return TURBOWASM_OK;
         default:
             return TURBOWASM_UNSUPPORTED;
     }
@@ -101,8 +113,17 @@ turbowasm_status turbowasm_validation_read_reftype(
     if (!turbowasm_reader_u8(reader, &first))
         return TURBOWASM_MALFORMED_MODULE;
 
-    if (first == 0x70u || first == 0x6fu) {
+    if (first == 0x70u || first == 0x6fu || first == 0x69u) {
         *out = turbowasm_validation_value_type_legacy(first);
+        return TURBOWASM_OK;
+    }
+
+    if (first == 0x74u) {
+        out->carrier = 0x69u;
+        out->is_reference = true;
+        out->nullable = true;
+        out->heap_kind = TURBOWASM_VALIDATION_HEAP_NOEXN;
+        out->type_index = UINT32_MAX;
         return TURBOWASM_OK;
     }
 
