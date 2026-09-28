@@ -91,6 +91,7 @@ static turbowasm_value_kind turbowasm_kind_from_valtype(uint8_t type) {
         case 0x7cu: return TURBOWASM_VALUE_F64;
         case 0x7bu: return TURBOWASM_VALUE_V128;
         case 0x70u: return TURBOWASM_VALUE_FUNCREF;
+        case 0x6fu: return TURBOWASM_VALUE_EXTERNREF;
         default: return (turbowasm_value_kind)0;
     }
 }
@@ -120,6 +121,9 @@ static bool turbowasm_zero_value(uint8_t type, turbowasm_value *out) {
         out->as.funcref.is_null = true;
         out->as.funcref.function_index = UINT32_MAX;
         out->as.funcref.owner = NULL;
+    } else if (kind == TURBOWASM_VALUE_EXTERNREF) {
+        out->as.externref.is_null = true;
+        out->as.externref.token = 0u;
     }
     return true;
 }
@@ -3728,7 +3732,8 @@ static turbowasm_status turbowasm_exec_function(
                     goto done;
 
                 if (left.kind != right.kind ||
-                    left.kind == TURBOWASM_VALUE_FUNCREF) {
+                    left.kind == TURBOWASM_VALUE_FUNCREF ||
+                    left.kind == TURBOWASM_VALUE_EXTERNREF) {
                     status = TURBOWASM_TYPE_MISMATCH;
                     goto done;
                 }
@@ -4072,15 +4077,21 @@ static turbowasm_status turbowasm_exec_function(
                     status = TURBOWASM_MALFORMED_MODULE;
                     goto done;
                 }
-                if (reference_type != 0x70u) {
+
+                if (reference_type == 0x70u) {
+                    out.kind = TURBOWASM_VALUE_FUNCREF;
+                    out.as.funcref.is_null = true;
+                    out.as.funcref.function_index = UINT32_MAX;
+                    out.as.funcref.owner = NULL;
+                } else if (reference_type == 0x6fu) {
+                    out.kind = TURBOWASM_VALUE_EXTERNREF;
+                    out.as.externref.is_null = true;
+                    out.as.externref.token = 0u;
+                } else {
                     status = TURBOWASM_UNSUPPORTED;
                     goto done;
                 }
 
-                out.kind = TURBOWASM_VALUE_FUNCREF;
-                out.as.funcref.is_null = true;
-                out.as.funcref.function_index = UINT32_MAX;
-                out.as.funcref.owner = NULL;
                 status = turbowasm_stack_push(&stack, out);
                 if (status != TURBOWASM_OK)
                     goto done;
@@ -4091,14 +4102,22 @@ static turbowasm_status turbowasm_exec_function(
                 turbowasm_value reference;
                 turbowasm_value out = {0};
 
-                status = turbowasm_stack_pop_kind(
-                    &stack, TURBOWASM_VALUE_FUNCREF,
-                    &reference);
+                status = turbowasm_stack_pop(&stack, &reference);
                 if (status != TURBOWASM_OK)
                     goto done;
 
                 out.kind = TURBOWASM_VALUE_I32;
-                out.as.i32 = reference.as.funcref.is_null ? 1 : 0;
+                if (reference.kind == TURBOWASM_VALUE_FUNCREF) {
+                    out.as.i32 =
+                        reference.as.funcref.is_null ? 1 : 0;
+                } else if (reference.kind == TURBOWASM_VALUE_EXTERNREF) {
+                    out.as.i32 =
+                        reference.as.externref.is_null ? 1 : 0;
+                } else {
+                    status = TURBOWASM_TYPE_MISMATCH;
+                    goto done;
+                }
+
                 status = turbowasm_stack_push(&stack, out);
                 if (status != TURBOWASM_OK)
                     goto done;
