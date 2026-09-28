@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 enum {
     TURBOWASM_VAL_I32 = 0x7f,
