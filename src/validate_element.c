@@ -49,6 +49,7 @@ static turbowasm_status turbowasm_element_read_elemkind(
 
     *out_type = turbowasm_validation_value_type_legacy(
         TURBOWASM_ELEMENT_FUNCREF);
+    out_type->nullable = false;
     return TURBOWASM_OK;
 }
 
@@ -224,14 +225,28 @@ turbowasm_status turbowasm_validate_element_section(
         turbowasm_status status;
 
         descriptor.reference_type = TURBOWASM_ELEMENT_FUNCREF;
-        descriptor.semantic_type =
-            turbowasm_validation_value_type_legacy(
-                TURBOWASM_ELEMENT_FUNCREF);
 
         if (!turbowasm_reader_uleb32(section, &flags))
             return TURBOWASM_MALFORMED_MODULE;
         if (flags > 7u)
             return TURBOWASM_UNSUPPORTED;
+
+        /*
+         * Legacy function-index element segments (flags 0..3) have semantic
+         * type (ref func), not nullable funcref. The expression shorthand at
+         * flag 4 is the nullable funcref form. Flags 5..7 carry an explicit
+         * reftype below.
+         */
+        if (flags <= 3u) {
+            descriptor.semantic_type =
+                turbowasm_validation_value_type_legacy(
+                    TURBOWASM_ELEMENT_FUNCREF);
+            descriptor.semantic_type.nullable = false;
+        } else if (flags == 4u) {
+            descriptor.semantic_type =
+                turbowasm_validation_value_type_legacy(
+                    TURBOWASM_ELEMENT_FUNCREF);
+        }
 
         active = flags == 0u || flags == 2u ||
                  flags == 4u || flags == 6u;

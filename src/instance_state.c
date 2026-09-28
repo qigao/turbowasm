@@ -491,6 +491,53 @@ static turbowasm_status turbowasm_allocate_memories(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status turbowasm_table_initial_value(
+    turbowasm_instance_impl *instance,
+    const turbowasm_validation_table *source,
+    turbowasm_instance_table_entry *out) {
+    turbowasm_value value = {0};
+    turbowasm_status status;
+
+    if (instance == NULL || source == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (source->initializer != NULL) {
+        turbowasm_validation_expr_span expression;
+
+        if (source->initializer_size == 0u)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        expression.bytes = source->initializer;
+        expression.size = source->initializer_size;
+        expression.result_type = source->reference_type;
+        status = turbowasm_eval_value_expr(
+            instance, &expression, &value);
+        if (status != TURBOWASM_OK)
+            return status;
+    } else if (source->reference_type == 0x70u) {
+        value.kind = TURBOWASM_VALUE_FUNCREF;
+        value.as.funcref.is_null = true;
+        value.as.funcref.function_index = UINT32_MAX;
+        value.as.funcref.owner = NULL;
+    } else if (source->reference_type == 0x6fu) {
+        value.kind = TURBOWASM_VALUE_EXTERNREF;
+        value.as.externref.is_null = true;
+        value.as.externref.token = 0u;
+    } else {
+        return TURBOWASM_UNSUPPORTED;
+    }
+
+    if ((source->reference_type == 0x70u &&
+         value.kind != TURBOWASM_VALUE_FUNCREF) ||
+        (source->reference_type == 0x6fu &&
+         value.kind != TURBOWASM_VALUE_EXTERNREF))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    memset(out, 0, sizeof(*out));
+    out->value = value;
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status turbowasm_allocate_tables(
     turbowasm_instance_impl *instance,
     const turbowasm_validation_context *context) {
@@ -511,7 +558,9 @@ static turbowasm_status turbowasm_allocate_tables(
             &context->tables[index];
         turbowasm_instance_table *table =
             &instance->tables[index];
+        turbowasm_instance_table_entry initial;
         uint32_t item;
+        turbowasm_status status;
 
         if (source->imported) {
             if (index >= instance->linked_table_count ||
@@ -541,21 +590,13 @@ static turbowasm_status turbowasm_allocate_tables(
                 return TURBOWASM_OUT_OF_MEMORY;
         }
 
-        for (item = 0u; item < table->size; ++item) {
-            if (source->reference_type == 0x70u) {
-                table->entries[item].value.kind =
-                    TURBOWASM_VALUE_FUNCREF;
-                table->entries[item].value.as.funcref.is_null = true;
-                table->entries[item].value.as.funcref.function_index =
-                    UINT32_MAX;
-                table->entries[item].value.as.funcref.owner = NULL;
-            } else {
-                table->entries[item].value.kind =
-                    TURBOWASM_VALUE_EXTERNREF;
-                table->entries[item].value.as.externref.is_null = true;
-                table->entries[item].value.as.externref.token = 0u;
-            }
-        }
+        status = turbowasm_table_initial_value(
+            instance, source, &initial);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        for (item = 0u; item < table->size; ++item)
+            table->entries[item] = initial;
     }
 
     return TURBOWASM_OK;

@@ -335,15 +335,22 @@ bool turbowasm_validation_context_append_global(
     return true;
 }
 
-bool turbowasm_validation_context_append_table_semantic(
+static bool turbowasm_validation_context_append_table_full(
     turbowasm_validation_context *context,
     turbowasm_validation_value_type reference_type,
     turbowasm_validation_limits limits,
-    bool imported) {
+    bool imported,
+    const uint8_t *initializer,
+    uint32_t initializer_size) {
     uint32_t required;
+    turbowasm_validation_table *table;
 
     if (context == NULL || context->table_count == UINT32_MAX ||
         !reference_type.is_reference)
+        return false;
+    if (imported && (initializer != NULL || initializer_size != 0u))
+        return false;
+    if ((initializer == NULL) != (initializer_size == 0u))
         return false;
 
     required = context->table_count + 1u;
@@ -354,14 +361,37 @@ bool turbowasm_validation_context_append_table_semantic(
             sizeof(*context->tables)))
         return false;
 
-    context->tables[context->table_count].reference_type =
-        reference_type.carrier;
-    context->tables[context->table_count].semantic_type =
-        reference_type;
-    context->tables[context->table_count].imported = imported;
-    context->tables[context->table_count].limits = limits;
+    table = &context->tables[context->table_count];
+    table->reference_type = reference_type.carrier;
+    table->semantic_type = reference_type;
+    table->imported = imported;
+    table->limits = limits;
+    table->initializer = initializer;
+    table->initializer_size = initializer_size;
     ++context->table_count;
     return true;
+}
+
+bool turbowasm_validation_context_append_table_semantic(
+    turbowasm_validation_context *context,
+    turbowasm_validation_value_type reference_type,
+    turbowasm_validation_limits limits,
+    bool imported) {
+    return turbowasm_validation_context_append_table_full(
+        context, reference_type, limits, imported, NULL, 0u);
+}
+
+bool turbowasm_validation_context_append_table_semantic_initialized(
+    turbowasm_validation_context *context,
+    turbowasm_validation_value_type reference_type,
+    turbowasm_validation_limits limits,
+    const uint8_t *initializer,
+    uint32_t initializer_size) {
+    if (initializer == NULL || initializer_size == 0u)
+        return false;
+    return turbowasm_validation_context_append_table_full(
+        context, reference_type, limits, false,
+        initializer, initializer_size);
 }
 
 bool turbowasm_validation_context_append_table(

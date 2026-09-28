@@ -309,6 +309,86 @@ static void test_externref_table_round_trip(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_defined_table_initializer_executes(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: () -> (); type1: () -> funcref */
+        0x01, 0x08,
+        0x02,
+        0x60, 0x00, 0x00,
+        0x60, 0x00, 0x01, 0x70,
+
+        /* target uses type0; getter uses type1 */
+        0x03, 0x03,
+        0x02, 0x00, 0x01,
+
+        /*
+         * table0: min=1, element type (ref func), explicit initializer
+         * ref.func 0.
+         */
+        0x04, 0x0a,
+        0x01,
+        0x40, 0x00,
+        0x64, 0x70,
+        0x00, 0x01,
+        0xd2, 0x00, 0x0b,
+
+        0x0a, 0x0b,
+        0x02,
+        /* func0 target */
+        0x02, 0x00, 0x0b,
+        /* func1 getter: table.get 0 at index 0 */
+        0x06, 0x00, 0x41, 0x00, 0x25, 0x00, 0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    assert(turbowasm_instance_invoke(
+               &instance, 1u,
+               NULL, 0u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(trap == TURBOWASM_TRAP_NONE);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_FUNCREF);
+    assert(!result.as.funcref.is_null);
+    assert(result.as.funcref.function_index == 0u);
+    assert(result.as.funcref.owner != NULL);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_nonnullable_table_rejects_null_initializer(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* table0: min=1, (ref func), explicit ref.null func */
+        0x04, 0x0a,
+        0x01,
+        0x40, 0x00,
+        0x64, 0x70,
+        0x00, 0x01,
+        0xd0, 0x70, 0x0b
+    };
+    turbowasm_module module = {0};
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) ==
+           TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
 static void test_externref_null_is_null_executes(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -351,6 +431,8 @@ int main(void) {
     test_ref_func_table_set_and_call_indirect();
     test_typed_funcref_br_table_meet();
     test_externref_table_round_trip();
+    test_defined_table_initializer_executes();
+    test_nonnullable_table_rejects_null_initializer();
     test_externref_null_is_null_executes();
     return 0;
 }

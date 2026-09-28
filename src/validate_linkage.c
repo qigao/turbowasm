@@ -1,4 +1,5 @@
 #include "validate_linkage.h"
+#include "validate_data.h"
 #include "validate_type.h"
 
 #include <stdbool.h>
@@ -333,15 +334,51 @@ turbowasm_status turbowasm_validate_table_section(
         turbowasm_validation_value_type reference_type;
         turbowasm_validation_limits limits = {0};
         turbowasm_status status;
+        bool explicit_initializer = false;
 
-        /*
-         * Defined-table initializer encoding starts with 0x40 0x00.
-         * Runtime ownership/initialization for that form is a separate slice;
-         * keep it explicitly unsupported rather than consuming it as a type.
-         */
         if (turbowasm_reader_remaining(section) != 0u &&
-            *section->cursor == 0x40u)
-            return TURBOWASM_UNSUPPORTED;
+            *section->cursor == 0x40u) {
+            uint8_t marker;
+            uint8_t zero;
+            const uint8_t *initializer_start;
+            size_t initializer_size;
+            turbowasm_validation_value_type initializer_type;
+
+            if (!turbowasm_reader_u8(section, &marker) ||
+                !turbowasm_reader_u8(section, &zero) ||
+                marker != 0x40u || zero != 0x00u)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            status = turbowasm_read_table_type(
+                section, context, &reference_type, &limits);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            initializer_start = section->cursor;
+            status = turbowasm_validate_const_expr_semantic(
+                section, context, &initializer_type);
+            if (status != TURBOWASM_OK)
+                return status;
+            if (!turbowasm_validation_value_type_matches(
+                    &initializer_type, &reference_type))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            initializer_size =
+                (size_t)(section->cursor - initializer_start);
+            if (initializer_size == 0u ||
+                initializer_size > UINT32_MAX)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            if (!turbowasm_validation_context_append_table_semantic_initialized(
+                    context, reference_type, limits,
+                    initializer_start,
+                    (uint32_t)initializer_size))
+                return TURBOWASM_OUT_OF_MEMORY;
+            explicit_initializer = true;
+        }
+
+        if (explicit_initializer)
+            continue;
 
         status = turbowasm_read_table_type(
             section, context, &reference_type, &limits);
@@ -349,9 +386,9 @@ turbowasm_status turbowasm_validate_table_section(
             return status;
 
         /*
-         * Without an explicit initializer, every defined table is initialized
-         * with null. A non-nullable reference type therefore has no valid
-         * default value and must be rejected.
+         * Without an explicit initializer, the binary format synthesizes
+         * ref.null(heaptype). Non-nullable tables therefore require the
+         * explicit 0x40 0x00 form above.
          */
         if (reference_type.is_reference && !reference_type.nullable)
             return TURBOWASM_MALFORMED_MODULE;

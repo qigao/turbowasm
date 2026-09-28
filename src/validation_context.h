@@ -96,6 +96,14 @@ typedef struct turbowasm_validation_table {
     turbowasm_validation_value_type semantic_type;
     bool imported;
     turbowasm_validation_limits limits;
+
+    /*
+     * Defined tables may carry an explicit constant initializer. The bytes
+     * borrow the loaded module just like global/segment expression spans.
+     * Imported tables never have an initializer here.
+     */
+    const uint8_t *initializer;
+    uint32_t initializer_size;
 } turbowasm_validation_table;
 
 typedef struct turbowasm_validation_memory {
@@ -253,6 +261,13 @@ bool turbowasm_validation_context_append_table_semantic(
     turbowasm_validation_value_type reference_type,
     turbowasm_validation_limits limits,
     bool imported);
+
+bool turbowasm_validation_context_append_table_semantic_initialized(
+    turbowasm_validation_context *context,
+    turbowasm_validation_value_type reference_type,
+    turbowasm_validation_limits limits,
+    const uint8_t *initializer,
+    uint32_t initializer_size);
 
 bool turbowasm_validation_context_append_memory(
     turbowasm_validation_context *context,
