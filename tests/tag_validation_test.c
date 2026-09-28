@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #define WASM_HEADER \
@@ -45,7 +46,16 @@ static void test_defined_tag_retains_type_identity(void) {
     const turbowasm_validation_func_type *type;
     const turbowasm_export_desc *export_desc;
 
-    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    {
+        turbowasm_status status = load(bytes, sizeof(bytes), &module);
+        if (status != TURBOWASM_OK) {
+            fprintf(stderr,
+                    "defined tag status=%d (%s)\n",
+                    (int)status,
+                    turbowasm_status_string(status));
+        }
+        assert(status == TURBOWASM_OK);
+    }
     assert(turbowasm_module_summary_get(&module, &summary));
     assert(summary.type_count == 1u);
     assert(summary.imported_tag_count == 0u);
