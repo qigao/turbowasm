@@ -298,12 +298,15 @@ static turbowasm_status turbowasm_allocate_memories(
                 return TURBOWASM_UNSUPPORTED;
             continue;
         }
-        if (bytes > (uint64_t)SIZE_MAX)
+        if (bytes > (uint64_t)SIZE_MAX ||
+            bytes > instance->create_options.max_memory_bytes)
             return TURBOWASM_OUT_OF_MEMORY;
 
         memory->pages = source->limits.minimum;
         memory->maximum_pages = source->limits.maximum;
         memory->has_maximum = source->limits.has_maximum;
+        memory->resource_max_bytes =
+            instance->create_options.max_memory_bytes;
 
         if (bytes != 0u) {
             memory->data = (uint8_t *)calloc(
@@ -351,6 +354,12 @@ static turbowasm_status turbowasm_allocate_tables(
         table->maximum = source->limits.maximum;
         table->has_maximum = source->limits.has_maximum;
         table->reference_type = source->reference_type;
+        table->resource_max_entries =
+            instance->create_options.max_table_entries;
+
+        if ((uint64_t)table->size >
+                table->resource_max_entries)
+            return TURBOWASM_OUT_OF_MEMORY;
 
         if (table->size != 0u) {
             if ((uint64_t)table->size *
@@ -926,7 +935,8 @@ turbowasm_status turbowasm_instance_memory_grow(
     next_bytes = next_pages * TURBOWASM_WASM_PAGE_SIZE;
     previous_bytes =
         (uint64_t)memory->pages * TURBOWASM_WASM_PAGE_SIZE;
-    if (next_bytes > (uint64_t)SIZE_MAX) {
+    if (next_bytes > (uint64_t)SIZE_MAX ||
+        next_bytes > memory->resource_max_bytes) {
         *out_previous_pages = UINT32_MAX;
         return TURBOWASM_OK;
     }
@@ -1399,6 +1409,7 @@ turbowasm_status turbowasm_instance_table_grow(
     next_size = (uint64_t)table->size + delta;
     if (next_size > UINT32_MAX ||
         (table->has_maximum && next_size > table->maximum) ||
+        next_size > table->resource_max_entries ||
         next_size * sizeof(*grown) > (uint64_t)SIZE_MAX) {
         *out_previous_size = UINT32_MAX;
         return TURBOWASM_OK;
