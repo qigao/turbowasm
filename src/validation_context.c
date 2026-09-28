@@ -44,6 +44,31 @@ bool turbowasm_validation_value_type_equal(
     return true;
 }
 
+bool turbowasm_validation_value_type_matches(
+    const turbowasm_validation_value_type *actual,
+    const turbowasm_validation_value_type *expected) {
+    if (actual == NULL || expected == NULL)
+        return false;
+
+    if (!actual->is_reference || !expected->is_reference)
+        return turbowasm_validation_value_type_equal(actual, expected);
+
+    if (actual->carrier != expected->carrier)
+        return false;
+    if (actual->nullable && !expected->nullable)
+        return false;
+
+    if (actual->heap_kind == expected->heap_kind) {
+        if (actual->heap_kind ==
+            TURBOWASM_VALIDATION_HEAP_TYPE_INDEX)
+            return actual->type_index == expected->type_index;
+        return true;
+    }
+
+    return actual->heap_kind == TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+           expected->heap_kind == TURBOWASM_VALIDATION_HEAP_FUNC;
+}
+
 static bool turbowasm_validation_reserve(
     void **storage,
     uint32_t *capacity,
@@ -310,14 +335,15 @@ bool turbowasm_validation_context_append_global(
     return true;
 }
 
-bool turbowasm_validation_context_append_table(
+bool turbowasm_validation_context_append_table_semantic(
     turbowasm_validation_context *context,
-    uint8_t reference_type,
+    turbowasm_validation_value_type reference_type,
     turbowasm_validation_limits limits,
     bool imported) {
     uint32_t required;
 
-    if (context == NULL || context->table_count == UINT32_MAX)
+    if (context == NULL || context->table_count == UINT32_MAX ||
+        !reference_type.is_reference)
         return false;
 
     required = context->table_count + 1u;
@@ -328,13 +354,26 @@ bool turbowasm_validation_context_append_table(
             sizeof(*context->tables)))
         return false;
 
-    context->tables[context->table_count].reference_type = reference_type;
+    context->tables[context->table_count].reference_type =
+        reference_type.carrier;
     context->tables[context->table_count].semantic_type =
-        turbowasm_validation_value_type_legacy(reference_type);
+        reference_type;
     context->tables[context->table_count].imported = imported;
     context->tables[context->table_count].limits = limits;
     ++context->table_count;
     return true;
+}
+
+bool turbowasm_validation_context_append_table(
+    turbowasm_validation_context *context,
+    uint8_t reference_type,
+    turbowasm_validation_limits limits,
+    bool imported) {
+    return turbowasm_validation_context_append_table_semantic(
+        context,
+        turbowasm_validation_value_type_legacy(reference_type),
+        limits,
+        imported);
 }
 
 bool turbowasm_validation_context_append_memory(
