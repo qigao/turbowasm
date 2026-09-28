@@ -239,6 +239,95 @@ jobs:
           ! grep -q 'SPEC_RUNTIME_UNSUPPORTED_DETAIL' "$log"
 
 
+  qualified-tail-call:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
+    name: Qualified proposal tail-call
+    needs: core
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout TurboWasm
+        uses: actions/checkout@v4
+
+      - name: Restore Salts 1.7.9 SDK
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./cmake/ci/restore-salts-sdk.ps1
+
+      - name: Ensure host build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
+
+      - name: Validate proposal selectors
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            tests/conformance/run_core.py \
+            tests/conformance/run_proposal.py
+          python3 tests/conformance/run_proposal.py --validate-all
+
+      - name: Build conformance runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/conformance-tail-call -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -O1" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" \
+            -DTURBOWASM_BUILD_TESTS=OFF \
+            -DTURBOWASM_BUILD_TOOLS=OFF \
+            -DTURBOWASM_ENABLE_CFLOW_ADAPTER=OFF \
+            -DTURBOWASM_ENABLE_MIR_JIT=OFF \
+            -DTURBOWASM_BUILD_CONFORMANCE_RUNNER=ON
+          cmake --build build/conformance-tail-call \
+            --target turbowasm_spec_runner -j2
+          test -x build/conformance-tail-call/tests/conformance/turbowasm_spec_runner
+
+      - name: Configure shared vcpkg cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore WABT from shared cache only
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/turbowasm-spec-tools-cache.log"
+          install_root="$RUNNER_TEMP/turbowasm-spec-tools"
+          rm -rf "$install_root"
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$GITHUB_WORKSPACE/cmake/vcpkg/spec-tools" \
+            --x-install-root="$install_root" \
+            --triplet x64-linux \
+            --only-binarycaching 2>&1 | tee "$log"
+          ! grep -Eq '^Building [^:]+:x64-linux' "$log"
+          grep -Eq 'Restored [1-9][0-9]* package\(s\) from NuGet' "$log"
+          tool="$install_root/x64-linux/tools/wabt/wast2json"
+          test -x "$tool"
+          "$tool" --version
+          echo "WAST2JSON=$tool" >> "$GITHUB_ENV"
+
+      - name: Run qualified tail-call proposal suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/turbowasm-proposal-tail-call.log"
+          python3 tests/conformance/run_proposal.py \
+            --selector tail-call \
+            --wast2json "$WAST2JSON" \
+            --runner "$PWD/build/conformance-tail-call/tests/conformance/turbowasm_spec_runner" \
+            --work-dir "$RUNNER_TEMP/turbowasm-proposal-tail-call" \
+            2>&1 | tee "$log"
+
+          grep -Eq 'CORE_CONFORMANCE pass=[1-9][0-9]* fail=0 unsupported=[0-9]+ total=[0-9]+ files=2' "$log"
+          ! grep -q 'SPEC_RUNTIME_UNSUPPORTED_DETAIL' "$log"
+
+
   proposal:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.target != 'core' }}
     name: Proposal ${{ inputs.target }}
