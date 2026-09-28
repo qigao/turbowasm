@@ -424,16 +424,6 @@ turbowasm_status turbowasm_linker_bind_instance(
                 &provider_module->validation.tables[
                     export_desc->item_index];
 
-            /*
-             * Runtime table execution currently supports funcref. Keep
-             * externref fail-closed until its value carrier lands.
-             */
-            if (expected_table->reference_type != 0x70u ||
-                actual_table->reference_type != 0x70u) {
-                result = TURBOWASM_UNSUPPORTED;
-                goto fail;
-            }
-
             if (expected_table->reference_type !=
                     actual_table->reference_type) {
                 result = TURBOWASM_TYPE_MISMATCH;
