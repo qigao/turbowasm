@@ -175,6 +175,17 @@ turbowasm_status turbowasm_instance_state_init(
     turbowasm_instance_impl *instance,
     const turbowasm_module_impl *module);
 
+/*
+ * Spec-conformance store path: on an instantiation trap, leave the partially
+ * instantiated instance alive so escaped references and imported-store side
+ * effects retain their WebAssembly store lifetime. Public create APIs keep
+ * their existing fail-closed cleanup behavior.
+ */
+turbowasm_status turbowasm_instance_create_linked_preserve_failure(
+    turbowasm_instance *instance,
+    const turbowasm_module *module,
+    const struct turbowasm_linker *linker);
+
 void turbowasm_instance_state_destroy(
     turbowasm_instance_impl *instance);
 
