@@ -32,6 +32,7 @@ typedef struct spec_state {
     size_t unsupported;
     bool printed_first_failure;
     bool printed_first_unsupported;
+    bool printed_first_runtime_unsupported;
 } spec_state;
 
 typedef enum spec_expected_pattern {
@@ -139,6 +140,17 @@ static void spec_note_unsupported(spec_state *state,
         fprintf(stderr, "FIRST_UNSUPPORTED line=%u %s\n",
                 line, message);
         state->printed_first_unsupported = true;
+    }
+}
+
+static void spec_note_runtime_unsupported(spec_state *state,
+                                          unsigned line,
+                                          const char *message) {
+    spec_note_unsupported(state, line, message);
+    if (!state->printed_first_runtime_unsupported) {
+        fprintf(stderr, "FIRST_RUNTIME_UNSUPPORTED line=%u %s\n",
+                line, message);
+        state->printed_first_runtime_unsupported = true;
     }
 }
 
@@ -802,7 +814,7 @@ static void spec_command_module(spec_state *state,
     if (status == TURBOWASM_UNSUPPORTED) {
         slot->unsupported = true;
         state->current_slot = (int64_t)slot_index;
-        spec_note_unsupported(state, line, "module validation unsupported");
+        spec_note_runtime_unsupported(state, line, "module validation unsupported");
         return;
     }
     if (status != TURBOWASM_OK) {
@@ -817,7 +829,7 @@ static void spec_command_module(spec_state *state,
         status == TURBOWASM_LINK_ERROR) {
         slot->unsupported = true;
         state->current_slot = (int64_t)slot_index;
-        spec_note_unsupported(state, line, "module host/link feature unsupported");
+        spec_note_runtime_unsupported(state, line, "module host/link feature unsupported");
         return;
     }
     if (status != TURBOWASM_OK) {
@@ -844,7 +856,7 @@ static void spec_command_register(spec_state *state,
         state->slots[(size_t)slot_index] == NULL ||
         state->slots[(size_t)slot_index]->unsupported ||
         !state->slots[(size_t)slot_index]->ready) {
-        spec_note_unsupported(state, line, "register target unavailable");
+        spec_note_runtime_unsupported(state, line, "register target unavailable");
         return;
     }
 
@@ -963,7 +975,7 @@ static void spec_command_action(spec_state *state,
 
     free(results);
     if (unsupported) {
-        spec_note_unsupported(state, line, "invoke unsupported");
+        spec_note_runtime_unsupported(state, line, "invoke unsupported");
     } else if (status != TURBOWASM_OK) {
         spec_note_failure(state, line, "action did not complete");
     } else {
@@ -997,7 +1009,7 @@ static void spec_command_assert_return(spec_state *state,
         &results, &result_count, &trap, &unsupported);
 
     if (unsupported) {
-        spec_note_unsupported(state, line, "assert_return invoke unsupported");
+        spec_note_runtime_unsupported(state, line, "assert_return invoke unsupported");
         goto done;
     }
     if (status != TURBOWASM_OK) {
@@ -1040,7 +1052,7 @@ static void spec_command_assert_trap(spec_state *state,
     free(results);
 
     if (unsupported) {
-        spec_note_unsupported(state, line, "assert_trap invoke unsupported");
+        spec_note_runtime_unsupported(state, line, "assert_trap invoke unsupported");
         return;
     }
     if (status != TURBOWASM_TRAPPED) {
