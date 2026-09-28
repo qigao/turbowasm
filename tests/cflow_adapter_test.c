@@ -214,10 +214,168 @@ static void test_rejected_admission_has_no_callbacks(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static bool always_interrupt(void *context) {
+    uint32_t *calls = (uint32_t *)context;
+    assert(calls != NULL);
+    ++*calls;
+    return true;
+}
+
+static void test_virtual_clock_deadline_policy(void) {
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_execution_options options = {0};
+    turbowasm_cflow_deadline_policy policy = {0};
+    cflow_clock clock = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    load_constant_module(&module, &instance);
+    assert(cflow_clock_virtual_init(&clock, (cflow_instant){100u}));
+    assert(turbowasm_cflow_deadline_init_after(
+        &policy, &clock, cflow_duration_from_ns(25u)));
+    assert(policy.deadline.ns == 125u);
+    assert(turbowasm_cflow_deadline_apply(&policy, &options));
+
+    assert(turbowasm_instance_invoke_with_options(
+               &instance, 0u, NULL, 0u,
+               &result, 1u, &result_count, &trap,
+               &options) == TURBOWASM_OK);
+    assert(result.as.i32 == 7);
+
+    assert(cflow_clock_advance(
+        &clock, cflow_duration_from_ns(24u)));
+    result_count = 0u;
+    trap = TURBOWASM_TRAP_NONE;
+    assert(turbowasm_instance_invoke_with_options(
+               &instance, 0u, NULL, 0u,
+               &result, 1u, &result_count, &trap,
+               &options) == TURBOWASM_OK);
+
+    assert(cflow_clock_advance(
+        &clock, cflow_duration_from_ns(1u)));
+    result_count = 0u;
+    trap = TURBOWASM_TRAP_NONE;
+    assert(turbowasm_instance_invoke_with_options(
+               &instance, 0u, NULL, 0u,
+               &result, 1u, &result_count, &trap,
+               &options) == TURBOWASM_INTERRUPTED);
+    assert(result_count == 0u);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    cflow_clock_destroy(&clock);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_zero_deadline_and_fuel_composition(void) {
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_execution_options options = {0};
+    turbowasm_cflow_deadline_policy policy = {0};
+    cflow_clock clock = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    load_constant_module(&module, &instance);
+    assert(cflow_clock_virtual_init(&clock, (cflow_instant){500u}));
+
+    assert(turbowasm_cflow_deadline_init_after(
+        &policy, &clock, cflow_duration_from_ns(0u)));
+    assert(policy.deadline.ns == 500u);
+    assert(turbowasm_cflow_deadline_apply(&policy, &options));
+    assert(turbowasm_instance_invoke_with_options(
+               &instance, 0u, NULL, 0u,
+               &result, 1u, &result_count, &trap,
+               &options) == TURBOWASM_INTERRUPTED);
+
+    options = (turbowasm_execution_options){0};
+    policy = (turbowasm_cflow_deadline_policy){0};
+    assert(turbowasm_cflow_deadline_init_after(
+        &policy, &clock, cflow_duration_from_s(1u)));
+    options.has_fuel_limit = true;
+    options.fuel = 1u;
+    assert(turbowasm_cflow_deadline_apply(&policy, &options));
+    result_count = 0u;
+    trap = TURBOWASM_TRAP_NONE;
+    assert(turbowasm_instance_invoke_with_options(
+               &instance, 0u, NULL, 0u,
+               &result, 1u, &result_count, &trap,
+               &options) == TURBOWASM_FUEL_EXHAUSTED);
+    assert(result_count == 0u);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    cflow_clock_destroy(&clock);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_deadline_chains_existing_interrupt(void) {
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_execution_options options = {0};
+    turbowasm_cflow_deadline_policy policy = {0};
+    cflow_clock clock = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    uint32_t calls = 0u;
+
+    load_constant_module(&module, &instance);
+    assert(cflow_clock_virtual_init(&clock, (cflow_instant){0u}));
+    assert(turbowasm_cflow_deadline_init_after(
+        &policy, &clock, cflow_duration_from_s(1u)));
+
+    options.should_interrupt = always_interrupt;
+    options.interrupt_context = &calls;
+    assert(turbowasm_cflow_deadline_apply(&policy, &options));
+    assert(turbowasm_instance_invoke_with_options(
+               &instance, 0u, NULL, 0u,
+               &result, 1u, &result_count, &trap,
+               &options) == TURBOWASM_INTERRUPTED);
+    assert(calls == 1u);
+
+    cflow_clock_destroy(&clock);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_system_clock_uses_same_policy(void) {
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_execution_options options = {0};
+    turbowasm_cflow_deadline_policy policy = {0};
+    cflow_clock clock = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    load_constant_module(&module, &instance);
+    assert(cflow_clock_system_init(&clock));
+    assert(turbowasm_cflow_deadline_init_after(
+        &policy, &clock, cflow_duration_from_s(3600u)));
+    assert(turbowasm_cflow_deadline_apply(&policy, &options));
+    assert(turbowasm_instance_invoke_with_options(
+               &instance, 0u, NULL, 0u,
+               &result, 1u, &result_count, &trap,
+               &options) == TURBOWASM_OK);
+
+    cflow_clock_destroy(&clock);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
     test_manual_execution();
     test_cancel_pending();
     test_reflected_signature_rejects_bad_argument_count();
     test_rejected_admission_has_no_callbacks();
+    test_virtual_clock_deadline_policy();
+    test_zero_deadline_and_fuel_composition();
+    test_deadline_chains_existing_interrupt();
+    test_system_clock_uses_same_policy();
     return 0;
 }
