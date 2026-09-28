@@ -32,7 +32,8 @@ typedef enum turbowasm_simd_exec_kind {
     TURBOWASM_SIMD_EXEC_LANE_EXTRACT,
     TURBOWASM_SIMD_EXEC_LANE_REPLACE,
     TURBOWASM_SIMD_EXEC_SHUFFLE,
-    TURBOWASM_SIMD_EXEC_SWIZZLE
+    TURBOWASM_SIMD_EXEC_SWIZZLE,
+    TURBOWASM_SIMD_EXEC_RELAXED
 } turbowasm_simd_exec_kind;
 
 typedef struct turbowasm_simd_exec_descriptor {
