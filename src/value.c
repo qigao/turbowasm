@@ -4,6 +4,8 @@ static const cmeta_type_identity turbowasm_v128_type_identity =
     CMETA_TYPE_ID_ATOM_INIT("turbowasm.value.v128");
 static const cmeta_type_identity turbowasm_funcref_type_identity =
     CMETA_TYPE_ID_ATOM_INIT("turbowasm.value.funcref");
+static const cmeta_type_identity turbowasm_externref_type_identity =
+    CMETA_TYPE_ID_ATOM_INIT("turbowasm.value.externref");
 
 static const cmeta_type_desc turbowasm_v128_type = {
     .name = "turbowasm_v128",
@@ -25,6 +27,16 @@ static const cmeta_type_desc turbowasm_funcref_type = {
     .identity = &turbowasm_funcref_type_identity
 };
 
+static const cmeta_type_desc turbowasm_externref_type = {
+    .name = "turbowasm_externref",
+    .size = sizeof(turbowasm_externref),
+    .align = _Alignof(turbowasm_externref),
+    .kind = CMETA_T_OBJECT,
+    .pointee = NULL,
+    .traits = NULL,
+    .identity = &turbowasm_externref_type_identity
+};
+
 const cmeta_type_desc *
 turbowasm_value_type_descriptor(turbowasm_value_kind kind) {
     switch (kind) {
@@ -34,6 +46,7 @@ turbowasm_value_type_descriptor(turbowasm_value_kind kind) {
         case TURBOWASM_VALUE_F64: return &cmeta_type_double;
         case TURBOWASM_VALUE_V128: return &turbowasm_v128_type;
         case TURBOWASM_VALUE_FUNCREF: return &turbowasm_funcref_type;
+        case TURBOWASM_VALUE_EXTERNREF: return &turbowasm_externref_type;
         default: return NULL;
     }
 }
