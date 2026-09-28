@@ -61,7 +61,8 @@ typedef enum turbowasm_exec_control_kind {
     TURBOWASM_EXEC_CONTROL_FUNCTION = 0,
     TURBOWASM_EXEC_CONTROL_BLOCK,
     TURBOWASM_EXEC_CONTROL_LOOP,
-    TURBOWASM_EXEC_CONTROL_IF
+    TURBOWASM_EXEC_CONTROL_IF,
+    TURBOWASM_EXEC_CONTROL_TRY_TABLE
 } turbowasm_exec_control_kind;
 
 typedef struct turbowasm_exec_control_frame {
@@ -94,6 +95,7 @@ static turbowasm_value_kind turbowasm_kind_from_valtype(uint8_t type) {
         case 0x7bu: return TURBOWASM_VALUE_V128;
         case 0x70u: return TURBOWASM_VALUE_FUNCREF;
         case 0x6fu: return TURBOWASM_VALUE_EXTERNREF;
+        case 0x69u: return TURBOWASM_VALUE_EXNREF;
         default: return (turbowasm_value_kind)0;
     }
 }
@@ -182,6 +184,9 @@ static bool turbowasm_zero_value(uint8_t type, turbowasm_value *out) {
     } else if (kind == TURBOWASM_VALUE_EXTERNREF) {
         out->as.externref.is_null = true;
         out->as.externref.token = 0u;
+    } else if (kind == TURBOWASM_VALUE_EXNREF) {
+        out->as.exnref.is_null = true;
+        out->as.exnref.exception = NULL;
     }
     return true;
 }
@@ -258,7 +263,7 @@ static bool turbowasm_exec_valtype(uint8_t type) {
     return type == 0x7fu || type == 0x7eu ||
            type == 0x7du || type == 0x7cu ||
            type == 0x7bu || type == 0x70u ||
-           type == 0x6fu;
+           type == 0x6fu || type == 0x69u;
 }
 
 static bool turbowasm_exec_controls_reserve(
@@ -398,7 +403,7 @@ static turbowasm_status turbowasm_exec_read_block_signature(
         return TURBOWASM_OK;
     }
 
-    if (turbowasm_exec_valtype(first) ||
+    if (turbowasm_exec_valtype(first) || first == 0x74u ||
         first == 0x63u || first == 0x64u) {
         turbowasm_validation_value_type type;
         bool generalized = false;
@@ -4021,7 +4026,8 @@ restart_frame:
 
                 if (left.kind != right.kind ||
                     left.kind == TURBOWASM_VALUE_FUNCREF ||
-                    left.kind == TURBOWASM_VALUE_EXTERNREF) {
+                    left.kind == TURBOWASM_VALUE_EXTERNREF ||
+                    left.kind == TURBOWASM_VALUE_EXNREF) {
                     status = TURBOWASM_TYPE_MISMATCH;
                     goto done;
                 }
@@ -4433,6 +4439,10 @@ restart_frame:
                     out.kind = TURBOWASM_VALUE_EXTERNREF;
                     out.as.externref.is_null = true;
                     out.as.externref.token = 0u;
+                } else if (reference_type.carrier == 0x69u) {
+                    out.kind = TURBOWASM_VALUE_EXNREF;
+                    out.as.exnref.is_null = true;
+                    out.as.exnref.exception = NULL;
                 } else {
                     status = TURBOWASM_UNSUPPORTED;
                     goto done;
@@ -4459,6 +4469,9 @@ restart_frame:
                 } else if (reference.kind == TURBOWASM_VALUE_EXTERNREF) {
                     out.as.i32 =
                         reference.as.externref.is_null ? 1 : 0;
+                } else if (reference.kind == TURBOWASM_VALUE_EXNREF) {
+                    out.as.i32 =
+                        reference.as.exnref.is_null ? 1 : 0;
                 } else {
                     status = TURBOWASM_TYPE_MISMATCH;
                     goto done;
