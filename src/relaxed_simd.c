@@ -48,6 +48,74 @@ static int16_t clamp_i16(int32_t value) {
     return (int16_t)value;
 }
 
+static int32_t relaxed_trunc_s32(double value) {
+    if (isnan(value))
+        return 0;
+    if (value <= -2147483648.0)
+        return INT32_MIN;
+    if (value >= 2147483648.0)
+        return INT32_MAX;
+    return (int32_t)trunc(value);
+}
+
+static uint32_t relaxed_trunc_u32(double value) {
+    if (isnan(value) || value <= 0.0)
+        return 0u;
+    if (value >= 4294967296.0)
+        return UINT32_MAX;
+    return (uint32_t)trunc(value);
+}
+
+static bool relaxed_trunc_f32x4(
+    salts_v128 *out,
+    const salts_v128 *value,
+    bool is_signed) {
+    uint8_t source[16];
+    uint8_t result[16];
+    size_t lane;
+
+    salts_simd_v128_store(source, value);
+    for (lane = 0u; lane < 4u; ++lane) {
+        uint32_t bits = read_u32_le(source + lane * 4u);
+        float input;
+
+        memcpy(&input, &bits, sizeof(input));
+        write_u32_le(
+            result + lane * 4u,
+            is_signed
+                ? (uint32_t)relaxed_trunc_s32((double)input)
+                : relaxed_trunc_u32((double)input));
+    }
+
+    salts_simd_v128_load(out, result);
+    return true;
+}
+
+static bool relaxed_trunc_f64x2_zero(
+    salts_v128 *out,
+    const salts_v128 *value,
+    bool is_signed) {
+    uint8_t source[16];
+    uint8_t result[16] = {0};
+    size_t lane;
+
+    salts_simd_v128_store(source, value);
+    for (lane = 0u; lane < 2u; ++lane) {
+        uint64_t bits = read_u64_le(source + lane * 8u);
+        double input;
+
+        memcpy(&input, &bits, sizeof(input));
+        write_u32_le(
+            result + lane * 4u,
+            is_signed
+                ? (uint32_t)relaxed_trunc_s32(input)
+                : relaxed_trunc_u32(input));
+    }
+
+    salts_simd_v128_load(out, result);
+    return true;
+}
+
 static bool relaxed_minmax_f32(
     salts_v128 *out,
     const salts_v128 *a,
@@ -266,33 +334,13 @@ bool turbowasm_relaxed_simd_execute(
                    salts_simd_swizzle_bytes(out, a, b);
 
         case 0x101u:
-            return salts_simd_convert(
-                &cmeta_vector_i32x4,
-                &cmeta_vector_f32x4,
-                SALTS_SIMD_CONVERT_TRUNC_SAT,
-                SALTS_SIMD_LANES_FULL,
-                out, a);
+            return relaxed_trunc_f32x4(out, a, true);
         case 0x102u:
-            return salts_simd_convert(
-                &cmeta_vector_u32x4,
-                &cmeta_vector_f32x4,
-                SALTS_SIMD_CONVERT_TRUNC_SAT,
-                SALTS_SIMD_LANES_FULL,
-                out, a);
+            return relaxed_trunc_f32x4(out, a, false);
         case 0x103u:
-            return salts_simd_convert(
-                &cmeta_vector_i32x4,
-                &cmeta_vector_f64x2,
-                SALTS_SIMD_CONVERT_TRUNC_SAT,
-                SALTS_SIMD_LANES_LOW_ZERO,
-                out, a);
+            return relaxed_trunc_f64x2_zero(out, a, true);
         case 0x104u:
-            return salts_simd_convert(
-                &cmeta_vector_u32x4,
-                &cmeta_vector_f64x2,
-                SALTS_SIMD_CONVERT_TRUNC_SAT,
-                SALTS_SIMD_LANES_LOW_ZERO,
-                out, a);
+            return relaxed_trunc_f64x2_zero(out, a, false);
 
         case 0x105u:
             return b != NULL && c != NULL &&
