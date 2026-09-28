@@ -3855,6 +3855,18 @@ turbowasm_instance *turbowasm_host_call_instance(
     return &impl->caller;
 }
 
+bool turbowasm_host_call_can_wait(
+    const turbowasm_host_call *call) {
+    const turbowasm_host_call_impl *impl;
+
+    if (call == NULL || call->impl == NULL)
+        return false;
+
+    impl = (const turbowasm_host_call_impl *)call->impl;
+    return impl->execution != NULL &&
+           impl->execution->host_wait != NULL;
+}
+
 turbowasm_status turbowasm_host_call_wait(
     turbowasm_host_call *call,
     uintptr_t operation_token,
