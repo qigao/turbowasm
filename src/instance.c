@@ -1305,6 +1305,261 @@ static bool turbowasm_f64_bits_is_nan(uint64_t bits) {
            (bits & UINT64_C(0x000fffffffffffff)) != 0u;
 }
 
+static float turbowasm_f32_from_bits(uint32_t bits) {
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static double turbowasm_f64_from_bits(uint64_t bits) {
+    double value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static uint32_t turbowasm_f32_to_bits(float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+static uint64_t turbowasm_f64_to_bits(double value) {
+    uint64_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+static float turbowasm_f32_quiet_nan(float value) {
+    return turbowasm_f32_from_bits(
+        turbowasm_f32_to_bits(value) | UINT32_C(0x7fc00000));
+}
+
+static double turbowasm_f64_quiet_nan(double value) {
+    return turbowasm_f64_from_bits(
+        turbowasm_f64_to_bits(value) |
+        UINT64_C(0x7ff8000000000000));
+}
+
+static float turbowasm_f32_nearest(float value) {
+    uint32_t bits = turbowasm_f32_to_bits(value);
+    float lower;
+    float upper;
+    float down_distance;
+    float up_distance;
+    float result;
+    int64_t lower_integer;
+
+    if (turbowasm_f32_bits_is_nan(bits))
+        return turbowasm_f32_quiet_nan(value);
+    if ((bits & UINT32_C(0x7fffffff)) ==
+        UINT32_C(0x7f800000))
+        return value;
+    if (value == 0.0f)
+        return value;
+
+    lower = floorf(value);
+    if (lower == value)
+        return value;
+    upper = ceilf(value);
+    down_distance = value - lower;
+    up_distance = upper - value;
+    if (down_distance < up_distance) {
+        result = lower;
+    } else if (up_distance < down_distance) {
+        result = upper;
+    } else {
+        lower_integer = (int64_t)lower;
+        result = (lower_integer & 1) == 0 ? lower : upper;
+    }
+
+    if (result == 0.0f &&
+        (bits & UINT32_C(0x80000000)) != 0u)
+        return turbowasm_f32_from_bits(UINT32_C(0x80000000));
+    return result;
+}
+
+static double turbowasm_f64_nearest(double value) {
+    uint64_t bits = turbowasm_f64_to_bits(value);
+    double lower;
+    double upper;
+    double down_distance;
+    double up_distance;
+    double result;
+    int64_t lower_integer;
+
+    if (turbowasm_f64_bits_is_nan(bits))
+        return turbowasm_f64_quiet_nan(value);
+    if ((bits & UINT64_C(0x7fffffffffffffff)) ==
+        UINT64_C(0x7ff0000000000000))
+        return value;
+    if (value == 0.0)
+        return value;
+
+    lower = floor(value);
+    if (lower == value)
+        return value;
+    upper = ceil(value);
+    down_distance = value - lower;
+    up_distance = upper - value;
+    if (down_distance < up_distance) {
+        result = lower;
+    } else if (up_distance < down_distance) {
+        result = upper;
+    } else {
+        lower_integer = (int64_t)lower;
+        result = (lower_integer & 1) == 0 ? lower : upper;
+    }
+
+    if (result == 0.0 &&
+        (bits & UINT64_C(0x8000000000000000)) != 0u)
+        return turbowasm_f64_from_bits(
+            UINT64_C(0x8000000000000000));
+    return result;
+}
+
+static turbowasm_status turbowasm_exec_f32_unary(
+    uint8_t opcode,
+    turbowasm_value_stack *stack) {
+    turbowasm_value in;
+    turbowasm_value out = {0};
+    turbowasm_status status;
+    uint32_t bits;
+    float result;
+
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_F32, &in);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    bits = turbowasm_f32_to_bits(in.as.f32);
+    out.kind = TURBOWASM_VALUE_F32;
+
+    if (opcode == 0x8bu) {
+        out.as.f32 = turbowasm_f32_from_bits(
+            bits & UINT32_C(0x7fffffff));
+        return turbowasm_stack_push(stack, out);
+    }
+    if (opcode == 0x8cu) {
+        out.as.f32 = turbowasm_f32_from_bits(
+            bits ^ UINT32_C(0x80000000));
+        return turbowasm_stack_push(stack, out);
+    }
+    if (turbowasm_f32_bits_is_nan(bits)) {
+        out.as.f32 = turbowasm_f32_quiet_nan(in.as.f32);
+        return turbowasm_stack_push(stack, out);
+    }
+    if (in.as.f32 == 0.0f) {
+        out.as.f32 = in.as.f32;
+        return turbowasm_stack_push(stack, out);
+    }
+
+    switch (opcode) {
+        case 0x8du:
+            result = ceilf(in.as.f32);
+            break;
+        case 0x8eu:
+            result = floorf(in.as.f32);
+            break;
+        case 0x8fu:
+            result = truncf(in.as.f32);
+            break;
+        case 0x90u:
+            result = turbowasm_f32_nearest(in.as.f32);
+            break;
+        case 0x91u:
+            if (in.as.f32 < 0.0f) {
+                result = turbowasm_f32_from_bits(
+                    UINT32_C(0x7fc00000));
+            } else {
+                result = sqrtf(in.as.f32);
+            }
+            break;
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+
+    if (result == 0.0f &&
+        (bits & UINT32_C(0x80000000)) != 0u &&
+        (opcode == 0x8du || opcode == 0x8fu ||
+         opcode == 0x90u || opcode == 0x91u))
+        result = turbowasm_f32_from_bits(UINT32_C(0x80000000));
+
+    out.as.f32 = result;
+    return turbowasm_stack_push(stack, out);
+}
+
+static turbowasm_status turbowasm_exec_f64_unary(
+    uint8_t opcode,
+    turbowasm_value_stack *stack) {
+    turbowasm_value in;
+    turbowasm_value out = {0};
+    turbowasm_status status;
+    uint64_t bits;
+    double result;
+
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_F64, &in);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    bits = turbowasm_f64_to_bits(in.as.f64);
+    out.kind = TURBOWASM_VALUE_F64;
+
+    if (opcode == 0x99u) {
+        out.as.f64 = turbowasm_f64_from_bits(
+            bits & UINT64_C(0x7fffffffffffffff));
+        return turbowasm_stack_push(stack, out);
+    }
+    if (opcode == 0x9au) {
+        out.as.f64 = turbowasm_f64_from_bits(
+            bits ^ UINT64_C(0x8000000000000000));
+        return turbowasm_stack_push(stack, out);
+    }
+    if (turbowasm_f64_bits_is_nan(bits)) {
+        out.as.f64 = turbowasm_f64_quiet_nan(in.as.f64);
+        return turbowasm_stack_push(stack, out);
+    }
+    if (in.as.f64 == 0.0) {
+        out.as.f64 = in.as.f64;
+        return turbowasm_stack_push(stack, out);
+    }
+
+    switch (opcode) {
+        case 0x9bu:
+            result = ceil(in.as.f64);
+            break;
+        case 0x9cu:
+            result = floor(in.as.f64);
+            break;
+        case 0x9du:
+            result = trunc(in.as.f64);
+            break;
+        case 0x9eu:
+            result = turbowasm_f64_nearest(in.as.f64);
+            break;
+        case 0x9fu:
+            if (in.as.f64 < 0.0) {
+                result = turbowasm_f64_from_bits(
+                    UINT64_C(0x7ff8000000000000));
+            } else {
+                result = sqrt(in.as.f64);
+            }
+            break;
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+
+    if (result == 0.0 &&
+        (bits & UINT64_C(0x8000000000000000)) != 0u &&
+        (opcode == 0x9bu || opcode == 0x9du ||
+         opcode == 0x9eu || opcode == 0x9fu))
+        result = turbowasm_f64_from_bits(
+            UINT64_C(0x8000000000000000));
+
+    out.as.f64 = result;
+    return turbowasm_stack_push(stack, out);
+}
+
 static float turbowasm_f32_minmax(float left,
                                   float right,
                                   bool maximum) {
@@ -3757,9 +4012,23 @@ static turbowasm_status turbowasm_exec_function(
                 if (status != TURBOWASM_OK) goto done;
                 break;
 
+            case 0x8bu: case 0x8cu: case 0x8du:
+            case 0x8eu: case 0x8fu: case 0x90u: case 0x91u:
+                status = turbowasm_exec_f32_unary(
+                    opcode, &stack);
+                if (status != TURBOWASM_OK) goto done;
+                break;
+
             case 0x92u: case 0x93u: case 0x94u: case 0x95u:
             case 0x96u: case 0x97u:
                 status = turbowasm_exec_f32_binary(
+                    opcode, &stack);
+                if (status != TURBOWASM_OK) goto done;
+                break;
+
+            case 0x99u: case 0x9au: case 0x9bu:
+            case 0x9cu: case 0x9du: case 0x9eu: case 0x9fu:
+                status = turbowasm_exec_f64_unary(
                     opcode, &stack);
                 if (status != TURBOWASM_OK) goto done;
                 break;
