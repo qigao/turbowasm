@@ -5111,12 +5111,31 @@ turbowasm_status turbowasm_jit_direct_call(
         context->depth + 1u);
 }
 
+static void turbowasm_instance_exception_destroy_all(
+    turbowasm_instance_impl *impl) {
+    turbowasm_exception *exception;
+
+    if (impl == NULL)
+        return;
+
+    exception = impl->exceptions;
+    while (exception != NULL) {
+        turbowasm_exception *next = exception->next;
+        free(exception->payload);
+        free(exception);
+        exception = next;
+    }
+    impl->exceptions = NULL;
+    impl->pending_exception = NULL;
+}
+
 static void turbowasm_instance_dispose_unpublished(
     turbowasm_instance_impl *impl) {
     if (impl == NULL)
         return;
 
     turbowasm_jit_instance_detach_backend(impl);
+    turbowasm_instance_exception_destroy_all(impl);
     turbowasm_instance_state_destroy(impl);
     free(impl->linked_functions);
     free(impl->linked_globals);
@@ -5227,6 +5246,7 @@ void turbowasm_instance_destroy(turbowasm_instance *instance) {
         return;
     impl = (turbowasm_instance_impl *)instance->impl;
     turbowasm_jit_instance_detach_backend(impl);
+    turbowasm_instance_exception_destroy_all(impl);
     turbowasm_instance_state_destroy(impl);
     free(impl->linked_functions);
     impl->linked_functions = NULL;
