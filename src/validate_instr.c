@@ -19,7 +19,7 @@ enum {
 };
 
 typedef struct turbowasm_type_stack {
-    uint8_t *values;
+    turbowasm_validation_value_type *values;
     uint32_t size;
     uint32_t capacity;
     uint32_t floor;
@@ -39,9 +39,9 @@ typedef struct turbowasm_control_frame {
     uint32_t parent_floor;
     bool parent_unreachable;
     bool else_seen;
-    uint8_t *start_types;
+    turbowasm_validation_value_type *start_types;
     uint32_t start_count;
-    uint8_t *end_types;
+    turbowasm_validation_value_type *end_types;
     uint32_t end_count;
     uint32_t annotation_index;
 } turbowasm_control_frame;
@@ -61,15 +61,20 @@ static bool turbowasm_instr_valtype(uint8_t type) {
 
 
 static bool turbowasm_types_equal(
-    const uint8_t *left,
+    const turbowasm_validation_value_type *left,
     uint32_t left_count,
-    const uint8_t *right,
+    const turbowasm_validation_value_type *right,
     uint32_t right_count) {
+    uint32_t index;
+
     if (left_count != right_count)
         return false;
-    if (left_count == 0u)
-        return true;
-    return memcmp(left, right, (size_t)left_count) == 0;
+    for (index = 0u; index < left_count; ++index) {
+        if (!turbowasm_validation_value_type_equal(
+                &left[index], &right[index]))
+            return false;
+    }
+    return true;
 }
 
 static bool turbowasm_control_reserve(
@@ -106,18 +111,19 @@ static bool turbowasm_control_reserve(
 }
 
 static bool turbowasm_copy_types(
-    const uint8_t *source,
+    const turbowasm_validation_value_type *source,
     uint32_t count,
-    uint8_t **out) {
-    uint8_t *copy = NULL;
+    turbowasm_validation_value_type **out) {
+    turbowasm_validation_value_type *copy = NULL;
 
     if (out == NULL)
         return false;
     if (count != 0u) {
-        copy = (uint8_t *)malloc((size_t)count);
+        copy = (turbowasm_validation_value_type *)malloc(
+            (size_t)count * sizeof(*copy));
         if (copy == NULL)
             return false;
-        memcpy(copy, source, (size_t)count);
+        memcpy(copy, source, (size_t)count * sizeof(*copy));
     }
     *out = copy;
     return true;
@@ -163,7 +169,7 @@ static bool turbowasm_stack_reserve(
     turbowasm_type_stack *stack,
     uint32_t required) {
     uint32_t next;
-    uint8_t *grown;
+    turbowasm_validation_value_type *grown;
 
     if (required <= stack->capacity)
         return true;
@@ -177,7 +183,10 @@ static bool turbowasm_stack_reserve(
         next *= 2u;
     }
 
-    grown = (uint8_t *)realloc(stack->values, (size_t)next);
+    if ((uint64_t)next * sizeof(*grown) > (uint64_t)SIZE_MAX)
+        return false;
+    grown = (turbowasm_validation_value_type *)realloc(
+        stack->values, (size_t)next * sizeof(*grown));
     if (grown == NULL)
         return false;
 
@@ -186,10 +195,10 @@ static bool turbowasm_stack_reserve(
     return true;
 }
 
-static turbowasm_status turbowasm_stack_push(
+static turbowasm_status turbowasm_stack_push_semantic(
     turbowasm_type_stack *stack,
-    uint8_t type) {
-    if (stack == NULL || !turbowasm_instr_valtype(type))
+    turbowasm_validation_value_type type) {
+    if (stack == NULL || !turbowasm_instr_valtype(type.carrier))
         return TURBOWASM_INVALID_ARGUMENT;
     if (stack->size == UINT32_MAX)
         return TURBOWASM_OUT_OF_MEMORY;
@@ -199,9 +208,16 @@ static turbowasm_status turbowasm_stack_push(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status turbowasm_stack_pop_any(
+static turbowasm_status turbowasm_stack_push(
     turbowasm_type_stack *stack,
-    uint8_t *out_type) {
+    uint8_t type) {
+    return turbowasm_stack_push_semantic(
+        stack, turbowasm_validation_value_type_legacy(type));
+}
+
+static turbowasm_status turbowasm_stack_pop_any_semantic(
+    turbowasm_type_stack *stack,
+    turbowasm_validation_value_type *out_type) {
     if (stack == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (stack->size < stack->floor)
@@ -210,7 +226,7 @@ static turbowasm_status turbowasm_stack_pop_any(
         if (!stack->unreachable)
             return TURBOWASM_MALFORMED_MODULE;
         if (out_type != NULL)
-            *out_type = TW_ANY;
+            *out_type = turbowasm_validation_value_type_legacy(TW_ANY);
         return TURBOWASM_OK;
     }
 
@@ -220,19 +236,43 @@ static turbowasm_status turbowasm_stack_pop_any(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status turbowasm_stack_pop_any(
+    turbowasm_type_stack *stack,
+    uint8_t *out_type) {
+    turbowasm_validation_value_type actual;
+    turbowasm_status status = turbowasm_stack_pop_any_semantic(
+        stack, &actual);
+
+    if (status == TURBOWASM_OK && out_type != NULL)
+        *out_type = actual.carrier;
+    return status;
+}
+
+static turbowasm_status turbowasm_stack_pop_semantic(
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_value_type *expected) {
+    turbowasm_validation_value_type actual;
+    turbowasm_status status;
+
+    if (expected == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = turbowasm_stack_pop_any_semantic(stack, &actual);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (actual.carrier == TW_ANY)
+        return TURBOWASM_OK;
+    return turbowasm_validation_value_type_equal(&actual, expected)
+        ? TURBOWASM_OK
+        : TURBOWASM_MALFORMED_MODULE;
+}
+
 static turbowasm_status turbowasm_stack_pop(
     turbowasm_type_stack *stack,
     uint8_t expected) {
-    uint8_t actual;
-    turbowasm_status status = turbowasm_stack_pop_any(
-        stack, &actual);
-    if (status != TURBOWASM_OK)
-        return status;
-    if (actual == TW_ANY)
-        return TURBOWASM_OK;
-    return actual == expected
-        ? TURBOWASM_OK
-        : TURBOWASM_MALFORMED_MODULE;
+    turbowasm_validation_value_type type =
+        turbowasm_validation_value_type_legacy(expected);
+    return turbowasm_stack_pop_semantic(stack, &type);
 }
 
 static turbowasm_status turbowasm_stack_unary(
@@ -264,8 +304,8 @@ static turbowasm_status turbowasm_stack_push_results(
     uint32_t index;
 
     for (index = 0u; index < type->result_count; ++index) {
-        turbowasm_status status = turbowasm_stack_push(
-            stack, type->results[index]);
+        turbowasm_status status = turbowasm_stack_push_semantic(
+            stack, type->result_semantics[index]);
         if (status != TURBOWASM_OK)
             return status;
     }
@@ -280,8 +320,8 @@ static turbowasm_status turbowasm_stack_pop_params(
     while (index != 0u) {
         turbowasm_status status;
         --index;
-        status = turbowasm_stack_pop(
-            stack, type->params[index]);
+        status = turbowasm_stack_pop_semantic(
+            stack, &type->param_semantics[index]);
         if (status != TURBOWASM_OK)
             return status;
     }
@@ -296,8 +336,8 @@ static turbowasm_status turbowasm_pop_results(
     while (index != 0u) {
         turbowasm_status status;
         --index;
-        status = turbowasm_stack_pop(
-            stack, type->results[index]);
+        status = turbowasm_stack_pop_semantic(
+            stack, &type->result_semantics[index]);
         if (status != TURBOWASM_OK)
             return status;
     }
@@ -317,24 +357,24 @@ static turbowasm_status turbowasm_validate_result_stack(
 
 
 typedef struct turbowasm_block_signature {
-    const uint8_t *start_types;
+    const turbowasm_validation_value_type *start_types;
     uint32_t start_count;
-    const uint8_t *end_types;
+    const turbowasm_validation_value_type *end_types;
     uint32_t end_count;
     uint32_t type_index;
-    uint8_t inline_end;
+    turbowasm_validation_value_type inline_end;
 } turbowasm_block_signature;
 
 static turbowasm_status turbowasm_stack_pop_types(
     turbowasm_type_stack *stack,
-    const uint8_t *types,
+    const turbowasm_validation_value_type *types,
     uint32_t count) {
     uint32_t index = count;
 
     while (index != 0u) {
         turbowasm_status status;
         --index;
-        status = turbowasm_stack_pop(stack, types[index]);
+        status = turbowasm_stack_pop_semantic(stack, &types[index]);
         if (status != TURBOWASM_OK)
             return status;
     }
@@ -343,12 +383,12 @@ static turbowasm_status turbowasm_stack_pop_types(
 
 static turbowasm_status turbowasm_stack_push_types(
     turbowasm_type_stack *stack,
-    const uint8_t *types,
+    const turbowasm_validation_value_type *types,
     uint32_t count) {
     uint32_t index;
 
     for (index = 0u; index < count; ++index) {
-        turbowasm_status status = turbowasm_stack_push(
+        turbowasm_status status = turbowasm_stack_push_semantic(
             stack, types[index]);
         if (status != TURBOWASM_OK)
             return status;
@@ -374,7 +414,8 @@ static turbowasm_status turbowasm_read_block_signature(
         return TURBOWASM_OK;
 
     if (turbowasm_instr_valtype(first)) {
-        signature->inline_end = first;
+        signature->inline_end =
+            turbowasm_validation_value_type_legacy(first);
         signature->end_types = &signature->inline_end;
         signature->end_count = 1u;
         return TURBOWASM_OK;
@@ -415,9 +456,9 @@ static turbowasm_status turbowasm_read_block_signature(
         if (type == NULL || !type->defined)
             return TURBOWASM_MALFORMED_MODULE;
 
-        signature->start_types = type->params;
+        signature->start_types = type->param_semantics;
         signature->start_count = type->param_count;
-        signature->end_types = type->results;
+        signature->end_types = type->result_semantics;
         signature->end_count = type->result_count;
         signature->type_index = (uint32_t)signed_value;
         return TURBOWASM_OK;
@@ -428,9 +469,9 @@ static turbowasm_status turbowasm_control_push(
     turbowasm_type_stack *stack,
     turbowasm_control_stack *controls,
     turbowasm_control_kind kind,
-    const uint8_t *start_types,
+    const turbowasm_validation_value_type *start_types,
     uint32_t start_count,
-    const uint8_t *end_types,
+    const turbowasm_validation_value_type *end_types,
     uint32_t end_count,
     uint32_t annotation_index) {
     turbowasm_control_frame frame = {0};
@@ -534,7 +575,7 @@ static turbowasm_status turbowasm_control_end(
     uint32_t parent_floor;
     bool parent_unreachable;
     uint32_t end_count;
-    uint8_t *end_types;
+    turbowasm_validation_value_type *end_types;
 
     if (frame == NULL || frame->kind == TURBOWASM_CTRL_FUNCTION)
         return TURBOWASM_MALFORMED_MODULE;
@@ -576,7 +617,7 @@ static turbowasm_status turbowasm_control_branch(
     bool conditional) {
     const turbowasm_control_frame *target =
         turbowasm_control_target(controls, depth);
-    const uint8_t *types;
+    const turbowasm_validation_value_type *types;
     uint32_t count;
     turbowasm_status status;
 
@@ -827,7 +868,7 @@ static turbowasm_status turbowasm_validate_conversion(
 
 static void turbowasm_control_label_types(
     const turbowasm_control_frame *target,
-    const uint8_t **out_types,
+    const turbowasm_validation_value_type **out_types,
     uint32_t *out_count) {
     if (target->kind == TURBOWASM_CTRL_LOOP) {
         *out_types = target->start_types;
@@ -844,7 +885,7 @@ static turbowasm_status turbowasm_validate_br_table(
     const turbowasm_control_stack *controls) {
     uint32_t count;
     uint32_t index;
-    const uint8_t *label_types = NULL;
+    const turbowasm_validation_value_type *label_types = NULL;
     uint32_t label_count = 0u;
     bool have_label_types = false;
     turbowasm_status status;
@@ -855,7 +896,7 @@ static turbowasm_status turbowasm_validate_br_table(
     for (index = 0u; index < count; ++index) {
         uint32_t depth;
         const turbowasm_control_frame *target;
-        const uint8_t *types;
+        const turbowasm_validation_value_type *types;
         uint32_t type_count;
 
         if (!turbowasm_reader_uleb32(body, &depth))
@@ -879,7 +920,7 @@ static turbowasm_status turbowasm_validate_br_table(
     {
         uint32_t default_depth;
         const turbowasm_control_frame *target;
-        const uint8_t *types;
+        const turbowasm_validation_value_type *types;
         uint32_t type_count;
 
         if (!turbowasm_reader_uleb32(body, &default_depth))
@@ -1295,7 +1336,7 @@ turbowasm_status turbowasm_validate_function_body(
     result = turbowasm_control_push(
         &stack, &controls, TURBOWASM_CTRL_FUNCTION,
         NULL, 0u,
-        function_type->results, function_type->result_count,
+        function_type->result_semantics, function_type->result_count,
         UINT32_MAX);
     if (result != TURBOWASM_OK)
         goto done;
@@ -1363,7 +1404,8 @@ turbowasm_status turbowasm_validate_function_body(
                 annotation.body_offset =
                     (uint32_t)(body->cursor - code_start);
                 annotation.type_index = signature.type_index;
-                annotation.inline_result_type = signature.inline_end;
+                annotation.inline_result_type =
+                    signature.inline_end.carrier;
 
                 if (!turbowasm_validation_function_append_control(
                         function_metadata,
