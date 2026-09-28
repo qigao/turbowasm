@@ -551,10 +551,65 @@ static void test_two_instances_share_immutable_module(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_tail_call_replaces_current_frame(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: (i32) -> i32 */
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+
+        0x03, 0x02,
+        0x01, 0x00,
+
+        0x0a, 0x14,
+        0x01,
+        0x12,
+        0x00,
+        /* if n == 0 return 0; else return_call self(n - 1) */
+        0x20, 0x00,
+        0x45,
+        0x04, 0x7f,
+          0x41, 0x00,
+        0x05,
+          0x20, 0x00,
+          0x41, 0x01,
+          0x6b,
+          0x12, 0x00,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value arg = i32_value(4096);
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(load_module(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+
+    assert(turbowasm_instance_invoke(
+               &instance, 0u,
+               &arg, 1u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(trap == TURBOWASM_TRAP_NONE);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_I32);
+    assert(result.as.i32 == 0);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
     test_typed_arguments_and_arithmetic();
     test_locals_are_zero_initialized();
     test_nested_local_direct_call();
+    test_tail_call_replaces_current_frame();
     test_externref_arguments_null_and_is_null();
     test_typed_select_transports_externref();
     test_return_discards_lower_temporaries();
