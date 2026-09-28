@@ -188,7 +188,27 @@ static void test_global_get_rejects_forward_local_global(void) {
     assert(module.impl == NULL);
 }
 
-static void test_extended_const_remains_unsupported(void) {
+static void test_extended_const_i32_arithmetic(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x06, 0x0f,
+        0x01, 0x7f, 0x00,
+        0x41, 0x14,
+        0x41, 0x02,
+        0x6c,
+        0x41, 0x02,
+        0x6b,
+        0x41, 0x04,
+        0x6a,
+        0x0b
+    };
+    turbowasm_module module = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_extended_const_multiple_values_rejected(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
         0x06, 0x08,
@@ -197,7 +217,8 @@ static void test_extended_const_remains_unsupported(void) {
     };
     turbowasm_module module = {0};
 
-    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_UNSUPPORTED);
+    assert(load(bytes, sizeof(bytes), &module) ==
+           TURBOWASM_MALFORMED_MODULE);
     assert(module.impl == NULL);
 }
 
@@ -304,7 +325,8 @@ int main(void) {
     test_global_get_accepts_prior_local_immutable();
     test_global_get_rejects_prior_local_mutable();
     test_global_get_rejects_forward_local_global();
-    test_extended_const_remains_unsupported();
+    test_extended_const_i32_arithmetic();
+    test_extended_const_multiple_values_rejected();
     test_sleb32_overflow_rejected();
     test_active_data_with_count();
     test_passive_data_without_memory();

@@ -93,6 +93,40 @@ static void test_globals_are_instance_local(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_extended_const_global_evaluates(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7f,
+        0x03, 0x02,
+        0x01, 0x00,
+        0x06, 0x0f,
+        0x01, 0x7f, 0x00,
+        0x41, 0x14,
+        0x41, 0x02,
+        0x6c,
+        0x41, 0x02,
+        0x6b,
+        0x41, 0x04,
+        0x6a,
+        0x0b,
+        0x0a, 0x06,
+        0x01, 0x04,
+        0x00, 0x23, 0x00, 0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+    assert(invoke_i32(&instance, 0u, NULL, 0u) == 42);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 static void test_active_data_and_memory_are_instance_local(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -290,6 +324,7 @@ static void test_start_runs_after_initialization(void) {
 
 int main(void) {
     test_globals_are_instance_local();
+    test_extended_const_global_evaluates();
     test_active_data_and_memory_are_instance_local();
     test_memory_out_of_bounds_traps();
     test_memory_grow_returns_minus_one_on_limit();
