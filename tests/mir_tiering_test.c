@@ -113,9 +113,9 @@ int main(void) {
     turbowasm_module_destroy(&module);
 
     /*
-     * Tail-call functions are not MIR-eligible yet. They must become
-     * interpreter-only per function rather than being miscompiled as an
-     * ordinary call followed by return.
+     * A terminal straight-line direct tail call is MIR-eligible. Generated
+     * code requests the transfer, returns, and the dispatcher trampolines to
+     * the target at the same logical depth.
      */
     {
         static const uint8_t tail_bytes[] = {
@@ -133,6 +133,8 @@ int main(void) {
         turbowasm_instance tail_instance = {0};
         turbowasm_instance_impl *tail_impl;
         turbowasm_jit_backend tail_backend = {0};
+        void *caller_compiled;
+        void *target_compiled;
 
         assert(turbowasm_module_load_borrowed(
                    &tail_module,
@@ -151,10 +153,131 @@ int main(void) {
 
         assert(invoke_i32_at(&tail_instance, 1u) == 7);
         assert(tail_impl->jit_functions[1].state ==
-               TURBOWASM_JIT_INTERPRET_ONLY);
-        assert(tail_impl->jit_functions[1].compiled.impl == NULL);
+               TURBOWASM_JIT_COMPILED);
+        assert(tail_impl->jit_functions[1].compiled.impl != NULL);
         assert(tail_impl->jit_functions[0].state ==
-               TURBOWASM_JIT_INTERPRET);
+               TURBOWASM_JIT_COMPILED);
+        assert(tail_impl->jit_functions[0].compiled.impl != NULL);
+        caller_compiled = tail_impl->jit_functions[1].compiled.impl;
+        target_compiled = tail_impl->jit_functions[0].compiled.impl;
+
+        assert(invoke_i32_at(&tail_instance, 1u) == 7);
+        assert(tail_impl->jit_functions[1].compiled.impl ==
+               caller_compiled);
+        assert(tail_impl->jit_functions[0].compiled.impl ==
+               target_compiled);
+
+        turbowasm_instance_destroy(&tail_instance);
+        turbowasm_module_destroy(&tail_module);
+    }
+
+    /*
+     * Deep compiled self-tail recursion must be bounded by execution control,
+     * not by TurboWasm's ordinary call-depth guard or the native C stack.
+     */
+    {
+        static const uint8_t recursive_tail_bytes[] = {
+            WASM_HEADER,
+            0x01, 0x06,
+            0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+            0x03, 0x02,
+            0x01, 0x00,
+            0x0a, 0x08,
+            0x01,
+            0x06, 0x00,
+                  0x20, 0x00,
+                  0x12, 0x00,
+                  0x0b
+        };
+        turbowasm_module tail_module = {0};
+        turbowasm_instance tail_instance = {0};
+        turbowasm_instance_impl *tail_impl;
+        turbowasm_jit_backend tail_backend = {0};
+        turbowasm_execution_options tail_options = {0};
+        turbowasm_value argument = {0};
+        turbowasm_value tail_result = {0};
+        size_t tail_result_count = 0u;
+        turbowasm_trap tail_trap = TURBOWASM_TRAP_NONE;
+
+        argument.kind = TURBOWASM_VALUE_I32;
+        argument.as.i32 = 42;
+
+        assert(turbowasm_module_load_borrowed(
+                   &tail_module,
+                   recursive_tail_bytes,
+                   sizeof(recursive_tail_bytes)) == TURBOWASM_OK);
+        assert(turbowasm_instance_create(
+                   &tail_instance,
+                   &tail_module) == TURBOWASM_OK);
+        tail_impl = (turbowasm_instance_impl *)tail_instance.impl;
+        assert(tail_impl != NULL);
+
+        assert(turbowasm_mir_backend_create(
+                   &tail_backend) == TURBOWASM_OK);
+        assert(turbowasm_jit_instance_attach_backend(
+                   tail_impl, &tail_backend, 1u) == TURBOWASM_OK);
+
+        tail_options.has_fuel_limit = true;
+        tail_options.fuel = 8192u;
+        assert(turbowasm_instance_invoke_with_options(
+                   &tail_instance, 0u,
+                   &argument, 1u,
+                   &tail_result, 1u,
+                   &tail_result_count,
+                   &tail_trap,
+                   &tail_options) == TURBOWASM_FUEL_EXHAUSTED);
+        assert(tail_result_count == 0u);
+        assert(tail_trap == TURBOWASM_TRAP_NONE);
+        assert(tail_impl->jit_functions[0].state ==
+               TURBOWASM_JIT_COMPILED);
+        assert(tail_impl->jit_functions[0].compiled.impl != NULL);
+
+        turbowasm_instance_destroy(&tail_instance);
+        turbowasm_module_destroy(&tail_module);
+    }
+
+    /*
+     * Structured direct tail calls remain intentionally ineligible until the
+     * structured MIR lowering can prove the same trampoline semantics.
+     */
+    {
+        static const uint8_t structured_tail_bytes[] = {
+            WASM_HEADER,
+            0x01, 0x05,
+            0x01, 0x60, 0x00, 0x01, 0x7f,
+            0x03, 0x03,
+            0x02, 0x00, 0x00,
+            0x0a, 0x13,
+            0x02,
+            0x04, 0x00, 0x41, 0x07, 0x0b,
+            0x0c, 0x00,
+                  0x41, 0x01,
+                  0x04, 0x7f,
+                    0x12, 0x00,
+                  0x05,
+                    0x41, 0x00,
+                  0x0b,
+                  0x0b
+        };
+        turbowasm_module tail_module = {0};
+        turbowasm_instance tail_instance = {0};
+        turbowasm_instance_impl *tail_impl;
+        turbowasm_jit_backend tail_backend = {0};
+
+        assert(turbowasm_module_load_borrowed(
+                   &tail_module,
+                   structured_tail_bytes,
+                   sizeof(structured_tail_bytes)) == TURBOWASM_OK);
+        assert(turbowasm_instance_create(
+                   &tail_instance,
+                   &tail_module) == TURBOWASM_OK);
+        tail_impl = (turbowasm_instance_impl *)tail_instance.impl;
+        assert(tail_impl != NULL);
+
+        assert(turbowasm_mir_backend_create(
+                   &tail_backend) == TURBOWASM_OK);
+        assert(turbowasm_jit_instance_attach_backend(
+                   tail_impl, &tail_backend, 1u) == TURBOWASM_OK);
 
         assert(invoke_i32_at(&tail_instance, 1u) == 7);
         assert(tail_impl->jit_functions[1].state ==
