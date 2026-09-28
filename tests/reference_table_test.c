@@ -186,6 +186,188 @@ static void test_ref_func_table_set_and_call_indirect(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_ref_func_table_set_and_return_call_indirect(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0 [] -> i32, type1 [] -> [] */
+        0x01, 0x08,
+        0x02,
+        0x60, 0x00, 0x01, 0x7f,
+        0x60, 0x00, 0x00,
+
+        /* functions: target, setter, indirect tail caller */
+        0x03, 0x04,
+        0x03, 0x00, 0x01, 0x00,
+
+        /* table0 funcref min=1 */
+        0x04, 0x04,
+        0x01, 0x70, 0x00, 0x01,
+
+        /* declarative element declares ref.func 0 without initializing */
+        0x09, 0x05,
+        0x01, 0x03, 0x00, 0x01, 0x00,
+
+        0x0a, 0x17,
+        0x03,
+        /* func0 -> 7 */
+        0x04, 0x00, 0x41, 0x07, 0x0b,
+        /* func1: table[0] = ref.func 0 */
+        0x08, 0x00,
+              0x41, 0x00,
+              0xd2, 0x00,
+              0x26, 0x00,
+              0x0b,
+        /* func2: return_call_indirect type0 at table[0] */
+        0x07, 0x00,
+              0x41, 0x00,
+              0x13, 0x00, 0x00,
+              0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    invoke_void(&instance, 1u);
+    assert(invoke_i32(&instance, 2u, NULL, 0u) == 7);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_return_call_indirect_preserves_null_and_bounds_traps(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: () -> i32, type1: (i32) -> i32 */
+        0x01, 0x0a,
+        0x02,
+        0x60, 0x00, 0x01, 0x7f,
+        0x60, 0x01, 0x7f, 0x01, 0x7f,
+
+        /* caller uses type1 */
+        0x03, 0x02,
+        0x01, 0x01,
+
+        /* table0 funcref min=1, initially null */
+        0x04, 0x04,
+        0x01, 0x70, 0x00, 0x01,
+
+        0x0a, 0x09,
+        0x01,
+        0x07, 0x00,
+              0x20, 0x00,
+              0x13, 0x00, 0x00,
+              0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value argument = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    argument.kind = TURBOWASM_VALUE_I32;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    argument.as.i32 = 0;
+    assert(turbowasm_instance_invoke(
+               &instance, 0u,
+               &argument, 1u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_TRAPPED);
+    assert(result_count == 0u);
+    assert(trap == TURBOWASM_TRAP_INDIRECT_CALL_NULL);
+
+    argument.as.i32 = 1;
+    result_count = 0u;
+    trap = TURBOWASM_TRAP_NONE;
+    assert(turbowasm_instance_invoke(
+               &instance, 0u,
+               &argument, 1u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_TRAPPED);
+    assert(result_count == 0u);
+    assert(trap == TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_return_call_indirect_preserves_type_mismatch_trap(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: () -> i32, type1: () -> i64, type2: () -> () */
+        0x01, 0x0c,
+        0x03,
+        0x60, 0x00, 0x01, 0x7f,
+        0x60, 0x00, 0x01, 0x7e,
+        0x60, 0x00, 0x00,
+
+        /* functions: i64 target, setter, i32 tail caller */
+        0x03, 0x04,
+        0x03, 0x01, 0x02, 0x00,
+
+        /* table0 funcref min=1 */
+        0x04, 0x04,
+        0x01, 0x70, 0x00, 0x01,
+
+        /* declarative element declares ref.func 0 */
+        0x09, 0x05,
+        0x01, 0x03, 0x00, 0x01, 0x00,
+
+        0x0a, 0x17,
+        0x03,
+        /* func0: i64.const 7 */
+        0x04, 0x00, 0x42, 0x07, 0x0b,
+        /* func1: table[0] = ref.func 0 */
+        0x08, 0x00,
+              0x41, 0x00,
+              0xd2, 0x00,
+              0x26, 0x00,
+              0x0b,
+        /* func2: return_call_indirect expecting type0 */
+        0x07, 0x00,
+              0x41, 0x00,
+              0x13, 0x00, 0x00,
+              0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    invoke_void(&instance, 1u);
+    assert(turbowasm_instance_invoke(
+               &instance, 2u,
+               NULL, 0u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_TRAPPED);
+    assert(result_count == 0u);
+    assert(trap == TURBOWASM_TRAP_INDIRECT_CALL_TYPE_MISMATCH);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 static void test_typed_funcref_br_table_meet(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -429,6 +611,9 @@ int main(void) {
     test_funcref_public_argument();
     test_table_get_out_of_bounds_traps();
     test_ref_func_table_set_and_call_indirect();
+    test_ref_func_table_set_and_return_call_indirect();
+    test_return_call_indirect_preserves_null_and_bounds_traps();
+    test_return_call_indirect_preserves_type_mismatch_trap();
     test_typed_funcref_br_table_meet();
     test_externref_table_round_trip();
     test_defined_table_initializer_executes();
