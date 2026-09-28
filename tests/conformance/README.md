@@ -137,3 +137,20 @@ sets explicitly; they are never counted as passes.
 Keeping NaN-policy work explicit lets this wave expose ordinary arithmetic,
 comparison, truncation, reinterpretation and conversion bugs without weakening
 the gate.
+
+
+## Wave 3A
+
+The next gate expands the memory engine before adding reference-heavy table
+families:
+
+- `memory.wast`, `memory_trap.wast`, `memory_redundancy.wast`;
+- `data.wast`;
+- `bulk-memory/memory_copy.wast`;
+- `bulk-memory/memory_fill.wast`;
+- `bulk-memory/memory_init.wast`.
+
+This wave intentionally stops before table/ref suites. Those carry much more
+`externref`, registration and host-linking coverage, so they remain a
+separate Wave 3B. That keeps memory validation/execution failures attributable
+to the memory engine rather than composition-layer unsupported behavior.
