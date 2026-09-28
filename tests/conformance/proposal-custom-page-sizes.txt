@@ -1,0 +1,4 @@
+# Pinned WebAssembly/custom-page-sizes i32/unshared qualification.
+custom-page-sizes.wast
+custom-page-sizes-invalid.wast
+memory_max.wast

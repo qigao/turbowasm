@@ -465,7 +465,7 @@ static turbowasm_status turbowasm_allocate_memories(
             &instance->memories[index];
         uint64_t bytes =
             (uint64_t)source->limits.minimum *
-            TURBOWASM_WASM_PAGE_SIZE;
+            source->page_size;
 
         if (source->imported) {
             if (index >= instance->linked_memory_count ||
@@ -478,6 +478,7 @@ static turbowasm_status turbowasm_allocate_memories(
 
         memory->pages = source->limits.minimum;
         memory->maximum_pages = source->limits.maximum;
+        memory->page_size = source->page_size;
         memory->has_maximum = source->limits.has_maximum;
 
         if (bytes != 0u) {
@@ -1077,7 +1078,7 @@ turbowasm_status turbowasm_instance_memory_bounds(
 
     effective = (uint64_t)address + offset;
     size = (uint64_t)memory->pages *
-           TURBOWASM_WASM_PAGE_SIZE;
+           memory->page_size;
 
     if (effective > size ||
         (uint64_t)width > size - effective)
@@ -1136,6 +1137,7 @@ turbowasm_status turbowasm_instance_memory_grow(
     uint32_t *out_previous_pages) {
     turbowasm_instance_memory *memory;
     uint64_t next_pages;
+    uint64_t maximum_pages;
     uint64_t next_bytes;
     uint64_t previous_bytes;
     uint8_t *grown;
@@ -1152,16 +1154,20 @@ turbowasm_status turbowasm_instance_memory_grow(
     *out_previous_pages = memory->pages;
 
     next_pages = (uint64_t)memory->pages + delta_pages;
-    if (next_pages > UINT32_C(65536) ||
+    maximum_pages = memory->page_size == UINT32_C(1)
+        ? UINT32_MAX
+        : (UINT64_C(1) << 32) / memory->page_size;
+    if (memory->page_size == 0u ||
+        next_pages > maximum_pages ||
         (memory->has_maximum &&
          next_pages > memory->maximum_pages)) {
         *out_previous_pages = UINT32_MAX;
         return TURBOWASM_OK;
     }
 
-    next_bytes = next_pages * TURBOWASM_WASM_PAGE_SIZE;
+    next_bytes = next_pages * memory->page_size;
     previous_bytes =
-        (uint64_t)memory->pages * TURBOWASM_WASM_PAGE_SIZE;
+        (uint64_t)memory->pages * memory->page_size;
     if (next_bytes > (uint64_t)SIZE_MAX) {
         *out_previous_pages = UINT32_MAX;
         return TURBOWASM_OK;

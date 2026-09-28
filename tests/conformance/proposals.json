@@ -12,7 +12,9 @@
     "commit": "cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0",
     "core_dir": "test/core",
     "suite": "proposal-threads.txt",
-    "wast2json_flags": ["--enable-threads"],
+    "wast2json_flags": [
+      "--enable-threads"
+    ],
     "minimum_passes": 0
   },
   "tail-call": {
@@ -38,5 +40,15 @@
     "suite": "proposal-relaxed-simd.txt",
     "wast2json_flags": [],
     "minimum_passes": 0
+  },
+  "custom-page-sizes": {
+    "repository": "https://github.com/WebAssembly/custom-page-sizes.git",
+    "commit": "d5a3275e1266bc49fb00d3e3ab99ad7e5c83313b",
+    "core_dir": "test/core/custom-page-sizes",
+    "suite": "proposal-custom-page-sizes.txt",
+    "wast2json_flags": [
+      "--enable-custom-page-sizes"
+    ],
+    "minimum_passes": 1
   }
 }
