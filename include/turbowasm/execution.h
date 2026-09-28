@@ -1,7 +1,7 @@
 #ifndef TURBOWASM_EXECUTION_H
 #define TURBOWASM_EXECUTION_H
 
-#include <turbowasm/instance.h>
+#include <turbowasm/link.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -67,6 +67,22 @@ turbowasm_execution_state turbowasm_execution_state_get(
 
 turbowasm_yield_reason turbowasm_execution_yield_reason_get(
     const turbowasm_execution *execution);
+
+/*
+ * Inspect/complete the one pending host wait.
+ *
+ * Completion only records the external terminal status; the retained callback
+ * frame continues on a later turbowasm_execution_resume(). Calling resume
+ * before completion leaves the execution yielded and does not enter Wasm.
+ */
+bool turbowasm_execution_pending_host_wait(
+    const turbowasm_execution *execution,
+    turbowasm_host_wait *out_wait);
+
+turbowasm_status turbowasm_execution_complete_host_wait(
+    turbowasm_execution *execution,
+    turbowasm_host_wait wait,
+    int status);
 
 turbowasm_status turbowasm_execution_terminal_status(
     const turbowasm_execution *execution);

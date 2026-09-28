@@ -260,6 +260,17 @@ set_target_properties(turbowasm_host_function_test PROPERTIES
 add_test(NAME turbowasm_host_function_test
          COMMAND turbowasm_host_function_test)
 
+add_executable(turbowasm_host_wait_test
+  host_wait_test.c)
+target_link_libraries(turbowasm_host_wait_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_host_wait_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_host_wait_test
+         COMMAND turbowasm_host_wait_test)
+
 
 add_executable(turbowasm_linked_table_test
   linked_table_test.c)

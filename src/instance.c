@@ -3855,6 +3855,61 @@ turbowasm_instance *turbowasm_host_call_instance(
     return &impl->caller;
 }
 
+bool turbowasm_host_call_can_wait(
+    const turbowasm_host_call *call) {
+    const turbowasm_host_call_impl *impl;
+
+    if (call == NULL || call->impl == NULL)
+        return false;
+
+    impl = (const turbowasm_host_call_impl *)call->impl;
+    return impl->execution != NULL &&
+           impl->execution->host_wait != NULL;
+}
+
+turbowasm_status turbowasm_host_call_wait(
+    turbowasm_host_call *call,
+    uintptr_t operation_token,
+    turbowasm_host_wait *out_wait,
+    int *out_status) {
+    turbowasm_host_call_impl *impl;
+
+    if (call == NULL || call->impl == NULL ||
+        out_wait == NULL || out_status == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    impl = (turbowasm_host_call_impl *)call->impl;
+    if (impl->execution == NULL ||
+        impl->execution->host_wait == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    return impl->execution->host_wait(
+        impl->execution->host_wait_context,
+        operation_token,
+        out_wait,
+        out_status);
+}
+
+turbowasm_status turbowasm_host_call_complete_wait(
+    turbowasm_host_call *call,
+    turbowasm_host_wait wait,
+    int status) {
+    turbowasm_host_call_impl *impl;
+
+    if (call == NULL || call->impl == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    impl = (turbowasm_host_call_impl *)call->impl;
+    if (impl->execution == NULL ||
+        impl->execution->host_wait_complete == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    return impl->execution->host_wait_complete(
+        impl->execution->host_wait_context,
+        wait,
+        status);
+}
+
 static turbowasm_status turbowasm_exec_host_function(
     turbowasm_instance_impl *instance,
     const turbowasm_linked_function *binding,

@@ -40,8 +40,39 @@ typedef struct turbowasm_host_call {
     void *impl;
 } turbowasm_host_call;
 
+/*
+ * Generation-checked pending host wait identity. operation_token is copied from
+ * the host adapter and remains opaque to TurboWasm; generation is Runtime-owned
+ * and prevents stale/duplicate completion from waking a later wait.
+ */
+typedef struct turbowasm_host_wait {
+    uint64_t generation;
+    uintptr_t operation_token;
+} turbowasm_host_wait;
+
 turbowasm_instance *turbowasm_host_call_instance(
     turbowasm_host_call *call);
+
+bool turbowasm_host_call_can_wait(
+    const turbowasm_host_call *call);
+
+/*
+ * Suspend the current async-capable host callback after an external operation
+ * has been accepted. This only succeeds inside a resumable execution. The same
+ * callback frame continues after the matching wait is completed and the
+ * execution is resumed. out_status receives the adapter-provided completion
+ * status.
+ */
+turbowasm_status turbowasm_host_call_wait(
+    turbowasm_host_call *call,
+    uintptr_t operation_token,
+    turbowasm_host_wait *out_wait,
+    int *out_status);
+
+turbowasm_status turbowasm_host_call_complete_wait(
+    turbowasm_host_call *call,
+    turbowasm_host_wait wait,
+    int status);
 
 typedef struct turbowasm_host_function_type {
     const turbowasm_value_kind *params;
