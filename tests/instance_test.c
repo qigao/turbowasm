@@ -234,6 +234,65 @@ static void test_externref_arguments_null_and_is_null(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_typed_select_transports_externref(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x08,
+        0x01, 0x60, 0x03, 0x6f, 0x6f, 0x7f, 0x01, 0x6f,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x0d, 0x01, 0x0b,
+        0x00,
+        0x20, 0x00,
+        0x20, 0x01,
+        0x20, 0x02,
+        0x1c, 0x01, 0x6f,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value args[3] = {{0}};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    args[0].kind = TURBOWASM_VALUE_EXTERNREF;
+    args[0].as.externref.is_null = false;
+    args[0].as.externref.token = (uintptr_t)11u;
+    args[1].kind = TURBOWASM_VALUE_EXTERNREF;
+    args[1].as.externref.is_null = false;
+    args[1].as.externref.token = (uintptr_t)22u;
+    args[2] = i32_value(1);
+
+    assert(load_module(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+
+    assert(turbowasm_instance_invoke(
+               &instance, 0u,
+               args, 3u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_EXTERNREF);
+    assert(!result.as.externref.is_null);
+    assert(result.as.externref.token == (uintptr_t)11u);
+
+    args[2] = i32_value(0);
+    result_count = 0u;
+    assert(turbowasm_instance_invoke(
+               &instance, 0u,
+               args, 3u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_EXTERNREF);
+    assert(result.as.externref.token == (uintptr_t)22u);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 static void test_return_discards_lower_temporaries(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -497,6 +556,7 @@ int main(void) {
     test_locals_are_zero_initialized();
     test_nested_local_direct_call();
     test_externref_arguments_null_and_is_null();
+    test_typed_select_transports_externref();
     test_return_discards_lower_temporaries();
     test_wrong_argument_type_rejected();
     test_result_capacity_checked_before_execution();
