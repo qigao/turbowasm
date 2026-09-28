@@ -104,6 +104,62 @@ static bool turbowasm_value_matches_type(
     return value != NULL && kind != 0 && value->kind == kind;
 }
 
+turbowasm_status turbowasm_jit_request_tail_call(
+    turbowasm_jit_invocation_context *context,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_func_type *type;
+    size_t index;
+
+    if (context == NULL || context->instance == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    context->tail_call_pending = false;
+    context->tail_argument_count = 0u;
+
+    if (argument_count > TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT ||
+        (argument_count != 0u && arguments == NULL)) {
+        context->call_status = TURBOWASM_UNSUPPORTED;
+        context->call_trap = TURBOWASM_TRAP_NONE;
+        return TURBOWASM_UNSUPPORTED;
+    }
+
+    module = turbowasm_module_impl_get(context->instance->module);
+    if (module == NULL) {
+        context->call_status = TURBOWASM_INVALID_ARGUMENT;
+        context->call_trap = TURBOWASM_TRAP_NONE;
+        return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    type = turbowasm_validation_context_function_type(
+        &module->validation, function_index);
+    if (type == NULL || !type->defined ||
+        argument_count != type->param_count) {
+        context->call_status = TURBOWASM_INVALID_ARGUMENT;
+        context->call_trap = TURBOWASM_TRAP_NONE;
+        return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    for (index = 0u; index < argument_count; ++index) {
+        if (!turbowasm_value_matches_type(
+                &arguments[index], type->params[index])) {
+            context->call_status = TURBOWASM_TYPE_MISMATCH;
+            context->call_trap = TURBOWASM_TRAP_NONE;
+            return TURBOWASM_TYPE_MISMATCH;
+        }
+        context->tail_arguments[index] = arguments[index];
+    }
+
+    context->tail_function_index = function_index;
+    context->tail_argument_count = argument_count;
+    context->tail_call_pending = true;
+    context->call_status = TURBOWASM_OK;
+    context->call_trap = TURBOWASM_TRAP_NONE;
+    return TURBOWASM_OK;
+}
+
 static bool turbowasm_zero_value(uint8_t type, turbowasm_value *out) {
     turbowasm_value_kind kind;
 
@@ -4453,11 +4509,13 @@ static turbowasm_status turbowasm_dispatch_function(
     const turbowasm_module_impl *module;
     const turbowasm_validation_function *function;
     turbowasm_jit_function_state *entry;
+    turbowasm_value tail_arguments[TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT];
     turbowasm_status status;
 
     if (instance == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
+dispatch_again:
     if (!instance->jit_backend_attached ||
         instance->jit_functions == NULL ||
         function_index >= instance->jit_function_count ||
@@ -4473,18 +4531,8 @@ static turbowasm_status turbowasm_dispatch_function(
 
     entry = &instance->jit_functions[function_index];
 
-    if (entry->state == TURBOWASM_JIT_COMPILED) {
-        turbowasm_jit_invocation_context context = {
-            instance, execution, depth,
-            TURBOWASM_OK, TURBOWASM_TRAP_NONE
-        };
-        return instance->jit_backend.invoke(
-            &entry->compiled,
-            &context,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap);
-    }
+    if (entry->state == TURBOWASM_JIT_COMPILED)
+        goto invoke_compiled;
 
     if (entry->state == TURBOWASM_JIT_INTERPRET_ONLY) {
         return turbowasm_exec_function(
@@ -4558,17 +4606,52 @@ static turbowasm_status turbowasm_dispatch_function(
     }
 
     entry->state = TURBOWASM_JIT_COMPILED;
+
+invoke_compiled:
     {
         turbowasm_jit_invocation_context context = {
             instance, execution, depth,
             TURBOWASM_OK, TURBOWASM_TRAP_NONE
         };
-        return instance->jit_backend.invoke(
+
+        status = instance->jit_backend.invoke(
             &entry->compiled,
             &context,
             arguments, argument_count,
             results, result_capacity,
             result_count, trap);
+        if (status != TURBOWASM_OK ||
+            !context.tail_call_pending)
+            return status;
+
+        if (context.tail_argument_count >
+                TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT)
+            return TURBOWASM_UNSUPPORTED;
+
+        if (context.tail_argument_count != 0u) {
+            memcpy(
+                tail_arguments,
+                context.tail_arguments,
+                context.tail_argument_count *
+                    sizeof(tail_arguments[0]));
+            arguments = tail_arguments;
+        } else {
+            arguments = NULL;
+        }
+
+        function_index = context.tail_function_index;
+        argument_count = context.tail_argument_count;
+        if (result_count != NULL)
+            *result_count = 0u;
+        if (trap != NULL)
+            *trap = TURBOWASM_TRAP_NONE;
+
+        /*
+         * Generated code has fully unwound before this jump. Re-enter at the
+         * same logical depth, so compiled tail-call chains are trampolined
+         * rather than recursively nesting native frames.
+         */
+        goto dispatch_again;
     }
 }
 
