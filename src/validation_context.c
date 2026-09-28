@@ -5,6 +5,45 @@
 #include <stdlib.h>
 #include <string.h>
 
+turbowasm_validation_value_type
+turbowasm_validation_value_type_legacy(uint8_t carrier) {
+    turbowasm_validation_value_type type = {0};
+
+    type.carrier = carrier;
+    type.type_index = UINT32_MAX;
+    if (carrier == 0x70u) {
+        type.is_reference = true;
+        type.nullable = true;
+        type.heap_kind = TURBOWASM_VALIDATION_HEAP_FUNC;
+    } else if (carrier == 0x6fu) {
+        type.is_reference = true;
+        type.nullable = true;
+        type.heap_kind = TURBOWASM_VALIDATION_HEAP_EXTERN;
+    }
+    return type;
+}
+
+bool turbowasm_validation_value_type_equal(
+    const turbowasm_validation_value_type *left,
+    const turbowasm_validation_value_type *right) {
+    if (left == NULL || right == NULL ||
+        left->carrier != right->carrier ||
+        left->is_reference != right->is_reference)
+        return false;
+
+    if (!left->is_reference)
+        return true;
+
+    if (left->nullable != right->nullable ||
+        left->heap_kind != right->heap_kind)
+        return false;
+
+    if (left->heap_kind == TURBOWASM_VALIDATION_HEAP_TYPE_INDEX)
+        return left->type_index == right->type_index;
+
+    return true;
+}
+
 static bool turbowasm_validation_reserve(
     void **storage,
     uint32_t *capacity,
@@ -55,7 +94,9 @@ void turbowasm_validation_context_destroy(
 
     for (index = 0u; index < context->type_count; ++index) {
         free(context->types[index].params);
+        free(context->types[index].param_semantics);
         free(context->types[index].results);
+        free(context->types[index].result_semantics);
     }
 
     free(context->imports);
@@ -158,15 +199,32 @@ bool turbowasm_validation_context_define_type(
 
     if (param_count != 0u) {
         type->params = (uint8_t *)calloc((size_t)param_count, 1u);
-        if (type->params == NULL)
+        type->param_semantics =
+            (turbowasm_validation_value_type *)calloc(
+                (size_t)param_count, sizeof(*type->param_semantics));
+        if (type->params == NULL || type->param_semantics == NULL) {
+            free(type->params);
+            free(type->param_semantics);
+            type->params = NULL;
+            type->param_semantics = NULL;
             return false;
+        }
     }
 
     if (result_count != 0u) {
         type->results = (uint8_t *)calloc((size_t)result_count, 1u);
-        if (type->results == NULL) {
+        type->result_semantics =
+            (turbowasm_validation_value_type *)calloc(
+                (size_t)result_count, sizeof(*type->result_semantics));
+        if (type->results == NULL || type->result_semantics == NULL) {
             free(type->params);
+            free(type->param_semantics);
+            free(type->results);
+            free(type->result_semantics);
             type->params = NULL;
+            type->param_semantics = NULL;
+            type->results = NULL;
+            type->result_semantics = NULL;
             return false;
         }
     }
@@ -241,6 +299,8 @@ bool turbowasm_validation_context_append_global(
         return false;
 
     context->globals[context->global_count].value_type = value_type;
+    context->globals[context->global_count].semantic_type =
+        turbowasm_validation_value_type_legacy(value_type);
     context->globals[context->global_count].mutable_value = mutable_value;
     context->globals[context->global_count].imported = imported;
     context->globals[context->global_count].initializer = initializer;
@@ -269,6 +329,8 @@ bool turbowasm_validation_context_append_table(
         return false;
 
     context->tables[context->table_count].reference_type = reference_type;
+    context->tables[context->table_count].semantic_type =
+        turbowasm_validation_value_type_legacy(reference_type);
     context->tables[context->table_count].imported = imported;
     context->tables[context->table_count].limits = limits;
     ++context->table_count;
@@ -470,15 +532,25 @@ bool turbowasm_validation_func_type_equal(
         left->result_count != right->result_count)
         return false;
 
-    if (left->param_count != 0u &&
-        memcmp(left->params, right->params,
-               (size_t)left->param_count) != 0)
-        return false;
+    if (left->param_count != 0u) {
+        uint32_t index;
+        for (index = 0u; index < left->param_count; ++index) {
+            if (!turbowasm_validation_value_type_equal(
+                    &left->param_semantics[index],
+                    &right->param_semantics[index]))
+                return false;
+        }
+    }
 
-    if (left->result_count != 0u &&
-        memcmp(left->results, right->results,
-               (size_t)left->result_count) != 0)
-        return false;
+    if (left->result_count != 0u) {
+        uint32_t index;
+        for (index = 0u; index < left->result_count; ++index) {
+            if (!turbowasm_validation_value_type_equal(
+                    &left->result_semantics[index],
+                    &right->result_semantics[index]))
+                return false;
+        }
+    }
 
     return true;
 }

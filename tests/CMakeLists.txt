@@ -22,6 +22,19 @@ set_target_properties(turbowasm_header_cpp_test PROPERTIES
   CXX_EXTENSIONS OFF)
 add_test(NAME turbowasm_header_cpp_test COMMAND turbowasm_header_cpp_test)
 
+add_executable(turbowasm_semantic_type_test
+  semantic_type_test.c)
+target_link_libraries(turbowasm_semantic_type_test
+  PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_semantic_type_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_semantic_type_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_semantic_type_test
+         COMMAND turbowasm_semantic_type_test)
+
 add_executable(turbowasm_validation_test validation_test.c)
 target_link_libraries(turbowasm_validation_test PRIVATE TurboWasm::Runtime)
 set_target_properties(turbowasm_validation_test PROPERTIES

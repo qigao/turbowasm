@@ -3,6 +3,7 @@
 #include "validate_element.h"
 #include "validate_instr.h"
 #include "validate_linkage.h"
+#include "validate_type.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -44,46 +45,28 @@ static unsigned turbowasm_section_rank(uint8_t id) {
     }
 }
 
-static bool turbowasm_valtype_supported(uint8_t type) {
-    switch (type) {
-        case 0x7fu: /* i32 */
-        case 0x7eu: /* i64 */
-        case 0x7du: /* f32 */
-        case 0x7cu: /* f64 */
-        case 0x7bu: /* v128 */
-        case 0x70u: /* funcref */
-        case 0x6fu: /* externref */
-            return true;
-        default:
-            return false;
-    }
-}
-
-static turbowasm_status turbowasm_read_valtype(
-    turbowasm_reader *reader,
-    uint8_t *out_type) {
-    uint8_t type;
-
-    if (!turbowasm_reader_u8(reader, &type))
-        return TURBOWASM_MALFORMED_MODULE;
-    if (!turbowasm_valtype_supported(type))
-        return TURBOWASM_UNSUPPORTED;
-    if (out_type != NULL)
-        *out_type = type;
-    return TURBOWASM_OK;
-}
-
-static turbowasm_status turbowasm_read_valtypes(
+static turbowasm_status turbowasm_read_legacy_valtypes(
     turbowasm_reader *reader,
     uint8_t *values,
+    turbowasm_validation_value_type *semantics,
     uint32_t count) {
     uint32_t index;
 
     for (index = 0u; index < count; ++index) {
-        turbowasm_status status =
-            turbowasm_read_valtype(reader, &values[index]);
+        turbowasm_validation_value_type type;
+        bool generalized = false;
+        turbowasm_status status = turbowasm_validation_read_valtype(
+            reader, &type, &generalized);
+
         if (status != TURBOWASM_OK)
             return status;
+        if (generalized)
+            return TURBOWASM_UNSUPPORTED;
+
+        if (values != NULL)
+            values[index] = type.carrier;
+        if (semantics != NULL)
+            semantics[index] = type;
     }
     return TURBOWASM_OK;
 }
@@ -103,6 +86,7 @@ static turbowasm_status turbowasm_validate_type_section(
     for (index = 0u; index < count; ++index) {
         uint8_t form;
         uint8_t *params = NULL;
+        turbowasm_validation_value_type *param_semantics = NULL;
         uint32_t param_count;
         uint32_t result_count;
         turbowasm_validation_func_type *type;
@@ -117,40 +101,55 @@ static turbowasm_status turbowasm_validate_type_section(
             return TURBOWASM_MALFORMED_MODULE;
         if (param_count != 0u) {
             params = (uint8_t *)malloc((size_t)param_count);
-            if (params == NULL)
+            param_semantics =
+                (turbowasm_validation_value_type *)calloc(
+                    (size_t)param_count, sizeof(*param_semantics));
+            if (params == NULL || param_semantics == NULL) {
+                free(params);
+                free(param_semantics);
                 return TURBOWASM_OUT_OF_MEMORY;
+            }
         }
 
-        status = turbowasm_read_valtypes(
-            section, params, param_count);
+        status = turbowasm_read_legacy_valtypes(
+            section, params, param_semantics, param_count);
         if (status != TURBOWASM_OK) {
             free(params);
+            free(param_semantics);
             return status;
         }
 
         if (!turbowasm_reader_uleb32(section, &result_count)) {
             free(params);
+            free(param_semantics);
             return TURBOWASM_MALFORMED_MODULE;
         }
 
         if (!turbowasm_validation_context_define_type(
                 context, index, param_count, result_count)) {
             free(params);
+            free(param_semantics);
             return TURBOWASM_OUT_OF_MEMORY;
         }
 
         type = turbowasm_validation_context_type_mut(context, index);
         if (type == NULL) {
             free(params);
+            free(param_semantics);
             return TURBOWASM_MALFORMED_MODULE;
         }
 
-        if (param_count != 0u)
+        if (param_count != 0u) {
             memcpy(type->params, params, (size_t)param_count);
+            memcpy(type->param_semantics, param_semantics,
+                   (size_t)param_count * sizeof(*param_semantics));
+        }
         free(params);
+        free(param_semantics);
 
-        status = turbowasm_read_valtypes(
-            section, type->results, result_count);
+        status = turbowasm_read_legacy_valtypes(
+            section, type->results, type->result_semantics,
+            result_count);
         if (status != TURBOWASM_OK)
             return status;
     }
