@@ -63,6 +63,16 @@ typedef struct turbowasm_linked_table {
     uint32_t table_index;
 } turbowasm_linked_table;
 
+typedef struct turbowasm_linked_tag {
+    struct turbowasm_instance_impl *provider;
+    uint32_t tag_index;
+} turbowasm_linked_tag;
+
+typedef struct turbowasm_tag_identity {
+    struct turbowasm_instance_impl *owner;
+    uint32_t tag_index;
+} turbowasm_tag_identity;
+
 typedef struct turbowasm_jit_execution_control {
     uint64_t fuel_remaining;
     bool fuel_limited;
@@ -96,6 +106,9 @@ typedef struct turbowasm_instance_impl {
 
     turbowasm_linked_table *linked_tables;
     uint32_t linked_table_count;
+
+    turbowasm_linked_tag *linked_tags;
+    uint32_t linked_tag_count;
 
     turbowasm_value *globals;
     uint32_t global_count;
@@ -174,6 +187,11 @@ turbowasm_status turbowasm_jit_direct_call(
 turbowasm_status turbowasm_instance_state_init(
     turbowasm_instance_impl *instance,
     const turbowasm_module_impl *module);
+
+turbowasm_status turbowasm_instance_tag_identity(
+    const turbowasm_instance_impl *instance,
+    uint32_t tag_index,
+    turbowasm_tag_identity *out);
 
 /*
  * Spec-conformance store path: on an instantiation trap, leave the partially

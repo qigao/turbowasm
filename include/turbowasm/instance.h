@@ -48,13 +48,10 @@ turbowasm_status turbowasm_instance_create(
     const turbowasm_module *module);
 
 /*
- * Resolve function imports through an explicit linker before executing the
- * module start function. Provider instances and their modules are borrowed and
- * must outlive the linked consumer instance.
- *
- * This first linker slice resolves function imports only. Imported memories,
- * tables and globals remain explicitly unsupported until their shared
- * ownership/lifetime model lands.
+ * Resolve imports through an explicit linker before executing the module start
+ * function. Provider instances and their modules are borrowed and must outlive
+ * the linked consumer instance. Imported functions, memories, tables, globals
+ * and tags preserve the provider-owned WebAssembly store identity.
  */
 turbowasm_status turbowasm_instance_create_linked(
     turbowasm_instance *instance,

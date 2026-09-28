@@ -4836,6 +4836,7 @@ static void turbowasm_instance_dispose_unpublished(
     free(impl->linked_globals);
     free(impl->linked_memories);
     free(impl->linked_tables);
+    free(impl->linked_tags);
     free(impl);
 }
 
@@ -4953,6 +4954,9 @@ void turbowasm_instance_destroy(turbowasm_instance *instance) {
     free(impl->linked_tables);
     impl->linked_tables = NULL;
     impl->linked_table_count = 0u;
+    free(impl->linked_tags);
+    impl->linked_tags = NULL;
+    impl->linked_tag_count = 0u;
     free(impl);
     instance->impl = NULL;
 }
