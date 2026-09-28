@@ -104,6 +104,16 @@ jobs:
           "$tool" --version
           echo "WAST2JSON=$tool" >> "$GITHUB_ENV"
 
+      - name: Run v128 permitted-result harness smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/conformance/run_core.py \
+            --wast2json "$WAST2JSON" \
+            --runner "$PWD/build/conformance/tests/conformance/turbowasm_spec_runner" \
+            --core-dir "$PWD/tests/conformance" \
+            --suite "$PWD/tests/conformance/result-set-harness-smoke.txt"
+
       - name: Materialize pinned WebAssembly spec
         shell: bash
         run: |
