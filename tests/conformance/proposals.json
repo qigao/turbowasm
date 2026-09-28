@@ -39,7 +39,7 @@
     "core_dir": "test/core",
     "suite": "proposal-relaxed-simd.txt",
     "wast2json_flags": [],
-    "minimum_passes": 0
+    "minimum_passes": 1
   },
   "custom-page-sizes": {
     "repository": "https://github.com/WebAssembly/custom-page-sizes.git",
