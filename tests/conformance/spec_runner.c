@@ -35,7 +35,7 @@ typedef struct spec_state {
      * and funcrefs written into imported tables may point back at these
      * otherwise unnamed instances.
      */
-    spec_slot *retained_failures;
+    spec_slot **retained_failures;
     size_t retained_failure_count;
     size_t retained_failure_capacity;
 
@@ -308,8 +308,9 @@ static bool spec_retain_failed_instantiation(
     size_t size,
     turbowasm_module *module,
     turbowasm_instance *instance) {
-    spec_slot *grown;
+    spec_slot **grown;
     spec_slot *slot;
+    turbowasm_instance_impl *impl;
     size_t next;
 
     if (state == NULL || bytes == NULL || *bytes == NULL ||
@@ -326,7 +327,7 @@ static bool spec_retain_failed_instantiation(
             next > SIZE_MAX / sizeof(*grown))
             return false;
 
-        grown = (spec_slot *)realloc(
+        grown = (spec_slot **)realloc(
             state->retained_failures,
             next * sizeof(*grown));
         if (grown == NULL)
@@ -339,13 +340,26 @@ static bool spec_retain_failed_instantiation(
         state->retained_failure_capacity = next;
     }
 
-    slot = &state->retained_failures[
-        state->retained_failure_count++];
+    slot = (spec_slot *)calloc(1u, sizeof(*slot));
+    if (slot == NULL)
+        return false;
+
     slot->bytes = *bytes;
     slot->size = size;
     slot->module = *module;
     slot->instance = *instance;
     slot->loaded = true;
+
+    /*
+     * The instance was created against the stack-local module wrapper above.
+     * Rebind that borrowed wrapper pointer to this stable heap slot before the
+     * command returns.
+     */
+    impl = (turbowasm_instance_impl *)slot->instance.impl;
+    impl->module = &slot->module;
+
+    state->retained_failures[
+        state->retained_failure_count++] = slot;
 
     *bytes = NULL;
     module->impl = NULL;
@@ -1498,7 +1512,10 @@ int main(int argc, char **argv) {
     index = state.retained_failure_count;
     while (index != 0u) {
         --index;
-        spec_slot_destroy(&state.retained_failures[index]);
+        if (state.retained_failures[index] != NULL) {
+            spec_slot_destroy(state.retained_failures[index]);
+            free(state.retained_failures[index]);
+        }
     }
     free(state.retained_failures);
 
