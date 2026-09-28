@@ -29,9 +29,7 @@ typedef struct turbowasm_instance_limits {
 
 struct turbowasm_instance_impl;
 
-typedef struct turbowasm_instance_table_entry {
-    turbowasm_value value;
-} turbowasm_instance_table_entry;
+typedef turbowasm_value turbowasm_instance_table_entry;
 
 typedef struct turbowasm_instance_table {
     turbowasm_instance_table_entry *entries;
