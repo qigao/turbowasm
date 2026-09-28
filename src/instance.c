@@ -1027,6 +1027,81 @@ static turbowasm_status turbowasm_exec_f64_compare(
     return turbowasm_stack_push(stack, out);
 }
 
+static bool turbowasm_f32_bits_is_nan(uint32_t bits) {
+    return (bits & UINT32_C(0x7f800000)) == UINT32_C(0x7f800000) &&
+           (bits & UINT32_C(0x007fffff)) != 0u;
+}
+
+static bool turbowasm_f64_bits_is_nan(uint64_t bits) {
+    return (bits & UINT64_C(0x7ff0000000000000)) ==
+               UINT64_C(0x7ff0000000000000) &&
+           (bits & UINT64_C(0x000fffffffffffff)) != 0u;
+}
+
+static float turbowasm_f32_minmax(float left,
+                                  float right,
+                                  bool maximum) {
+    uint32_t left_bits;
+    uint32_t right_bits;
+    uint32_t out_bits;
+    float out;
+
+    memcpy(&left_bits, &left, sizeof(left_bits));
+    memcpy(&right_bits, &right, sizeof(right_bits));
+
+    if (left == right) {
+        out_bits = maximum
+            ? (left_bits & right_bits)
+            : (left_bits | right_bits);
+    } else if (maximum ? left > right : left < right) {
+        out_bits = left_bits;
+    } else if (maximum ? left < right : left > right) {
+        out_bits = right_bits;
+    } else {
+        out_bits = turbowasm_f32_bits_is_nan(left_bits)
+            ? left_bits
+            : (turbowasm_f32_bits_is_nan(right_bits)
+                ? right_bits
+                : UINT32_C(0x7fc00000));
+        out_bits |= UINT32_C(0x7fc00000);
+    }
+
+    memcpy(&out, &out_bits, sizeof(out));
+    return out;
+}
+
+static double turbowasm_f64_minmax(double left,
+                                   double right,
+                                   bool maximum) {
+    uint64_t left_bits;
+    uint64_t right_bits;
+    uint64_t out_bits;
+    double out;
+
+    memcpy(&left_bits, &left, sizeof(left_bits));
+    memcpy(&right_bits, &right, sizeof(right_bits));
+
+    if (left == right) {
+        out_bits = maximum
+            ? (left_bits & right_bits)
+            : (left_bits | right_bits);
+    } else if (maximum ? left > right : left < right) {
+        out_bits = left_bits;
+    } else if (maximum ? left < right : left > right) {
+        out_bits = right_bits;
+    } else {
+        out_bits = turbowasm_f64_bits_is_nan(left_bits)
+            ? left_bits
+            : (turbowasm_f64_bits_is_nan(right_bits)
+                ? right_bits
+                : UINT64_C(0x7ff8000000000000));
+        out_bits |= UINT64_C(0x7ff8000000000000);
+    }
+
+    memcpy(&out, &out_bits, sizeof(out));
+    return out;
+}
+
 static turbowasm_status turbowasm_exec_f32_binary(
     uint8_t opcode,
     turbowasm_value_stack *stack) {
@@ -1048,6 +1123,14 @@ static turbowasm_status turbowasm_exec_f32_binary(
         case 0x93u: out.as.f32 = left.as.f32 - right.as.f32; break;
         case 0x94u: out.as.f32 = left.as.f32 * right.as.f32; break;
         case 0x95u: out.as.f32 = left.as.f32 / right.as.f32; break;
+        case 0x96u:
+            out.as.f32 = turbowasm_f32_minmax(
+                left.as.f32, right.as.f32, false);
+            break;
+        case 0x97u:
+            out.as.f32 = turbowasm_f32_minmax(
+                left.as.f32, right.as.f32, true);
+            break;
         default: return TURBOWASM_UNSUPPORTED;
     }
     return turbowasm_stack_push(stack, out);
@@ -1074,6 +1157,14 @@ static turbowasm_status turbowasm_exec_f64_binary(
         case 0xa1u: out.as.f64 = left.as.f64 - right.as.f64; break;
         case 0xa2u: out.as.f64 = left.as.f64 * right.as.f64; break;
         case 0xa3u: out.as.f64 = left.as.f64 / right.as.f64; break;
+        case 0xa4u:
+            out.as.f64 = turbowasm_f64_minmax(
+                left.as.f64, right.as.f64, false);
+            break;
+        case 0xa5u:
+            out.as.f64 = turbowasm_f64_minmax(
+                left.as.f64, right.as.f64, true);
+            break;
         default: return TURBOWASM_UNSUPPORTED;
     }
     return turbowasm_stack_push(stack, out);
@@ -3022,12 +3113,14 @@ static turbowasm_status turbowasm_exec_function(
                 break;
 
             case 0x92u: case 0x93u: case 0x94u: case 0x95u:
+            case 0x96u: case 0x97u:
                 status = turbowasm_exec_f32_binary(
                     opcode, &stack);
                 if (status != TURBOWASM_OK) goto done;
                 break;
 
             case 0xa0u: case 0xa1u: case 0xa2u: case 0xa3u:
+            case 0xa4u: case 0xa5u:
                 status = turbowasm_exec_f64_binary(
                     opcode, &stack);
                 if (status != TURBOWASM_OK) goto done;
