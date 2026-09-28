@@ -1474,6 +1474,91 @@ done:
     free(expected);
 }
 
+static void spec_command_assert_return_either(
+    spec_state *state,
+    unsigned line,
+    int64_t slot_index,
+    const char *field_hex,
+    const char *args_text,
+    const char *alternatives_text) {
+    turbowasm_value *results = NULL;
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    bool unsupported = false;
+    turbowasm_status status;
+    char *copy = NULL;
+    char *cursor;
+    bool matched = false;
+    bool parsed_any = false;
+
+    if (alternatives_text == NULL || *alternatives_text == '\0') {
+        spec_note_failure(state, line, "empty permitted result set");
+        return;
+    }
+
+    status = spec_invoke(
+        state, slot_index, field_hex, args_text,
+        &results, &result_count, &trap, &unsupported);
+
+    if (unsupported) {
+        spec_note_runtime_unsupported(
+            state, line, "assert_return_either invoke unsupported");
+        goto done;
+    }
+    if (status != TURBOWASM_OK) {
+        spec_note_failure(
+            state, line, "assert_return_either did not complete");
+        goto done;
+    }
+    if (result_count != 1u) {
+        spec_note_failure(
+            state, line, "assert_return_either requires one result");
+        goto done;
+    }
+
+    copy = (char *)malloc(strlen(alternatives_text) + 1u);
+    if (copy == NULL) {
+        spec_note_failure(
+            state, line, "permitted result allocation failed");
+        goto done;
+    }
+    strcpy(copy, alternatives_text);
+
+    cursor = copy;
+    while (cursor != NULL && *cursor != '\0') {
+        char *next = strchr(cursor, '|');
+        spec_expected_value expected;
+
+        if (next != NULL)
+            *next = '\0';
+        if (!spec_parse_expected_value(cursor, &expected)) {
+            spec_note_failure(
+                state, line, "invalid permitted result encoding");
+            goto done;
+        }
+
+        parsed_any = true;
+        if (spec_expected_matches(&results[0], &expected)) {
+            matched = true;
+            break;
+        }
+        cursor = next == NULL ? NULL : next + 1u;
+    }
+
+    if (!parsed_any) {
+        spec_note_failure(state, line, "empty permitted result set");
+    } else if (!matched) {
+        spec_note_failure(
+            state, line, "result outside permitted result set");
+    } else {
+        spec_note_pass(state);
+    }
+
+done:
+    free(copy);
+    free(results);
+}
+
 static void spec_command_assert_trap(spec_state *state,
                                      unsigned line,
                                      int64_t slot_index,
@@ -1672,6 +1757,15 @@ static int spec_run_manifest(spec_state *state, const char *path) {
             field_count == 6u) {
             int64_t slot = spec_resolve_slot(state, fields[2]);
             spec_command_assert_return(
+                state, line, slot, fields[3],
+                fields[4], fields[5]);
+            goto command_done;
+        }
+
+        if (strcmp(fields[0], "assert_return_either") == 0 &&
+            field_count == 6u) {
+            int64_t slot = spec_resolve_slot(state, fields[2]);
+            spec_command_assert_return_either(
                 state, line, slot, fields[3],
                 fields[4], fields[5]);
             goto command_done;
