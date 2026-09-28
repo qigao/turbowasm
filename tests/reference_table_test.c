@@ -186,6 +186,70 @@ static void test_ref_func_table_set_and_call_indirect(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_typed_funcref_br_table_meet(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: () -> (), type1: (i32) -> funcref */
+        0x01, 0x09,
+        0x02,
+        0x60, 0x00, 0x00,
+        0x60, 0x01, 0x7f, 0x01, 0x70,
+
+        0x03, 0x02,
+        0x01, 0x01,
+
+        0x0a, 0x14,
+        0x01, 0x12,
+        0x00,
+        /* outer label: (ref null func) */
+        0x02, 0x70,
+          /* inner label: (ref null type0) */
+          0x02, 0x63, 0x00,
+            /* value: ref.null type0; selector: local0 */
+            0xd0, 0x00,
+            0x20, 0x00,
+            /* labels [outer, outer], default inner */
+            0x0e, 0x02, 0x01, 0x01, 0x00,
+          0x0b,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value argument = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    int32_t selector;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    for (selector = 0; selector < 3; ++selector) {
+        argument.kind = TURBOWASM_VALUE_I32;
+        argument.as.i32 = selector;
+        result_count = 0u;
+        trap = TURBOWASM_TRAP_NONE;
+
+        assert(turbowasm_instance_invoke(
+                   &instance, 0u,
+                   &argument, 1u,
+                   &result, 1u,
+                   &result_count,
+                   &trap) == TURBOWASM_OK);
+        assert(trap == TURBOWASM_TRAP_NONE);
+        assert(result_count == 1u);
+        assert(result.kind == TURBOWASM_VALUE_FUNCREF);
+        assert(result.as.funcref.is_null);
+    }
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 static void test_externref_null_is_null_executes(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -226,6 +290,7 @@ int main(void) {
     test_funcref_public_argument();
     test_table_get_out_of_bounds_traps();
     test_ref_func_table_set_and_call_indirect();
+    test_typed_funcref_br_table_meet();
     test_externref_null_is_null_executes();
     return 0;
 }
