@@ -3106,6 +3106,7 @@ static turbowasm_status turbowasm_exec_simd_memory(
     turbowasm_value_stack *stack,
     turbowasm_trap *trap,
     const turbowasm_simd_exec_descriptor *descriptor) {
+    uint32_t memory_index;
     uint32_t offset;
     uint8_t lane = 0u;
     turbowasm_value address;
@@ -3120,7 +3121,8 @@ static turbowasm_status turbowasm_exec_simd_memory(
         stack == NULL || trap == NULL || descriptor == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    status = turbowasm_exec_read_memarg(reader, &offset);
+    status = turbowasm_exec_read_indexed_memarg(
+        reader, &memory_index, &offset);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -3144,7 +3146,7 @@ static turbowasm_status turbowasm_exec_simd_memory(
         return status;
 
     status = turbowasm_instance_memory_bounds(
-        instance, 0u,
+        instance, memory_index,
         (uint32_t)address.as.i32,
         offset, descriptor->memory_width,
         &memory);
