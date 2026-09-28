@@ -16,6 +16,7 @@ enum {
     TW_V128 = 0x7b,
     TW_FUNCREF = 0x70,
     TW_EXTERNREF = 0x6f,
+    TW_EXNREF = 0x69,
     TW_ANY = 0xff
 };
 
@@ -31,7 +32,8 @@ typedef enum turbowasm_control_kind {
     TURBOWASM_CTRL_FUNCTION = 0,
     TURBOWASM_CTRL_BLOCK,
     TURBOWASM_CTRL_LOOP,
-    TURBOWASM_CTRL_IF
+    TURBOWASM_CTRL_IF,
+    TURBOWASM_CTRL_TRY_TABLE
 } turbowasm_control_kind;
 
 typedef struct turbowasm_control_frame {
@@ -57,7 +59,19 @@ static bool turbowasm_instr_valtype(uint8_t type) {
     return type == TW_I32 || type == TW_I64 ||
            type == TW_F32 || type == TW_F64 ||
            type == TW_V128 || type == TW_FUNCREF ||
-           type == TW_EXTERNREF;
+           type == TW_EXTERNREF || type == TW_EXNREF;
+}
+
+static turbowasm_validation_value_type turbowasm_exnref_type(
+    bool nullable) {
+    turbowasm_validation_value_type type = {0};
+
+    type.carrier = TW_EXNREF;
+    type.is_reference = true;
+    type.nullable = nullable;
+    type.heap_kind = TURBOWASM_VALIDATION_HEAP_EXN;
+    type.type_index = UINT32_MAX;
+    return type;
 }
 
 
@@ -452,7 +466,7 @@ static turbowasm_status turbowasm_read_block_signature(
         return TURBOWASM_OK;
     }
 
-    if (turbowasm_instr_valtype(first) ||
+    if (turbowasm_instr_valtype(first) || first == 0x74u ||
         first == 0x63u || first == 0x64u) {
         bool generalized = false;
         turbowasm_status status =
@@ -1046,6 +1060,185 @@ static void turbowasm_control_label_types(
     }
 }
 
+static bool turbowasm_catch_payload_matches_label(
+    const turbowasm_validation_context *context,
+    const turbowasm_control_frame *target,
+    turbowasm_validation_catch_kind kind,
+    uint32_t tag_index) {
+    const turbowasm_validation_value_type *label_types;
+    uint32_t label_count;
+    const turbowasm_validation_func_type *tag_type = NULL;
+    uint32_t param_count = 0u;
+    uint32_t index;
+    bool with_ref =
+        kind == TURBOWASM_VALIDATION_CATCH_REF ||
+        kind == TURBOWASM_VALIDATION_CATCH_ALL_REF;
+
+    if (context == NULL || target == NULL)
+        return false;
+
+    turbowasm_control_label_types(
+        target, &label_types, &label_count);
+
+    if (kind == TURBOWASM_VALIDATION_CATCH ||
+        kind == TURBOWASM_VALIDATION_CATCH_REF) {
+        const turbowasm_validation_tag *tag =
+            turbowasm_validation_context_tag(context, tag_index);
+        if (tag == NULL)
+            return false;
+        tag_type = turbowasm_validation_context_type(
+            context, tag->type_index);
+        if (tag_type == NULL || !tag_type->defined ||
+            tag_type->result_count != 0u)
+            return false;
+        param_count = tag_type->param_count;
+    }
+
+    if (with_ref && param_count == UINT32_MAX)
+        return false;
+    if (label_count != param_count + (with_ref ? 1u : 0u))
+        return false;
+
+    for (index = 0u; index < param_count; ++index) {
+        if (!turbowasm_validation_value_type_matches(
+                &tag_type->param_semantics[index],
+                &label_types[index]))
+            return false;
+    }
+
+    if (with_ref) {
+        turbowasm_validation_value_type exn =
+            turbowasm_exnref_type(false);
+        if (!turbowasm_validation_value_type_matches(
+                &exn, &label_types[param_count]))
+            return false;
+    }
+
+    return true;
+}
+
+static turbowasm_status turbowasm_read_try_catches(
+    turbowasm_reader *body,
+    const turbowasm_validation_context *context,
+    const turbowasm_control_stack *controls,
+    turbowasm_validation_catch **out_catches,
+    uint32_t *out_count) {
+    uint32_t count;
+    uint32_t index;
+    turbowasm_validation_catch *catches = NULL;
+
+    if (body == NULL || context == NULL || controls == NULL ||
+        out_catches == NULL || out_count == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *out_catches = NULL;
+    *out_count = 0u;
+
+    if (!turbowasm_reader_uleb32(body, &count))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (count != 0u) {
+        if ((uint64_t)count * sizeof(*catches) > (uint64_t)SIZE_MAX)
+            return TURBOWASM_OUT_OF_MEMORY;
+        catches = (turbowasm_validation_catch *)calloc(
+            (size_t)count, sizeof(*catches));
+        if (catches == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    for (index = 0u; index < count; ++index) {
+        uint8_t kind;
+        const turbowasm_control_frame *target;
+
+        catches[index].tag_index = UINT32_MAX;
+
+        if (!turbowasm_reader_u8(body, &kind) ||
+            kind > (uint8_t)TURBOWASM_VALIDATION_CATCH_ALL_REF) {
+            free(catches);
+            return TURBOWASM_MALFORMED_MODULE;
+        }
+        catches[index].kind = (turbowasm_validation_catch_kind)kind;
+
+        if (kind == (uint8_t)TURBOWASM_VALIDATION_CATCH ||
+            kind == (uint8_t)TURBOWASM_VALIDATION_CATCH_REF) {
+            if (!turbowasm_reader_uleb32(
+                    body, &catches[index].tag_index)) {
+                free(catches);
+                return TURBOWASM_MALFORMED_MODULE;
+            }
+        }
+
+        if (!turbowasm_reader_uleb32(
+                body, &catches[index].label_depth)) {
+            free(catches);
+            return TURBOWASM_MALFORMED_MODULE;
+        }
+
+        /*
+         * Catch label indices are validated in the surrounding context,
+         * before the try_table label itself is pushed.
+         */
+        target = turbowasm_control_target(
+            controls, catches[index].label_depth);
+        if (target == NULL ||
+            !turbowasm_catch_payload_matches_label(
+                context, target, catches[index].kind,
+                catches[index].tag_index)) {
+            free(catches);
+            return TURBOWASM_MALFORMED_MODULE;
+        }
+    }
+
+    *out_catches = catches;
+    *out_count = count;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_validate_throw(
+    turbowasm_reader *body,
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_context *context) {
+    uint32_t tag_index;
+    const turbowasm_validation_tag *tag;
+    const turbowasm_validation_func_type *type;
+    turbowasm_status status;
+
+    if (!turbowasm_reader_uleb32(body, &tag_index))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    tag = turbowasm_validation_context_tag(context, tag_index);
+    if (tag == NULL)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    type = turbowasm_validation_context_type(
+        context, tag->type_index);
+    if (type == NULL || !type->defined || type->result_count != 0u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    status = turbowasm_stack_pop_types(
+        stack, type->param_semantics, type->param_count);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    turbowasm_control_mark_unreachable(stack);
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_validate_throw_ref(
+    turbowasm_type_stack *stack) {
+    turbowasm_validation_value_type exn =
+        turbowasm_exnref_type(true);
+    turbowasm_status status =
+        turbowasm_stack_pop_semantic(stack, &exn);
+
+    if (status != TURBOWASM_OK)
+        return status;
+
+    turbowasm_control_mark_unreachable(stack);
+    return TURBOWASM_OK;
+}
+
+
 static turbowasm_status turbowasm_validate_br_table(
     turbowasm_reader *body,
     turbowasm_type_stack *stack,
@@ -1638,6 +1831,17 @@ turbowasm_status turbowasm_validate_function_body(
                     (uint32_t)(body->cursor - code_start - 1u);
                 break;
             }
+            case 0x08u: /* throw */
+                result = turbowasm_validate_throw(
+                    body, &stack, context);
+                if (result != TURBOWASM_OK)
+                    goto done;
+                break;
+            case 0x0au: /* throw_ref */
+                result = turbowasm_validate_throw_ref(&stack);
+                if (result != TURBOWASM_OK)
+                    goto done;
+                break;
             case 0x0bu: /* end */
                 if (controls.size == 1u) {
                     if (turbowasm_reader_remaining(body) != 0u) {
@@ -1807,6 +2011,71 @@ turbowasm_status turbowasm_validate_function_body(
                 result = turbowasm_stack_push_semantic(
                     &stack, type);
                 if (result != TURBOWASM_OK) goto done;
+                break;
+            }
+            case 0x1fu: { /* try_table */
+                turbowasm_block_signature signature;
+                turbowasm_validation_control annotation = {0};
+                turbowasm_validation_catch *catches = NULL;
+                uint32_t catch_count = 0u;
+                uint32_t annotation_index;
+
+                if (code_start == NULL ||
+                    body->cursor <= code_start ||
+                    (size_t)(body->cursor - code_start - 1u) > UINT32_MAX) {
+                    result = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                annotation.kind =
+                    TURBOWASM_VALIDATION_CONTROL_TRY_TABLE;
+                annotation.opcode_offset =
+                    (uint32_t)(body->cursor - code_start - 1u);
+                annotation.else_offset = UINT32_MAX;
+                annotation.end_offset = UINT32_MAX;
+                annotation.type_index = UINT32_MAX;
+
+                result = turbowasm_read_block_signature(
+                    body, context, &signature);
+                if (result != TURBOWASM_OK)
+                    goto done;
+
+                result = turbowasm_read_try_catches(
+                    body, context, &controls,
+                    &catches, &catch_count);
+                if (result != TURBOWASM_OK)
+                    goto done;
+
+                if ((size_t)(body->cursor - code_start) > UINT32_MAX) {
+                    free(catches);
+                    result = TURBOWASM_OUT_OF_MEMORY;
+                    goto done;
+                }
+
+                annotation.body_offset =
+                    (uint32_t)(body->cursor - code_start);
+                annotation.type_index = signature.type_index;
+                annotation.inline_result_type =
+                    signature.inline_end.carrier;
+                annotation.catches = catches;
+                annotation.catch_count = catch_count;
+
+                if (!turbowasm_validation_function_append_control(
+                        function_metadata,
+                        annotation,
+                        &annotation_index)) {
+                    free(catches);
+                    result = TURBOWASM_OUT_OF_MEMORY;
+                    goto done;
+                }
+
+                result = turbowasm_control_push(
+                    &stack, &controls, TURBOWASM_CTRL_TRY_TABLE,
+                    signature.start_types, signature.start_count,
+                    signature.end_types, signature.end_count,
+                    annotation_index);
+                if (result != TURBOWASM_OK)
+                    goto done;
                 break;
             }
             case 0x20u: /* local.get */
