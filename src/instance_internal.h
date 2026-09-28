@@ -11,7 +11,8 @@
 #include <stdint.h>
 
 enum {
-    TURBOWASM_WASM_PAGE_SIZE = 65536u
+    TURBOWASM_WASM_PAGE_SIZE = 65536u,
+    TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT = 2u
 };
 
 typedef struct turbowasm_instance_memory {
@@ -124,6 +125,18 @@ typedef struct turbowasm_jit_invocation_context {
     turbowasm_status call_status;
     turbowasm_trap call_trap;
 
+    /*
+     * Compiled tail calls unwind generated code before dispatching the next
+     * function.  The dispatcher consumes this request in a loop at the same
+     * logical depth, so neither TurboWasm call depth nor native generated-code
+     * frames grow across a direct tail-call chain.
+     */
+    bool tail_call_pending;
+    uint32_t tail_function_index;
+    size_t tail_argument_count;
+    turbowasm_value
+        tail_arguments[TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT];
+
     /* Invocation-local v128 temporary frame used by helper-backed JIT
      * lowering. Nested compiled calls save/replace/restore this frame. */
     salts_v128 *simd_slots;
@@ -140,6 +153,12 @@ void turbowasm_jit_instance_detach_backend(
 
 turbowasm_status turbowasm_jit_execution_checkpoint(
     turbowasm_jit_invocation_context *context);
+
+turbowasm_status turbowasm_jit_request_tail_call(
+    turbowasm_jit_invocation_context *context,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count);
 
 turbowasm_status turbowasm_jit_direct_call(
     turbowasm_jit_invocation_context *context,
