@@ -1,4 +1,5 @@
 #include "validate_linkage.h"
+#include "validate_type.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -141,14 +142,23 @@ static turbowasm_status turbowasm_read_limits(
 
 static turbowasm_status turbowasm_read_table_type(
     turbowasm_reader *reader,
-    uint8_t *out_reference_type,
+    const turbowasm_validation_context *context,
+    turbowasm_validation_value_type *out_reference_type,
     turbowasm_validation_limits *out_limits) {
-    uint8_t reference_type;
+    turbowasm_validation_value_type reference_type;
+    bool generalized = false;
+    turbowasm_status status;
 
-    if (!turbowasm_reader_u8(reader, &reference_type))
+    status = turbowasm_validation_read_reftype(
+        reader, &reference_type, &generalized);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (reference_type.heap_kind ==
+            TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+        (context == NULL ||
+         reference_type.type_index >= context->type_count))
         return TURBOWASM_MALFORMED_MODULE;
-    if (reference_type != 0x70u && reference_type != 0x6fu)
-        return TURBOWASM_UNSUPPORTED;
 
     if (out_reference_type != NULL)
         *out_reference_type = reference_type;
@@ -252,14 +262,14 @@ turbowasm_status turbowasm_validate_import_section(
                 ++summary->imported_function_count;
                 break;
             case 0x01u: {
-                uint8_t reference_type;
+                turbowasm_validation_value_type reference_type;
                 turbowasm_validation_limits limits = {0};
                 import_desc.item_index =
                     summary->imported_table_count;
                 status = turbowasm_read_table_type(
-                    section, &reference_type, &limits);
+                    section, context, &reference_type, &limits);
                 if (status != TURBOWASM_OK) return status;
-                if (!turbowasm_validation_context_append_table(
+                if (!turbowasm_validation_context_append_table_semantic(
                         context, reference_type, limits, true))
                     return TURBOWASM_OUT_OF_MEMORY;
                 ++summary->imported_table_count;
@@ -320,12 +330,12 @@ turbowasm_status turbowasm_validate_table_section(
         return TURBOWASM_MALFORMED_MODULE;
 
     for (index = 0u; index < count; ++index) {
-        uint8_t reference_type;
+        turbowasm_validation_value_type reference_type;
         turbowasm_validation_limits limits = {0};
         turbowasm_status status = turbowasm_read_table_type(
-            section, &reference_type, &limits);
+            section, context, &reference_type, &limits);
         if (status != TURBOWASM_OK) return status;
-        if (!turbowasm_validation_context_append_table(
+        if (!turbowasm_validation_context_append_table_semantic(
                 context, reference_type, limits, false))
             return TURBOWASM_OUT_OF_MEMORY;
     }
