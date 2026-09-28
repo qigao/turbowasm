@@ -391,7 +391,9 @@ turbowasm_status turbowasm_linker_bind_instance(
                     goto fail;
                 }
 
-                if (!turbowasm_link_limits_match(
+                if (expected_memory->page_size !=
+                        actual_memory->page_size ||
+                    !turbowasm_link_limits_match(
                         expected_memory->limits,
                         actual_limits)) {
                     result = TURBOWASM_TYPE_MISMATCH;
