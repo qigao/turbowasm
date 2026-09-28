@@ -223,8 +223,126 @@ static void test_execution_control_is_not_an_exception(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static const uint8_t linked_provider_bytes[] = {
+    WASM_HEADER,
+    /* type0: (i32)->(); type1: ()->i32 */
+    0x01, 0x09, 0x02,
+    0x60, 0x01, 0x7f, 0x00,
+    0x60, 0x00, 0x01, 0x7f,
+
+    /* function0 type1 */
+    0x03, 0x02, 0x01, 0x01,
+
+    /* tag0=a, tag1=b: same signature, distinct identity */
+    0x0d, 0x05, 0x02,
+    0x00, 0x00,
+    0x00, 0x00,
+
+    /* export tag a, tag b, and thrower f */
+    0x07, 0x0d, 0x03,
+    0x01, 0x61, 0x04, 0x00,
+    0x01, 0x62, 0x04, 0x01,
+    0x01, 0x66, 0x00, 0x00,
+
+    /* func0: i32.const 7; throw tag1 */
+    0x0a, 0x08, 0x01, 0x06,
+    0x00, 0x41, 0x07, 0x08, 0x01, 0x0b
+};
+
+static const uint8_t linked_consumer_bytes[] = {
+    WASM_HEADER,
+    /* type0: (i32)->(); type1: ()->i32 */
+    0x01, 0x09, 0x02,
+    0x60, 0x01, 0x7f, 0x00,
+    0x60, 0x00, 0x01, 0x7f,
+
+    /*
+     * import p.a tag0, p.b tag1, p.f function0.
+     * The imported tags are normalized to provider store identity.
+     */
+    0x02, 0x15, 0x03,
+    0x01, 0x70, 0x01, 0x61, 0x04, 0x00, 0x00,
+    0x01, 0x70, 0x01, 0x62, 0x04, 0x00, 0x00,
+    0x01, 0x70, 0x01, 0x66, 0x00, 0x01,
+
+    /* defined consumer function1 type1 */
+    0x03, 0x02, 0x01, 0x01,
+
+    /*
+     * outer block result i32
+     *   inner block result i32
+     *     try_table
+     *       catch tag0 -> inner
+     *       catch tag1 -> outer
+     *       call imported provider function0
+     *       drop
+     *     end
+     *     i32.const 0
+     *   end
+     *   i32.const 100
+     *   i32.add
+     * end
+     *
+     * Provider throws tag1 payload 7. Correct canonical identity returns 7;
+     * structural/signature-only matching against tag0 would produce 107.
+     */
+    0x0a, 0x1d, 0x01, 0x1b,
+    0x00,
+    0x02, 0x7f,
+    0x02, 0x7f,
+    0x1f, 0x40, 0x02,
+    0x00, 0x00, 0x00,
+    0x00, 0x01, 0x01,
+    0x10, 0x00,
+    0x1a,
+    0x0b,
+    0x41, 0x00,
+    0x0b,
+    0x41, 0xe4, 0x00,
+    0x6a,
+    0x0b,
+    0x0b
+};
+
+static void test_linked_provider_identity_crosses_call_frame(void) {
+    static const uint8_t p_name_bytes[] = {(uint8_t)'p'};
+    const turbowasm_name p_name = {p_name_bytes, 1u};
+    turbowasm_module provider_module = {0};
+    turbowasm_module consumer_module = {0};
+    turbowasm_instance provider = {0};
+    turbowasm_instance consumer = {0};
+    turbowasm_linker linker = {0};
+
+    assert(turbowasm_module_load_borrowed(
+               &provider_module,
+               linked_provider_bytes,
+               sizeof(linked_provider_bytes)) == TURBOWASM_OK);
+    assert(turbowasm_module_load_borrowed(
+               &consumer_module,
+               linked_consumer_bytes,
+               sizeof(linked_consumer_bytes)) == TURBOWASM_OK);
+
+    assert(turbowasm_instance_create(
+               &provider, &provider_module) == TURBOWASM_OK);
+    assert(turbowasm_linker_init(&linker) == TURBOWASM_OK);
+    assert(turbowasm_linker_define_instance(
+               &linker, p_name, &provider) == TURBOWASM_OK);
+    assert(turbowasm_instance_create_linked(
+               &consumer, &consumer_module, &linker) == TURBOWASM_OK);
+
+    assert(invoke_i32(&consumer, 1u) == 7);
+
+    turbowasm_linker_destroy(&linker);
+    turbowasm_instance_destroy(&consumer);
+    turbowasm_instance_destroy(&provider);
+    turbowasm_module_destroy(&consumer_module);
+    turbowasm_module_destroy(&provider_module);
+}
+
 int main(void) {
     test_direct_indirect_and_tail_unwind();
     test_execution_control_is_not_an_exception();
+    test_linked_provider_identity_crosses_call_frame();
     return 0;
 }
