@@ -3745,6 +3745,48 @@ static turbowasm_status turbowasm_exec_function(
                     goto done;
                 break;
             }
+            case 0x1cu: { /* typed select */
+                uint32_t type_count;
+                uint8_t type;
+                turbowasm_value_kind kind;
+                turbowasm_value condition;
+                turbowasm_value right;
+                turbowasm_value left;
+
+                if (!turbowasm_reader_uleb32(
+                        &reader, &type_count) ||
+                    type_count != 1u ||
+                    !turbowasm_reader_u8(&reader, &type)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                kind = turbowasm_kind_from_valtype(type);
+                if (kind == 0) {
+                    status = TURBOWASM_UNSUPPORTED;
+                    goto done;
+                }
+
+                status = turbowasm_stack_pop_kind(
+                    &stack, TURBOWASM_VALUE_I32, &condition);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                status = turbowasm_stack_pop_kind(
+                    &stack, kind, &right);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                status = turbowasm_stack_pop_kind(
+                    &stack, kind, &left);
+                if (status != TURBOWASM_OK)
+                    goto done;
+
+                status = turbowasm_stack_push(
+                    &stack,
+                    condition.as.i32 != 0 ? left : right);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
             case 0x20u: /* local.get */
             case 0x21u: /* local.set */
             case 0x22u: { /* local.tee */

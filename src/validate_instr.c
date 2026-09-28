@@ -1535,6 +1535,43 @@ turbowasm_status turbowasm_validate_function_body(
                 if (result != TURBOWASM_OK) goto done;
                 break;
             }
+            case 0x1cu: { /* typed select */
+                uint32_t type_count;
+                uint8_t type;
+
+                if (!turbowasm_reader_uleb32(body, &type_count)) {
+                    result = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+                if (type_count != 1u) {
+                    result = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+                if (!turbowasm_reader_u8(body, &type)) {
+                    result = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+                if (!turbowasm_instr_valtype(type)) {
+                    /*
+                     * General reference types carry a heap type after their
+                     * prefix. They are a later Reference Types slice; fail
+                     * closed as unsupported rather than misclassifying them
+                     * as malformed.
+                     */
+                    result = TURBOWASM_UNSUPPORTED;
+                    goto done;
+                }
+
+                result = turbowasm_stack_pop(&stack, TW_I32);
+                if (result != TURBOWASM_OK) goto done;
+                result = turbowasm_stack_pop(&stack, type);
+                if (result != TURBOWASM_OK) goto done;
+                result = turbowasm_stack_pop(&stack, type);
+                if (result != TURBOWASM_OK) goto done;
+                result = turbowasm_stack_push(&stack, type);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            }
             case 0x20u: /* local.get */
             case 0x21u: /* local.set */
             case 0x22u: { /* local.tee */
