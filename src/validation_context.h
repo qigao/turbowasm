@@ -250,6 +250,14 @@ bool turbowasm_validation_context_append_global(
     const uint8_t *initializer,
     uint32_t initializer_size);
 
+bool turbowasm_validation_context_append_global_semantic(
+    turbowasm_validation_context *context,
+    turbowasm_validation_value_type value_type,
+    bool mutable_value,
+    bool imported,
+    const uint8_t *initializer,
+    uint32_t initializer_size);
+
 bool turbowasm_validation_context_append_table(
     turbowasm_validation_context *context,
     uint8_t reference_type,
