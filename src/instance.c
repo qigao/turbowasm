@@ -1195,10 +1195,18 @@ static turbowasm_status turbowasm_exec_indirect_call(
     if (status != TURBOWASM_OK)
         return status;
 
-    return turbowasm_exec_call_index(
+    status = turbowasm_exec_call_index(
         target.instance,
         target.function_index,
         stack, trap, execution, depth);
+    if (status == TURBOWASM_EXCEPTION) {
+        turbowasm_status transfer_status =
+            turbowasm_exception_transfer_pending(
+                instance, target.instance);
+        if (transfer_status != TURBOWASM_OK)
+            return transfer_status;
+    }
+    return status;
 }
 
 static uint32_t turbowasm_clz32(uint32_t value) {
