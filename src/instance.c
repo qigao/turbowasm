@@ -1144,19 +1144,21 @@ static turbowasm_status turbowasm_exec_trapping_conversion(
         case 0xaeu: case 0xafu:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_F32, &in);
-            value = (double)in.as.f32;
             break;
         case 0xaau: case 0xabu:
         case 0xb0u: case 0xb1u:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_F64, &in);
-            value = in.as.f64;
             break;
         default:
             return TURBOWASM_UNSUPPORTED;
     }
     if (status != TURBOWASM_OK)
         return status;
+
+    value = in.kind == TURBOWASM_VALUE_F32
+        ? (double)in.as.f32
+        : in.as.f64;
 
     if (value != value) {
         *trap = TURBOWASM_TRAP_INVALID_CONVERSION_TO_INTEGER;
