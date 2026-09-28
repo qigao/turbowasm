@@ -145,7 +145,90 @@ static void test_fuel_and_interrupt(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_tail_call_preserves_execution_control(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: (i32) -> i32 */
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+
+        0x03, 0x02,
+        0x01, 0x00,
+
+        0x0a, 0x14,
+        0x01,
+        0x12,
+        0x00,
+        /* if n == 0 return 0; else return_call self(n - 1) */
+        0x20, 0x00,
+        0x45,
+        0x04, 0x7f,
+          0x41, 0x00,
+        0x05,
+          0x20, 0x00,
+          0x41, 0x01,
+          0x6b,
+          0x12, 0x00,
+        0x0b,
+        0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_execution_options options = {0};
+    turbowasm_value argument = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    interrupt_counter counter = {0};
+
+    argument.kind = TURBOWASM_VALUE_I32;
+    argument.as.i32 = 4096;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    options.has_fuel_limit = true;
+    options.fuel = 12u;
+    assert(turbowasm_instance_invoke_with_options(
+               &instance, 0u,
+               &argument, 1u,
+               &result, 1u,
+               &result_count,
+               &trap,
+               &options) == TURBOWASM_FUEL_EXHAUSTED);
+    assert(result_count == 0u);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    options.has_fuel_limit = false;
+    options.fuel = 0u;
+    counter.checks = 0u;
+    counter.stop_at = 17u;
+    options.should_interrupt = stop_after_checks;
+    options.interrupt_context = &counter;
+    result_count = 0u;
+    trap = TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_instance_invoke_with_options(
+               &instance, 0u,
+               &argument, 1u,
+               &result, 1u,
+               &result_count,
+               &trap,
+               &options) == TURBOWASM_INTERRUPTED);
+    assert(counter.checks == 17u);
+    assert(result_count == 0u);
+    assert(trap == TURBOWASM_TRAP_NONE);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
     test_fuel_and_interrupt();
+    test_tail_call_preserves_execution_control();
     return 0;
 }
