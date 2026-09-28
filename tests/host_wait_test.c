@@ -53,8 +53,13 @@ static turbowasm_status host_wait_i32(
         return TURBOWASM_UNSUPPORTED;
 
     ++probe->submitted;
-    status = turbowasm_host_call_wait(
-        call, probe->operation_token, &completion_status);
+    {
+        turbowasm_host_wait wait = {0};
+        status = turbowasm_host_call_wait(
+            call, probe->operation_token, &wait, &completion_status);
+        assert(wait.generation != 0u);
+        assert(wait.operation_token == probe->operation_token);
+    }
     if (status != TURBOWASM_OK)
         return status;
 
