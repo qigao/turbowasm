@@ -13,10 +13,21 @@ int main(void) {
     turbowasm_v128 result = {0};
     const cmeta_type_desc *i32_type =
         turbowasm_value_type_descriptor(TURBOWASM_VALUE_I32);
+    const cmeta_type_desc *externref_type =
+        turbowasm_value_type_descriptor(TURBOWASM_VALUE_EXTERNREF);
+    turbowasm_value external = {0};
+
+    external.kind = TURBOWASM_VALUE_EXTERNREF;
+    external.as.externref.is_null = false;
+    external.as.externref.token = (uintptr_t)7u;
 
     if (i32_type == NULL ||
         !cmeta_type_equal(i32_type, &cmeta_type_int32))
         return 7;
+    if (externref_type == NULL ||
+        externref_type->size != sizeof(turbowasm_externref) ||
+        external.as.externref.token != (uintptr_t)7u)
+        return 14;
 
     if (turbowasm_v128_load(
             &left, TURBOWASM_V128_I32X4, left_data) != TURBOWASM_OK)
