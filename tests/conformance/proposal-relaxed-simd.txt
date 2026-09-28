@@ -1,0 +1,8 @@
+# WebAssembly relaxed-SIMD proposal-specific core tests.
+relaxed-simd/i16x8_relaxed_q15mulr_s.wast
+relaxed-simd/i32x4_relaxed_trunc.wast
+relaxed-simd/i8x16_relaxed_swizzle.wast
+relaxed-simd/relaxed_dot_product.wast
+relaxed-simd/relaxed_laneselect.wast
+relaxed-simd/relaxed_madd_nmadd.wast
+relaxed-simd/relaxed_min_max.wast

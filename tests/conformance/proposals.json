@@ -1,0 +1,42 @@
+{
+  "exception-handling": {
+    "repository": "https://github.com/WebAssembly/exception-handling.git",
+    "commit": "af287a73d8f3bf7ea216c10592f9e350b947c4f2",
+    "core_dir": "test/core",
+    "suite": "proposal-exception-handling.txt",
+    "wast2json_flags": [],
+    "minimum_passes": 0
+  },
+  "threads": {
+    "repository": "https://github.com/WebAssembly/threads.git",
+    "commit": "cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0",
+    "core_dir": "test/core",
+    "suite": "proposal-threads.txt",
+    "wast2json_flags": ["--enable-threads"],
+    "minimum_passes": 0
+  },
+  "tail-call": {
+    "repository": "https://github.com/WebAssembly/tail-call.git",
+    "commit": "a6003d06aefef41e20a3e36fe2e500062555c895",
+    "core_dir": "test/core",
+    "suite": "proposal-tail-call.txt",
+    "wast2json_flags": [],
+    "minimum_passes": 0
+  },
+  "multi-memory": {
+    "repository": "https://github.com/WebAssembly/multi-memory.git",
+    "commit": "cf8b5aa27257311b8eac80ae83f4ba22ee308064",
+    "core_dir": "test/core",
+    "suite": "proposal-multi-memory.txt",
+    "wast2json_flags": [],
+    "minimum_passes": 0
+  },
+  "relaxed-simd": {
+    "repository": "https://github.com/WebAssembly/relaxed-simd.git",
+    "commit": "c3f9359af2cd607cc46b0a3274f90ea52543a2f2",
+    "core_dir": "test/core",
+    "suite": "proposal-relaxed-simd.txt",
+    "wast2json_flags": [],
+    "minimum_passes": 0
+  }
+}

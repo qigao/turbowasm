@@ -287,6 +287,7 @@ def run_file(
     filename,
     temp_root,
     compare_runner=None,
+    wast2json_flags=None,
 ):
     wast_path = os.path.join(core_dir, filename)
     case_dir = os.path.join(
@@ -296,14 +297,19 @@ def run_file(
     json_path = os.path.join(case_dir, "case.json")
     manifest_path = os.path.join(case_dir, "case.twcf")
 
+    convert_args = [
+        wast2json,
+        "--enable-function-references",
+    ]
+    convert_args.extend(wast2json_flags or [])
+    convert_args.extend([
+        wast_path,
+        "-o",
+        json_path,
+    ])
+
     convert = subprocess.run(
-        [
-            wast2json,
-            "--enable-function-references",
-            wast_path,
-            "-o",
-            json_path,
-        ],
+        convert_args,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -509,6 +515,18 @@ def main():
     parser.add_argument("--wast2json", required=True)
     parser.add_argument("--runner", required=True)
     parser.add_argument("--compare-runner")
+    parser.add_argument(
+        "--wast2json-flag",
+        action="append",
+        default=[],
+        help="Additional feature flag passed to wast2json; may repeat",
+    )
+    parser.add_argument(
+        "--minimum-passes",
+        type=int,
+        default=1,
+        help="Minimum aggregate upstream passes required for success",
+    )
     parser.add_argument("--core-dir", required=True)
     parser.add_argument("--suite", required=True)
     args = parser.parse_args()
@@ -542,6 +560,7 @@ def main():
                 filename,
                 temp_root,
                 compare_runner=args.compare_runner,
+                wast2json_flags=args.wast2json_flag,
             )
             passed += p
             failed += f
@@ -577,8 +596,14 @@ def main():
             f"mismatches={differential_mismatches}"
         )
 
-    if passed == 0:
-        print("no upstream assertions passed", file=sys.stderr)
+    if args.minimum_passes < 0:
+        print("minimum passes must be non-negative", file=sys.stderr)
+        return 2
+    if passed < args.minimum_passes:
+        print(
+            f"upstream passes {passed} below minimum {args.minimum_passes}",
+            file=sys.stderr,
+        )
         return 1
     return 1 if failed else 0
 
