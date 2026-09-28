@@ -1,5 +1,8 @@
+#include "module_internal.h"
 #include "reader.h"
 #include "validate_type.h"
+
+#include <turbowasm/turbowasm.h>
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -80,6 +83,44 @@ static void test_general_function_reference_types(void) {
     assert(type.type_index == 1u);
 }
 
+static void test_legacy_function_type_retains_semantics(void) {
+    static const uint8_t bytes[] = {
+        0x00, 0x61, 0x73, 0x6d,
+        0x01, 0x00, 0x00, 0x00,
+        0x01, 0x06,
+        0x01, 0x60,
+        0x01, 0x6f,
+        0x01, 0x70
+    };
+    turbowasm_module module = {0};
+    const turbowasm_module_impl *impl;
+    const turbowasm_validation_func_type *type;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    impl = turbowasm_module_impl_get(&module);
+    assert(impl != NULL);
+    assert(impl->validation.type_count == 1u);
+
+    type = &impl->validation.types[0];
+    assert(type->defined);
+    assert(type->param_count == 1u);
+    assert(type->result_count == 1u);
+    assert(type->params[0] == 0x6fu);
+    assert(type->results[0] == 0x70u);
+
+    assert(type->param_semantics[0].is_reference);
+    assert(type->param_semantics[0].nullable);
+    assert(type->param_semantics[0].heap_kind ==
+           TURBOWASM_VALIDATION_HEAP_EXTERN);
+    assert(type->result_semantics[0].is_reference);
+    assert(type->result_semantics[0].nullable);
+    assert(type->result_semantics[0].heap_kind ==
+           TURBOWASM_VALIDATION_HEAP_FUNC);
+
+    turbowasm_module_destroy(&module);
+}
+
 static void test_unsupported_heap_type_stays_explicit(void) {
     static const uint8_t anyref[] = {0x63, 0x6e};
     turbowasm_validation_value_type type;
@@ -92,6 +133,7 @@ static void test_unsupported_heap_type_stays_explicit(void) {
 int main(void) {
     test_legacy_reference_types();
     test_general_function_reference_types();
+    test_legacy_function_type_retains_semantics();
     test_unsupported_heap_type_stays_explicit();
     return 0;
 }
