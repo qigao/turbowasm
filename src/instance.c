@@ -2141,23 +2141,6 @@ static void turbowasm_write_u64_le(uint8_t *p, uint64_t value) {
         p[index] = (uint8_t)(value >> (8u * index));
 }
 
-static turbowasm_status turbowasm_exec_read_memarg(
-    turbowasm_reader *reader,
-    uint32_t *out_offset) {
-    uint32_t alignment;
-    uint32_t offset;
-
-    if (reader == NULL || out_offset == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (!turbowasm_reader_uleb32(reader, &alignment) ||
-        !turbowasm_reader_uleb32(reader, &offset))
-        return TURBOWASM_MALFORMED_MODULE;
-
-    (void)alignment;
-    *out_offset = offset;
-    return TURBOWASM_OK;
-}
-
 static turbowasm_status turbowasm_exec_read_indexed_memarg(
     turbowasm_reader *reader,
     uint32_t *out_memory_index,
@@ -3106,6 +3089,7 @@ static turbowasm_status turbowasm_exec_simd_memory(
     turbowasm_value_stack *stack,
     turbowasm_trap *trap,
     const turbowasm_simd_exec_descriptor *descriptor) {
+    uint32_t memory_index;
     uint32_t offset;
     uint8_t lane = 0u;
     turbowasm_value address;
@@ -3120,7 +3104,8 @@ static turbowasm_status turbowasm_exec_simd_memory(
         stack == NULL || trap == NULL || descriptor == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    status = turbowasm_exec_read_memarg(reader, &offset);
+    status = turbowasm_exec_read_indexed_memarg(
+        reader, &memory_index, &offset);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -3144,7 +3129,7 @@ static turbowasm_status turbowasm_exec_simd_memory(
         return status;
 
     status = turbowasm_instance_memory_bounds(
-        instance, 0u,
+        instance, memory_index,
         (uint32_t)address.as.i32,
         offset, descriptor->memory_width,
         &memory);
@@ -3450,12 +3435,14 @@ static turbowasm_status turbowasm_exec_simd(
 
     switch (subopcode) {
         case 0x00u: { /* v128.load */
+            uint32_t memory_index;
             uint32_t offset;
             turbowasm_value address;
             turbowasm_value out = {0};
             uint8_t *source;
 
-            status = turbowasm_exec_read_memarg(reader, &offset);
+            status = turbowasm_exec_read_indexed_memarg(
+                reader, &memory_index, &offset);
             if (status != TURBOWASM_OK)
                 return status;
             status = turbowasm_stack_pop_kind(
@@ -3464,7 +3451,7 @@ static turbowasm_status turbowasm_exec_simd(
                 return status;
 
             status = turbowasm_instance_memory_bounds(
-                instance, 0u,
+                instance, memory_index,
                 (uint32_t)address.as.i32,
                 offset, 16u, &source);
             if (status == TURBOWASM_TRAPPED) {
@@ -3481,12 +3468,14 @@ static turbowasm_status turbowasm_exec_simd(
         }
 
         case 0x0bu: { /* v128.store */
+            uint32_t memory_index;
             uint32_t offset;
             turbowasm_value value;
             turbowasm_value address;
             uint8_t *destination;
 
-            status = turbowasm_exec_read_memarg(reader, &offset);
+            status = turbowasm_exec_read_indexed_memarg(
+                reader, &memory_index, &offset);
             if (status != TURBOWASM_OK)
                 return status;
             status = turbowasm_stack_pop_kind(
@@ -3499,7 +3488,7 @@ static turbowasm_status turbowasm_exec_simd(
                 return status;
 
             status = turbowasm_instance_memory_bounds(
-                instance, 0u,
+                instance, memory_index,
                 (uint32_t)address.as.i32,
                 offset, 16u, &destination);
             if (status == TURBOWASM_TRAPPED) {

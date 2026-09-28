@@ -926,27 +926,6 @@ static turbowasm_status turbowasm_validate_return_call_indirect(
 }
 
 
-static bool turbowasm_memory0_exists(
-    const turbowasm_validation_context *context) {
-    return context != NULL && context->memory_count != 0u;
-}
-
-static turbowasm_status turbowasm_validate_memarg(
-    turbowasm_reader *body,
-    uint32_t maximum_alignment) {
-    uint32_t alignment;
-    uint32_t offset;
-
-    if (!turbowasm_reader_uleb32(body, &alignment) ||
-        !turbowasm_reader_uleb32(body, &offset))
-        return TURBOWASM_MALFORMED_MODULE;
-    (void)offset;
-
-    return alignment <= maximum_alignment
-        ? TURBOWASM_OK
-        : TURBOWASM_MALFORMED_MODULE;
-}
-
 static turbowasm_status turbowasm_validate_indexed_memarg(
     turbowasm_reader *body,
     const turbowasm_validation_context *context,
@@ -995,19 +974,8 @@ static turbowasm_status turbowasm_validate_load(
     uint32_t maximum_alignment) {
     turbowasm_status status;
 
-    if (result_type == TW_V128) {
-        /*
-         * Indexed SIMD memory operands land in a later slice. Keep the
-         * current memory-0 encoding explicit rather than accepting a memidx
-         * that the SIMD interpreter/JIT helpers do not yet carry.
-         */
-        if (!turbowasm_memory0_exists(context))
-            return TURBOWASM_MALFORMED_MODULE;
-        status = turbowasm_validate_memarg(body, maximum_alignment);
-    } else {
-        status = turbowasm_validate_indexed_memarg(
-            body, context, maximum_alignment);
-    }
+    status = turbowasm_validate_indexed_memarg(
+        body, context, maximum_alignment);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -1025,14 +993,8 @@ static turbowasm_status turbowasm_validate_store(
     uint32_t maximum_alignment) {
     turbowasm_status status;
 
-    if (value_type == TW_V128) {
-        if (!turbowasm_memory0_exists(context))
-            return TURBOWASM_MALFORMED_MODULE;
-        status = turbowasm_validate_memarg(body, maximum_alignment);
-    } else {
-        status = turbowasm_validate_indexed_memarg(
-            body, context, maximum_alignment);
-    }
+    status = turbowasm_validate_indexed_memarg(
+        body, context, maximum_alignment);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -1196,17 +1158,6 @@ static turbowasm_status turbowasm_stack_pop_i32_n(
         --count;
     }
     return TURBOWASM_OK;
-}
-
-static turbowasm_status turbowasm_read_reserved_zero(
-    turbowasm_reader *body) {
-    uint8_t reserved;
-
-    if (!turbowasm_reader_u8(body, &reserved))
-        return TURBOWASM_MALFORMED_MODULE;
-    return reserved == 0x00u
-        ? TURBOWASM_OK
-        : TURBOWASM_UNSUPPORTED;
 }
 
 static turbowasm_status turbowasm_validate_fc(
@@ -1467,10 +1418,8 @@ static turbowasm_status turbowasm_validate_simd_descriptor(
         case TURBOWASM_SIMD_MEMORY_LOAD_LANE: {
             uint8_t lane;
 
-            if (!turbowasm_memory0_exists(context))
-                return TURBOWASM_MALFORMED_MODULE;
-            status = turbowasm_validate_memarg(
-                body, descriptor->memory_alignment);
+            status = turbowasm_validate_indexed_memarg(
+                body, context, descriptor->memory_alignment);
             if (status != TURBOWASM_OK)
                 return status;
             if (!turbowasm_reader_u8(body, &lane))
@@ -1490,10 +1439,8 @@ static turbowasm_status turbowasm_validate_simd_descriptor(
         case TURBOWASM_SIMD_MEMORY_STORE_LANE: {
             uint8_t lane;
 
-            if (!turbowasm_memory0_exists(context))
-                return TURBOWASM_MALFORMED_MODULE;
-            status = turbowasm_validate_memarg(
-                body, descriptor->memory_alignment);
+            status = turbowasm_validate_indexed_memarg(
+                body, context, descriptor->memory_alignment);
             if (status != TURBOWASM_OK)
                 return status;
             if (!turbowasm_reader_u8(body, &lane))

@@ -101,8 +101,8 @@ static void test_slot_copy(void) {
 static void test_memory_helper_and_trap(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
-        /* memory0 min=1 */
-        0x05, 0x03, 0x01, 0x00, 0x01
+        /* memory0 min=1, memory1 min=1 */
+        0x05, 0x05, 0x02, 0x00, 0x01, 0x00, 0x01
     };
     turbowasm_module module = {0};
     turbowasm_instance instance = {0};
@@ -127,20 +127,36 @@ static void test_memory_helper_and_trap(void) {
     assert(turbowasm_jit_simd_memory(
                &context,
                0x0b, /* v128.store */
-               0, 0, 0) == TURBOWASM_OK);
+               0, 0, 0, 0) == TURBOWASM_OK);
     assert(turbowasm_jit_simd_memory(
                &context,
                0x00, /* v128.load */
-               1, 0, 0) == TURBOWASM_OK);
+               0, 1, 0, 0) == TURBOWASM_OK);
 
     salts_simd_v128_store(output, &slots[1]);
     assert(memcmp(input, output, sizeof(input)) == 0);
+
+    {
+        int32_t input1[4] = {5, 6, 7, 8};
+        memset(output, 0, sizeof(output));
+        salts_simd_v128_load(&slots[0], input1);
+        assert(turbowasm_jit_simd_memory(
+                   &context,
+                   0x0b, /* v128.store */
+                   1, 0, 0, 0) == TURBOWASM_OK);
+        assert(turbowasm_jit_simd_memory(
+                   &context,
+                   0x00, /* v128.load */
+                   1, 1, 0, 0) == TURBOWASM_OK);
+        salts_simd_v128_store(output, &slots[1]);
+        assert(memcmp(input1, output, sizeof(input1)) == 0);
+    }
 
     reset_status(&context);
     assert(turbowasm_jit_simd_memory(
                &context,
                0x00,
-               1, 65530, 0) == TURBOWASM_TRAPPED);
+               0, 1, 65530, 0) == TURBOWASM_TRAPPED);
     assert(context.call_status == TURBOWASM_TRAPPED);
     assert(context.call_trap ==
            TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS);
