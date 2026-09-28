@@ -597,7 +597,7 @@ turbowasm_status turbowasm_validate_export_section(
         if (!turbowasm_reader_u8(section, &kind) ||
             !turbowasm_reader_uleb32(section, &item_index))
             return TURBOWASM_MALFORMED_MODULE;
-        if (kind > 0x03u)
+        if (kind > 0x04u)
             return TURBOWASM_UNSUPPORTED;
         if (!turbowasm_export_index_valid(
                 kind, item_index, summary))
