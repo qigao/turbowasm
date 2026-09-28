@@ -238,6 +238,31 @@ static turbowasm_status turbowasm_read_memory_type(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status turbowasm_read_tag_type(
+    turbowasm_reader *reader,
+    const turbowasm_validation_context *context,
+    uint32_t *out_type_index) {
+    uint8_t attribute;
+    uint32_t type_index;
+    const turbowasm_validation_func_type *type;
+
+    if (reader == NULL || context == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_u8(reader, &attribute) ||
+        !turbowasm_reader_uleb32(reader, &type_index))
+        return TURBOWASM_MALFORMED_MODULE;
+    if (attribute != 0x00u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    type = turbowasm_validation_context_type(context, type_index);
+    if (type == NULL || !type->defined || type->result_count != 0u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (out_type_index != NULL)
+        *out_type_index = type_index;
+    return TURBOWASM_OK;
+}
+
 static bool turbowasm_index_in_total(
     uint32_t index,
     uint32_t imported,
@@ -330,6 +355,20 @@ turbowasm_status turbowasm_validate_import_section(
                         NULL, 0u))
                     return TURBOWASM_OUT_OF_MEMORY;
                 ++summary->imported_global_count;
+                break;
+            }
+            case 0x04u: {
+                import_desc.item_index =
+                    summary->imported_tag_count;
+                status = turbowasm_read_tag_type(
+                    section, context, &type_index);
+                if (status != TURBOWASM_OK)
+                    return status;
+                import_desc.type_index = type_index;
+                if (!turbowasm_validation_context_append_tag(
+                        context, type_index, true))
+                    return TURBOWASM_OUT_OF_MEMORY;
+                ++summary->imported_tag_count;
                 break;
             }
             default:
@@ -461,6 +500,35 @@ turbowasm_status turbowasm_validate_memory_section(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_validate_tag_section(
+    turbowasm_reader *section,
+    turbowasm_module_summary *summary,
+    turbowasm_validation_context *context) {
+    uint32_t count;
+    uint32_t index;
+
+    if (section == NULL || summary == NULL || context == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_uleb32(section, &count))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    for (index = 0u; index < count; ++index) {
+        uint32_t type_index;
+        turbowasm_status status = turbowasm_read_tag_type(
+            section, context, &type_index);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (!turbowasm_validation_context_append_tag(
+                context, type_index, false))
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    if (turbowasm_reader_remaining(section) != 0u)
+        return TURBOWASM_MALFORMED_MODULE;
+    summary->tag_count = count;
+    return TURBOWASM_OK;
+}
+
 static bool turbowasm_export_index_valid(
     uint8_t kind,
     uint32_t index,
@@ -482,6 +550,10 @@ static bool turbowasm_export_index_valid(
             return turbowasm_index_in_total(
                 index, summary->imported_global_count,
                 summary->global_count);
+        case 0x04u:
+            return turbowasm_index_in_total(
+                index, summary->imported_tag_count,
+                summary->tag_count);
         default:
             return false;
     }
