@@ -1724,15 +1724,15 @@ turbowasm_status turbowasm_validate_function_body(
                     goto done;
                 }
                 if (opcode == 0x23u) {
-                    result = turbowasm_stack_push(
-                        &stack, global->value_type);
+                    result = turbowasm_stack_push_semantic(
+                        &stack, global->semantic_type);
                 } else {
                     if (!global->mutable_value) {
                         result = TURBOWASM_MALFORMED_MODULE;
                         goto done;
                     }
-                    result = turbowasm_stack_pop(
-                        &stack, global->value_type);
+                    result = turbowasm_stack_pop_semantic(
+                        &stack, &global->semantic_type);
                 }
                 if (result != TURBOWASM_OK) goto done;
                 break;
