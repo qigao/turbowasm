@@ -36,7 +36,13 @@ if(NOT TARGET Salts::SIMD)
     "TurboWasm requires Salts 1.8.3 with the canonical Salts::SIMD target")
 endif()
 
+if(NOT TARGET Salts::Coroutine)
+  message(FATAL_ERROR
+    "TurboWasm requires Salts 1.8.3 with the canonical Salts::Coroutine target")
+endif()
+
 add_library(turbowasm
+  src/execution.c
   src/instance.c
   src/instance_state.c
   src/jit_simd_helper.c
@@ -69,7 +75,9 @@ target_include_directories(turbowasm
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
-target_link_libraries(turbowasm PUBLIC Salts::CMeta Salts::SIMD)
+target_link_libraries(turbowasm
+  PUBLIC Salts::CMeta Salts::SIMD
+  PRIVATE Salts::Coroutine)
 if(UNIX)
   target_link_libraries(turbowasm PRIVATE m)
 endif()
