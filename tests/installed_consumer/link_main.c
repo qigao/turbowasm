@@ -58,8 +58,14 @@ static turbowasm_status host_wait_once(
     if (!turbowasm_host_call_can_wait(call))
         return TURBOWASM_UNSUPPORTED;
 
-    status = turbowasm_host_call_wait(
-        call, (uintptr_t)0x55u, &completion_status);
+    {
+        turbowasm_host_wait wait = {0};
+        status = turbowasm_host_call_wait(
+            call, (uintptr_t)0x55u, &wait, &completion_status);
+        if (wait.generation == 0u ||
+            wait.operation_token != (uintptr_t)0x55u)
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
     if (status != TURBOWASM_OK)
         return status;
 
