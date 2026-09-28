@@ -849,21 +849,22 @@ turbowasm_status turbowasm_instance_state_init(
     if (status != TURBOWASM_OK)
         goto fail;
 
-    status = turbowasm_apply_data_segments(
-        instance, &module->validation);
-    if (status != TURBOWASM_OK)
-        goto fail;
-
+    /*
+     * Instantiation initializes active element segments before active data
+     * segments. Side effects to imported store objects are observable even if
+     * a later segment traps, so this order is semantically significant.
+     */
     status = turbowasm_apply_element_segments(
         instance, &module->validation);
     if (status != TURBOWASM_OK)
-        goto fail;
+        return status;
+
+    status = turbowasm_apply_data_segments(
+        instance, &module->validation);
+    if (status != TURBOWASM_OK)
+        return status;
 
     return TURBOWASM_OK;
-
-fail:
-    turbowasm_instance_state_destroy(instance);
-    return status;
 }
 
 void turbowasm_instance_state_destroy(
