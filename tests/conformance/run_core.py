@@ -39,8 +39,12 @@ def encode_value(value, expected=False):
     if value_type in ("i32", "i64", "f32", "f64"):
         if not isinstance(raw, str):
             return None, f"{value_type} value is not a string"
-        if expected and raw.startswith("nan:"):
-            return None, f"{value_type} NaN pattern not yet qualified"
+        if (
+            expected
+            and value_type in ("f32", "f64")
+            and raw in ("nan:canonical", "nan:arithmetic")
+        ):
+            return f"{value_type}:{raw}", None
         if not raw.isdigit():
             return None, f"{value_type} non-decimal encoding unsupported"
         return f"{value_type}:{raw}", None

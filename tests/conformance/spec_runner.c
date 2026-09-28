@@ -31,6 +31,17 @@ typedef struct spec_state {
     bool printed_first_unsupported;
 } spec_state;
 
+typedef enum spec_expected_pattern {
+    SPEC_EXPECT_EXACT = 0,
+    SPEC_EXPECT_NAN_CANONICAL,
+    SPEC_EXPECT_NAN_ARITHMETIC
+} spec_expected_pattern;
+
+typedef struct spec_expected_value {
+    turbowasm_value value;
+    spec_expected_pattern pattern;
+} spec_expected_value;
+
 static void spec_note_failure(spec_state *state,
                               unsigned line,
                               const char *message) {
@@ -366,6 +377,132 @@ static bool spec_parse_values(const char *text,
     *out_values = values;
     *out_count = count;
     return true;
+}
+
+static bool spec_parse_expected_value(
+    const char *token,
+    spec_expected_value *out) {
+    if (token == NULL || out == NULL)
+        return false;
+
+    memset(out, 0, sizeof(*out));
+
+    if (strcmp(token, "f32:nan:canonical") == 0) {
+        out->value.kind = TURBOWASM_VALUE_F32;
+        out->pattern = SPEC_EXPECT_NAN_CANONICAL;
+        return true;
+    }
+    if (strcmp(token, "f32:nan:arithmetic") == 0) {
+        out->value.kind = TURBOWASM_VALUE_F32;
+        out->pattern = SPEC_EXPECT_NAN_ARITHMETIC;
+        return true;
+    }
+    if (strcmp(token, "f64:nan:canonical") == 0) {
+        out->value.kind = TURBOWASM_VALUE_F64;
+        out->pattern = SPEC_EXPECT_NAN_CANONICAL;
+        return true;
+    }
+    if (strcmp(token, "f64:nan:arithmetic") == 0) {
+        out->value.kind = TURBOWASM_VALUE_F64;
+        out->pattern = SPEC_EXPECT_NAN_ARITHMETIC;
+        return true;
+    }
+
+    out->pattern = SPEC_EXPECT_EXACT;
+    return spec_parse_value(token, &out->value);
+}
+
+static bool spec_parse_expected_values(
+    const char *text,
+    spec_expected_value **out_values,
+    size_t *out_count) {
+    size_t count;
+    size_t index = 0u;
+    char *copy = NULL;
+    char *cursor;
+    spec_expected_value *values = NULL;
+
+    if (out_values == NULL || out_count == NULL)
+        return false;
+    *out_values = NULL;
+    *out_count = 0u;
+
+    count = spec_count_tokens(text);
+    if (count == 0u)
+        return true;
+
+    values = (spec_expected_value *)calloc(count, sizeof(*values));
+    if (values == NULL)
+        return false;
+
+    copy = (char *)malloc(strlen(text) + 1u);
+    if (copy == NULL) {
+        free(values);
+        return false;
+    }
+    strcpy(copy, text);
+
+    cursor = copy;
+    while (cursor != NULL && *cursor != '\0') {
+        char *comma = strchr(cursor, ',');
+        if (comma != NULL)
+            *comma = '\0';
+
+        if (index >= count ||
+            !spec_parse_expected_value(cursor, &values[index])) {
+            free(copy);
+            free(values);
+            return false;
+        }
+        ++index;
+        cursor = comma == NULL ? NULL : comma + 1u;
+    }
+
+    free(copy);
+    if (index != count) {
+        free(values);
+        return false;
+    }
+
+    *out_values = values;
+    *out_count = count;
+    return true;
+}
+
+static bool spec_expected_matches(
+    const turbowasm_value *actual,
+    const spec_expected_value *expected) {
+    uint32_t f32_bits;
+    uint64_t f64_bits;
+
+    if (actual == NULL || expected == NULL)
+        return false;
+
+    if (expected->pattern == SPEC_EXPECT_EXACT)
+        return spec_values_equal(actual, &expected->value);
+
+    if (actual->kind != expected->value.kind)
+        return false;
+
+    if (actual->kind == TURBOWASM_VALUE_F32) {
+        memcpy(&f32_bits, &actual->as.f32, sizeof(f32_bits));
+        if (expected->pattern == SPEC_EXPECT_NAN_CANONICAL)
+            return (f32_bits & UINT32_C(0x7fffffff)) ==
+                   UINT32_C(0x7fc00000);
+        return (f32_bits & UINT32_C(0x7fc00000)) ==
+               UINT32_C(0x7fc00000);
+    }
+
+    if (actual->kind == TURBOWASM_VALUE_F64) {
+        memcpy(&f64_bits, &actual->as.f64, sizeof(f64_bits));
+        if (expected->pattern == SPEC_EXPECT_NAN_CANONICAL)
+            return (f64_bits & UINT64_C(0x7fffffffffffffff)) ==
+                   UINT64_C(0x7ff8000000000000);
+        return (f64_bits & UINT64_C(0x7ff8000000000000)) ==
+               UINT64_C(0x7ff8000000000000);
+    }
+
+    return false;
 }
 
 static int64_t spec_resolve_slot(const spec_state *state,
@@ -731,7 +868,7 @@ static void spec_command_assert_return(spec_state *state,
                                        const char *args_text,
                                        const char *expected_text) {
     turbowasm_value *results = NULL;
-    turbowasm_value *expected = NULL;
+    spec_expected_value *expected = NULL;
     size_t result_count = 0u;
     size_t expected_count = 0u;
     size_t index;
@@ -739,7 +876,7 @@ static void spec_command_assert_return(spec_state *state,
     bool unsupported = false;
     turbowasm_status status;
 
-    if (!spec_parse_values(
+    if (!spec_parse_expected_values(
             expected_text, &expected, &expected_count)) {
         spec_note_failure(state, line, "invalid expected value encoding");
         return;
@@ -763,7 +900,7 @@ static void spec_command_assert_return(spec_state *state,
     }
 
     for (index = 0u; index < result_count; ++index) {
-        if (!spec_values_equal(&results[index], &expected[index])) {
+        if (!spec_expected_matches(&results[index], &expected[index])) {
             spec_note_failure(state, line, "assert_return value mismatch");
             goto done;
         }
