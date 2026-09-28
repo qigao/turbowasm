@@ -2,16 +2,14 @@ name: TurboWasm CI
 
 on:
   pull_request:
-  push:
-    branches: [master]
-  workflow_dispatch:
+
 
 permissions:
   contents: read
   packages: read
 
 env:
-  SALTS_SDK_VERSION: 1.8.2
+  SALTS_SDK_VERSION: 1.8.3
 
 jobs:
   linux:
@@ -21,7 +19,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.2 SDK
+      - name: Restore Salts 1.8.3 SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -78,7 +76,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.2 SDK
+      - name: Restore Salts 1.8.3 SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -148,7 +146,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.2 SDK
+      - name: Restore Salts 1.8.3 SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -226,7 +224,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.2 SDK
+      - name: Restore Salts 1.8.3 SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
