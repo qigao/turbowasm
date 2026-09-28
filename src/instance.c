@@ -4031,6 +4031,49 @@ restart_frame:
                     goto done;
                 break;
             }
+            case 0x08u: { /* throw */
+                uint32_t tag_index;
+                turbowasm_exception *exception = NULL;
+
+                if (!turbowasm_reader_uleb32(&reader, &tag_index)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+                status = turbowasm_exception_create(
+                    instance, context, tag_index, &stack, &exception);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                status = turbowasm_exec_handle_exception(
+                    instance, exception, &stack, &controls,
+                    &reader, function, &finished, &returned);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
+            case 0x0au: { /* throw_ref */
+                turbowasm_value reference;
+                turbowasm_exception *exception;
+
+                status = turbowasm_stack_pop_kind(
+                    &stack, TURBOWASM_VALUE_EXNREF, &reference);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                if (reference.as.exnref.is_null ||
+                    reference.as.exnref.exception == NULL) {
+                    *trap = TURBOWASM_TRAP_NULL_REFERENCE;
+                    status = TURBOWASM_TRAPPED;
+                    goto done;
+                }
+
+                exception = (turbowasm_exception *)
+                    reference.as.exnref.exception;
+                status = turbowasm_exec_handle_exception(
+                    instance, exception, &stack, &controls,
+                    &reader, function, &finished, &returned);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
             case 0x0bu: /* end */
                 if (controls.size == 1u) {
                     if (turbowasm_reader_remaining(&reader) != 0u) {
@@ -4270,6 +4313,54 @@ restart_frame:
                 status = turbowasm_stack_push(
                     &stack,
                     condition.as.i32 != 0 ? left : right);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+            }
+            case 0x1fu: { /* try_table */
+                uint32_t opcode_offset;
+                const turbowasm_validation_control *annotation;
+                turbowasm_exec_block_signature signature;
+
+                if (reader.cursor <= function->code ||
+                    (size_t)(reader.cursor - function->code - 1u) >
+                        UINT32_MAX) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+                opcode_offset =
+                    (uint32_t)(reader.cursor - function->code - 1u);
+                annotation =
+                    turbowasm_validation_function_control_at(
+                        function, opcode_offset);
+                if (annotation == NULL ||
+                    annotation->kind !=
+                        TURBOWASM_VALIDATION_CONTROL_TRY_TABLE ||
+                    annotation->end_offset == UINT32_MAX) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                status = turbowasm_exec_read_block_signature(
+                    &reader, context, &signature);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                if ((size_t)(reader.cursor - function->code) >
+                        annotation->body_offset ||
+                    annotation->body_offset > function->code_size) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                /*
+                 * Validation retained and proved all catch immediates. Runtime
+                 * execution consumes them by advancing to the retained body.
+                 */
+                reader.cursor = function->code + annotation->body_offset;
+                status = turbowasm_exec_control_push(
+                    &controls, &stack,
+                    TURBOWASM_EXEC_CONTROL_TRY_TABLE,
+                    annotation, &signature);
                 if (status != TURBOWASM_OK)
                     goto done;
                 break;
@@ -5251,6 +5342,8 @@ const char *turbowasm_trap_string(turbowasm_trap trap) {
             return "indirect_call_type_mismatch";
         case TURBOWASM_TRAP_INVALID_CONVERSION_TO_INTEGER:
             return "invalid_conversion_to_integer";
+        case TURBOWASM_TRAP_NULL_REFERENCE:
+            return "null_reference";
         default: return "unknown";
     }
 }
