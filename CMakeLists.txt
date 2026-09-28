@@ -21,19 +21,19 @@ if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
 endif()
 
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTS_ROOT_PATH)
-find_package(Salts 1.8.2 CONFIG REQUIRED
+find_package(Salts 1.8.3 EXACT CONFIG REQUIRED
   PATHS "${SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
 
 if(NOT TARGET Salts::CMeta)
   message(FATAL_ERROR
-    "TurboWasm requires Salts 1.8.2 with the canonical Salts::CMeta target")
+    "TurboWasm requires Salts 1.8.3 with the canonical Salts::CMeta target")
 endif()
 
 if(NOT TARGET Salts::SIMD)
   message(FATAL_ERROR
-    "TurboWasm requires Salts 1.8.2 with the canonical Salts::SIMD target")
+    "TurboWasm requires Salts 1.8.3 with the canonical Salts::SIMD target")
 endif()
 
 add_library(turbowasm
