@@ -186,6 +186,59 @@ static void test_ref_func_table_set_and_call_indirect(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_ref_func_table_set_and_return_call_indirect(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0 [] -> i32, type1 [] -> [] */
+        0x01, 0x08,
+        0x02,
+        0x60, 0x00, 0x01, 0x7f,
+        0x60, 0x00, 0x00,
+
+        /* functions: target, setter, indirect tail caller */
+        0x03, 0x04,
+        0x03, 0x00, 0x01, 0x00,
+
+        /* table0 funcref min=1 */
+        0x04, 0x04,
+        0x01, 0x70, 0x00, 0x01,
+
+        /* declarative element declares ref.func 0 without initializing */
+        0x09, 0x05,
+        0x01, 0x03, 0x00, 0x01, 0x00,
+
+        0x0a, 0x17,
+        0x03,
+        /* func0 -> 7 */
+        0x04, 0x00, 0x41, 0x07, 0x0b,
+        /* func1: table[0] = ref.func 0 */
+        0x08, 0x00,
+              0x41, 0x00,
+              0xd2, 0x00,
+              0x26, 0x00,
+              0x0b,
+        /* func2: return_call_indirect type0 at table[0] */
+        0x07, 0x00,
+              0x41, 0x00,
+              0x13, 0x00, 0x00,
+              0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    invoke_void(&instance, 1u);
+    assert(invoke_i32(&instance, 2u, NULL, 0u) == 7);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 static void test_typed_funcref_br_table_meet(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -429,6 +482,7 @@ int main(void) {
     test_funcref_public_argument();
     test_table_get_out_of_bounds_traps();
     test_ref_func_table_set_and_call_indirect();
+    test_ref_func_table_set_and_return_call_indirect();
     test_typed_funcref_br_table_meet();
     test_externref_table_round_trip();
     test_defined_table_initializer_executes();
