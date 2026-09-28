@@ -20,7 +20,7 @@ typedef struct spec_slot {
 } spec_slot;
 
 typedef struct spec_state {
-    spec_slot *slots;
+    spec_slot **slots;
     size_t slot_count;
     turbowasm_linker linker;
     int64_t current_slot;
@@ -108,31 +108,41 @@ static void spec_slot_destroy(spec_slot *slot) {
 }
 
 static bool spec_ensure_slot(spec_state *state, size_t slot_index) {
-    spec_slot *grown;
+    spec_slot **grown;
     size_t next;
 
-    if (slot_index < state->slot_count)
-        return true;
+    if (state == NULL)
+        return false;
 
-    next = state->slot_count == 0u ? 8u : state->slot_count;
-    while (next <= slot_index) {
-        if (next > SIZE_MAX / 2u)
+    if (slot_index >= state->slot_count) {
+        next = state->slot_count == 0u ? 8u : state->slot_count;
+        while (next <= slot_index) {
+            if (next > SIZE_MAX / 2u)
+                return false;
+            next *= 2u;
+        }
+
+        if (next > SIZE_MAX / sizeof(*grown))
             return false;
-        next *= 2u;
+
+        grown = (spec_slot **)realloc(
+            state->slots, next * sizeof(*grown));
+        if (grown == NULL)
+            return false;
+
+        memset(grown + state->slot_count, 0,
+               (next - state->slot_count) * sizeof(*grown));
+        state->slots = grown;
+        state->slot_count = next;
     }
 
-    if (next > SIZE_MAX / sizeof(*grown))
-        return false;
+    if (state->slots[slot_index] == NULL) {
+        state->slots[slot_index] =
+            (spec_slot *)calloc(1u, sizeof(spec_slot));
+        if (state->slots[slot_index] == NULL)
+            return false;
+    }
 
-    grown = (spec_slot *)realloc(
-        state->slots, next * sizeof(*grown));
-    if (grown == NULL)
-        return false;
-
-    memset(grown + state->slot_count, 0,
-           (next - state->slot_count) * sizeof(*grown));
-    state->slots = grown;
-    state->slot_count = next;
     return true;
 }
 
@@ -428,8 +438,8 @@ static turbowasm_status spec_invoke(spec_state *state,
         (size_t)slot_index >= state->slot_count)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    slot = &state->slots[(size_t)slot_index];
-    if (slot->unsupported || !slot->ready) {
+    slot = state->slots[(size_t)slot_index];
+    if (slot == NULL || slot->unsupported || !slot->ready) {
         *out_unsupported = true;
         return TURBOWASM_UNSUPPORTED;
     }
@@ -505,7 +515,7 @@ static void spec_command_module(spec_state *state,
         return;
     }
 
-    slot = &state->slots[slot_index];
+    slot = state->slots[slot_index];
     spec_slot_destroy(slot);
     slot->bytes = spec_read_file(path, &slot->size);
     if (slot->bytes == NULL) {
@@ -557,8 +567,9 @@ static void spec_command_register(spec_state *state,
 
     if (slot_index < 0 ||
         (size_t)slot_index >= state->slot_count ||
-        state->slots[(size_t)slot_index].unsupported ||
-        !state->slots[(size_t)slot_index].ready) {
+        state->slots[(size_t)slot_index] == NULL ||
+        state->slots[(size_t)slot_index]->unsupported ||
+        !state->slots[(size_t)slot_index]->ready) {
         spec_note_unsupported(state, line, "register target unavailable");
         return;
     }
@@ -573,7 +584,7 @@ static void spec_command_register(spec_state *state,
 
     status = turbowasm_linker_define_instance(
         &state->linker, name,
-        &state->slots[(size_t)slot_index].instance);
+        &state->slots[(size_t)slot_index]->instance);
     free(name_bytes);
 
     if (status != TURBOWASM_OK) {
@@ -841,6 +852,12 @@ static int spec_run_manifest(spec_state *state, const char *path) {
             continue;
         }
 
+        if (getenv("TURBOWASM_SPEC_TRACE") != NULL) {
+            fprintf(stderr, "TRACE line=%u command=%s\n",
+                    line, fields[0]);
+            fflush(stderr);
+        }
+
         if (strcmp(fields[0], "unsupported") == 0) {
             spec_note_unsupported(state, line, fields[2]);
             continue;
@@ -941,7 +958,10 @@ int main(int argc, char **argv) {
     index = state.slot_count;
     while (index != 0u) {
         --index;
-        spec_slot_destroy(&state.slots[index]);
+        if (state.slots[index] != NULL) {
+            spec_slot_destroy(state.slots[index]);
+            free(state.slots[index]);
+        }
     }
     free(state.slots);
     turbowasm_linker_destroy(&state.linker);

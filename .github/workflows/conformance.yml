@@ -47,7 +47,9 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build/conformance -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -O1" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" \
             -DTURBOWASM_BUILD_TESTS=OFF \
             -DTURBOWASM_BUILD_TOOLS=OFF \
             -DTURBOWASM_ENABLE_CFLOW_ADAPTER=OFF \

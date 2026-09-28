@@ -288,8 +288,29 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
     )
     match = SUMMARY_RE.search(result.stdout)
     if match is None:
-        print(f"SPEC {filename} runner_summary_missing")
+        print(
+            f"SPEC {filename} runner_summary_missing "
+            f"returncode={result.returncode}"
+        )
         print(result.stdout)
+
+        trace_env = os.environ.copy()
+        trace_env["TURBOWASM_SPEC_TRACE"] = "1"
+        traced = subprocess.run(
+            [runner, manifest_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            env=trace_env,
+        )
+        trace_lines = traced.stdout.splitlines()
+        print(
+            f"SPEC {filename} traced_returncode={traced.returncode} "
+            f"trace_tail={min(80, len(trace_lines))}"
+        )
+        for trace_line in trace_lines[-80:]:
+            print(trace_line)
         return 0, 1, 0, 1
 
     passed, failed, unsupported, total = map(int, match.groups())
