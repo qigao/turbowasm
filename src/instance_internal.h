@@ -120,6 +120,7 @@ typedef struct turbowasm_instance_impl {
     /* Instance-owned exception objects keep exnref values stable until the
      * instance is destroyed. */
     turbowasm_exception *exceptions;
+    turbowasm_exception *pending_exception;
 
     turbowasm_value *globals;
     uint32_t global_count;
