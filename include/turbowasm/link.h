@@ -43,6 +43,24 @@ typedef struct turbowasm_host_call {
 turbowasm_instance *turbowasm_host_call_instance(
     turbowasm_host_call *call);
 
+/*
+ * Copy through the canonical guest-memory bounds path for the current host
+ * invocation. These APIs never return a long-lived guest pointer.
+ */
+turbowasm_status turbowasm_host_call_memory_read(
+    turbowasm_host_call *call,
+    uint32_t memory_index,
+    uint64_t address,
+    void *destination,
+    size_t length);
+
+turbowasm_status turbowasm_host_call_memory_write(
+    turbowasm_host_call *call,
+    uint32_t memory_index,
+    uint64_t address,
+    const void *source,
+    size_t length);
+
 typedef struct turbowasm_host_function_type {
     const turbowasm_value_kind *params;
     size_t param_count;
