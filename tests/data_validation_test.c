@@ -212,6 +212,35 @@ static void test_known_nonconst_opcode_is_invalid(void) {
     assert(module.impl == NULL);
 }
 
+static void test_call_is_not_a_constant_expression(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: () -> funcref */
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x70,
+
+        /* func0 uses type0 */
+        0x03, 0x02,
+        0x01, 0x00,
+
+        /* global funcref = call 0: syntactically known, not constant */
+        0x06, 0x06,
+        0x01, 0x70, 0x00,
+        0x10, 0x00, 0x0b,
+
+        /* func0: ref.null func */
+        0x0a, 0x06,
+        0x01, 0x04,
+        0x00, 0xd0, 0x70, 0x0b
+    };
+    turbowasm_module module = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) ==
+           TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
 static void test_extended_const_i32_arithmetic(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -350,6 +379,7 @@ int main(void) {
     test_global_get_rejects_prior_local_mutable();
     test_global_get_rejects_forward_local_global();
     test_known_nonconst_opcode_is_invalid();
+    test_call_is_not_a_constant_expression();
     test_extended_const_i32_arithmetic();
     test_extended_const_multiple_values_rejected();
     test_sleb32_overflow_rejected();

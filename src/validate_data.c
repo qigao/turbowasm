@@ -322,6 +322,7 @@ turbowasm_status turbowasm_validate_const_expr_semantic(
              * below so capability accounting remains honest.
              */
             case 0x01u: /* nop */
+            case 0x10u: /* call */
             case 0x20u: /* local.get */
             case 0x68u: /* i32.ctz */
             case 0x8cu: /* f32.neg */
