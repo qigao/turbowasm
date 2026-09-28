@@ -21,7 +21,7 @@
     "core_dir": "test/core",
     "suite": "proposal-tail-call.txt",
     "wast2json_flags": [],
-    "minimum_passes": 0
+    "minimum_passes": 1
   },
   "multi-memory": {
     "repository": "https://github.com/WebAssembly/multi-memory.git",
