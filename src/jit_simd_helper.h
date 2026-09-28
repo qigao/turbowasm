@@ -59,6 +59,7 @@ int64_t turbowasm_jit_simd_reduce(
 int64_t turbowasm_jit_simd_memory(
     turbowasm_jit_invocation_context *context,
     int64_t opcode,
+    int64_t memory_index,
     int64_t slot,
     int64_t address,
     int64_t offset);
