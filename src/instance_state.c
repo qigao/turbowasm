@@ -15,6 +15,7 @@ static turbowasm_value_kind turbowasm_state_kind_from_valtype(
         case 0x7cu: return TURBOWASM_VALUE_F64;
         case 0x7bu: return TURBOWASM_VALUE_V128;
         case 0x70u: return TURBOWASM_VALUE_FUNCREF;
+        case 0x6fu: return TURBOWASM_VALUE_EXTERNREF;
         default: return (turbowasm_value_kind)0;
     }
 }
@@ -107,12 +108,18 @@ static turbowasm_status turbowasm_eval_value_expr(
             uint8_t reference_type;
             if (!turbowasm_reader_u8(&reader, &reference_type))
                 return TURBOWASM_MALFORMED_MODULE;
-            if (reference_type != 0x70u)
+            if (reference_type == 0x70u) {
+                out->kind = TURBOWASM_VALUE_FUNCREF;
+                out->as.funcref.is_null = true;
+                out->as.funcref.function_index = UINT32_MAX;
+                out->as.funcref.owner = NULL;
+            } else if (reference_type == 0x6fu) {
+                out->kind = TURBOWASM_VALUE_EXTERNREF;
+                out->as.externref.is_null = true;
+                out->as.externref.token = 0u;
+            } else {
                 return TURBOWASM_UNSUPPORTED;
-            out->kind = TURBOWASM_VALUE_FUNCREF;
-            out->as.funcref.is_null = true;
-            out->as.funcref.function_index = UINT32_MAX;
-            out->as.funcref.owner = NULL;
+            }
             break;
         }
         case 0xd2u:
