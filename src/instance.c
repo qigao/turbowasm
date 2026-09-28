@@ -2545,16 +2545,14 @@ static turbowasm_status turbowasm_exec_fc(
 
         case 8u: { /* memory.init */
             uint32_t data_index;
-            uint8_t memory_index;
+            uint32_t memory_index;
             turbowasm_value length;
             turbowasm_value source;
             turbowasm_value destination;
 
             if (!turbowasm_reader_uleb32(reader, &data_index) ||
-                !turbowasm_reader_u8(reader, &memory_index))
+                !turbowasm_reader_uleb32(reader, &memory_index))
                 return TURBOWASM_MALFORMED_MODULE;
-            if (memory_index != 0u)
-                return TURBOWASM_UNSUPPORTED;
 
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &length);
@@ -2567,7 +2565,7 @@ static turbowasm_status turbowasm_exec_fc(
             if (status != TURBOWASM_OK) return status;
 
             status = turbowasm_instance_memory_init(
-                instance, data_index, 0u,
+                instance, data_index, memory_index,
                 (uint32_t)destination.as.i32,
                 (uint32_t)source.as.i32,
                 (uint32_t)length.as.i32);
@@ -2585,20 +2583,17 @@ static turbowasm_status turbowasm_exec_fc(
         }
 
         case 10u: { /* memory.copy */
-            uint8_t destination_memory;
-            uint8_t source_memory;
+            uint32_t destination_memory;
+            uint32_t source_memory;
             turbowasm_value length;
             turbowasm_value source;
             turbowasm_value destination;
 
-            if (!turbowasm_reader_u8(
+            if (!turbowasm_reader_uleb32(
                     reader, &destination_memory) ||
-                !turbowasm_reader_u8(
+                !turbowasm_reader_uleb32(
                     reader, &source_memory))
                 return TURBOWASM_MALFORMED_MODULE;
-            if (destination_memory != 0u ||
-                source_memory != 0u)
-                return TURBOWASM_UNSUPPORTED;
 
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &length);
@@ -2611,7 +2606,7 @@ static turbowasm_status turbowasm_exec_fc(
             if (status != TURBOWASM_OK) return status;
 
             status = turbowasm_instance_memory_copy(
-                instance, 0u, 0u,
+                instance, destination_memory, source_memory,
                 (uint32_t)destination.as.i32,
                 (uint32_t)source.as.i32,
                 (uint32_t)length.as.i32);
@@ -2621,15 +2616,13 @@ static turbowasm_status turbowasm_exec_fc(
         }
 
         case 11u: { /* memory.fill */
-            uint8_t memory_index;
+            uint32_t memory_index;
             turbowasm_value length;
             turbowasm_value value;
             turbowasm_value destination;
 
-            if (!turbowasm_reader_u8(reader, &memory_index))
+            if (!turbowasm_reader_uleb32(reader, &memory_index))
                 return TURBOWASM_MALFORMED_MODULE;
-            if (memory_index != 0u)
-                return TURBOWASM_UNSUPPORTED;
 
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &length);
@@ -2642,7 +2635,7 @@ static turbowasm_status turbowasm_exec_fc(
             if (status != TURBOWASM_OK) return status;
 
             status = turbowasm_instance_memory_fill(
-                instance, 0u,
+                instance, memory_index,
                 (uint32_t)destination.as.i32,
                 (uint8_t)value.as.i32,
                 (uint32_t)length.as.i32);

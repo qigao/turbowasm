@@ -1235,12 +1235,11 @@ static turbowasm_status turbowasm_validate_fc(
 
         case 8u: { /* memory.init */
             uint32_t data_index;
-            if (!turbowasm_reader_uleb32(body, &data_index))
+            uint32_t memory_index;
+            if (!turbowasm_reader_uleb32(body, &data_index) ||
+                !turbowasm_reader_uleb32(body, &memory_index))
                 return TURBOWASM_MALFORMED_MODULE;
-            status = turbowasm_read_reserved_zero(body);
-            if (status != TURBOWASM_OK)
-                return status;
-            if (!turbowasm_memory0_exists(context) ||
+            if (memory_index >= context->memory_count ||
                 !context->has_data_count ||
                 data_index >= context->data_count)
                 return TURBOWASM_MALFORMED_MODULE;
@@ -1257,24 +1256,28 @@ static turbowasm_status turbowasm_validate_fc(
             return TURBOWASM_OK;
         }
 
-        case 10u: /* memory.copy */
-            status = turbowasm_read_reserved_zero(body);
-            if (status != TURBOWASM_OK)
-                return status;
-            status = turbowasm_read_reserved_zero(body);
-            if (status != TURBOWASM_OK)
-                return status;
-            if (!turbowasm_memory0_exists(context))
+        case 10u: { /* memory.copy */
+            uint32_t destination_memory;
+            uint32_t source_memory;
+            if (!turbowasm_reader_uleb32(
+                    body, &destination_memory) ||
+                !turbowasm_reader_uleb32(
+                    body, &source_memory))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (destination_memory >= context->memory_count ||
+                source_memory >= context->memory_count)
                 return TURBOWASM_MALFORMED_MODULE;
             return turbowasm_stack_pop_i32_n(stack, 3u);
+        }
 
-        case 11u: /* memory.fill */
-            status = turbowasm_read_reserved_zero(body);
-            if (status != TURBOWASM_OK)
-                return status;
-            if (!turbowasm_memory0_exists(context))
+        case 11u: { /* memory.fill */
+            uint32_t memory_index;
+            if (!turbowasm_reader_uleb32(body, &memory_index))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (memory_index >= context->memory_count)
                 return TURBOWASM_MALFORMED_MODULE;
             return turbowasm_stack_pop_i32_n(stack, 3u);
+        }
 
         case 12u: { /* table.init */
             uint32_t element_index;
