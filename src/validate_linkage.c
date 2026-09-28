@@ -332,9 +332,30 @@ turbowasm_status turbowasm_validate_table_section(
     for (index = 0u; index < count; ++index) {
         turbowasm_validation_value_type reference_type;
         turbowasm_validation_limits limits = {0};
-        turbowasm_status status = turbowasm_read_table_type(
+        turbowasm_status status;
+
+        /*
+         * Defined-table initializer encoding starts with 0x40 0x00.
+         * Runtime ownership/initialization for that form is a separate slice;
+         * keep it explicitly unsupported rather than consuming it as a type.
+         */
+        if (turbowasm_reader_remaining(section) != 0u &&
+            *section->cursor == 0x40u)
+            return TURBOWASM_UNSUPPORTED;
+
+        status = turbowasm_read_table_type(
             section, context, &reference_type, &limits);
-        if (status != TURBOWASM_OK) return status;
+        if (status != TURBOWASM_OK)
+            return status;
+
+        /*
+         * Without an explicit initializer, every defined table is initialized
+         * with null. A non-nullable reference type therefore has no valid
+         * default value and must be rejected.
+         */
+        if (reference_type.is_reference && !reference_type.nullable)
+            return TURBOWASM_MALFORMED_MODULE;
+
         if (!turbowasm_validation_context_append_table_semantic(
                 context, reference_type, limits, false))
             return TURBOWASM_OUT_OF_MEMORY;
