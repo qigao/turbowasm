@@ -1752,6 +1752,83 @@ static turbowasm_status turbowasm_exec_bulk_trap(
     return status;
 }
 
+static turbowasm_status turbowasm_exec_trunc_sat(
+    uint32_t subopcode,
+    turbowasm_value_stack *stack) {
+    turbowasm_value in;
+    turbowasm_value out = {0};
+    turbowasm_status status;
+    double value;
+    uint32_t bits32;
+    uint64_t bits64;
+
+    if (subopcode <= 1u || (subopcode >= 4u && subopcode <= 5u)) {
+        status = turbowasm_stack_pop_kind(
+            stack, TURBOWASM_VALUE_F32, &in);
+    } else if (subopcode <= 7u) {
+        status = turbowasm_stack_pop_kind(
+            stack, TURBOWASM_VALUE_F64, &in);
+    } else {
+        return TURBOWASM_UNSUPPORTED;
+    }
+    if (status != TURBOWASM_OK)
+        return status;
+
+    value = in.kind == TURBOWASM_VALUE_F32
+        ? (double)in.as.f32
+        : in.as.f64;
+
+    if (subopcode <= 3u) {
+        out.kind = TURBOWASM_VALUE_I32;
+        if (value != value) {
+            bits32 = 0u;
+        } else if ((subopcode & 1u) == 0u) {
+            if (value < -2147483648.0) {
+                bits32 = UINT32_C(0x80000000);
+            } else if (value >= 2147483648.0) {
+                bits32 = UINT32_C(0x7fffffff);
+            } else {
+                int32_t signed_value = (int32_t)value;
+                memcpy(&bits32, &signed_value, sizeof(bits32));
+            }
+        } else {
+            if (value <= -1.0) {
+                bits32 = 0u;
+            } else if (value >= 4294967296.0) {
+                bits32 = UINT32_MAX;
+            } else {
+                bits32 = (uint32_t)value;
+            }
+        }
+        memcpy(&out.as.i32, &bits32, sizeof(bits32));
+        return turbowasm_stack_push(stack, out);
+    }
+
+    out.kind = TURBOWASM_VALUE_I64;
+    if (value != value) {
+        bits64 = 0u;
+    } else if ((subopcode & 1u) == 0u) {
+        if (value < -0x1p63) {
+            bits64 = UINT64_C(0x8000000000000000);
+        } else if (value >= 0x1p63) {
+            bits64 = UINT64_C(0x7fffffffffffffff);
+        } else {
+            int64_t signed_value = (int64_t)value;
+            memcpy(&bits64, &signed_value, sizeof(bits64));
+        }
+    } else {
+        if (value <= -1.0) {
+            bits64 = 0u;
+        } else if (value >= 0x1p64) {
+            bits64 = UINT64_MAX;
+        } else {
+            bits64 = (uint64_t)value;
+        }
+    }
+    memcpy(&out.as.i64, &bits64, sizeof(bits64));
+    return turbowasm_stack_push(stack, out);
+}
+
 static turbowasm_status turbowasm_exec_fc(
     turbowasm_instance_impl *instance,
     turbowasm_reader *reader,
@@ -1764,6 +1841,10 @@ static turbowasm_status turbowasm_exec_fc(
         return TURBOWASM_MALFORMED_MODULE;
 
     switch (subopcode) {
+        case 0u: case 1u: case 2u: case 3u:
+        case 4u: case 5u: case 6u: case 7u:
+            return turbowasm_exec_trunc_sat(subopcode, stack);
+
         case 8u: { /* memory.init */
             uint32_t data_index;
             uint8_t memory_index;
