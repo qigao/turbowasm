@@ -2596,8 +2596,8 @@ static turbowasm_status turbowasm_exec_fc(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &delta);
             if (status != TURBOWASM_OK) return status;
-            status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_FUNCREF, &initial);
+            status = turbowasm_stack_pop(
+                stack, &initial);
             if (status != TURBOWASM_OK) return status;
 
             status = turbowasm_instance_table_grow(
@@ -2644,8 +2644,8 @@ static turbowasm_status turbowasm_exec_fc(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &length);
             if (status != TURBOWASM_OK) return status;
-            status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_FUNCREF, &value);
+            status = turbowasm_stack_pop(
+                stack, &value);
             if (status != TURBOWASM_OK) return status;
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &destination);
@@ -3919,8 +3919,8 @@ static turbowasm_status turbowasm_exec_function(
                         goto done;
                     status = turbowasm_stack_push(&stack, value);
                 } else {
-                    status = turbowasm_stack_pop_kind(
-                        &stack, TURBOWASM_VALUE_FUNCREF, &value);
+                    status = turbowasm_stack_pop(
+                        &stack, &value);
                     if (status != TURBOWASM_OK)
                         goto done;
                     status = turbowasm_stack_pop_kind(
