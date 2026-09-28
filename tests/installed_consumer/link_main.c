@@ -9,7 +9,7 @@
 
 static turbowasm_status host_inc(
     void *context,
-    turbowasm_instance *caller,
+    turbowasm_host_call *call,
     const turbowasm_value *arguments,
     size_t argument_count,
     turbowasm_value *results,
@@ -18,8 +18,8 @@ static turbowasm_status host_inc(
     turbowasm_trap *trap) {
     (void)context;
 
-    if (caller == NULL ||
-        turbowasm_instance_module(caller) == NULL ||
+    if (call == NULL ||
+        turbowasm_instance_module(turbowasm_host_call_instance(call)) == NULL ||
         argument_count != 1u ||
         result_capacity < 1u ||
         arguments == NULL ||
