@@ -68,6 +68,9 @@ target_include_directories(turbowasm
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 target_link_libraries(turbowasm PUBLIC Salts::CMeta Salts::SIMD)
+if(UNIX)
+  target_link_libraries(turbowasm PRIVATE m)
+endif()
 
 if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
   if(NOT TARGET Salts::CFlow)
