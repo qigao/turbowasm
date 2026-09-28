@@ -62,6 +62,14 @@ typedef enum spec_expected_pattern {
 typedef struct spec_expected_value {
     turbowasm_value value;
     spec_expected_pattern pattern;
+
+    /*
+     * v128 expectations may carry a NaN pattern per floating-point lane.
+     * Integer lanes and ordinary floating lanes remain exact bit patterns.
+     */
+    uint8_t v128_lane_bits;
+    uint8_t v128_lane_count;
+    spec_expected_pattern v128_lane_patterns[16];
 } spec_expected_value;
 
 /*
@@ -460,6 +468,169 @@ static bool spec_parse_u64(const char *text, uint64_t *out) {
     return true;
 }
 
+static bool spec_v128_layout(
+    const char *lane_type,
+    size_t lane_type_size,
+    turbowasm_v128_shape *out_shape,
+    uint8_t *out_lane_bits,
+    uint8_t *out_lane_count,
+    bool *out_float_lane) {
+    if (lane_type == NULL || out_shape == NULL ||
+        out_lane_bits == NULL || out_lane_count == NULL ||
+        out_float_lane == NULL)
+        return false;
+
+    *out_float_lane = false;
+    if (lane_type_size == 2u &&
+        memcmp(lane_type, "i8", 2u) == 0) {
+        *out_shape = TURBOWASM_V128_I8X16;
+        *out_lane_bits = 8u;
+        *out_lane_count = 16u;
+        return true;
+    }
+    if (lane_type_size == 3u &&
+        memcmp(lane_type, "i16", 3u) == 0) {
+        *out_shape = TURBOWASM_V128_I16X8;
+        *out_lane_bits = 16u;
+        *out_lane_count = 8u;
+        return true;
+    }
+    if (lane_type_size == 3u &&
+        memcmp(lane_type, "i32", 3u) == 0) {
+        *out_shape = TURBOWASM_V128_I32X4;
+        *out_lane_bits = 32u;
+        *out_lane_count = 4u;
+        return true;
+    }
+    if (lane_type_size == 3u &&
+        memcmp(lane_type, "i64", 3u) == 0) {
+        *out_shape = TURBOWASM_V128_I64X2;
+        *out_lane_bits = 64u;
+        *out_lane_count = 2u;
+        return true;
+    }
+    if (lane_type_size == 3u &&
+        memcmp(lane_type, "f32", 3u) == 0) {
+        *out_shape = TURBOWASM_V128_F32X4;
+        *out_lane_bits = 32u;
+        *out_lane_count = 4u;
+        *out_float_lane = true;
+        return true;
+    }
+    if (lane_type_size == 3u &&
+        memcmp(lane_type, "f64", 3u) == 0) {
+        *out_shape = TURBOWASM_V128_F64X2;
+        *out_lane_bits = 64u;
+        *out_lane_count = 2u;
+        *out_float_lane = true;
+        return true;
+    }
+    return false;
+}
+
+static bool spec_parse_v128_token(
+    const char *token,
+    bool allow_patterns,
+    turbowasm_value *out,
+    spec_expected_value *expected_out) {
+    const char *lane_type;
+    const char *separator;
+    char *copy = NULL;
+    char *cursor;
+    turbowasm_v128_shape shape;
+    uint8_t lane_bits;
+    uint8_t lane_count;
+    bool float_lane;
+    uint8_t bytes[16] = {0};
+    uint8_t lane_index = 0u;
+    size_t lane_size;
+
+    if (token == NULL || out == NULL ||
+        strncmp(token, "v128:", 5u) != 0)
+        return false;
+
+    lane_type = token + 5u;
+    separator = strchr(lane_type, ':');
+    if (separator == NULL ||
+        !spec_v128_layout(
+            lane_type, (size_t)(separator - lane_type),
+            &shape, &lane_bits, &lane_count, &float_lane))
+        return false;
+
+    copy = (char *)malloc(strlen(separator + 1u) + 1u);
+    if (copy == NULL)
+        return false;
+    strcpy(copy, separator + 1u);
+    cursor = copy;
+    lane_size = (size_t)lane_bits / 8u;
+
+    if (expected_out != NULL) {
+        expected_out->v128_lane_bits = lane_bits;
+        expected_out->v128_lane_count = lane_count;
+    }
+
+    while (cursor != NULL && *cursor != '\0') {
+        char *next = strchr(cursor, ';');
+        uint64_t bits = 0u;
+        spec_expected_pattern pattern = SPEC_EXPECT_EXACT;
+        size_t byte_index;
+
+        if (next != NULL)
+            *next = '\0';
+        if (lane_index >= lane_count) {
+            free(copy);
+            return false;
+        }
+
+        if (allow_patterns && float_lane &&
+            strcmp(cursor, "nan:canonical") == 0) {
+            pattern = SPEC_EXPECT_NAN_CANONICAL;
+        } else if (allow_patterns && float_lane &&
+                   strcmp(cursor, "nan:arithmetic") == 0) {
+            pattern = SPEC_EXPECT_NAN_ARITHMETIC;
+        } else {
+            if (!spec_parse_u64(cursor, &bits) ||
+                (lane_bits < 64u &&
+                 bits >= (UINT64_C(1) << lane_bits))) {
+                free(copy);
+                return false;
+            }
+        }
+
+        for (byte_index = 0u;
+             byte_index < lane_size;
+             ++byte_index) {
+            bytes[(size_t)lane_index * lane_size + byte_index] =
+                (uint8_t)(bits >> (8u * byte_index));
+        }
+        if (expected_out != NULL)
+            expected_out->v128_lane_patterns[lane_index] = pattern;
+
+        ++lane_index;
+        cursor = next == NULL ? NULL : next + 1u;
+    }
+
+    free(copy);
+    if (lane_index != lane_count)
+        return false;
+
+    memset(out, 0, sizeof(*out));
+    out->kind = TURBOWASM_VALUE_V128;
+    return turbowasm_v128_load(
+               &out->as.v128, shape, bytes) == TURBOWASM_OK;
+}
+
+static uint64_t spec_read_lane_le(
+    const uint8_t *bytes,
+    size_t lane_size) {
+    uint64_t result = 0u;
+    size_t index;
+
+    for (index = 0u; index < lane_size; ++index)
+        result |= (uint64_t)bytes[index] << (8u * index);
+    return result;
+}
+
 static bool spec_parse_value(const char *token,
                              turbowasm_value *out) {
     const char *colon;
@@ -468,6 +639,10 @@ static bool spec_parse_value(const char *token,
 
     if (token == NULL || out == NULL)
         return false;
+
+    if (strncmp(token, "v128:", 5u) == 0)
+        return spec_parse_v128_token(
+            token, false, out, NULL);
 
     memset(out, 0, sizeof(*out));
     colon = strchr(token, ':');
@@ -574,6 +749,18 @@ static bool spec_values_equal(const turbowasm_value *actual,
                        expected->as.externref.is_null;
             return actual->as.externref.token ==
                    expected->as.externref.token;
+        case TURBOWASM_VALUE_V128: {
+            uint8_t actual_bytes[16];
+            uint8_t expected_bytes[16];
+            if (turbowasm_v128_store(
+                    actual_bytes, &actual->as.v128) != TURBOWASM_OK ||
+                turbowasm_v128_store(
+                    expected_bytes, &expected->as.v128) != TURBOWASM_OK)
+                return false;
+            return memcmp(
+                       actual_bytes, expected_bytes,
+                       sizeof(actual_bytes)) == 0;
+        }
         default:
             return false;
     }
@@ -657,6 +844,12 @@ static bool spec_parse_expected_value(
         return false;
 
     memset(out, 0, sizeof(*out));
+
+    if (strncmp(token, "v128:", 5u) == 0) {
+        out->pattern = SPEC_EXPECT_EXACT;
+        return spec_parse_v128_token(
+            token, true, &out->value, out);
+    }
 
     if (strcmp(token, "f32:nan:canonical") == 0) {
         out->value.kind = TURBOWASM_VALUE_F32;
@@ -753,6 +946,72 @@ static bool spec_expected_matches(
 
     if (actual == NULL || expected == NULL)
         return false;
+
+    if (expected->value.kind == TURBOWASM_VALUE_V128 &&
+        expected->v128_lane_count != 0u) {
+        uint8_t actual_bytes[16];
+        uint8_t expected_bytes[16];
+        size_t lane_size =
+            (size_t)expected->v128_lane_bits / 8u;
+        uint8_t lane;
+
+        if (actual->kind != TURBOWASM_VALUE_V128 ||
+            lane_size == 0u ||
+            (size_t)expected->v128_lane_count * lane_size != 16u ||
+            turbowasm_v128_store(
+                actual_bytes, &actual->as.v128) != TURBOWASM_OK ||
+            turbowasm_v128_store(
+                expected_bytes,
+                &expected->value.as.v128) != TURBOWASM_OK)
+            return false;
+
+        for (lane = 0u;
+             lane < expected->v128_lane_count;
+             ++lane) {
+            const uint8_t *a =
+                actual_bytes + (size_t)lane * lane_size;
+            const uint8_t *e =
+                expected_bytes + (size_t)lane * lane_size;
+            spec_expected_pattern lane_pattern =
+                expected->v128_lane_patterns[lane];
+
+            if (lane_pattern == SPEC_EXPECT_EXACT) {
+                if (memcmp(a, e, lane_size) != 0)
+                    return false;
+                continue;
+            }
+
+            if (expected->v128_lane_bits == 32u) {
+                uint32_t bits = (uint32_t)spec_read_lane_le(
+                    a, lane_size);
+                if (lane_pattern == SPEC_EXPECT_NAN_CANONICAL) {
+                    if ((bits & UINT32_C(0x7fffffff)) !=
+                        UINT32_C(0x7fc00000))
+                        return false;
+                } else if ((bits & UINT32_C(0x7fc00000)) !=
+                           UINT32_C(0x7fc00000)) {
+                    return false;
+                }
+                continue;
+            }
+
+            if (expected->v128_lane_bits == 64u) {
+                uint64_t bits = spec_read_lane_le(a, lane_size);
+                if (lane_pattern == SPEC_EXPECT_NAN_CANONICAL) {
+                    if ((bits & UINT64_C(0x7fffffffffffffff)) !=
+                        UINT64_C(0x7ff8000000000000))
+                        return false;
+                } else if ((bits & UINT64_C(0x7ff8000000000000)) !=
+                           UINT64_C(0x7ff8000000000000)) {
+                    return false;
+                }
+                continue;
+            }
+
+            return false;
+        }
+        return true;
+    }
 
     if (expected->pattern == SPEC_EXPECT_EXACT)
         return spec_values_equal(actual, &expected->value);
