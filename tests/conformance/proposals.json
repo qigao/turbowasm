@@ -31,7 +31,7 @@
     "core_dir": "test/core",
     "suite": "proposal-multi-memory.txt",
     "wast2json_flags": [],
-    "minimum_passes": 0
+    "minimum_passes": 1
   },
   "relaxed-simd": {
     "repository": "https://github.com/WebAssembly/relaxed-simd.git",

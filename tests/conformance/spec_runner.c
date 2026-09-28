@@ -1,7 +1,8 @@
 #include <turbowasm/turbowasm.h>
 
-#ifdef TURBOWASM_SPEC_ENABLE_MIR
 #include "instance_internal.h"
+
+#ifdef TURBOWASM_SPEC_ENABLE_MIR
 #include "jit/mir_backend.h"
 #endif
 
@@ -27,6 +28,17 @@ typedef struct spec_slot {
 typedef struct spec_state {
     spec_slot **slots;
     size_t slot_count;
+
+    /*
+     * WebAssembly store allocations created by assertions that trap during
+     * instantiation. Imported memory/table side effects remain observable,
+     * and funcrefs written into imported tables may point back at these
+     * otherwise unnamed instances.
+     */
+    spec_slot **retained_failures;
+    size_t retained_failure_count;
+    size_t retained_failure_capacity;
+
     turbowasm_linker linker;
     turbowasm_module spectest_module;
     turbowasm_instance spectest_instance;
@@ -288,6 +300,71 @@ static void spec_slot_destroy(spec_slot *slot) {
     turbowasm_module_destroy(&slot->module);
     free(slot->bytes);
     memset(slot, 0, sizeof(*slot));
+}
+
+static bool spec_retain_failed_instantiation(
+    spec_state *state,
+    uint8_t **bytes,
+    size_t size,
+    turbowasm_module *module,
+    turbowasm_instance *instance) {
+    spec_slot **grown;
+    spec_slot *slot;
+    turbowasm_instance_impl *impl;
+    size_t next;
+
+    if (state == NULL || bytes == NULL || *bytes == NULL ||
+        module == NULL || module->impl == NULL ||
+        instance == NULL || instance->impl == NULL)
+        return false;
+
+    if (state->retained_failure_count ==
+        state->retained_failure_capacity) {
+        next = state->retained_failure_capacity == 0u
+            ? 4u
+            : state->retained_failure_capacity * 2u;
+        if (next < state->retained_failure_capacity ||
+            next > SIZE_MAX / sizeof(*grown))
+            return false;
+
+        grown = (spec_slot **)realloc(
+            state->retained_failures,
+            next * sizeof(*grown));
+        if (grown == NULL)
+            return false;
+
+        memset(grown + state->retained_failure_capacity, 0,
+               (next - state->retained_failure_capacity) *
+                   sizeof(*grown));
+        state->retained_failures = grown;
+        state->retained_failure_capacity = next;
+    }
+
+    slot = (spec_slot *)calloc(1u, sizeof(*slot));
+    if (slot == NULL)
+        return false;
+
+    slot->bytes = *bytes;
+    slot->size = size;
+    slot->module = *module;
+    slot->instance = *instance;
+    slot->loaded = true;
+
+    /*
+     * The instance was created against the stack-local module wrapper above.
+     * Rebind that borrowed wrapper pointer to this stable heap slot before the
+     * command returns.
+     */
+    impl = (turbowasm_instance_impl *)slot->instance.impl;
+    impl->module = &slot->module;
+
+    state->retained_failures[
+        state->retained_failure_count++] = slot;
+
+    *bytes = NULL;
+    module->impl = NULL;
+    instance->impl = NULL;
+    return true;
 }
 
 static bool spec_ensure_slot(spec_state *state, size_t slot_index) {
@@ -1015,8 +1092,13 @@ static void spec_command_negative_module(spec_state *state,
         return;
     }
 
-    status = turbowasm_instance_create_linked(
-        &instance, &module, &state->linker);
+    if (strcmp(kind, "assert_uninstantiable") == 0) {
+        status = turbowasm_instance_create_linked_preserve_failure(
+            &instance, &module, &state->linker);
+    } else {
+        status = turbowasm_instance_create_linked(
+            &instance, &module, &state->linker);
+    }
 
     if (strcmp(kind, "assert_unlinkable") == 0) {
         if (status == TURBOWASM_LINK_ERROR ||
@@ -1031,7 +1113,16 @@ static void spec_command_negative_module(spec_state *state,
         }
     } else if (strcmp(kind, "assert_uninstantiable") == 0) {
         if (status == TURBOWASM_TRAPPED) {
-            spec_note_pass(state);
+            if (instance.impl != NULL &&
+                !spec_retain_failed_instantiation(
+                    state, &bytes, size,
+                    &module, &instance)) {
+                spec_note_failure(
+                    state, line,
+                    "failed to retain trapped store allocation");
+            } else {
+                spec_note_pass(state);
+            }
         } else if (status == TURBOWASM_UNSUPPORTED ||
                    status == TURBOWASM_LINK_ERROR) {
             spec_note_runtime_unsupported(state, line,
@@ -1417,6 +1508,16 @@ int main(int argc, char **argv) {
         }
     }
     free(state.slots);
+
+    index = state.retained_failure_count;
+    while (index != 0u) {
+        --index;
+        if (state.retained_failures[index] != NULL) {
+            spec_slot_destroy(state.retained_failures[index]);
+            free(state.retained_failures[index]);
+        }
+    }
+    free(state.retained_failures);
 
     if (state.spectest_ready) {
         turbowasm_instance_destroy(&state.spectest_instance);
