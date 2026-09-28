@@ -171,3 +171,22 @@ funcref/table failures are treated as real gaps. Non-null `externref` still
 has no public Runtime value carrier and remains explicit unsupported coverage.
 Imports/registers that require host modules not defined by the WAST file also
 remain unsupported rather than being fabricated by the harness.
+
+
+## Qualified proposal gates
+
+Proposal selectors start as manual diagnostics. A proposal graduates into the
+normal pull-request/push gate only after Runtime semantics are implemented.
+
+Tail calls are the first graduated proposal. The qualified gate runs the pinned
+`WebAssembly/tail-call` suites `return_call.wast` and
+`return_call_indirect.wast` and requires:
+
+- zero conformance failures;
+- at least one real upstream pass (so an all-unsupported run cannot be green);
+- no Runtime-originated unsupported command.
+
+Harness-level unsupported WAST shapes remain reported separately; they are not
+silently counted as passes. MIR tail-call lowering is not required for this
+gate: tail-call functions remain per-function interpreter fallback until an
+exact native tail semantic is implemented.
