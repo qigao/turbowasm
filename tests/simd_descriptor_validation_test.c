@@ -181,13 +181,70 @@ static void test_vector_shift(void) {
     assert(load(bytes, sizeof(bytes)) == TURBOWASM_OK);
 }
 
+static void test_relaxed_simd_stack_forms(void) {
+    static const uint8_t binary[] = {
+        WASM_HEADER,
+        0x01, 0x07,
+        0x01, 0x60, 0x02, 0x7b, 0x7b, 0x01, 0x7b,
+        FUNCTION_TYPE0,
+        0x0a, 0x0b, 0x01, 0x09,
+        0x00,
+        0x20, 0x00,
+        0x20, 0x01,
+        0xfd, 0x80, 0x02,
+        0x0b
+    };
+    static const uint8_t unary[] = {
+        WASM_HEADER,
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7b, 0x01, 0x7b,
+        FUNCTION_TYPE0,
+        0x0a, 0x09, 0x01, 0x07,
+        0x00,
+        0x20, 0x00,
+        0xfd, 0x81, 0x02,
+        0x0b
+    };
+    static const uint8_t ternary[] = {
+        WASM_HEADER,
+        0x01, 0x08,
+        0x01, 0x60, 0x03, 0x7b, 0x7b, 0x7b, 0x01, 0x7b,
+        FUNCTION_TYPE0,
+        0x0a, 0x0d, 0x01, 0x0b,
+        0x00,
+        0x20, 0x00,
+        0x20, 0x01,
+        0x20, 0x02,
+        0xfd, 0x85, 0x02,
+        0x0b
+    };
+    static const uint8_t terminal_ternary[] = {
+        WASM_HEADER,
+        0x01, 0x08,
+        0x01, 0x60, 0x03, 0x7b, 0x7b, 0x7b, 0x01, 0x7b,
+        FUNCTION_TYPE0,
+        0x0a, 0x0d, 0x01, 0x0b,
+        0x00,
+        0x20, 0x00,
+        0x20, 0x01,
+        0x20, 0x02,
+        0xfd, 0x93, 0x02,
+        0x0b
+    };
+
+    assert(load(binary, sizeof(binary)) == TURBOWASM_OK);
+    assert(load(unary, sizeof(unary)) == TURBOWASM_OK);
+    assert(load(ternary, sizeof(ternary)) == TURBOWASM_OK);
+    assert(load(terminal_ternary, sizeof(terminal_ternary)) == TURBOWASM_OK);
+}
+
 static void test_unknown_simd_opcode_fails_closed(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
         0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
         FUNCTION_TYPE0,
         0x0a, 0x07, 0x01, 0x05,
-        0x00, 0xfd, 0x80, 0x02, 0x0b
+        0x00, 0xfd, 0x94, 0x02, 0x0b
     };
     assert(load(bytes, sizeof(bytes)) == TURBOWASM_UNSUPPORTED);
 }
@@ -202,6 +259,7 @@ int main(void) {
     test_bitselect_ternary();
     test_any_true();
     test_vector_shift();
+    test_relaxed_simd_stack_forms();
     test_unknown_simd_opcode_fails_closed();
     return 0;
 }
