@@ -109,6 +109,7 @@ typedef struct turbowasm_validation_table {
 
 typedef struct turbowasm_validation_memory {
     bool imported;
+    uint32_t page_size;
     turbowasm_validation_limits limits;
 } turbowasm_validation_memory;
 
@@ -281,6 +282,7 @@ bool turbowasm_validation_context_append_table_semantic_initialized(
 bool turbowasm_validation_context_append_memory(
     turbowasm_validation_context *context,
     turbowasm_validation_limits limits,
+    uint32_t page_size,
     bool imported);
 
 bool turbowasm_validation_context_append_data_segment(
