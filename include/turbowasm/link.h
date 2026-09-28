@@ -28,10 +28,21 @@ typedef struct turbowasm_linker {
  * instances and must remain valid while those instances may invoke the host
  * function. The linker itself may be destroyed after instance creation.
  *
+ * turbowasm_host_call is an opaque per-invocation Runtime context. This first
+ * slice only exposes the caller instance accessor. Future host-wait support can
+ * suspend through the same call context without replaying the Wasm import.
+ *
  * This first host ABI deliberately exposes no guest-memory pointer and no
  * scheduler/NativeIO handle. WASI capability adapters layer those contracts on
  * top rather than bypassing Runtime validation.
  */
+typedef struct turbowasm_host_call {
+    void *impl;
+} turbowasm_host_call;
+
+turbowasm_instance *turbowasm_host_call_instance(
+    turbowasm_host_call *call);
+
 typedef struct turbowasm_host_function_type {
     const turbowasm_value_kind *params;
     size_t param_count;
@@ -41,7 +52,7 @@ typedef struct turbowasm_host_function_type {
 
 typedef turbowasm_status (*turbowasm_host_function_fn)(
     void *context,
-    struct turbowasm_instance *caller,
+    turbowasm_host_call *call,
     const turbowasm_value *arguments,
     size_t argument_count,
     turbowasm_value *results,
