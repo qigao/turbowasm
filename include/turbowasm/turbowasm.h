@@ -6,6 +6,7 @@
 #include <turbowasm/module.h>
 #include <turbowasm/link.h>
 #include <turbowasm/instance.h>
+#include <turbowasm/execution.h>
 #include <turbowasm/simd.h>
 
 #endif /* TURBOWASM_H */

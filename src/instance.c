@@ -29,17 +29,37 @@ static turbowasm_status turbowasm_execution_checkpoint(
     if (execution == NULL)
         return TURBOWASM_OK;
 
-    if (execution->should_interrupt != NULL &&
-        execution->should_interrupt(execution->interrupt_context))
-        return TURBOWASM_INTERRUPTED;
+    for (;;) {
+        if (execution->should_interrupt != NULL &&
+            execution->should_interrupt(execution->interrupt_context)) {
+            if (execution->suspend != NULL) {
+                turbowasm_status status = execution->suspend(
+                    execution->suspend_context,
+                    TURBOWASM_INTERRUPTED);
+                if (status != TURBOWASM_OK)
+                    return status;
+                continue;
+            }
+            return TURBOWASM_INTERRUPTED;
+        }
 
-    if (execution->fuel_limited) {
-        if (execution->fuel_remaining == 0u)
-            return TURBOWASM_FUEL_EXHAUSTED;
-        --execution->fuel_remaining;
+        if (execution->fuel_limited) {
+            if (execution->fuel_remaining == 0u) {
+                if (execution->suspend != NULL) {
+                    turbowasm_status status = execution->suspend(
+                        execution->suspend_context,
+                        TURBOWASM_FUEL_EXHAUSTED);
+                    if (status != TURBOWASM_OK)
+                        return status;
+                    continue;
+                }
+                return TURBOWASM_FUEL_EXHAUSTED;
+            }
+            --execution->fuel_remaining;
+        }
+
+        return TURBOWASM_OK;
     }
-
-    return TURBOWASM_OK;
 }
 
 turbowasm_status turbowasm_jit_execution_checkpoint(
@@ -4920,6 +4940,32 @@ done:
     free(stack.values);
     free(controls.frames);
     return status;
+}
+
+turbowasm_status turbowasm_instance_invoke_interpreter_internal(
+    turbowasm_instance_impl *instance,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap,
+    turbowasm_jit_execution_control *execution) {
+    if (instance == NULL || result_count == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    return turbowasm_exec_function(
+        instance,
+        function_index,
+        arguments,
+        argument_count,
+        results,
+        result_capacity,
+        result_count,
+        trap,
+        execution,
+        0u);
 }
 
 static turbowasm_status turbowasm_dispatch_function(

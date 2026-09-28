@@ -455,6 +455,17 @@ set_target_properties(turbowasm_execution_control_test PROPERTIES
 add_test(NAME turbowasm_execution_control_test
          COMMAND turbowasm_execution_control_test)
 
+add_executable(turbowasm_resumable_execution_test
+  resumable_execution_test.c)
+target_link_libraries(turbowasm_resumable_execution_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_resumable_execution_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_resumable_execution_test
+         COMMAND turbowasm_resumable_execution_test)
+
 
 add_executable(turbowasm_jit_backend_contract_test
   jit_backend_contract_test.c)

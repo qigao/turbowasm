@@ -80,11 +80,24 @@ typedef struct turbowasm_exception {
     struct turbowasm_exception *next;
 } turbowasm_exception;
 
+typedef turbowasm_status (*turbowasm_execution_suspend_fn)(
+    void *context,
+    turbowasm_status reason);
+
 typedef struct turbowasm_jit_execution_control {
     uint64_t fuel_remaining;
     bool fuel_limited;
     turbowasm_interrupt_check_fn should_interrupt;
     void *interrupt_context;
+
+    /*
+     * Optional restartable-execution hook. One-shot invoke paths leave this
+     * NULL and preserve the historical FUEL_EXHAUSTED / INTERRUPTED statuses.
+     * A resumable interpreter may suspend here and return TURBOWASM_OK after
+     * it is resumed with a fresh execution budget.
+     */
+    turbowasm_execution_suspend_fn suspend;
+    void *suspend_context;
 } turbowasm_jit_execution_control;
 
 typedef enum turbowasm_jit_function_state_kind {
@@ -195,6 +208,17 @@ turbowasm_status turbowasm_jit_direct_call(
     size_t result_capacity,
     size_t *result_count,
     turbowasm_trap *trap);
+
+turbowasm_status turbowasm_instance_invoke_interpreter_internal(
+    turbowasm_instance_impl *instance,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap,
+    turbowasm_jit_execution_control *execution);
 
 turbowasm_status turbowasm_instance_state_init(
     turbowasm_instance_impl *instance,

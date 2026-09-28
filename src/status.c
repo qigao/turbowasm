@@ -13,6 +13,7 @@ const char *turbowasm_status_string(turbowasm_status status) {
         case TURBOWASM_INTERRUPTED: return "interrupted";
         case TURBOWASM_LINK_ERROR: return "link_error";
         case TURBOWASM_EXCEPTION: return "exception";
+        case TURBOWASM_YIELDED: return "yielded";
         default: return "unknown";
     }
 }
