@@ -367,8 +367,65 @@ static void test_simd_memory_oob_traps(void) {
     turbowasm_module_destroy(&module);
 }
 
+
+static void test_multi_memory_v128_round_trip(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: (v128) -> v128 */
+        0x01, 0x06,
+        0x01, 0x60, 0x01, 0x7b, 0x01, 0x7b,
+
+        0x03, 0x02,
+        0x01, 0x00,
+
+        /* memory0 min=1, memory1 min=1 */
+        0x05, 0x05,
+        0x02,
+        0x00, 0x01,
+        0x00, 0x01,
+
+        0x0a, 0x14,
+        0x01,
+        0x12, 0x00,
+              0x41, 0x00,
+              0x20, 0x00,
+              /* v128.store memory1, align=4, offset=0 */
+              0xfd, 0x0b, 0x44, 0x01, 0x00,
+              0x41, 0x00,
+              /* v128.load memory1, align=4, offset=0 */
+              0xfd, 0x00, 0x44, 0x01, 0x00,
+              0x0b
+    };
+    const uint8_t original[16] = {
+        0x10, 0x21, 0x32, 0x43,
+        0x54, 0x65, 0x76, 0x87,
+        0x98, 0xa9, 0xba, 0xcb,
+        0xdc, 0xed, 0xfe, 0x0f
+    };
+    uint8_t actual[16] = {0};
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value argument = raw_v128(original);
+    turbowasm_value result;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    result = invoke_v128(&instance, 0u, &argument, 1u);
+    assert(turbowasm_v128_store(
+               actual, &result.as.v128) == TURBOWASM_OK);
+    assert(memcmp(actual, original, sizeof(actual)) == 0);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
     test_widening_loads();
+    test_multi_memory_v128_round_trip();
     test_splat_and_zero_loads();
     test_lane_load_preserves_other_lanes();
     test_lane_store_writes_only_selected_width();
