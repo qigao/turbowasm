@@ -1,5 +1,10 @@
 #include <turbowasm/turbowasm.h>
 
+#ifdef TURBOWASM_SPEC_ENABLE_MIR
+#include "instance_internal.h"
+#include "jit/mir_backend.h"
+#endif
+
 #include <errno.h>
 #include <inttypes.h>
 #include <stdbool.h>
@@ -81,6 +86,82 @@ static const uint8_t spec_spectest_module_bytes[] = {
     0x0b, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b, 0x02, 0x00,
     0x0b, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b
 };
+
+#ifdef TURBOWASM_SPEC_ENABLE_MIR
+static turbowasm_status spec_attach_mir(turbowasm_instance *instance) {
+    turbowasm_jit_backend backend = {0};
+    turbowasm_instance_impl *impl;
+    turbowasm_status status;
+
+    if (instance == NULL || instance->impl == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = turbowasm_mir_backend_create(&backend);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    impl = (turbowasm_instance_impl *)instance->impl;
+    status = turbowasm_jit_instance_attach_backend(
+        impl, &backend, 1u);
+    if (status != TURBOWASM_OK && backend.context != NULL &&
+        backend.destroy_backend != NULL) {
+        backend.destroy_backend(backend.context);
+        backend.context = NULL;
+    }
+    return status;
+}
+
+static void spec_collect_mir_stats(
+    const spec_state *state,
+    size_t *compiled,
+    size_t *interpret_only,
+    size_t *cold,
+    uint64_t *calls) {
+    size_t slot_index;
+
+    if (state == NULL || compiled == NULL ||
+        interpret_only == NULL || cold == NULL || calls == NULL)
+        return;
+
+    for (slot_index = 0u;
+         slot_index < state->slot_count;
+         ++slot_index) {
+        const spec_slot *slot = state->slots[slot_index];
+        const turbowasm_instance_impl *impl;
+        uint32_t function_index;
+
+        if (slot == NULL || !slot->ready ||
+            slot->instance.impl == NULL)
+            continue;
+
+        impl = (const turbowasm_instance_impl *)slot->instance.impl;
+        if (!impl->jit_backend_attached ||
+            impl->jit_functions == NULL)
+            continue;
+
+        for (function_index = 0u;
+             function_index < impl->jit_function_count;
+             ++function_index) {
+            const turbowasm_jit_function_state *entry =
+                &impl->jit_functions[function_index];
+
+            *calls += entry->call_count;
+            switch (entry->state) {
+                case TURBOWASM_JIT_COMPILED:
+                    ++*compiled;
+                    break;
+                case TURBOWASM_JIT_INTERPRET_ONLY:
+                    ++*interpret_only;
+                    break;
+                case TURBOWASM_JIT_INTERPRET:
+                default:
+                    ++*cold;
+                    break;
+            }
+        }
+    }
+}
+#endif
 
 static bool spec_init_spectest(spec_state *state) {
     static const uint8_t name_bytes[] = {
@@ -837,6 +918,14 @@ static void spec_command_module(spec_state *state,
         return;
     }
 
+#ifdef TURBOWASM_SPEC_ENABLE_MIR
+    status = spec_attach_mir(&slot->instance);
+    if (status != TURBOWASM_OK) {
+        spec_note_failure(state, line, "failed to attach MIR replay backend");
+        return;
+    }
+#endif
+
     slot->ready = true;
     state->current_slot = (int64_t)slot_index;
     spec_note_pass(state);
@@ -1225,6 +1314,12 @@ int main(int argc, char **argv) {
     spec_state state;
     size_t index;
     int rc;
+#ifdef TURBOWASM_SPEC_ENABLE_MIR
+    size_t mir_compiled = 0u;
+    size_t mir_interpret_only = 0u;
+    size_t mir_cold = 0u;
+    uint64_t mir_calls = 0u;
+#endif
 
     if (argc != 2) {
         fprintf(stderr, "usage: turbowasm_spec_runner <manifest>\n");
@@ -1251,6 +1346,20 @@ int main(int argc, char **argv) {
            state.failed,
            state.unsupported,
            state.passed + state.failed + state.unsupported);
+
+#ifdef TURBOWASM_SPEC_ENABLE_MIR
+    spec_collect_mir_stats(
+        &state,
+        &mir_compiled,
+        &mir_interpret_only,
+        &mir_cold,
+        &mir_calls);
+    printf("MIR_REPLAY compiled=%zu interpret_only=%zu cold=%zu calls=%" PRIu64 "\n",
+           mir_compiled,
+           mir_interpret_only,
+           mir_cold,
+           mir_calls);
+#endif
 
     index = state.slot_count;
     while (index != 0u) {

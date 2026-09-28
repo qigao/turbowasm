@@ -8,6 +8,7 @@ on:
       - "src/**"
       - "tests/conformance/**"
       - "cmake/vcpkg/spec-tools/**"
+      - "cmake/vcpkg/mir/**"
       - ".github/workflows/conformance.yml"
   push:
     branches: [master]
@@ -107,3 +108,110 @@ jobs:
             --runner "$PWD/build/conformance/tests/conformance/turbowasm_spec_runner" \
             --core-dir "$WASM_SPEC_ROOT/test/core" \
             --suite "$PWD/tests/conformance/core-smoke.txt"
+
+
+  mir-replay:
+    name: Pinned core spec MIR replay
+    needs: core
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout TurboWasm
+        uses: actions/checkout@v4
+
+      - name: Restore Salts 1.7.9 SDK
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./cmake/ci/restore-salts-sdk.ps1
+
+      - name: Ensure host build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
+
+      - name: Configure shared vcpkg cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore MIR and WABT from shared cache only
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mir_log="$RUNNER_TEMP/turbowasm-mir-cache.log"
+          mir_root="$RUNNER_TEMP/turbowasm-mir"
+          rm -rf "$mir_root"
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$GITHUB_WORKSPACE/cmake/vcpkg/mir" \
+            --x-install-root="$mir_root" \
+            --triplet x64-linux \
+            --only-binarycaching 2>&1 | tee "$mir_log"
+          ! grep -Eq '^Building mir-jit:x64-linux' "$mir_log"
+          grep -Eq 'Restored [1-9][0-9]* package\(s\) from NuGet' "$mir_log"
+          test -f "$mir_root/x64-linux/share/MIR/MIRConfig.cmake"
+          echo "MIR_PREFIX=$mir_root/x64-linux" >> "$GITHUB_ENV"
+
+          wabt_log="$RUNNER_TEMP/turbowasm-spec-tools-cache.log"
+          wabt_root="$RUNNER_TEMP/turbowasm-spec-tools"
+          rm -rf "$wabt_root"
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$GITHUB_WORKSPACE/cmake/vcpkg/spec-tools" \
+            --x-install-root="$wabt_root" \
+            --triplet x64-linux \
+            --only-binarycaching 2>&1 | tee "$wabt_log"
+          ! grep -Eq '^Building [^:]+:x64-linux' "$wabt_log"
+          grep -Eq 'Restored [1-9][0-9]* package\(s\) from NuGet' "$wabt_log"
+          tool="$wabt_root/x64-linux/tools/wabt/wast2json"
+          test -x "$tool"
+          echo "WAST2JSON=$tool" >> "$GITHUB_ENV"
+
+      - name: Build MIR conformance runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/conformance-mir -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$MIR_PREFIX" \
+            -DTURBOWASM_BUILD_TESTS=OFF \
+            -DTURBOWASM_BUILD_TOOLS=OFF \
+            -DTURBOWASM_ENABLE_CFLOW_ADAPTER=OFF \
+            -DTURBOWASM_ENABLE_MIR_JIT=ON \
+            -DTURBOWASM_BUILD_CONFORMANCE_RUNNER=ON
+          cmake --build build/conformance-mir \
+            --target turbowasm_spec_runner_mir -j2
+          test -x build/conformance-mir/tests/conformance/turbowasm_spec_runner_mir
+          python3 -m py_compile tests/conformance/run_core.py
+
+      - name: Materialize pinned WebAssembly spec
+        shell: bash
+        run: |
+          set -euo pipefail
+          spec="$RUNNER_TEMP/wasm-spec"
+          rm -rf "$spec"
+          git init "$spec"
+          git -C "$spec" remote add origin https://github.com/WebAssembly/spec.git
+          git -C "$spec" fetch --depth=1 origin "$WASM_SPEC_COMMIT"
+          git -C "$spec" checkout --detach FETCH_HEAD
+          test "$(git -C "$spec" rev-parse HEAD)" = "$WASM_SPEC_COMMIT"
+          test -d "$spec/test/core"
+          echo "WASM_SPEC_ROOT=$spec" >> "$GITHUB_ENV"
+
+      - name: Replay pinned core suite through MIR
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/turbowasm-mir-replay.log"
+          python3 tests/conformance/run_core.py \
+            --wast2json "$WAST2JSON" \
+            --runner "$PWD/build/conformance-mir/tests/conformance/turbowasm_spec_runner_mir" \
+            --core-dir "$WASM_SPEC_ROOT/test/core" \
+            --suite "$PWD/tests/conformance/core-smoke.txt" \
+            2>&1 | tee "$log"
+
+          grep -Eq 'CORE_CONFORMANCE pass=[1-9][0-9]* fail=0 unsupported=[0-9]+ total=[0-9]+ files=52' "$log"
+          grep -Eq 'MIR_REPLAY compiled=[1-9][0-9]* ' "$log"
+          ! grep -q 'SPEC_RUNTIME_UNSUPPORTED_DETAIL' "$log"
