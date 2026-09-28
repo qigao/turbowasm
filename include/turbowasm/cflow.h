@@ -2,6 +2,7 @@
 #define TURBOWASM_CFLOW_H
 
 #include <cflow/executor.h>
+#include <cflow/clock.h>
 #include <turbowasm/instance.h>
 
 #include <stdbool.h>
@@ -11,6 +12,36 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+
+typedef struct turbowasm_cflow_deadline_policy {
+    cflow_clock *clock;
+    cflow_deadline deadline;
+    turbowasm_interrupt_check_fn chained_interrupt;
+    void *chained_context;
+} turbowasm_cflow_deadline_policy;
+
+/*
+ * Initialize a borrowed-clock deadline. The policy does not own or destroy
+ * the clock. init_after uses Salts' saturating cflow_deadline_after().
+ */
+bool turbowasm_cflow_deadline_init_after(
+    turbowasm_cflow_deadline_policy *policy,
+    cflow_clock *clock,
+    cflow_duration delay);
+
+bool turbowasm_cflow_deadline_init_at(
+    turbowasm_cflow_deadline_policy *policy,
+    cflow_clock *clock,
+    cflow_deadline deadline);
+
+/*
+ * Compose the deadline with existing execution options. Fuel fields are left
+ * untouched. An existing interruption predicate is chained after the deadline.
+ */
+bool turbowasm_cflow_deadline_apply(
+    turbowasm_cflow_deadline_policy *policy,
+    turbowasm_execution_options *options);
 
 typedef enum turbowasm_cflow_terminal_kind {
     TURBOWASM_CFLOW_EXECUTED = 0,

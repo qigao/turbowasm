@@ -1,5 +1,69 @@
 #include <turbowasm/cflow.h>
 
+static bool turbowasm_cflow_deadline_should_interrupt(void *context) {
+    turbowasm_cflow_deadline_policy *policy =
+        (turbowasm_cflow_deadline_policy *)context;
+    cflow_instant now;
+
+    if (policy == NULL || policy->clock == NULL)
+        return true;
+
+    now = cflow_clock_now(policy->clock);
+    if (now.ns >= policy->deadline.ns)
+        return true;
+
+    return policy->chained_interrupt != NULL &&
+           policy->chained_interrupt(policy->chained_context);
+}
+
+bool turbowasm_cflow_deadline_init_at(
+    turbowasm_cflow_deadline_policy *policy,
+    cflow_clock *clock,
+    cflow_deadline deadline) {
+    if (policy == NULL || clock == NULL)
+        return false;
+
+    policy->clock = clock;
+    policy->deadline = deadline;
+    policy->chained_interrupt = NULL;
+    policy->chained_context = NULL;
+    return true;
+}
+
+bool turbowasm_cflow_deadline_init_after(
+    turbowasm_cflow_deadline_policy *policy,
+    cflow_clock *clock,
+    cflow_duration delay) {
+    cflow_instant now;
+
+    if (policy == NULL || clock == NULL)
+        return false;
+
+    now = cflow_clock_now(clock);
+    return turbowasm_cflow_deadline_init_at(
+        policy, clock, cflow_deadline_after(now, delay));
+}
+
+bool turbowasm_cflow_deadline_apply(
+    turbowasm_cflow_deadline_policy *policy,
+    turbowasm_execution_options *options) {
+    if (policy == NULL || policy->clock == NULL || options == NULL)
+        return false;
+
+    if (options->should_interrupt !=
+            turbowasm_cflow_deadline_should_interrupt ||
+        options->interrupt_context != policy) {
+        policy->chained_interrupt = options->should_interrupt;
+        policy->chained_context = options->interrupt_context;
+    }
+
+    options->should_interrupt =
+        turbowasm_cflow_deadline_should_interrupt;
+    options->interrupt_context = policy;
+    return true;
+}
+
+
 static bool turbowasm_cflow_call_valid(
     const turbowasm_cflow_call *call) {
     const turbowasm_module *module;

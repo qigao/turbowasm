@@ -62,6 +62,37 @@ int main(void) {
     if (result.kind != TURBOWASM_VALUE_I32 || result.as.i32 != 7)
         return 7;
 
+
+    {
+        cflow_clock clock = {0};
+        turbowasm_cflow_deadline_policy policy = {0};
+
+        probe.completed = 0;
+        probe.status = TURBOWASM_OK;
+        call.use_options = true;
+        call.options = (turbowasm_execution_options){0};
+
+        if (!cflow_clock_virtual_init(
+                &clock, (cflow_instant){100u}))
+            return 8;
+        if (!turbowasm_cflow_deadline_init_after(
+                &policy, &clock, cflow_duration_from_ns(0u)))
+            return 9;
+        if (!turbowasm_cflow_deadline_apply(
+                &policy, &call.options))
+            return 10;
+        if (turbowasm_cflow_try_submit(
+                &executor, &call) != CFLOW_ADMISSION_ACCEPTED)
+            return 11;
+        if (cflow_executor_run_ready(&executor) != 1u)
+            return 12;
+        if (!probe.completed ||
+            probe.status != TURBOWASM_INTERRUPTED)
+            return 13;
+
+        cflow_clock_destroy(&clock);
+    }
+
     cflow_executor_shutdown(&executor);
     cflow_executor_destroy(&executor);
     turbowasm_instance_destroy(&instance);
