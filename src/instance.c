@@ -4,6 +4,7 @@
 #include "link_internal.h"
 #include "module_internal.h"
 #include "reader.h"
+#include "relaxed_simd.h"
 #include "simd_exec_table.h"
 #include "validate_type.h"
 
@@ -2851,6 +2852,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
     turbowasm_value out = {0};
     turbowasm_value left;
     turbowasm_value right;
+    turbowasm_value third;
     turbowasm_value mask;
     turbowasm_value count;
     uint32_t reduced = 0u;
@@ -3063,6 +3065,40 @@ static turbowasm_status turbowasm_exec_simd_generic(
                 &out.as.v128.bits,
                 &left.as.v128.bits);
             break;
+
+        case TURBOWASM_SIMD_EXEC_RELAXED: {
+            uint8_t arity =
+                turbowasm_relaxed_simd_arity(descriptor->opcode);
+            const salts_v128 *b = NULL;
+            const salts_v128 *third_value = NULL;
+
+            if (arity == 3u) {
+                status = turbowasm_stack_pop_kind(
+                    stack, TURBOWASM_VALUE_V128, &third);
+                if (status != TURBOWASM_OK) return status;
+                third_value = &third.as.v128.bits;
+            }
+            if (arity >= 2u) {
+                status = turbowasm_stack_pop_kind(
+                    stack, TURBOWASM_VALUE_V128, &right);
+                if (status != TURBOWASM_OK) return status;
+                b = &right.as.v128.bits;
+            }
+            if (arity == 0u)
+                return TURBOWASM_UNSUPPORTED;
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_V128, &left);
+            if (status != TURBOWASM_OK) return status;
+
+            supported = turbowasm_relaxed_simd_execute(
+                descriptor->opcode,
+                &out.as.v128.bits,
+                &left.as.v128.bits,
+                b,
+                third_value);
+            break;
+        }
 
         case TURBOWASM_SIMD_EXEC_SPLAT:
         default:

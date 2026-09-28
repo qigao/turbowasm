@@ -95,6 +95,10 @@
     { (opcode_), TURBOWASM_SIMD_EXEC_SWIZZLE, &cmeta_vector_i8x16, \
       0u, TURBOWASM_V128_I8X16, 0u, NULL, 0u }
 
+#define REL(opcode_, desc_, shape_) \
+    { (opcode_), TURBOWASM_SIMD_EXEC_RELAXED, &(desc_), \
+      0u, (shape_), 0u, NULL, 0u }
+
 /*
  * This is intentionally an execution-capability table, not another
  * validation table. Every opcode here must also exist in
@@ -563,9 +567,32 @@ static const turbowasm_simd_exec_descriptor descriptors[] = {
          TURBOWASM_V128_F64X2),
     CONV(0xffu, cmeta_vector_f64x2, cmeta_vector_u32x4,
          SALTS_SIMD_CONVERT_NUMERIC, SALTS_SIMD_LANES_LOW,
-         TURBOWASM_V128_F64X2)
+         TURBOWASM_V128_F64X2),
+
+    /* Relaxed SIMD: each descriptor chooses one proposal-permitted projection. */
+    REL(0x100u, cmeta_vector_i8x16, TURBOWASM_V128_I8X16),
+    REL(0x101u, cmeta_vector_i32x4, TURBOWASM_V128_I32X4),
+    REL(0x102u, cmeta_vector_u32x4, TURBOWASM_V128_U32X4),
+    REL(0x103u, cmeta_vector_i32x4, TURBOWASM_V128_I32X4),
+    REL(0x104u, cmeta_vector_u32x4, TURBOWASM_V128_U32X4),
+    REL(0x105u, cmeta_vector_f32x4, TURBOWASM_V128_F32X4),
+    REL(0x106u, cmeta_vector_f32x4, TURBOWASM_V128_F32X4),
+    REL(0x107u, cmeta_vector_f64x2, TURBOWASM_V128_F64X2),
+    REL(0x108u, cmeta_vector_f64x2, TURBOWASM_V128_F64X2),
+    REL(0x109u, cmeta_vector_i8x16, TURBOWASM_V128_I8X16),
+    REL(0x10au, cmeta_vector_i16x8, TURBOWASM_V128_I16X8),
+    REL(0x10bu, cmeta_vector_i32x4, TURBOWASM_V128_I32X4),
+    REL(0x10cu, cmeta_vector_i64x2, TURBOWASM_V128_I64X2),
+    REL(0x10du, cmeta_vector_f32x4, TURBOWASM_V128_F32X4),
+    REL(0x10eu, cmeta_vector_f32x4, TURBOWASM_V128_F32X4),
+    REL(0x10fu, cmeta_vector_f64x2, TURBOWASM_V128_F64X2),
+    REL(0x110u, cmeta_vector_f64x2, TURBOWASM_V128_F64X2),
+    REL(0x111u, cmeta_vector_i16x8, TURBOWASM_V128_I16X8),
+    REL(0x112u, cmeta_vector_i16x8, TURBOWASM_V128_I16X8),
+    REL(0x113u, cmeta_vector_i32x4, TURBOWASM_V128_I32X4)
 };
 
+#undef REL
 #undef SWIZ
 #undef SHUF
 #undef LREP
