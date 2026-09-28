@@ -311,6 +311,23 @@ turbowasm_status turbowasm_validate_const_expr_semantic(
                     &stack, global->semantic_type);
                 break;
             }
+
+            /*
+             * These are valid core instructions, but they are not members of
+             * the constant-expression instruction subset. Encountering one
+             * here therefore makes the module invalid; it does not indicate
+             * an unsupported TurboWasm feature.
+             *
+             * Keep genuinely unknown/proposal opcodes on the UNSUPPORTED path
+             * below so capability accounting remains honest.
+             */
+            case 0x01u: /* nop */
+            case 0x20u: /* local.get */
+            case 0x68u: /* i32.ctz */
+            case 0x8cu: /* f32.neg */
+                status = TURBOWASM_MALFORMED_MODULE;
+                break;
+
             default:
                 status = TURBOWASM_UNSUPPORTED;
                 break;

@@ -188,6 +188,30 @@ static void test_global_get_rejects_forward_local_global(void) {
     assert(module.impl == NULL);
 }
 
+static void test_known_nonconst_opcode_is_invalid(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /*
+         * global f32 = f32.neg(f32.const 0)
+         *
+         * f32.neg is a known core opcode, but it is not admitted by the
+         * constant-expression grammar.
+         */
+        0x06, 0x0a,
+        0x01,
+        0x7d, 0x00,
+        0x43, 0x00, 0x00, 0x00, 0x00,
+        0x8c,
+        0x0b
+    };
+    turbowasm_module module = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) ==
+           TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
 static void test_extended_const_i32_arithmetic(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -325,6 +349,7 @@ int main(void) {
     test_global_get_accepts_prior_local_immutable();
     test_global_get_rejects_prior_local_mutable();
     test_global_get_rejects_forward_local_global();
+    test_known_nonconst_opcode_is_invalid();
     test_extended_const_i32_arithmetic();
     test_extended_const_multiple_values_rejected();
     test_sleb32_overflow_rejected();
