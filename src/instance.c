@@ -3516,8 +3516,10 @@ restart_frame:
     type = turbowasm_validation_context_function_type(
         context, function_index);
 
-    if (function == NULL || type == NULL || !type->defined)
-        return TURBOWASM_INVALID_ARGUMENT;
+    if (function == NULL || type == NULL || !type->defined) {
+        status = TURBOWASM_INVALID_ARGUMENT;
+        goto done;
+    }
     if (function->imported) {
         const turbowasm_linked_function *binding;
 
@@ -3551,26 +3553,29 @@ restart_frame:
         goto done;
     }
 
-    if (argument_count != type->param_count)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (type->result_count > result_capacity)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (type->param_count != 0u && arguments == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (type->result_count != 0u && results == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
+    if (argument_count != type->param_count ||
+        type->result_count > result_capacity ||
+        (type->param_count != 0u && arguments == NULL) ||
+        (type->result_count != 0u && results == NULL)) {
+        status = TURBOWASM_INVALID_ARGUMENT;
+        goto done;
+    }
 
     for (index = 0u; index < type->param_count; ++index) {
         if (!turbowasm_value_matches_type(
-                &arguments[index], type->params[index]))
-            return TURBOWASM_TYPE_MISMATCH;
+                &arguments[index], type->params[index])) {
+            status = TURBOWASM_TYPE_MISMATCH;
+            goto done;
+        }
     }
 
     if (function->local_count != 0u) {
         locals = (turbowasm_value *)calloc(
             (size_t)function->local_count, sizeof(*locals));
-        if (locals == NULL)
-            return TURBOWASM_OUT_OF_MEMORY;
+        if (locals == NULL) {
+            status = TURBOWASM_OUT_OF_MEMORY;
+            goto done;
+        }
     }
 
     for (index = 0u; index < function->local_count; ++index) {
