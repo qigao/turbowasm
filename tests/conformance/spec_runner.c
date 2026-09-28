@@ -777,8 +777,8 @@ static void spec_command_module_definition(spec_state *state,
 
     status = turbowasm_module_load_borrowed(&module, bytes, size);
     if (status == TURBOWASM_UNSUPPORTED) {
-        spec_note_unsupported(state, line,
-                              "module definition validation unsupported");
+        spec_note_runtime_unsupported(state, line,
+                                      "module definition validation unsupported");
     } else if (status != TURBOWASM_OK) {
         spec_note_failure(state, line, "valid module definition rejected");
     } else {
@@ -902,8 +902,8 @@ static void spec_command_negative_module(spec_state *state,
         if (status == TURBOWASM_MALFORMED_MODULE) {
             spec_note_pass(state);
         } else if (status == TURBOWASM_UNSUPPORTED) {
-            spec_note_unsupported(state, line,
-                                  "negative module feature unsupported");
+            spec_note_runtime_unsupported(state, line,
+                                          "negative module feature unsupported");
         } else {
             spec_note_failure(state, line,
                               "negative module unexpectedly admitted");
@@ -914,8 +914,8 @@ static void spec_command_negative_module(spec_state *state,
     }
 
     if (status == TURBOWASM_UNSUPPORTED) {
-        spec_note_unsupported(state, line,
-                              "assertion module validation unsupported");
+        spec_note_runtime_unsupported(state, line,
+                                      "assertion module validation unsupported");
         free(bytes);
         return;
     }
@@ -934,8 +934,8 @@ static void spec_command_negative_module(spec_state *state,
             status == TURBOWASM_TYPE_MISMATCH) {
             spec_note_pass(state);
         } else if (status == TURBOWASM_UNSUPPORTED) {
-            spec_note_unsupported(state, line,
-                                  "unlinkable feature unsupported");
+            spec_note_runtime_unsupported(state, line,
+                                          "unlinkable feature unsupported");
         } else {
             spec_note_failure(state, line,
                               "module did not fail linking");
@@ -945,8 +945,8 @@ static void spec_command_negative_module(spec_state *state,
             spec_note_pass(state);
         } else if (status == TURBOWASM_UNSUPPORTED ||
                    status == TURBOWASM_LINK_ERROR) {
-            spec_note_unsupported(state, line,
-                                  "uninstantiable precondition unsupported");
+            spec_note_runtime_unsupported(state, line,
+                                          "uninstantiable precondition unsupported");
         } else {
             spec_note_failure(state, line,
                               "module did not trap during instantiation");
