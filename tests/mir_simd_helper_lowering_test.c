@@ -16,6 +16,38 @@
     0x00, 0x61, 0x73, 0x6d, \
     0x01, 0x00, 0x00, 0x00
 
+static const uint8_t relaxed_simd_module[] = {
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
+    0x03, 0x04, 0x03, 0x00, 0x00, 0x00,
+    0x0a, 0x35, 0x03,
+
+    /* f32x4.splat -> relaxed trunc -> i32x4.bitmask = 0 */
+    0x0f, 0x00,
+    0x43, 0x00, 0x00, 0x80, 0x3f,
+    0xfd, 0x13,
+    0xfd, 0x81, 0x02,
+    0xfd, 0xa4, 0x01,
+    0x0b,
+
+    /* relaxed swizzle with zero indexes -> all lanes negative */
+    0x0f, 0x00,
+    0x41, 0x7f, 0xfd, 0x0f,
+    0x41, 0x00, 0xfd, 0x0f,
+    0xfd, 0x80, 0x02,
+    0xfd, 0x64,
+    0x0b,
+
+    /* relaxed i8x16 laneselect with all-one mask -> left */
+    0x13, 0x00,
+    0x41, 0x7f, 0xfd, 0x0f,
+    0x41, 0x00, 0xfd, 0x0f,
+    0x41, 0x7f, 0xfd, 0x0f,
+    0xfd, 0x89, 0x02,
+    0xfd, 0x64,
+    0x0b
+};
+
 static const uint8_t multi_memory_simd_module[] = {
     WASM_HEADER,
     0x01, 0x05,
@@ -360,6 +392,30 @@ int main(void) {
         &backend, &module, &instance);
     test_shuffle_stays_interpreter_fallback(
         &backend, &module, &instance);
+
+    {
+        turbowasm_module relaxed_module = {0};
+        turbowasm_instance relaxed_instance = {0};
+
+        assert(turbowasm_module_load_borrowed(
+                   &relaxed_module,
+                   relaxed_simd_module,
+                   sizeof(relaxed_simd_module)) == TURBOWASM_OK);
+        assert(turbowasm_instance_create(
+                   &relaxed_instance,
+                   &relaxed_module) == TURBOWASM_OK);
+
+        /* Exercise relaxed unary, binary and ternary MIR helper lowering. */
+        compare_i32_success(
+            &backend, &relaxed_module, &relaxed_instance, 0u, 0);
+        compare_i32_success(
+            &backend, &relaxed_module, &relaxed_instance, 1u, 65535);
+        compare_i32_success(
+            &backend, &relaxed_module, &relaxed_instance, 2u, 65535);
+
+        turbowasm_instance_destroy(&relaxed_instance);
+        turbowasm_module_destroy(&relaxed_module);
+    }
 
     {
         turbowasm_module mm_module = {0};

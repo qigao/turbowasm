@@ -2,6 +2,7 @@
 
 #include "../instance_internal.h"
 #include "../jit_simd_helper.h"
+#include "../relaxed_simd.h"
 #include "../simd_exec_table.h"
 
 #include "../reader.h"
@@ -1212,6 +1213,23 @@ static bool turbowasm_mir_scan_simd_straightline(
             if (descriptor == NULL)
                 goto done;
 
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_RELAXED) {
+                uint8_t arity =
+                    turbowasm_relaxed_simd_arity(subopcode);
+                uint8_t operand;
+
+                if (arity == 0u)
+                    goto done;
+                for (operand = 0u; operand < arity; ++operand) {
+                    if (!turbowasm_mir_simd_stack_pop(
+                            types, &stack_size, 0x7bu))
+                        goto done;
+                }
+                types[stack_size++] = 0x7bu;
+                ++slot_count;
+                continue;
+            }
+
             if (descriptor->kind == TURBOWASM_SIMD_EXEC_SPLAT) {
                 uint8_t scalar_type =
                     turbowasm_mir_simd_splat_scalar_type(descriptor);
@@ -1722,6 +1740,7 @@ static bool turbowasm_mir_scan_structured_scalar(
                     descriptor->kind == TURBOWASM_SIMD_EXEC_REDUCE ||
                     descriptor->kind == TURBOWASM_SIMD_EXEC_SHIFT ||
                     descriptor->kind == TURBOWASM_SIMD_EXEC_SELECT ||
+                    descriptor->kind == TURBOWASM_SIMD_EXEC_RELAXED ||
                     turbowasm_mir_simd_kind_unary(descriptor->kind) ||
                     turbowasm_mir_simd_kind_binary(descriptor->kind))
                     break;
@@ -2478,7 +2497,28 @@ static turbowasm_status turbowasm_mir_structured_emit_simd(
         if (*next_slot >= slot_limit)
             return TURBOWASM_UNSUPPORTED;
 
-        if (turbowasm_mir_simd_kind_unary(descriptor->kind)) {
+        if (descriptor->kind == TURBOWASM_SIMD_EXEC_RELAXED) {
+            uint8_t arity =
+                turbowasm_relaxed_simd_arity(descriptor->opcode);
+            if (arity == 0u || *stack_size < arity)
+                return TURBOWASM_UNSUPPORTED;
+            if (arity == 3u) {
+                c = stack[--*stack_size];
+                if (c.type != 0x7bu)
+                    return TURBOWASM_UNSUPPORTED;
+                c_slot = (int64_t)c.reg;
+            }
+            if (arity >= 2u) {
+                b = stack[--*stack_size];
+                if (b.type != 0x7bu)
+                    return TURBOWASM_UNSUPPORTED;
+                b_slot = (int64_t)b.reg;
+            }
+            a = stack[--*stack_size];
+            if (a.type != 0x7bu)
+                return TURBOWASM_UNSUPPORTED;
+            a_slot = (int64_t)a.reg;
+        } else if (turbowasm_mir_simd_kind_unary(descriptor->kind)) {
             if (*stack_size < 1u)
                 return TURBOWASM_UNSUPPORTED;
             a = stack[--*stack_size];
@@ -4081,7 +4121,30 @@ static turbowasm_status turbowasm_mir_compile_simd_straightline(
                 if (next_slot >= slot_count)
                     goto done;
 
-                if (turbowasm_mir_simd_kind_unary(
+                if (descriptor->kind ==
+                        TURBOWASM_SIMD_EXEC_RELAXED) {
+                    uint8_t arity =
+                        turbowasm_relaxed_simd_arity(
+                            descriptor->opcode);
+                    if (arity == 0u || stack_size < arity)
+                        goto done;
+                    if (arity == 3u) {
+                        c = stack[--stack_size];
+                        if (c.type != 0x7bu)
+                            goto done;
+                        c_slot = (int64_t)c.reg;
+                    }
+                    if (arity >= 2u) {
+                        b = stack[--stack_size];
+                        if (b.type != 0x7bu)
+                            goto done;
+                        b_slot = (int64_t)b.reg;
+                    }
+                    a = stack[--stack_size];
+                    if (a.type != 0x7bu)
+                        goto done;
+                    a_slot = (int64_t)a.reg;
+                } else if (turbowasm_mir_simd_kind_unary(
                         descriptor->kind)) {
                     if (stack_size < 1u)
                         goto done;

@@ -198,6 +198,64 @@ static void test_success_does_not_set_trap(void) {
     assert(context.call_trap == TURBOWASM_TRAP_NONE);
 }
 
+static void test_relaxed_helper_parity(void) {
+    salts_v128 slots[4] = {{{0}}};
+    turbowasm_jit_invocation_context context = {0};
+    uint8_t source[16];
+    uint8_t indexes[16] = {0};
+    uint8_t actual_bytes[16] = {0};
+    float trunc_source[4] = {1.9f, -2.9f, 1.0e30f, -1.0e30f};
+    int32_t trunc_actual[4] = {0};
+    const int32_t trunc_expected[4] = {1, -2, INT32_MAX, INT32_MIN};
+    uint32_t left[4] = {1u, 2u, 3u, 4u};
+    uint32_t right[4] = {10u, 20u, 30u, 40u};
+    uint32_t mask[4] = {UINT32_MAX, 0u, UINT32_MAX, 0u};
+    uint32_t select_actual[4] = {0};
+    const uint32_t select_expected[4] = {1u, 20u, 3u, 40u};
+    uint32_t index;
+
+    context.simd_slots = slots;
+    context.simd_slot_count = 4u;
+    reset_status(&context);
+
+    for (index = 0u; index < 16u; ++index)
+        source[index] = UINT8_C(0x80) + (uint8_t)index;
+    salts_simd_v128_load(&slots[0], source);
+    salts_simd_v128_load(&slots[1], indexes);
+
+    assert(turbowasm_jit_simd_op(
+               &context,
+               0x100, /* i8x16.relaxed_swizzle */
+               2, 0, 1, -1, 0) == TURBOWASM_OK);
+    salts_simd_v128_store(actual_bytes, &slots[2]);
+    for (index = 0u; index < 16u; ++index)
+        assert(actual_bytes[index] == source[0]);
+
+    salts_simd_v128_load(&slots[0], trunc_source);
+    assert(turbowasm_jit_simd_op(
+               &context,
+               0x101, /* i32x4.relaxed_trunc_f32x4_s */
+               2, 0, -1, -1, 0) == TURBOWASM_OK);
+    salts_simd_v128_store(trunc_actual, &slots[2]);
+    assert(memcmp(
+        trunc_actual, trunc_expected, sizeof(trunc_actual)) == 0);
+
+    salts_simd_v128_load(&slots[0], left);
+    salts_simd_v128_load(&slots[1], right);
+    salts_simd_v128_load(&slots[2], mask);
+    assert(turbowasm_jit_simd_op(
+               &context,
+               0x10b, /* i32x4.relaxed_laneselect */
+               3, 0, 1, 2, 0) == TURBOWASM_OK);
+    salts_simd_v128_store(select_actual, &slots[3]);
+    assert(memcmp(
+        select_actual, select_expected,
+        sizeof(select_actual)) == 0);
+
+    assert(context.call_status == TURBOWASM_OK);
+    assert(context.call_trap == TURBOWASM_TRAP_NONE);
+}
+
 static void test_unsupported_kind_records_status(void) {
     salts_v128 slots[3] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
@@ -221,6 +279,7 @@ int main(void) {
     test_memory_helper_and_trap();
     test_invalid_slot_is_invalid_argument();
     test_success_does_not_set_trap();
+    test_relaxed_helper_parity();
     test_unsupported_kind_records_status();
     return 0;
 }
