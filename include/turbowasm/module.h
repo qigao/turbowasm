@@ -44,13 +44,14 @@ typedef enum turbowasm_external_kind {
     TURBOWASM_EXTERN_FUNCTION = 0,
     TURBOWASM_EXTERN_TABLE = 1,
     TURBOWASM_EXTERN_MEMORY = 2,
-    TURBOWASM_EXTERN_GLOBAL = 3
+    TURBOWASM_EXTERN_GLOBAL = 3,
+    TURBOWASM_EXTERN_TAG = 4
 } turbowasm_external_kind;
 
 /*
  * item_index is the index in the corresponding Wasm function/table/memory/
- * global index space. Function imports additionally retain their Wasm type
- * index. For non-function imports type_index is UINT32_MAX.
+ * global/tag index space. Function and tag imports retain their Wasm type
+ * index. Other imports use UINT32_MAX.
  */
 typedef struct turbowasm_import_desc {
     turbowasm_name module_name;
@@ -76,11 +77,13 @@ typedef struct turbowasm_module_summary {
     uint32_t imported_table_count;
     uint32_t imported_memory_count;
     uint32_t imported_global_count;
+    uint32_t imported_tag_count;
 
     uint32_t function_count;
     uint32_t table_count;
     uint32_t memory_count;
     uint32_t global_count;
+    uint32_t tag_count;
     uint32_t code_count;
 
     uint32_t export_count;

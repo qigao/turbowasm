@@ -113,6 +113,11 @@ typedef struct turbowasm_validation_memory {
     turbowasm_validation_limits limits;
 } turbowasm_validation_memory;
 
+typedef struct turbowasm_validation_tag {
+    uint32_t type_index;
+    bool imported;
+} turbowasm_validation_tag;
+
 typedef enum turbowasm_validation_segment_mode {
     TURBOWASM_VALIDATION_SEGMENT_ACTIVE = 0,
     TURBOWASM_VALIDATION_SEGMENT_PASSIVE,
@@ -181,6 +186,10 @@ typedef struct turbowasm_validation_context {
     turbowasm_validation_memory *memories;
     uint32_t memory_count;
     uint32_t memory_capacity;
+
+    turbowasm_validation_tag *tags;
+    uint32_t tag_count;
+    uint32_t tag_capacity;
 
     turbowasm_validation_data_segment *data_segments;
     uint32_t data_segment_count;
@@ -284,6 +293,16 @@ bool turbowasm_validation_context_append_memory(
     turbowasm_validation_limits limits,
     uint32_t page_size,
     bool imported);
+
+bool turbowasm_validation_context_append_tag(
+    turbowasm_validation_context *context,
+    uint32_t type_index,
+    bool imported);
+
+const turbowasm_validation_tag *
+turbowasm_validation_context_tag(
+    const turbowasm_validation_context *context,
+    uint32_t index);
 
 bool turbowasm_validation_context_append_data_segment(
     turbowasm_validation_context *context,

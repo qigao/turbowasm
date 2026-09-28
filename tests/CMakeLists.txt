@@ -52,6 +52,17 @@ set_target_properties(turbowasm_linkage_validation_test PROPERTIES
 add_test(NAME turbowasm_linkage_validation_test
          COMMAND turbowasm_linkage_validation_test)
 
+add_executable(turbowasm_tag_validation_test tag_validation_test.c)
+target_link_libraries(turbowasm_tag_validation_test PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_tag_validation_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_tag_validation_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_tag_validation_test
+         COMMAND turbowasm_tag_validation_test)
+
 add_executable(turbowasm_data_validation_test data_validation_test.c)
 target_link_libraries(turbowasm_data_validation_test PRIVATE TurboWasm::Runtime)
 set_target_properties(turbowasm_data_validation_test PROPERTIES

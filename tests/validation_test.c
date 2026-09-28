@@ -155,7 +155,7 @@ static void test_truncated_section_payload(void) {
 static void test_unknown_section_is_unsupported(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
-        0x0d, 0x00
+        0x0e, 0x00
     };
     turbowasm_module module = {0};
 

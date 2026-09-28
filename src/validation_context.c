@@ -137,6 +137,7 @@ void turbowasm_validation_context_destroy(
     free(context->globals);
     free(context->tables);
     free(context->memories);
+    free(context->tags);
     free(context->data_segments);
     for (index = 0u; index < context->element_segment_count; ++index)
         free(context->element_segments[index].items);
@@ -447,6 +448,45 @@ bool turbowasm_validation_context_append_memory(
     context->memories[context->memory_count].limits = limits;
     ++context->memory_count;
     return true;
+}
+
+bool turbowasm_validation_context_append_tag(
+    turbowasm_validation_context *context,
+    uint32_t type_index,
+    bool imported) {
+    const turbowasm_validation_func_type *type;
+    uint32_t required;
+
+    if (context == NULL ||
+        type_index >= context->type_count ||
+        context->tag_count == UINT32_MAX)
+        return false;
+
+    type = turbowasm_validation_context_type(context, type_index);
+    if (type == NULL || !type->defined || type->result_count != 0u)
+        return false;
+
+    required = context->tag_count + 1u;
+    if (!turbowasm_validation_reserve(
+            (void **)&context->tags,
+            &context->tag_capacity,
+            required,
+            sizeof(*context->tags)))
+        return false;
+
+    context->tags[context->tag_count].type_index = type_index;
+    context->tags[context->tag_count].imported = imported;
+    ++context->tag_count;
+    return true;
+}
+
+const turbowasm_validation_tag *
+turbowasm_validation_context_tag(
+    const turbowasm_validation_context *context,
+    uint32_t index) {
+    if (context == NULL || index >= context->tag_count)
+        return NULL;
+    return &context->tags[index];
 }
 
 

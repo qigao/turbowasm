@@ -24,7 +24,8 @@ enum {
     TURBOWASM_SECTION_ELEMENT = 9u,
     TURBOWASM_SECTION_CODE = 10u,
     TURBOWASM_SECTION_DATA = 11u,
-    TURBOWASM_SECTION_DATA_COUNT = 12u
+    TURBOWASM_SECTION_DATA_COUNT = 12u,
+    TURBOWASM_SECTION_TAG = 13u
 };
 
 static unsigned turbowasm_section_rank(uint8_t id) {
@@ -34,13 +35,14 @@ static unsigned turbowasm_section_rank(uint8_t id) {
         case TURBOWASM_SECTION_FUNCTION: return 3u;
         case TURBOWASM_SECTION_TABLE: return 4u;
         case TURBOWASM_SECTION_MEMORY: return 5u;
-        case TURBOWASM_SECTION_GLOBAL: return 6u;
-        case TURBOWASM_SECTION_EXPORT: return 7u;
-        case TURBOWASM_SECTION_START: return 8u;
-        case TURBOWASM_SECTION_ELEMENT: return 9u;
-        case TURBOWASM_SECTION_DATA_COUNT: return 10u;
-        case TURBOWASM_SECTION_CODE: return 11u;
-        case TURBOWASM_SECTION_DATA: return 12u;
+        case TURBOWASM_SECTION_TAG: return 6u;
+        case TURBOWASM_SECTION_GLOBAL: return 7u;
+        case TURBOWASM_SECTION_EXPORT: return 8u;
+        case TURBOWASM_SECTION_START: return 9u;
+        case TURBOWASM_SECTION_ELEMENT: return 10u;
+        case TURBOWASM_SECTION_DATA_COUNT: return 11u;
+        case TURBOWASM_SECTION_CODE: return 12u;
+        case TURBOWASM_SECTION_DATA: return 13u;
         default: return 0u;
     }
 }
@@ -252,6 +254,9 @@ static turbowasm_status turbowasm_validate_section_payload(
                 section, summary, context);
         case TURBOWASM_SECTION_MEMORY:
             return turbowasm_validate_memory_section(
+                section, summary, context);
+        case TURBOWASM_SECTION_TAG:
+            return turbowasm_validate_tag_section(
                 section, summary, context);
         case TURBOWASM_SECTION_GLOBAL:
             return turbowasm_validate_global_section(
