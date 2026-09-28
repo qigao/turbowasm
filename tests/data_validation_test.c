@@ -143,7 +143,7 @@ static void test_global_get_rejects_imported_mutable(void) {
     assert(module.impl == NULL);
 }
 
-static void test_global_get_rejects_prior_local_immutable(void) {
+static void test_global_get_accepts_prior_local_immutable(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
         0x06, 0x0b,
@@ -152,9 +152,12 @@ static void test_global_get_rejects_prior_local_immutable(void) {
         0x7f, 0x00, 0x23, 0x00, 0x0b
     };
     turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
 
-    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_MALFORMED_MODULE);
-    assert(module.impl == NULL);
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
 }
 
 static void test_global_get_rejects_prior_local_mutable(void) {
@@ -372,7 +375,7 @@ int main(void) {
     test_global_type_mismatch();
     test_global_get_imported_immutable();
     test_global_get_rejects_imported_mutable();
-    test_global_get_rejects_prior_local_immutable();
+    test_global_get_accepts_prior_local_immutable();
     test_global_get_rejects_prior_local_mutable();
     test_global_get_rejects_forward_local_global();
     test_known_nonconst_opcode_is_invalid();
