@@ -621,6 +621,140 @@ static void test_execution_control_parity_and_cache(void) {
     pair_destroy(&pair);
 }
 
+
+static void test_eh_fallback_isolation(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: (i32) -> (); type1: () -> i32 */
+        0x01, 0x09,
+        0x02,
+        0x60, 0x01, 0x7f, 0x00,
+        0x60, 0x00, 0x01, 0x7f,
+
+        /* five defined functions, all type1 */
+        0x03, 0x06,
+        0x05, 0x01, 0x01, 0x01, 0x01, 0x01,
+
+        /* tag0: type0 */
+        0x0d, 0x03,
+        0x01, 0x00, 0x00,
+
+        0x0a, 0x2c,
+        0x05,
+
+        /* f0: EH thrower, statically () -> i32, never returns normally. */
+        0x06,
+        0x00,
+        0x41, 0x2a,
+        0x08, 0x00,
+        0x0b,
+
+        /*
+         * f1: EH catcher. The tag payload branches to the outer i32 label,
+         * so the successful result is 42.
+         */
+        0x11,
+        0x00,
+        0x02, 0x7f,
+          0x1f, 0x40,
+          0x01,
+            0x00, 0x00, 0x00,
+          0x10, 0x00,
+          0x1a,
+          0x0b,
+          0x41, 0x00,
+        0x0b,
+        0x0b,
+
+        /* f2: unrelated MIR-eligible scalar sibling => 7. */
+        0x04,
+        0x00,
+        0x41, 0x07,
+        0x0b,
+
+        /* f3: MIR-eligible caller -> interpreted EH catcher + 1 => 43. */
+        0x07,
+        0x00,
+        0x10, 0x01,
+        0x41, 0x01,
+        0x6a,
+        0x0b,
+
+        /* f4: MIR-eligible caller -> interpreted uncaught thrower. */
+        0x04,
+        0x00,
+        0x10, 0x00,
+        0x0b
+    };
+    differential_pair pair;
+    turbowasm_instance_impl *impl;
+    call_result interpreted;
+    call_result tiered;
+
+    pair_init(&pair, bytes, sizeof(bytes));
+    impl = tiered_impl(&pair);
+
+    /*
+     * EH-bearing f1 is rejected by MIR eligibility at threshold=1, but its
+     * interpreter result remains identical to the non-tiered instance.
+     */
+    compare_unbounded(&pair, 1u, NULL, 0u);
+    assert(impl->jit_functions[1].state ==
+           TURBOWASM_JIT_INTERPRET_ONLY);
+    assert(impl->jit_functions[1].compiled.impl == NULL);
+
+    /* An unrelated sibling in the same instance still compiles normally. */
+    compare_unbounded(&pair, 2u, NULL, 0u);
+    assert(impl->jit_functions[2].state ==
+           TURBOWASM_JIT_COMPILED);
+    assert(impl->jit_functions[2].compiled.impl != NULL);
+
+    /*
+     * A compiled caller can enter the interpreter-only EH catcher and return
+     * to native code without changing the observable result.
+     */
+    compare_unbounded(&pair, 3u, NULL, 0u);
+    assert(impl->jit_functions[3].state ==
+           TURBOWASM_JIT_COMPILED);
+    assert(impl->jit_functions[3].compiled.impl != NULL);
+    assert(impl->jit_functions[1].state ==
+           TURBOWASM_JIT_INTERPRET_ONLY);
+
+    /*
+     * The same compiled->interpreter boundary preserves an uncaught Wasm
+     * exception as TURBOWASM_EXCEPTION, not a trap or JIT/policy status.
+     */
+    interpreted = invoke_capture(
+        &pair.interpreter, 4u, NULL, 0u, NULL);
+    tiered = invoke_capture(
+        &pair.tiered, 4u, NULL, 0u, NULL);
+    assert_call_equal(interpreted, tiered);
+    assert(interpreted.status == TURBOWASM_EXCEPTION);
+    assert(interpreted.trap == TURBOWASM_TRAP_NONE);
+    assert(interpreted.count == 0u);
+
+    assert(impl->jit_functions[4].state ==
+           TURBOWASM_JIT_COMPILED);
+    assert(impl->jit_functions[4].compiled.impl != NULL);
+    assert(impl->jit_functions[0].state ==
+           TURBOWASM_JIT_INTERPRET_ONLY);
+    assert(impl->jit_functions[0].compiled.impl == NULL);
+
+    /* Compiling other functions must not perturb the EH fallback cache. */
+    compare_unbounded(&pair, 1u, NULL, 0u);
+    assert(impl->jit_functions[1].state ==
+           TURBOWASM_JIT_INTERPRET_ONLY);
+    assert(impl->jit_functions[2].state ==
+           TURBOWASM_JIT_COMPILED);
+    assert(impl->jit_functions[3].state ==
+           TURBOWASM_JIT_COMPILED);
+    assert(impl->jit_functions[4].state ==
+           TURBOWASM_JIT_COMPILED);
+
+    pair_destroy(&pair);
+}
+
 int main(void) {
     test_integer_locals_and_fallback();
     test_float_lowering_and_fallback();
@@ -628,5 +762,6 @@ int main(void) {
     test_compiled_caller_preserves_state_mutation();
     test_compiled_caller_preserves_memory_trap();
     test_execution_control_parity_and_cache();
+    test_eh_fallback_isolation();
     return 0;
 }
