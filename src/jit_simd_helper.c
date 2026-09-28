@@ -1,5 +1,6 @@
 #include "jit_simd_helper.h"
 
+#include "relaxed_simd.h"
 #include "simd_exec_table.h"
 
 #include <limits.h>
@@ -336,6 +337,19 @@ int64_t turbowasm_jit_simd_op(
             supported = a != NULL && b != NULL &&
                 salts_simd_swizzle_bytes(out, a, b);
             break;
+
+        case TURBOWASM_SIMD_EXEC_RELAXED: {
+            uint8_t arity =
+                turbowasm_relaxed_simd_arity(descriptor->opcode);
+            supported =
+                arity != 0u &&
+                a != NULL &&
+                (arity < 2u || b != NULL) &&
+                (arity < 3u || c != NULL) &&
+                turbowasm_relaxed_simd_execute(
+                    descriptor->opcode, out, a, b, c);
+            break;
+        }
 
         default:
             supported = false;
