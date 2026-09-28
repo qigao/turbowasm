@@ -847,6 +847,199 @@ static turbowasm_status turbowasm_exec_indirect_call(
         stack, trap, execution, depth);
 }
 
+typedef struct turbowasm_tail_call_request {
+    bool active;
+    turbowasm_instance_impl *instance;
+    uint32_t function_index;
+    turbowasm_value *arguments;
+    size_t argument_count;
+} turbowasm_tail_call_request;
+
+static turbowasm_status turbowasm_collect_tail_arguments(
+    turbowasm_value_stack *stack,
+    const turbowasm_validation_func_type *type,
+    turbowasm_value **out_arguments) {
+    turbowasm_value *arguments = NULL;
+    uint32_t index;
+    turbowasm_status status;
+
+    if (stack == NULL || type == NULL || out_arguments == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *out_arguments = NULL;
+    if (type->param_count != 0u) {
+        arguments = (turbowasm_value *)calloc(
+            (size_t)type->param_count, sizeof(*arguments));
+        if (arguments == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    index = type->param_count;
+    while (index != 0u) {
+        --index;
+        status = turbowasm_stack_pop(stack, &arguments[index]);
+        if (status != TURBOWASM_OK) {
+            free(arguments);
+            return status;
+        }
+    }
+
+    *out_arguments = arguments;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_prepare_direct_tail_call(
+    turbowasm_instance_impl *instance,
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    turbowasm_tail_call_request *request) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_context *context;
+    const turbowasm_validation_function *function;
+    const turbowasm_validation_func_type *type;
+    const turbowasm_linked_function *binding;
+    turbowasm_value *arguments = NULL;
+    uint32_t function_index;
+    turbowasm_status status;
+
+    if (instance == NULL || reader == NULL ||
+        stack == NULL || request == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    context = &module->validation;
+
+    if (!turbowasm_reader_uleb32(reader, &function_index))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    function = turbowasm_validation_context_function(
+        context, function_index);
+    type = turbowasm_validation_context_function_type(
+        context, function_index);
+    if (function == NULL || type == NULL || !type->defined)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    status = turbowasm_collect_tail_arguments(
+        stack, type, &arguments);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    request->instance = instance;
+    request->function_index = function_index;
+    request->arguments = arguments;
+    request->argument_count = type->param_count;
+    request->active = true;
+
+    if (!function->imported)
+        return TURBOWASM_OK;
+
+    if (function_index >= instance->linked_function_count) {
+        free(arguments);
+        memset(request, 0, sizeof(*request));
+        return TURBOWASM_UNSUPPORTED;
+    }
+
+    binding = &instance->linked_functions[function_index];
+    if (binding->provider == NULL) {
+        free(arguments);
+        memset(request, 0, sizeof(*request));
+        return TURBOWASM_UNSUPPORTED;
+    }
+
+    request->instance = binding->provider;
+    request->function_index = binding->function_index;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_prepare_indirect_tail_call(
+    turbowasm_instance_impl *instance,
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    turbowasm_trap *trap,
+    turbowasm_tail_call_request *request) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_func_type *expected_type;
+    const turbowasm_validation_func_type *actual_type;
+    const turbowasm_module_impl *target_module;
+    turbowasm_instance_impl *target_instance;
+    turbowasm_instance_table_entry entry;
+    turbowasm_value selector;
+    turbowasm_value *arguments = NULL;
+    uint32_t type_index;
+    uint32_t table_index;
+    uint32_t target_function;
+    turbowasm_status status;
+
+    if (instance == NULL || reader == NULL || stack == NULL ||
+        trap == NULL || request == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!turbowasm_reader_uleb32(reader, &type_index) ||
+        !turbowasm_reader_uleb32(reader, &table_index))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    expected_type = turbowasm_validation_context_type(
+        &module->validation, type_index);
+    if (expected_type == NULL || !expected_type->defined)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_I32, &selector);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = turbowasm_instance_table_lookup(
+        instance, table_index,
+        (uint32_t)selector.as.i32, &entry);
+    if (status == TURBOWASM_TRAPPED) {
+        *trap = TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS;
+        return TURBOWASM_TRAPPED;
+    }
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (entry.value.kind != TURBOWASM_VALUE_FUNCREF)
+        return TURBOWASM_TYPE_MISMATCH;
+    if (entry.value.as.funcref.is_null) {
+        *trap = TURBOWASM_TRAP_INDIRECT_CALL_NULL;
+        return TURBOWASM_TRAPPED;
+    }
+
+    target_instance = entry.value.as.funcref.owner != NULL
+        ? (turbowasm_instance_impl *)entry.value.as.funcref.owner
+        : instance;
+    target_function = entry.value.as.funcref.function_index;
+    target_module = turbowasm_module_impl_get(target_instance->module);
+    if (target_module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    actual_type = turbowasm_validation_context_function_type(
+        &target_module->validation, target_function);
+    if (!turbowasm_validation_func_type_equal(
+            expected_type, actual_type)) {
+        *trap = TURBOWASM_TRAP_INDIRECT_CALL_TYPE_MISMATCH;
+        return TURBOWASM_TRAPPED;
+    }
+
+    status = turbowasm_collect_tail_arguments(
+        stack, expected_type, &arguments);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    request->active = true;
+    request->instance = target_instance;
+    request->function_index = target_function;
+    request->arguments = arguments;
+    request->argument_count = expected_type->param_count;
+    return TURBOWASM_OK;
+}
+
 static uint32_t turbowasm_clz32(uint32_t value) {
     uint32_t count = 0u;
 
