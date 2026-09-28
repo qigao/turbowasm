@@ -3618,8 +3618,10 @@ static turbowasm_status turbowasm_exec_function(
     const turbowasm_validation_function *function;
     const turbowasm_validation_func_type *type;
     turbowasm_value *locals = NULL;
+    turbowasm_value *owned_arguments = NULL;
     turbowasm_value_stack stack = {0};
     turbowasm_exec_control_stack controls = {0};
+    turbowasm_tail_call_request tail = {0};
     turbowasm_reader reader;
     uint32_t index;
     turbowasm_status status = TURBOWASM_OK;
@@ -3629,65 +3631,88 @@ static turbowasm_status turbowasm_exec_function(
     if (instance == NULL || result_count == NULL || trap == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    module = turbowasm_module_impl_get(instance->module);
-    if (module == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (depth >= TURBOWASM_EXEC_MAX_CALL_DEPTH) {
-        *trap = TURBOWASM_TRAP_CALL_STACK_EXHAUSTED;
-        return TURBOWASM_TRAPPED;
-    }
+    for (;;) {
+        locals = NULL;
+        memset(&stack, 0, sizeof(stack));
+        memset(&controls, 0, sizeof(controls));
+        memset(&tail, 0, sizeof(tail));
+        status = TURBOWASM_OK;
+        finished = false;
+        returned = false;
+        *result_count = 0u;
 
-    context = &module->validation;
-    function = turbowasm_validation_context_function(
-        context, function_index);
-    type = turbowasm_validation_context_function_type(
-        context, function_index);
+        module = turbowasm_module_impl_get(instance->module);
+        if (module == NULL) {
+            status = TURBOWASM_INVALID_ARGUMENT;
+            goto done;
+        }
+        if (depth >= TURBOWASM_EXEC_MAX_CALL_DEPTH) {
+            *trap = TURBOWASM_TRAP_CALL_STACK_EXHAUSTED;
+            status = TURBOWASM_TRAPPED;
+            goto done;
+        }
 
-    if (function == NULL || type == NULL || !type->defined)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (function->imported) {
-        const turbowasm_linked_function *binding;
+        context = &module->validation;
+        function = turbowasm_validation_context_function(
+            context, function_index);
+        type = turbowasm_validation_context_function_type(
+            context, function_index);
 
-        if (function_index >= instance->linked_function_count)
-            return TURBOWASM_UNSUPPORTED;
-        binding = &instance->linked_functions[function_index];
-        if (binding->provider == NULL)
-            return TURBOWASM_UNSUPPORTED;
+        if (function == NULL || type == NULL || !type->defined) {
+            status = TURBOWASM_INVALID_ARGUMENT;
+            goto done;
+        }
+        if (function->imported) {
+            const turbowasm_linked_function *binding;
 
-        return turbowasm_dispatch_function(
-            binding->provider,
-            binding->function_index,
-            arguments,
-            argument_count,
-            results,
-            result_capacity,
-            result_count,
-            trap,
-            execution,
-            depth);
-    }
+            if (function_index >= instance->linked_function_count) {
+                status = TURBOWASM_UNSUPPORTED;
+                goto done;
+            }
+            binding = &instance->linked_functions[function_index];
+            if (binding->provider == NULL) {
+                status = TURBOWASM_UNSUPPORTED;
+                goto done;
+            }
 
-    if (argument_count != type->param_count)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (type->result_count > result_capacity)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (type->param_count != 0u && arguments == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (type->result_count != 0u && results == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
+            status = turbowasm_dispatch_function(
+                binding->provider,
+                binding->function_index,
+                arguments,
+                argument_count,
+                results,
+                result_capacity,
+                result_count,
+                trap,
+                execution,
+                depth);
+            goto done;
+        }
 
-    for (index = 0u; index < type->param_count; ++index) {
-        if (!turbowasm_value_matches_type(
-                &arguments[index], type->params[index]))
-            return TURBOWASM_TYPE_MISMATCH;
-    }
+        if (argument_count != type->param_count ||
+            type->result_count > result_capacity ||
+            (type->param_count != 0u && arguments == NULL) ||
+            (type->result_count != 0u && results == NULL)) {
+            status = TURBOWASM_INVALID_ARGUMENT;
+            goto done;
+        }
 
-    if (function->local_count != 0u) {
-        locals = (turbowasm_value *)calloc(
-            (size_t)function->local_count, sizeof(*locals));
-        if (locals == NULL)
-            return TURBOWASM_OUT_OF_MEMORY;
-    }
+        for (index = 0u; index < type->param_count; ++index) {
+            if (!turbowasm_value_matches_type(
+                    &arguments[index], type->params[index])) {
+                status = TURBOWASM_TYPE_MISMATCH;
+                goto done;
+            }
+        }
+
+        if (function->local_count != 0u) {
+            locals = (turbowasm_value *)calloc(
+                (size_t)function->local_count, sizeof(*locals));
+            if (locals == NULL) {
+                status = TURBOWASM_OUT_OF_MEMORY;
+                goto done;
+            }
+        }
 
     for (index = 0u; index < function->local_count; ++index) {
         if (!turbowasm_zero_value(function->local_types[index],
@@ -3716,6 +3741,15 @@ static turbowasm_status turbowasm_exec_function(
             locals[index].as.funcref.owner = instance;
         }
     }
+
+    /*
+     * Tail-call arguments are owned only until the replacement frame has
+     * copied them into its locals. Releasing them here keeps a million-step
+     * tail recursion at constant heap ownership as well as constant C depth.
+     */
+    free(owned_arguments);
+    owned_arguments = NULL;
+    arguments = NULL;
 
     turbowasm_reader_init(&reader, function->code, function->code_size);
 
@@ -3929,6 +3963,18 @@ static turbowasm_status turbowasm_exec_function(
                 if (status != TURBOWASM_OK)
                     goto done;
                 break;
+            case 0x12u: /* return_call */
+                status = turbowasm_prepare_direct_tail_call(
+                    instance, &reader, &stack, &tail);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                goto done;
+            case 0x13u: /* return_call_indirect */
+                status = turbowasm_prepare_indirect_tail_call(
+                    instance, &reader, &stack, trap, &tail);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                goto done;
             case 0x1au: { /* drop */
                 turbowasm_value ignored;
                 status = turbowasm_stack_pop(&stack, &ignored);
@@ -4471,10 +4517,23 @@ static turbowasm_status turbowasm_exec_function(
     *result_count = type->result_count;
 
 done:
-    free(locals);
-    free(stack.values);
-    free(controls.frames);
-    return status;
+        free(locals);
+        free(stack.values);
+        free(controls.frames);
+
+        if (status == TURBOWASM_OK && tail.active) {
+            free(owned_arguments);
+            owned_arguments = tail.arguments;
+            instance = tail.instance;
+            function_index = tail.function_index;
+            arguments = owned_arguments;
+            argument_count = tail.argument_count;
+            continue;
+        }
+
+        free(owned_arguments);
+        return status;
+    }
 }
 
 static turbowasm_status turbowasm_dispatch_function(
