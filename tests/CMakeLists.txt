@@ -63,6 +63,17 @@ set_target_properties(turbowasm_tag_validation_test PROPERTIES
 add_test(NAME turbowasm_tag_validation_test
          COMMAND turbowasm_tag_validation_test)
 
+add_executable(turbowasm_eh_runtime_test eh_runtime_test.c)
+target_link_libraries(turbowasm_eh_runtime_test PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_eh_runtime_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_eh_runtime_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_eh_runtime_test
+         COMMAND turbowasm_eh_runtime_test)
+
 add_executable(turbowasm_eh_validation_test eh_validation_test.c)
 target_link_libraries(turbowasm_eh_validation_test PRIVATE TurboWasm::Runtime)
 target_include_directories(turbowasm_eh_validation_test
