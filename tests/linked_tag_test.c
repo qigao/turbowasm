@@ -98,16 +98,6 @@ static const uint8_t missing_export_bytes[] = {
     0x04, 0x00, 0x00
 };
 
-static turbowasm_name one_char_name(uint8_t byte) {
-    turbowasm_name name = {&byte, 1u};
-
-    /*
-     * The linker copies namespace bytes synchronously, so this local backing
-     * byte only needs to remain live for the call itself.
-     */
-    return name;
-}
-
 static turbowasm_tag_identity identity_at(
     const turbowasm_instance *instance,
     uint32_t tag_index) {
