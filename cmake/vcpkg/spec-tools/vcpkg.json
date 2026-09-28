@@ -1,7 +1,7 @@
 {
-  "name": "turbowasm-spec-tools",
+  "name": "qigao-turbowasm-spec-tools-cache",
   "version-string": "1",
-  "description": "TurboWasm repository-owned WebAssembly conformance tool manifest.",
+  "description": "Host WABT tooling profile for TurboWasm WebAssembly spec conformance conversion.",
   "dependencies": [
     {
       "name": "wabt",
@@ -9,6 +9,5 @@
         "tools"
       ]
     }
-  ],
-  "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"
+  ]
 }
