@@ -1,0 +1,14 @@
+# WebAssembly threads proposal-specific core tests.
+threads/LB.wast
+threads/LB_atomic.wast
+threads/MP.wast
+threads/MP_atomic.wast
+threads/SB.wast
+threads/SB_atomic.wast
+threads/atomic.wast
+threads/deeply_nested.wast
+threads/nested.wast
+threads/simple.wast
+threads/thread.wast
+threads/unlinkable.wast
+threads/wait_notify.wast
