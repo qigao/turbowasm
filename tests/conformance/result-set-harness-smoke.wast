@@ -3,7 +3,9 @@
   (func (export "identity") (param v128) (result v128)
     (local.get 0))
   (func (export "nan-lanes") (result v128)
-    (v128.const f32x4 nan:canonical 1.0 -0.0 2.0))
+    ;; canonical qNaN, 1.0, -0.0, 2.0 as raw i32 lane bits
+    (v128.const i32x4
+      0x7fc00000 0x3f800000 0x80000000 0x40000000))
 )
 
 (assert_return
