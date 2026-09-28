@@ -50,5 +50,13 @@
       "--enable-custom-page-sizes"
     ],
     "minimum_passes": 1
+  },
+  "extended-const": {
+    "repository": "https://github.com/WebAssembly/spec.git",
+    "commit": "608711107b7f1edb13efd57b7d79b49477462d36",
+    "core_dir": "test/core",
+    "suite": "proposal-extended-const.txt",
+    "wast2json_flags": [],
+    "minimum_passes": 1
   }
 }

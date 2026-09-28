@@ -1,0 +1,6 @@
+# Pinned WebAssembly/extended-const qualification.
+# These three suites exercise extended const expressions in globals,
+# active data offsets and active element offsets.
+global.wast
+data.wast
+elem.wast
