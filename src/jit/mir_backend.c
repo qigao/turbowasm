@@ -799,6 +799,54 @@ static bool turbowasm_mir_scan_scalar_locals(
                 ++register_count;
                 break;
             }
+            case 0x12u: { /* return_call */
+                uint32_t callee_index;
+                const turbowasm_validation_function *callee;
+                const turbowasm_validation_func_type *callee_type;
+                uint32_t arg_index;
+                uint32_t base;
+
+                if (!turbowasm_reader_uleb32(
+                        &reader, &callee_index))
+                    goto done;
+
+                callee = turbowasm_validation_context_function(
+                    validation, callee_index);
+                callee_type =
+                    turbowasm_validation_context_function_type(
+                        validation, callee_index);
+                if (callee == NULL || callee->imported ||
+                    !turbowasm_mir_call_signature_supported(
+                        callee_type) ||
+                    callee_type->results[0] != result_type ||
+                    stack_size < callee_type->param_count)
+                    goto done;
+
+                base = stack_size - callee_type->param_count;
+                for (arg_index = 0u;
+                     arg_index < callee_type->param_count;
+                     ++arg_index) {
+                    if (types[base + arg_index] !=
+                        callee_type->params[arg_index])
+                        goto done;
+                }
+
+                /*
+                 * T3 initially admits only terminal straight-line direct
+                 * tail calls.  The final function-end byte is structural and
+                 * is not executed after the transfer.
+                 */
+                if (turbowasm_reader_remaining(&reader) != 1u ||
+                    reader.cursor[0] != 0x0bu)
+                    goto done;
+
+                if (out_register_count != NULL)
+                    *out_register_count = register_count;
+                if (out_result_type != NULL)
+                    *out_result_type = result_type;
+                ok = true;
+                goto done;
+            }
             case 0x20u: { /* local.get */
                 uint32_t local_index;
                 if (!turbowasm_reader_uleb32(
