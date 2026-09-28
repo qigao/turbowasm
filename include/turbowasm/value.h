@@ -20,7 +20,8 @@ typedef enum turbowasm_value_kind {
     TURBOWASM_VALUE_F64 = 0x7c,
     TURBOWASM_VALUE_V128 = 0x7b,
     TURBOWASM_VALUE_FUNCREF = 0x70,
-    TURBOWASM_VALUE_EXTERNREF = 0x6f
+    TURBOWASM_VALUE_EXTERNREF = 0x6f,
+    TURBOWASM_VALUE_EXNREF = 0x69
 } turbowasm_value_kind;
 
 /* Wasm binary typing stops at v128.  The validated TurboWasm IR may refine the
@@ -76,6 +77,14 @@ typedef struct turbowasm_externref {
     uintptr_t token;
 } turbowasm_externref;
 
+typedef struct turbowasm_exnref {
+    bool is_null;
+
+    /* Opaque TurboWasm-owned exception identity. The reference remains valid
+     * until the owning instance is destroyed. */
+    const void *exception;
+} turbowasm_exnref;
+
 typedef struct turbowasm_value {
     turbowasm_value_kind kind;
     union {
@@ -86,6 +95,7 @@ typedef struct turbowasm_value {
         turbowasm_v128 v128;
         turbowasm_funcref funcref;
         turbowasm_externref externref;
+        turbowasm_exnref exnref;
     } as;
 } turbowasm_value;
 
