@@ -366,25 +366,26 @@ static turbowasm_status turbowasm_eval_i32_expr(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status turbowasm_eval_funcref_expr(
+static turbowasm_status turbowasm_eval_table_expr(
     const turbowasm_instance_impl *instance,
     const turbowasm_validation_expr_span *expression,
+    uint8_t reference_type,
     turbowasm_instance_table_entry *out) {
-    turbowasm_value value;
     turbowasm_status status;
 
     if (expression == NULL || out == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    status = turbowasm_eval_value_expr(
-        instance, expression, &value);
+    status = turbowasm_eval_value_expr(instance, expression, out);
     if (status != TURBOWASM_OK)
         return status;
-    if (value.kind != TURBOWASM_VALUE_FUNCREF)
-        return TURBOWASM_UNSUPPORTED;
 
-    memset(out, 0, sizeof(*out));
-    out->value = value;
+    if ((reference_type == 0x70u &&
+         out->kind != TURBOWASM_VALUE_FUNCREF) ||
+        (reference_type == 0x6fu &&
+         out->kind != TURBOWASM_VALUE_EXTERNREF))
+        return TURBOWASM_TYPE_MISMATCH;
+
     return TURBOWASM_OK;
 }
 
@@ -514,7 +515,8 @@ static turbowasm_status turbowasm_allocate_tables(
                 return TURBOWASM_UNSUPPORTED;
             continue;
         }
-        if (source->reference_type != 0x70u)
+        if (source->reference_type != 0x70u &&
+            source->reference_type != 0x6fu)
             return TURBOWASM_UNSUPPORTED;
 
         table->size = source->limits.minimum;
@@ -536,12 +538,19 @@ static turbowasm_status turbowasm_allocate_tables(
         }
 
         for (item = 0u; item < table->size; ++item) {
-            table->entries[item].value.kind =
-                TURBOWASM_VALUE_FUNCREF;
-            table->entries[item].value.as.funcref.is_null = true;
-            table->entries[item].value.as.funcref.function_index =
-                UINT32_MAX;
-            table->entries[item].value.as.funcref.owner = NULL;
+            table->entries[item].kind =
+                source->reference_type == 0x70u
+                    ? TURBOWASM_VALUE_FUNCREF
+                    : TURBOWASM_VALUE_EXTERNREF;
+            if (source->reference_type == 0x70u) {
+                table->entries[item].as.funcref.is_null = true;
+                table->entries[item].as.funcref.function_index =
+                    UINT32_MAX;
+                table->entries[item].as.funcref.owner = NULL;
+            } else {
+                table->entries[item].as.externref.is_null = true;
+                table->entries[item].as.externref.token = 0u;
+            }
         }
     }
 
@@ -685,6 +694,7 @@ static turbowasm_status turbowasm_apply_data_segments(
 static turbowasm_status turbowasm_element_item_value(
     const turbowasm_instance_impl *instance,
     const turbowasm_validation_element_item *item,
+    uint8_t reference_type,
     turbowasm_instance_table_entry *out) {
     if (item == NULL || out == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -692,17 +702,18 @@ static turbowasm_status turbowasm_element_item_value(
     memset(out, 0, sizeof(*out));
     if (item->kind ==
         TURBOWASM_VALIDATION_ELEMENT_FUNCTION_INDEX) {
-        out->value.kind = TURBOWASM_VALUE_FUNCREF;
-        out->value.as.funcref.is_null = false;
-        out->value.as.funcref.function_index =
-            item->function_index;
-        out->value.as.funcref.owner =
+        if (reference_type != 0x70u)
+            return TURBOWASM_TYPE_MISMATCH;
+        out->kind = TURBOWASM_VALUE_FUNCREF;
+        out->as.funcref.is_null = false;
+        out->as.funcref.function_index = item->function_index;
+        out->as.funcref.owner =
             (turbowasm_instance_impl *)instance;
         return TURBOWASM_OK;
     }
 
-    return turbowasm_eval_funcref_expr(
-        instance, &item->expression, out);
+    return turbowasm_eval_table_expr(
+        instance, &item->expression, reference_type, out);
 }
 
 static turbowasm_status turbowasm_apply_element_segments(
@@ -751,6 +762,7 @@ static turbowasm_status turbowasm_apply_element_segments(
             status = turbowasm_element_item_value(
                 instance,
                 &segment->items[item_index],
+                table->reference_type,
                 &value);
             if (status != TURBOWASM_OK)
                 return status;
@@ -1171,10 +1183,10 @@ static bool turbowasm_instance_funcref_owner_visible(
         if (table == NULL)
             continue;
         for (element = 0u; element < table->size; ++element) {
-            if (table->entries[element].value.kind ==
+            if (table->entries[element].kind ==
                     TURBOWASM_VALUE_FUNCREF &&
-                !table->entries[element].value.as.funcref.is_null &&
-                table->entries[element].value.as.funcref.owner == owner)
+                !table->entries[element].as.funcref.is_null &&
+                table->entries[element].as.funcref.owner == owner)
                 return true;
         }
     }
@@ -1182,8 +1194,9 @@ static bool turbowasm_instance_funcref_owner_visible(
     return false;
 }
 
-static turbowasm_status turbowasm_funcref_to_table_entry(
+static turbowasm_status turbowasm_value_to_table_entry(
     turbowasm_instance_impl *instance,
+    uint8_t reference_type,
     turbowasm_value value,
     turbowasm_instance_table_entry *out) {
     turbowasm_instance_impl *owner;
@@ -1191,20 +1204,28 @@ static turbowasm_status turbowasm_funcref_to_table_entry(
 
     if (instance == NULL || out == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+
+    if (reference_type == 0x6fu) {
+        if (value.kind != TURBOWASM_VALUE_EXTERNREF)
+            return TURBOWASM_TYPE_MISMATCH;
+        *out = value;
+        return TURBOWASM_OK;
+    }
+
+    if (reference_type != 0x70u)
+        return TURBOWASM_UNSUPPORTED;
     if (value.kind != TURBOWASM_VALUE_FUNCREF)
         return TURBOWASM_TYPE_MISMATCH;
 
-    memset(out, 0, sizeof(*out));
     if (value.as.funcref.is_null) {
-        value.as.funcref.function_index = UINT32_MAX;
-        value.as.funcref.owner = NULL;
-        out->value = value;
+        *out = value;
+        out->as.funcref.function_index = UINT32_MAX;
+        out->as.funcref.owner = NULL;
         return TURBOWASM_OK;
     }
 
     owner = value.as.funcref.owner != NULL
-        ? (turbowasm_instance_impl *)
-            value.as.funcref.owner
+        ? (turbowasm_instance_impl *)value.as.funcref.owner
         : instance;
 
     if (!turbowasm_instance_funcref_owner_visible(
@@ -1217,8 +1238,8 @@ static turbowasm_status turbowasm_funcref_to_table_entry(
             module->validation.function_count)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    value.as.funcref.owner = owner;
-    out->value = value;
+    *out = value;
+    out->as.funcref.owner = owner;
     return TURBOWASM_OK;
 }
 
@@ -1249,29 +1270,12 @@ turbowasm_status turbowasm_instance_table_get_value(
     uint32_t table_index,
     uint32_t element_index,
     turbowasm_value *out) {
-    turbowasm_instance_table_entry entry;
-    turbowasm_status status;
-
-    const turbowasm_instance_table *table;
-
     if (instance == NULL || out == NULL ||
         table_index >= instance->table_count)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    table = turbowasm_instance_table_resolve_const(
-        instance, table_index);
-    if (table == NULL)
-        return TURBOWASM_UNSUPPORTED;
-    if (table->reference_type != 0x70u)
-        return TURBOWASM_UNSUPPORTED;
-
-    status = turbowasm_instance_table_lookup(
-        instance, table_index, element_index, &entry);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    *out = entry.value;
-    return TURBOWASM_OK;
+    return turbowasm_instance_table_lookup(
+        instance, table_index, element_index, out);
 }
 
 turbowasm_status turbowasm_instance_table_set_value(
@@ -1280,6 +1284,8 @@ turbowasm_status turbowasm_instance_table_set_value(
     uint32_t element_index,
     turbowasm_value value) {
     turbowasm_instance_table *table;
+    turbowasm_instance_table_entry entry;
+    turbowasm_status status;
 
     if (instance == NULL || table_index >= instance->table_count)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -1288,20 +1294,15 @@ turbowasm_status turbowasm_instance_table_set_value(
         instance, table_index);
     if (table == NULL)
         return TURBOWASM_UNSUPPORTED;
-    if (table->reference_type != 0x70u)
-        return TURBOWASM_UNSUPPORTED;
     if (element_index >= table->size)
         return TURBOWASM_TRAPPED;
 
-    {
-        turbowasm_instance_table_entry entry;
-        turbowasm_status status =
-            turbowasm_funcref_to_table_entry(
-                instance, value, &entry);
-        if (status != TURBOWASM_OK)
-            return status;
-        table->entries[element_index] = entry;
-    }
+    status = turbowasm_value_to_table_entry(
+        instance, table->reference_type, value, &entry);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    table->entries[element_index] = entry;
     return TURBOWASM_OK;
 }
 
@@ -1447,8 +1448,6 @@ turbowasm_status turbowasm_instance_table_init(
         return TURBOWASM_UNSUPPORTED;
     if (segment->reference_type != table->reference_type)
         return TURBOWASM_TYPE_MISMATCH;
-    if (table->reference_type != 0x70u)
-        return TURBOWASM_UNSUPPORTED;
 
     source_size = instance->element_segment_dropped[element_index]
         ? 0u
@@ -1471,6 +1470,7 @@ turbowasm_status turbowasm_instance_table_init(
             status = turbowasm_element_item_value(
                 instance,
                 &segment->items[source + index],
+                table->reference_type,
                 &values[index]);
             if (status != TURBOWASM_OK)
                 goto done;
@@ -1557,13 +1557,11 @@ turbowasm_status turbowasm_instance_table_grow(
         return TURBOWASM_UNSUPPORTED;
     *out_previous_size = table->size;
 
-    if (table->reference_type != 0x70u)
-        return TURBOWASM_UNSUPPORTED;
-
     {
         turbowasm_status status =
-            turbowasm_funcref_to_table_entry(
-                instance, initial, &entry);
+            turbowasm_value_to_table_entry(
+                instance, table->reference_type,
+                initial, &entry);
         if (status != TURBOWASM_OK)
             return status;
     }
@@ -1650,15 +1648,14 @@ turbowasm_status turbowasm_instance_table_fill(
         instance, table_index);
     if (table == NULL)
         return TURBOWASM_UNSUPPORTED;
-    if (table->reference_type != 0x70u)
-        return TURBOWASM_UNSUPPORTED;
     if (!turbowasm_range_fits(destination, length, table->size))
         return TURBOWASM_TRAPPED;
 
     {
         turbowasm_status status =
-            turbowasm_funcref_to_table_entry(
-                instance, value, &entry);
+            turbowasm_value_to_table_entry(
+                instance, table->reference_type,
+                value, &entry);
         if (status != TURBOWASM_OK)
             return status;
     }
