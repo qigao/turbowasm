@@ -154,3 +154,20 @@ This wave intentionally stops before table/ref suites. Those carry much more
 `externref`, registration and host-linking coverage, so they remain a
 separate Wave 3B. That keeps memory validation/execution failures attributable
 to the memory engine rather than composition-layer unsupported behavior.
+
+
+## Wave 3B
+
+After memory/bulk-memory is clean under ASan, the next gate adds reference and
+table semantics:
+
+- `table.wast`, `table_get.wast`, `table_set.wast`, `table_grow.wast`;
+- `ref.wast`, `ref_null.wast`, `ref_is_null.wast`, `ref_func.wast`;
+- `elem.wast`;
+- `bulk-memory/table_copy.wast`, `table_fill.wast`, `table_init.wast`.
+
+The Runtime currently carries complete cross-instance `funcref` identity, so
+funcref/table failures are treated as real gaps. Non-null `externref` still
+has no public Runtime value carrier and remains explicit unsupported coverage.
+Imports/registers that require host modules not defined by the WAST file also
+remain unsupported rather than being fabricated by the harness.
