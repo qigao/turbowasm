@@ -282,8 +282,85 @@ static void test_passive_element_bulk_runtime(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_multi_memory_bulk_runtime(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0 [] -> i32 */
+        0x01, 0x05,
+        0x01, 0x60, 0x00, 0x01, 0x7f,
+
+        /* two functions */
+        0x03, 0x03,
+        0x02, 0x00, 0x00,
+
+        /* memory0 min=1, memory1 min=1 */
+        0x05, 0x05,
+        0x02,
+        0x00, 0x01,
+        0x00, 0x01,
+
+        /* DataCount=1 */
+        0x0c, 0x01, 0x01,
+
+        0x0a, 0x2f,
+        0x02,
+
+        /*
+         * func0:
+         *   fill memory1[0] = 42
+         *   copy one byte memory1 -> memory0
+         *   return memory0[0]
+         */
+        0x1a, 0x00,
+        0x41, 0x00,
+        0x41, 0x2a,
+        0x41, 0x01,
+        0xfc, 0x0b, 0x01,
+        0x41, 0x00,
+        0x41, 0x00,
+        0x41, 0x01,
+        0xfc, 0x0a, 0x00, 0x01,
+        0x41, 0x00,
+        0x2d, 0x00, 0x00,
+        0x0b,
+
+        /*
+         * func1:
+         *   memory.init data0 into memory1 at byte 1
+         *   return memory1[1]
+         */
+        0x12, 0x00,
+        0x41, 0x01,
+        0x41, 0x00,
+        0x41, 0x01,
+        0xfc, 0x08, 0x00, 0x01,
+        0x41, 0x01,
+        0x2d, 0x40, 0x01, 0x00,
+        0x0b,
+
+        /* passive data0 = "a" */
+        0x0b, 0x04,
+        0x01, 0x01, 0x01, 0x61
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_OK);
+
+    assert(invoke_i32(&instance, 0u) == 42);
+    assert(invoke_i32(&instance, 1u) == 0x61);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
     test_passive_data_bulk_runtime();
     test_passive_element_bulk_runtime();
+    test_multi_memory_bulk_runtime();
     return 0;
 }
