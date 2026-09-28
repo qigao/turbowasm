@@ -33,7 +33,7 @@ if ([string]::IsNullOrWhiteSpace($SaltsRid)) {
   }
 }
 
-$saltsVersion = if ($env:SALTS_SDK_VERSION) { $env:SALTS_SDK_VERSION } else { "1.7.9" }
+$saltsVersion = if ($env:SALTS_SDK_VERSION) { $env:SALTS_SDK_VERSION } else { "1.8.2" }
 $packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $env:RUNNER_TEMP "qigao-nuget" }
 $config = Join-Path $env:RUNNER_TEMP "qigao-nuget.config"
 $project = Join-Path $env:RUNNER_TEMP "turbowasm-salts-sdk-restore.csproj"
@@ -68,7 +68,7 @@ $functionHeader = Join-Path $saltsRoot "include/cmeta/function.h"
 
 foreach ($path in @($configPath, $targetsPath, $functionHeader)) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-    throw "missing restored Salts 1.7.9 SDK file: $path"
+    throw "missing restored Salts 1.8.2 SDK file: $path"
   }
 }
 
