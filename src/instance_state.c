@@ -821,6 +821,58 @@ static turbowasm_status turbowasm_apply_element_segments(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_instance_tag_identity(
+    const turbowasm_instance_impl *instance,
+    uint32_t tag_index,
+    turbowasm_tag_identity *out) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_tag *tag;
+
+    if (instance == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    tag = turbowasm_validation_context_tag(
+        &module->validation, tag_index);
+    if (tag == NULL)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (!tag->imported) {
+        out->owner = (turbowasm_instance_impl *)instance;
+        out->tag_index = tag_index;
+        return TURBOWASM_OK;
+    }
+
+    if (tag_index >= instance->linked_tag_count ||
+        instance->linked_tags == NULL ||
+        instance->linked_tags[tag_index].provider == NULL)
+        return TURBOWASM_LINK_ERROR;
+
+    {
+        turbowasm_instance_impl *owner =
+            instance->linked_tags[tag_index].provider;
+        uint32_t owner_index =
+            instance->linked_tags[tag_index].tag_index;
+        const turbowasm_module_impl *owner_module =
+            turbowasm_module_impl_get(owner->module);
+        const turbowasm_validation_tag *owner_tag;
+
+        if (owner_module == NULL)
+            return TURBOWASM_LINK_ERROR;
+        owner_tag = turbowasm_validation_context_tag(
+            &owner_module->validation, owner_index);
+        if (owner_tag == NULL || owner_tag->imported)
+            return TURBOWASM_LINK_ERROR;
+
+        out->owner = owner;
+        out->tag_index = owner_index;
+    }
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_instance_state_init(
     turbowasm_instance_impl *instance,
     const turbowasm_module_impl *module) {
