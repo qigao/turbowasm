@@ -66,7 +66,13 @@ bool turbowasm_host_call_can_wait(
 turbowasm_status turbowasm_host_call_wait(
     turbowasm_host_call *call,
     uintptr_t operation_token,
+    turbowasm_host_wait *out_wait,
     int *out_status);
+
+turbowasm_status turbowasm_host_call_complete_wait(
+    turbowasm_host_call *call,
+    turbowasm_host_wait wait,
+    int status);
 
 typedef struct turbowasm_host_function_type {
     const turbowasm_value_kind *params;
