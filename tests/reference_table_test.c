@@ -186,7 +186,7 @@ static void test_ref_func_table_set_and_call_indirect(void) {
     turbowasm_module_destroy(&module);
 }
 
-static void test_externref_execution_fails_closed(void) {
+static void test_externref_null_is_null_executes(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
         0x01, 0x05,
@@ -211,7 +211,11 @@ static void test_externref_execution_fails_closed(void) {
                NULL, 0u,
                &result, 1u,
                &result_count,
-               &trap) == TURBOWASM_UNSUPPORTED);
+               &trap) == TURBOWASM_OK);
+    assert(trap == TURBOWASM_TRAP_NONE);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_I32);
+    assert(result.as.i32 == 1);
 
     turbowasm_instance_destroy(&instance);
     turbowasm_module_destroy(&module);
@@ -222,6 +226,6 @@ int main(void) {
     test_funcref_public_argument();
     test_table_get_out_of_bounds_traps();
     test_ref_func_table_set_and_call_indirect();
-    test_externref_execution_fails_closed();
+    test_externref_null_is_null_executes();
     return 0;
 }

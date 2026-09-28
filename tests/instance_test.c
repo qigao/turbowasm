@@ -149,6 +149,91 @@ static void test_nested_local_direct_call(void) {
 }
 
 
+static void test_externref_arguments_null_and_is_null(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+
+        /* type0: (externref) -> externref
+         * type1: () -> externref
+         * type2: (externref) -> i32 */
+        0x01, 0x0f,
+        0x03,
+        0x60, 0x01, 0x6f, 0x01, 0x6f,
+        0x60, 0x00, 0x01, 0x6f,
+        0x60, 0x01, 0x6f, 0x01, 0x7f,
+
+        0x03, 0x04,
+        0x03, 0x00, 0x01, 0x02,
+
+        0x0a, 0x11,
+        0x03,
+        0x04, 0x00, 0x20, 0x00, 0x0b,
+        0x04, 0x00, 0xd0, 0x6f, 0x0b,
+        0x05, 0x00, 0x20, 0x00, 0xd1, 0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_value external = {0};
+    turbowasm_value null_external = {0};
+    turbowasm_value result = {0};
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+    external.kind = TURBOWASM_VALUE_EXTERNREF;
+    external.as.externref.is_null = false;
+    external.as.externref.token = (uintptr_t)42u;
+
+    assert(load_module(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_instance_create(&instance, &module) == TURBOWASM_OK);
+
+    assert(turbowasm_instance_invoke(
+               &instance, 0u,
+               &external, 1u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_EXTERNREF);
+    assert(!result.as.externref.is_null);
+    assert(result.as.externref.token == (uintptr_t)42u);
+
+    result_count = 0u;
+    assert(turbowasm_instance_invoke(
+               &instance, 1u,
+               NULL, 0u,
+               &null_external, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(null_external.kind == TURBOWASM_VALUE_EXTERNREF);
+    assert(null_external.as.externref.is_null);
+
+    result_count = 0u;
+    assert(turbowasm_instance_invoke(
+               &instance, 2u,
+               &external, 1u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_I32);
+    assert(result.as.i32 == 0);
+
+    result_count = 0u;
+    assert(turbowasm_instance_invoke(
+               &instance, 2u,
+               &null_external, 1u,
+               &result, 1u,
+               &result_count,
+               &trap) == TURBOWASM_OK);
+    assert(result_count == 1u);
+    assert(result.kind == TURBOWASM_VALUE_I32);
+    assert(result.as.i32 == 1);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+}
+
 static void test_return_discards_lower_temporaries(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -411,6 +496,7 @@ int main(void) {
     test_typed_arguments_and_arithmetic();
     test_locals_are_zero_initialized();
     test_nested_local_direct_call();
+    test_externref_arguments_null_and_is_null();
     test_return_discards_lower_temporaries();
     test_wrong_argument_type_rejected();
     test_result_capacity_checked_before_execution();

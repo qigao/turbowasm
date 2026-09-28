@@ -270,6 +270,21 @@ static bool spec_parse_value(const char *token,
         out->as.funcref.owner = NULL;
         return true;
     }
+    if (type_size == 9u &&
+        memcmp(token, "externref", 9u) == 0) {
+        out->kind = TURBOWASM_VALUE_EXTERNREF;
+        if (strcmp(colon + 1u, "null") == 0) {
+            out->as.externref.is_null = true;
+            out->as.externref.token = 0u;
+            return true;
+        }
+        if (!spec_parse_u64(colon + 1u, &bits) ||
+            bits > (uint64_t)UINTPTR_MAX)
+            return false;
+        out->as.externref.is_null = false;
+        out->as.externref.token = (uintptr_t)bits;
+        return true;
+    }
 
     return false;
 }
@@ -303,6 +318,13 @@ static bool spec_values_equal(const turbowasm_value *actual,
         case TURBOWASM_VALUE_FUNCREF:
             return actual->as.funcref.is_null &&
                    expected->as.funcref.is_null;
+        case TURBOWASM_VALUE_EXTERNREF:
+            if (actual->as.externref.is_null ||
+                expected->as.externref.is_null)
+                return actual->as.externref.is_null &&
+                       expected->as.externref.is_null;
+            return actual->as.externref.token ==
+                   expected->as.externref.token;
         default:
             return false;
     }

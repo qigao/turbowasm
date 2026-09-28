@@ -53,10 +53,17 @@ def encode_value(value, expected=False):
     if value_type == "funcref" and raw == "null":
         return "funcref:null", None
 
+    if value_type == "externref":
+        if raw == "null":
+            return "externref:null", None
+        if isinstance(raw, str) and raw.isdigit():
+            return f"externref:{raw}", None
+        return None, "externref payload encoding unsupported"
+
     if value_type == "v128":
         return None, "v128 manifest comparison not yet qualified"
 
-    if value_type in ("externref", "exnref", "funcref"):
+    if value_type in ("exnref", "funcref"):
         return None, f"{value_type} non-null/reference payload unsupported"
 
     return None, f"value type {value_type!r} unsupported"
