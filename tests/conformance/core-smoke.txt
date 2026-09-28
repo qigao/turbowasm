@@ -43,10 +43,7 @@ f32_cmp.wast
 f64_cmp.wast
 conversions.wast
 
-# Wave 3A: memory/data/bulk-memory engine.
-memory.wast
-memory_trap.wast
-memory_redundancy.wast
+# Wave 3A: data/bulk-memory engine (memory base suites are in Wave 3).
 data.wast
 bulk-memory/memory_copy.wast
 bulk-memory/memory_fill.wast
