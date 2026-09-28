@@ -865,6 +865,14 @@ turbowasm_status turbowasm_instance_state_init(
         return status;
 
     return TURBOWASM_OK;
+
+fail:
+    /*
+     * The creator owns cleanup policy. Public creation destroys this partial
+     * state; the private spec-store path may retain it after an instantiation
+     * trap so escaped references remain alive.
+     */
+    return status;
 }
 
 void turbowasm_instance_state_destroy(
