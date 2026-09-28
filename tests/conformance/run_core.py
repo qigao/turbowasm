@@ -366,11 +366,15 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
 
 def load_suite(path):
     result = []
+    seen = set()
     with open(path, "r", encoding="utf-8") as handle:
         for raw in handle:
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
+            if line in seen:
+                raise ValueError(f"duplicate conformance suite entry: {line}")
+            seen.add(line)
             result.append(line)
     return result
 
