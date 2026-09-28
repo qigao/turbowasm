@@ -10,6 +10,9 @@ import tempfile
 SUMMARY_RE = re.compile(
     r"CONFORMANCE pass=(\d+) fail=(\d+) unsupported=(\d+) total=(\d+)"
 )
+MIR_REPLAY_RE = re.compile(
+    r"MIR_REPLAY compiled=(\d+) interpret_only=(\d+) cold=(\d+) calls=(\d+)"
+)
 
 TRAP_MAP = [
     ("unreachable", 1),
@@ -298,7 +301,7 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
     if convert.returncode != 0:
         print(f"SPEC {filename} converter_unsupported")
         print(convert.stdout)
-        return 0, 0, 1, 1
+        return 0, 0, 1, 1, None
 
     convert_json(json_path, manifest_path)
 
@@ -334,9 +337,15 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
         )
         for trace_line in trace_lines[-80:]:
             print(trace_line)
-        return 0, 1, 0, 1
+        return 0, 1, 0, 1, None
 
     passed, failed, unsupported, total = map(int, match.groups())
+    mir_match = MIR_REPLAY_RE.search(result.stdout)
+    mir_stats = (
+        tuple(map(int, mir_match.groups()))
+        if mir_match is not None
+        else None
+    )
     print(
         f"SPEC {filename} pass={passed} fail={failed} "
         f"unsupported={unsupported} total={total}"
@@ -375,7 +384,7 @@ def run_file(wast2json, runner, core_dir, filename, temp_root):
         failed = 1
         total += 1
 
-    return passed, failed, unsupported, total
+    return passed, failed, unsupported, total, mir_stats
 
 
 def load_suite(path):
@@ -409,10 +418,15 @@ def main():
     failed = 0
     unsupported = 0
     total = 0
+    mir_compiled = 0
+    mir_interpret_only = 0
+    mir_cold = 0
+    mir_calls = 0
+    mir_files = 0
 
     with tempfile.TemporaryDirectory(prefix="turbowasm-spec-") as temp_root:
         for filename in suite:
-            p, f, u, t = run_file(
+            p, f, u, t, mir = run_file(
                 args.wast2json,
                 args.runner,
                 args.core_dir,
@@ -423,11 +437,25 @@ def main():
             failed += f
             unsupported += u
             total += t
+            if mir is not None:
+                compiled, interpret_only, cold, calls = mir
+                mir_compiled += compiled
+                mir_interpret_only += interpret_only
+                mir_cold += cold
+                mir_calls += calls
+                mir_files += 1
 
     print(
         f"CORE_CONFORMANCE pass={passed} fail={failed} "
         f"unsupported={unsupported} total={total} files={len(suite)}"
     )
+
+    if mir_files:
+        print(
+            f"MIR_REPLAY compiled={mir_compiled} "
+            f"interpret_only={mir_interpret_only} "
+            f"cold={mir_cold} calls={mir_calls} files={mir_files}"
+        )
 
     if passed == 0:
         print("no upstream assertions passed", file=sys.stderr)
