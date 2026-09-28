@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -70,128 +71,290 @@ static bool turbowasm_memory_index_valid(
     return context != NULL && index < context->memory_count;
 }
 
+typedef struct turbowasm_const_type_stack {
+    turbowasm_validation_value_type *values;
+    uint32_t size;
+    uint32_t capacity;
+} turbowasm_const_type_stack;
+
+static bool turbowasm_const_type_stack_reserve(
+    turbowasm_const_type_stack *stack,
+    uint32_t required) {
+    uint32_t next;
+    turbowasm_validation_value_type *grown;
+
+    if (stack == NULL)
+        return false;
+    if (required <= stack->capacity)
+        return true;
+
+    next = stack->capacity == 0u ? 4u : stack->capacity;
+    while (next < required) {
+        if (next > UINT32_MAX / 2u) {
+            next = required;
+            break;
+        }
+        next *= 2u;
+    }
+
+    if ((uint64_t)next * sizeof(*grown) > (uint64_t)SIZE_MAX)
+        return false;
+    grown = (turbowasm_validation_value_type *)realloc(
+        stack->values, (size_t)next * sizeof(*grown));
+    if (grown == NULL)
+        return false;
+
+    stack->values = grown;
+    stack->capacity = next;
+    return true;
+}
+
+static turbowasm_status turbowasm_const_type_stack_push(
+    turbowasm_const_type_stack *stack,
+    turbowasm_validation_value_type type) {
+    if (stack == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (stack->size == UINT32_MAX)
+        return TURBOWASM_OUT_OF_MEMORY;
+    if (!turbowasm_const_type_stack_reserve(
+            stack, stack->size + 1u))
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    stack->values[stack->size++] = type;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_const_type_stack_pop(
+    turbowasm_const_type_stack *stack,
+    uint8_t carrier) {
+    turbowasm_validation_value_type expected =
+        turbowasm_validation_value_type_legacy(carrier);
+
+    if (stack == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (stack->size == 0u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    --stack->size;
+    return turbowasm_validation_value_type_matches(
+        &stack->values[stack->size], &expected)
+        ? TURBOWASM_OK
+        : TURBOWASM_MALFORMED_MODULE;
+}
+
 turbowasm_status turbowasm_validate_const_expr_semantic(
     turbowasm_reader *reader,
     turbowasm_validation_context *context,
     turbowasm_validation_value_type *out_type) {
-    uint8_t opcode;
-    uint8_t end;
+    turbowasm_const_type_stack stack = {0};
     turbowasm_status status = TURBOWASM_OK;
 
     if (reader == NULL || context == NULL || out_type == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (!turbowasm_reader_u8(reader, &opcode))
-        return TURBOWASM_MALFORMED_MODULE;
 
-    switch (opcode) {
-        case 0x41u: {
-            int32_t value;
-            if (!turbowasm_reader_sleb32(reader, &value))
-                return TURBOWASM_MALFORMED_MODULE;
-            (void)value;
-            *out_type =
-                turbowasm_validation_value_type_legacy(TURBOWASM_VAL_I32);
-            break;
-        }
-        case 0x42u: {
-            int64_t value;
-            if (!turbowasm_reader_sleb64(reader, &value))
-                return TURBOWASM_MALFORMED_MODULE;
-            (void)value;
-            *out_type =
-                turbowasm_validation_value_type_legacy(TURBOWASM_VAL_I64);
-            break;
-        }
-        case 0x43u: {
-            turbowasm_reader bytes;
-            if (!turbowasm_reader_slice(reader, 4u, &bytes))
-                return TURBOWASM_MALFORMED_MODULE;
-            *out_type =
-                turbowasm_validation_value_type_legacy(TURBOWASM_VAL_F32);
-            break;
-        }
-        case 0x44u: {
-            turbowasm_reader bytes;
-            if (!turbowasm_reader_slice(reader, 8u, &bytes))
-                return TURBOWASM_MALFORMED_MODULE;
-            *out_type =
-                turbowasm_validation_value_type_legacy(TURBOWASM_VAL_F64);
-            break;
-        }
-        case 0xd0u: {
-            status = turbowasm_validation_read_heaptype(
-                reader, out_type);
-            if (status != TURBOWASM_OK)
-                return status;
-            if (out_type->heap_kind ==
-                    TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
-                out_type->type_index >= context->type_count)
-                return TURBOWASM_MALFORMED_MODULE;
-            out_type->nullable = true;
-            break;
-        }
-        case 0xd2u: {
-            uint32_t function_index;
-            const turbowasm_validation_function *function;
+    for (;;) {
+        uint8_t opcode;
 
-            if (!turbowasm_reader_uleb32(reader, &function_index))
-                return TURBOWASM_MALFORMED_MODULE;
-            if (!turbowasm_function_index_valid(function_index, context))
-                return TURBOWASM_MALFORMED_MODULE;
-            if (!turbowasm_validation_context_declare_function_ref(
-                    context, function_index))
-                return TURBOWASM_OUT_OF_MEMORY;
+        if (!turbowasm_reader_u8(reader, &opcode)) {
+            status = TURBOWASM_MALFORMED_MODULE;
+            break;
+        }
+        if (opcode == 0x0bu)
+            break;
 
-            function = turbowasm_validation_context_function(
-                context, function_index);
-            if (function == NULL)
-                return TURBOWASM_MALFORMED_MODULE;
+        switch (opcode) {
+            case 0x41u: {
+                int32_t value;
+                if (!turbowasm_reader_sleb32(reader, &value)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    break;
+                }
+                (void)value;
+                status = turbowasm_const_type_stack_push(
+                    &stack,
+                    turbowasm_validation_value_type_legacy(
+                        TURBOWASM_VAL_I32));
+                break;
+            }
+            case 0x42u: {
+                int64_t value;
+                if (!turbowasm_reader_sleb64(reader, &value)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    break;
+                }
+                (void)value;
+                status = turbowasm_const_type_stack_push(
+                    &stack,
+                    turbowasm_validation_value_type_legacy(
+                        TURBOWASM_VAL_I64));
+                break;
+            }
+            case 0x43u: {
+                turbowasm_reader bytes;
+                if (!turbowasm_reader_slice(reader, 4u, &bytes)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    break;
+                }
+                status = turbowasm_const_type_stack_push(
+                    &stack,
+                    turbowasm_validation_value_type_legacy(
+                        TURBOWASM_VAL_F32));
+                break;
+            }
+            case 0x44u: {
+                turbowasm_reader bytes;
+                if (!turbowasm_reader_slice(reader, 8u, &bytes)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    break;
+                }
+                status = turbowasm_const_type_stack_push(
+                    &stack,
+                    turbowasm_validation_value_type_legacy(
+                        TURBOWASM_VAL_F64));
+                break;
+            }
+            case 0x6au: /* i32.add */
+            case 0x6bu: /* i32.sub */
+            case 0x6cu: /* i32.mul */
+                status = turbowasm_const_type_stack_pop(
+                    &stack, TURBOWASM_VAL_I32);
+                if (status == TURBOWASM_OK)
+                    status = turbowasm_const_type_stack_pop(
+                        &stack, TURBOWASM_VAL_I32);
+                if (status == TURBOWASM_OK)
+                    status = turbowasm_const_type_stack_push(
+                        &stack,
+                        turbowasm_validation_value_type_legacy(
+                            TURBOWASM_VAL_I32));
+                break;
+            case 0x7cu: /* i64.add */
+            case 0x7du: /* i64.sub */
+            case 0x7eu: /* i64.mul */
+                status = turbowasm_const_type_stack_pop(
+                    &stack, TURBOWASM_VAL_I64);
+                if (status == TURBOWASM_OK)
+                    status = turbowasm_const_type_stack_pop(
+                        &stack, TURBOWASM_VAL_I64);
+                if (status == TURBOWASM_OK)
+                    status = turbowasm_const_type_stack_push(
+                        &stack,
+                        turbowasm_validation_value_type_legacy(
+                            TURBOWASM_VAL_I64));
+                break;
+            case 0xd0u: {
+                turbowasm_validation_value_type type;
 
-            memset(out_type, 0, sizeof(*out_type));
-            out_type->carrier = TURBOWASM_VAL_FUNCREF;
-            out_type->is_reference = true;
-            out_type->nullable = false;
-            out_type->heap_kind =
-                TURBOWASM_VALIDATION_HEAP_TYPE_INDEX;
-            out_type->type_index = function->type_index;
-            break;
+                status = turbowasm_validation_read_heaptype(
+                    reader, &type);
+                if (status != TURBOWASM_OK)
+                    break;
+                if (type.heap_kind ==
+                        TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+                    type.type_index >= context->type_count) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    break;
+                }
+                type.nullable = true;
+                status = turbowasm_const_type_stack_push(
+                    &stack, type);
+                break;
+            }
+            case 0xd2u: {
+                uint32_t function_index;
+                const turbowasm_validation_function *function;
+                turbowasm_validation_value_type type = {0};
+
+                if (!turbowasm_reader_uleb32(
+                        reader, &function_index) ||
+                    !turbowasm_function_index_valid(
+                        function_index, context)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    break;
+                }
+                if (!turbowasm_validation_context_declare_function_ref(
+                        context, function_index)) {
+                    status = TURBOWASM_OUT_OF_MEMORY;
+                    break;
+                }
+
+                function = turbowasm_validation_context_function(
+                    context, function_index);
+                if (function == NULL) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    break;
+                }
+
+                type.carrier = TURBOWASM_VAL_FUNCREF;
+                type.is_reference = true;
+                type.nullable = false;
+                type.heap_kind =
+                    TURBOWASM_VALIDATION_HEAP_TYPE_INDEX;
+                type.type_index = function->type_index;
+                status = turbowasm_const_type_stack_push(
+                    &stack, type);
+                break;
+            }
+            case 0xfdu: {
+                uint32_t subopcode;
+                turbowasm_reader bytes;
+
+                if (!turbowasm_reader_uleb32(
+                        reader, &subopcode)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    break;
+                }
+                if (subopcode != 0x0cu) {
+                    status = TURBOWASM_UNSUPPORTED;
+                    break;
+                }
+                if (!turbowasm_reader_slice(
+                        reader, 16u, &bytes)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    break;
+                }
+                status = turbowasm_const_type_stack_push(
+                    &stack,
+                    turbowasm_validation_value_type_legacy(
+                        TURBOWASM_VAL_V128));
+                break;
+            }
+            case 0x23u: {
+                uint32_t global_index;
+                const turbowasm_validation_global *global;
+
+                if (!turbowasm_reader_uleb32(
+                        reader, &global_index)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    break;
+                }
+                global = turbowasm_validation_context_global(
+                    context, global_index);
+                if (global == NULL || global->mutable_value) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    break;
+                }
+                status = turbowasm_const_type_stack_push(
+                    &stack, global->semantic_type);
+                break;
+            }
+            default:
+                status = TURBOWASM_UNSUPPORTED;
+                break;
         }
-        case 0xfdu: {
-            uint32_t subopcode;
-            turbowasm_reader bytes;
-            if (!turbowasm_reader_uleb32(reader, &subopcode))
-                return TURBOWASM_MALFORMED_MODULE;
-            if (subopcode != 0x0cu)
-                return TURBOWASM_UNSUPPORTED;
-            if (!turbowasm_reader_slice(reader, 16u, &bytes))
-                return TURBOWASM_MALFORMED_MODULE;
-            *out_type =
-                turbowasm_validation_value_type_legacy(TURBOWASM_VAL_V128);
+
+        if (status != TURBOWASM_OK)
             break;
-        }
-        case 0x23u: {
-            uint32_t global_index;
-            const turbowasm_validation_global *global;
-            if (!turbowasm_reader_uleb32(reader, &global_index))
-                return TURBOWASM_MALFORMED_MODULE;
-            global = turbowasm_validation_context_global(
-                context, global_index);
-            if (global == NULL)
-                return TURBOWASM_MALFORMED_MODULE;
-            if (global->mutable_value)
-                return TURBOWASM_MALFORMED_MODULE;
-            *out_type = global->semantic_type;
-            break;
-        }
-        default:
-            return TURBOWASM_UNSUPPORTED;
     }
 
-    if (!turbowasm_reader_u8(reader, &end))
-        return TURBOWASM_MALFORMED_MODULE;
-    if (end != 0x0bu)
-        status = TURBOWASM_UNSUPPORTED;
+    if (status == TURBOWASM_OK) {
+        if (stack.size != 1u) {
+            status = TURBOWASM_MALFORMED_MODULE;
+        } else {
+            *out_type = stack.values[0];
+        }
+    }
 
+    free(stack.values);
     return status;
 }
 
