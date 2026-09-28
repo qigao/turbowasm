@@ -53,6 +53,9 @@ typedef struct turbowasm_host_wait {
 turbowasm_instance *turbowasm_host_call_instance(
     turbowasm_host_call *call);
 
+bool turbowasm_host_call_can_wait(
+    const turbowasm_host_call *call);
+
 /*
  * Suspend the current async-capable host callback after an external operation
  * has been accepted. This only succeeds inside a resumable execution. The same
