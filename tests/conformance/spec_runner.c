@@ -1185,6 +1185,42 @@ static bool spec_parse_unsigned(const char *text, unsigned *out) {
     return true;
 }
 
+static void spec_trace_command_result(
+    const spec_state *state,
+    unsigned line,
+    const char *command,
+    size_t passed_before,
+    size_t failed_before,
+    size_t unsupported_before) {
+    const char *outcome = "mixed";
+
+    if (state == NULL || command == NULL ||
+        getenv("TURBOWASM_SPEC_RESULT_TRACE") == NULL)
+        return;
+
+    if (state->passed == passed_before + 1u &&
+        state->failed == failed_before &&
+        state->unsupported == unsupported_before) {
+        outcome = "pass";
+    } else if (state->passed == passed_before &&
+               state->failed == failed_before + 1u &&
+               state->unsupported == unsupported_before) {
+        outcome = "fail";
+    } else if (state->passed == passed_before &&
+               state->failed == failed_before &&
+               state->unsupported == unsupported_before + 1u) {
+        outcome = "unsupported";
+    } else if (state->passed == passed_before &&
+               state->failed == failed_before &&
+               state->unsupported == unsupported_before) {
+        outcome = "none";
+    }
+
+    printf("RESULT line=%u command=%s outcome=%s\n",
+           line, command, outcome);
+    fflush(stdout);
+}
+
 static int spec_run_manifest(spec_state *state, const char *path) {
     FILE *file = fopen(path, "rb");
     char buffer[65536];
@@ -1227,6 +1263,11 @@ static int spec_run_manifest(spec_state *state, const char *path) {
             continue;
         }
 
+        {
+            const size_t passed_before = state->passed;
+            const size_t failed_before = state->failed;
+            const size_t unsupported_before = state->unsupported;
+
         if (getenv("TURBOWASM_SPEC_TRACE") != NULL) {
             fprintf(stderr, "TRACE line=%u command=%s\n",
                     line, fields[0]);
@@ -1235,29 +1276,29 @@ static int spec_run_manifest(spec_state *state, const char *path) {
 
         if (strcmp(fields[0], "unsupported") == 0) {
             spec_note_unsupported(state, line, fields[2]);
-            continue;
+            goto command_done;
         }
 
         if (strcmp(fields[0], "module_definition") == 0 &&
             field_count == 3u) {
             spec_command_module_definition(state, line, fields[2]);
-            continue;
+            goto command_done;
         }
 
         if (strcmp(fields[0], "module") == 0 && field_count == 4u) {
             unsigned slot = 0u;
             if (!spec_parse_unsigned(fields[2], &slot)) {
                 spec_note_failure(state, line, "bad module slot");
-                continue;
+                goto command_done;
             }
             spec_command_module(state, line, (size_t)slot, fields[3]);
-            continue;
+            goto command_done;
         }
 
         if (strcmp(fields[0], "register") == 0 && field_count == 4u) {
             int64_t slot = spec_resolve_slot(state, fields[2]);
             spec_command_register(state, line, slot, fields[3]);
-            continue;
+            goto command_done;
         }
 
         if ((strcmp(fields[0], "assert_invalid") == 0 ||
@@ -1267,14 +1308,14 @@ static int spec_run_manifest(spec_state *state, const char *path) {
             field_count == 3u) {
             spec_command_negative_module(
                 state, line, fields[0], fields[2]);
-            continue;
+            goto command_done;
         }
 
         if (strcmp(fields[0], "action") == 0 && field_count == 5u) {
             int64_t slot = spec_resolve_slot(state, fields[2]);
             spec_command_action(
                 state, line, slot, fields[3], fields[4]);
-            continue;
+            goto command_done;
         }
 
         if (strcmp(fields[0], "assert_return") == 0 &&
@@ -1283,7 +1324,7 @@ static int spec_run_manifest(spec_state *state, const char *path) {
             spec_command_assert_return(
                 state, line, slot, fields[3],
                 fields[4], fields[5]);
-            continue;
+            goto command_done;
         }
 
         if (strcmp(fields[0], "assert_trap") == 0 &&
@@ -1295,15 +1336,21 @@ static int spec_run_manifest(spec_state *state, const char *path) {
             trap_value = strtol(fields[5], &end, 10);
             if (errno != 0 || end == NULL || *end != '\0') {
                 spec_note_failure(state, line, "bad trap encoding");
-                continue;
+                goto command_done;
             }
             spec_command_assert_trap(
                 state, line, slot, fields[3],
                 fields[4], (int)trap_value);
-            continue;
+            goto command_done;
         }
 
         spec_note_failure(state, line, "unknown manifest command");
+
+command_done:
+        spec_trace_command_result(
+            state, line, fields[0],
+            passed_before, failed_before, unsupported_before);
+        }
     }
 
     fclose(file);
