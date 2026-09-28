@@ -162,13 +162,17 @@ static void test_direct_indirect_and_tail_unwind(void) {
     assert(invoke_i32(&instance, 5u) == 42);
 
     /* Invoking the tail wrapper directly leaves the Wasm exception uncaught. */
-    result_count = 0u;
-    trap = TURBOWASM_TRAP_NONE;
-    assert(turbowasm_instance_invoke(
-               &instance, 4u, NULL, 0u,
-               NULL, 0u, &result_count, &trap) == TURBOWASM_EXCEPTION);
-    assert(result_count == 0u);
-    assert(trap == TURBOWASM_TRAP_NONE);
+    {
+        turbowasm_value unused_result = {0};
+        result_count = 0u;
+        trap = TURBOWASM_TRAP_NONE;
+        assert(turbowasm_instance_invoke(
+                   &instance, 4u, NULL, 0u,
+                   &unused_result, 1u, &result_count, &trap) ==
+               TURBOWASM_EXCEPTION);
+        assert(result_count == 0u);
+        assert(trap == TURBOWASM_TRAP_NONE);
+    }
 
     /* A later invocation must not observe stale pending-exception state. */
     assert(invoke_i32(&instance, 1u) == 42);
