@@ -2143,14 +2143,27 @@ static void turbowasm_write_u64_le(uint8_t *p, uint64_t value) {
 
 static turbowasm_status turbowasm_exec_read_memarg(
     turbowasm_reader *reader,
+    uint32_t *out_memory_index,
     uint32_t *out_offset) {
-    uint32_t alignment;
+    uint32_t flags;
+    uint32_t memory_index = 0u;
     uint32_t offset;
 
-    if (!turbowasm_reader_uleb32(reader, &alignment) ||
-        !turbowasm_reader_uleb32(reader, &offset))
+    if (reader == NULL || out_memory_index == NULL || out_offset == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!turbowasm_reader_uleb32(reader, &flags) ||
+        flags >= UINT32_C(0x80))
         return TURBOWASM_MALFORMED_MODULE;
-    (void)alignment;
+
+    if ((flags & UINT32_C(0x40)) != 0u &&
+        !turbowasm_reader_uleb32(reader, &memory_index))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (!turbowasm_reader_uleb32(reader, &offset))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    *out_memory_index = memory_index;
     *out_offset = offset;
     return TURBOWASM_OK;
 }
@@ -2163,12 +2176,14 @@ static turbowasm_status turbowasm_exec_memory_load(
     uint8_t opcode) {
     turbowasm_value address;
     turbowasm_value out = {0};
+    uint32_t memory_index;
     uint32_t offset;
     uint8_t *p;
     size_t width;
     turbowasm_status status;
 
-    status = turbowasm_exec_read_memarg(reader, &offset);
+    status = turbowasm_exec_read_memarg(
+        reader, &memory_index, &offset);
     if (status != TURBOWASM_OK)
         return status;
     status = turbowasm_stack_pop_kind(
@@ -2190,7 +2205,7 @@ static turbowasm_status turbowasm_exec_memory_load(
     }
 
     status = turbowasm_instance_memory_bounds(
-        instance, 0u, (uint32_t)address.as.i32,
+        instance, memory_index, (uint32_t)address.as.i32,
         offset, width, &p);
     if (status == TURBOWASM_TRAPPED) {
         *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
@@ -2278,12 +2293,14 @@ static turbowasm_status turbowasm_exec_memory_store(
     turbowasm_value value;
     turbowasm_value address;
     turbowasm_value_kind expected;
+    uint32_t memory_index;
     uint32_t offset;
     uint8_t *p;
     size_t width;
     turbowasm_status status;
 
-    status = turbowasm_exec_read_memarg(reader, &offset);
+    status = turbowasm_exec_read_memarg(
+        reader, &memory_index, &offset);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -2314,7 +2331,7 @@ static turbowasm_status turbowasm_exec_memory_store(
         return status;
 
     status = turbowasm_instance_memory_bounds(
-        instance, 0u, (uint32_t)address.as.i32,
+        instance, memory_index, (uint32_t)address.as.i32,
         offset, width, &p);
     if (status == TURBOWASM_TRAPPED) {
         *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
@@ -2369,21 +2386,19 @@ static turbowasm_status turbowasm_exec_memory_size_or_grow(
     turbowasm_reader *reader,
     turbowasm_value_stack *stack,
     uint8_t opcode) {
-    uint8_t reserved;
+    uint32_t memory_index;
     uint32_t pages;
     turbowasm_value out = {0};
     turbowasm_status status;
 
-    if (!turbowasm_reader_u8(reader, &reserved))
+    if (!turbowasm_reader_uleb32(reader, &memory_index))
         return TURBOWASM_MALFORMED_MODULE;
-    if (reserved != 0u)
-        return TURBOWASM_UNSUPPORTED;
 
     out.kind = TURBOWASM_VALUE_I32;
 
     if (opcode == 0x3fu) {
         status = turbowasm_instance_memory_size(
-            instance, 0u, &pages);
+            instance, memory_index, &pages);
         if (status != TURBOWASM_OK)
             return status;
         out.as.i32 = (int32_t)pages;
@@ -2394,7 +2409,7 @@ static turbowasm_status turbowasm_exec_memory_size_or_grow(
         if (status != TURBOWASM_OK)
             return status;
         status = turbowasm_instance_memory_grow(
-            instance, 0u, (uint32_t)delta.as.i32, &pages);
+            instance, memory_index, (uint32_t)delta.as.i32, &pages);
         if (status != TURBOWASM_OK)
             return status;
         out.as.i32 = pages == UINT32_MAX
