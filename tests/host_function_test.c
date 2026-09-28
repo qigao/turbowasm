@@ -24,7 +24,7 @@ typedef struct host_probe {
 
 static turbowasm_status host_add(
     void *context,
-    turbowasm_instance *caller,
+    turbowasm_host_call *call,
     const turbowasm_value *arguments,
     size_t argument_count,
     turbowasm_value *results,
@@ -34,8 +34,8 @@ static turbowasm_status host_add(
     host_probe *probe = (host_probe *)context;
 
     assert(probe != NULL);
-    assert(caller != NULL);
-    assert(turbowasm_instance_module(caller) != NULL);
+    assert(call != NULL);
+    assert(turbowasm_instance_module(turbowasm_host_call_instance(call)) != NULL);
     assert(argument_count == 2u);
     assert(result_capacity >= 1u);
     assert(arguments[0].kind == TURBOWASM_VALUE_I32);
@@ -52,7 +52,7 @@ static turbowasm_status host_add(
 
 static turbowasm_status host_sub(
     void *context,
-    turbowasm_instance *caller,
+    turbowasm_host_call *call,
     const turbowasm_value *arguments,
     size_t argument_count,
     turbowasm_value *results,
@@ -61,7 +61,7 @@ static turbowasm_status host_sub(
     turbowasm_trap *trap) {
     host_probe *probe = (host_probe *)context;
 
-    (void)caller;
+    (void)call;
     assert(probe != NULL);
     assert(argument_count == 2u);
     assert(result_capacity >= 1u);
@@ -77,7 +77,7 @@ static turbowasm_status host_sub(
 
 static turbowasm_status host_trap(
     void *context,
-    turbowasm_instance *caller,
+    turbowasm_host_call *call,
     const turbowasm_value *arguments,
     size_t argument_count,
     turbowasm_value *results,
@@ -85,7 +85,7 @@ static turbowasm_status host_trap(
     size_t *result_count,
     turbowasm_trap *trap) {
     (void)context;
-    (void)caller;
+    (void)call;
     (void)arguments;
     (void)results;
     (void)result_capacity;
