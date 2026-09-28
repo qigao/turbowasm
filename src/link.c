@@ -424,18 +424,22 @@ turbowasm_status turbowasm_linker_bind_instance(
                 &provider_module->validation.tables[
                     export_desc->item_index];
 
-            /*
-             * Runtime table execution currently supports funcref. Keep
-             * externref fail-closed until its value carrier lands.
-             */
-            if (expected_table->reference_type != 0x70u ||
-                actual_table->reference_type != 0x70u) {
+            if ((expected_table->reference_type != 0x70u &&
+                 expected_table->reference_type != 0x6fu) ||
+                (actual_table->reference_type != 0x70u &&
+                 actual_table->reference_type != 0x6fu)) {
                 result = TURBOWASM_UNSUPPORTED;
                 goto fail;
             }
 
-            if (expected_table->reference_type !=
-                    actual_table->reference_type) {
+            /*
+             * Tables are mutable, so imported element types are invariant.
+             * Preserve typed-funcref semantic identity instead of comparing
+             * only the erased carrier byte.
+             */
+            if (!turbowasm_validation_value_type_equal(
+                    &expected_table->semantic_type,
+                    &actual_table->semantic_type)) {
                 result = TURBOWASM_TYPE_MISMATCH;
                 goto fail;
             }
