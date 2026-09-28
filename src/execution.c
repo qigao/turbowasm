@@ -84,12 +84,13 @@ static turbowasm_status turbowasm_execution_suspend(
 static turbowasm_status turbowasm_execution_host_wait(
     void *context,
     uintptr_t operation_token,
+    turbowasm_host_wait *out_wait,
     int *out_status) {
     turbowasm_execution_impl *execution =
         (turbowasm_execution_impl *)context;
     uint64_t generation;
 
-    if (execution == NULL || out_status == NULL ||
+    if (execution == NULL || out_wait == NULL || out_status == NULL ||
         execution->host_wait_active)
         return TURBOWASM_INVALID_ARGUMENT;
 
@@ -103,6 +104,7 @@ static turbowasm_status turbowasm_execution_host_wait(
     execution->host_wait_active = true;
     execution->host_wait_completed = false;
     execution->host_wait_status = 0;
+    *out_wait = execution->host_wait;
     execution->yield_reason = TURBOWASM_YIELD_HOST_WAIT;
     execution->state = TURBOWASM_EXECUTION_YIELDED;
 
@@ -127,6 +129,26 @@ static turbowasm_status turbowasm_execution_host_wait(
     execution->host_wait_status = 0;
     execution->yield_reason = TURBOWASM_YIELD_NONE;
     execution->state = TURBOWASM_EXECUTION_RUNNING;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_execution_host_wait_complete(
+    void *context,
+    turbowasm_host_wait wait,
+    int status) {
+    turbowasm_execution_impl *impl =
+        (turbowasm_execution_impl *)context;
+
+    if (impl == NULL ||
+        !impl->host_wait_active ||
+        impl->host_wait_completed ||
+        wait.generation == 0u ||
+        wait.generation != impl->host_wait.generation ||
+        wait.operation_token != impl->host_wait.operation_token)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    impl->host_wait_status = status;
+    impl->host_wait_completed = true;
     return TURBOWASM_OK;
 }
 
@@ -235,6 +257,8 @@ turbowasm_status turbowasm_execution_create(
     impl->control.suspend = turbowasm_execution_suspend;
     impl->control.suspend_context = impl;
     impl->control.host_wait = turbowasm_execution_host_wait;
+    impl->control.host_wait_complete =
+        turbowasm_execution_host_wait_complete;
     impl->control.host_wait_context = impl;
 
     opts.stack_size = TURBOWASM_RESUMABLE_STACK_SIZE;
@@ -359,17 +383,11 @@ turbowasm_status turbowasm_execution_complete_host_wait(
 
     if (impl == NULL ||
         impl->state != TURBOWASM_EXECUTION_YIELDED ||
-        impl->yield_reason != TURBOWASM_YIELD_HOST_WAIT ||
-        !impl->host_wait_active ||
-        impl->host_wait_completed ||
-        wait.generation == 0u ||
-        wait.generation != impl->host_wait.generation ||
-        wait.operation_token != impl->host_wait.operation_token)
+        impl->yield_reason != TURBOWASM_YIELD_HOST_WAIT)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    impl->host_wait_status = status;
-    impl->host_wait_completed = true;
-    return TURBOWASM_OK;
+    return turbowasm_execution_host_wait_complete(
+        impl, wait, status);
 }
 
 turbowasm_status turbowasm_execution_terminal_status(
