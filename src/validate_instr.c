@@ -857,6 +857,75 @@ static turbowasm_status turbowasm_validate_call_indirect(
 }
 
 
+static bool turbowasm_tail_results_equal(
+    const turbowasm_validation_func_type *callee,
+    const turbowasm_validation_func_type *current) {
+    uint32_t index;
+
+    if (callee == NULL || current == NULL ||
+        !callee->defined || !current->defined ||
+        callee->result_count != current->result_count)
+        return false;
+
+    for (index = 0u; index < callee->result_count; ++index) {
+        if (!turbowasm_validation_value_type_equal(
+                &callee->result_semantics[index],
+                &current->result_semantics[index]))
+            return false;
+    }
+    return true;
+}
+
+static turbowasm_status turbowasm_validate_return_call(
+    turbowasm_reader *body,
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_context *context,
+    const turbowasm_validation_func_type *current_type) {
+    uint32_t function_index;
+    const turbowasm_validation_func_type *callee_type;
+
+    if (!turbowasm_reader_uleb32(body, &function_index))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    callee_type = turbowasm_validation_context_function_type(
+        context, function_index);
+    if (callee_type == NULL ||
+        !turbowasm_tail_results_equal(callee_type, current_type))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    return turbowasm_stack_pop_params(stack, callee_type);
+}
+
+static turbowasm_status turbowasm_validate_return_call_indirect(
+    turbowasm_reader *body,
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_context *context,
+    const turbowasm_validation_func_type *current_type) {
+    uint32_t type_index;
+    uint32_t table_index;
+    const turbowasm_validation_func_type *callee_type;
+    turbowasm_status status;
+
+    if (!turbowasm_reader_uleb32(body, &type_index) ||
+        !turbowasm_reader_uleb32(body, &table_index))
+        return TURBOWASM_MALFORMED_MODULE;
+    if (table_index >= context->table_count ||
+        context->tables[table_index].reference_type != TW_FUNCREF)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    callee_type = turbowasm_validation_context_type(
+        context, type_index);
+    if (callee_type == NULL || !callee_type->defined ||
+        !turbowasm_tail_results_equal(callee_type, current_type))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    status = turbowasm_stack_pop(stack, TW_I32);
+    if (status != TURBOWASM_OK)
+        return status;
+    return turbowasm_stack_pop_params(stack, callee_type);
+}
+
+
 static bool turbowasm_memory0_exists(
     const turbowasm_validation_context *context) {
     return context != NULL && context->memory_count != 0u;
@@ -1653,6 +1722,20 @@ turbowasm_status turbowasm_validate_function_body(
                     body, &stack, context);
                 if (result != TURBOWASM_OK)
                     goto done;
+                break;
+            case 0x12u: /* return_call */
+                result = turbowasm_validate_return_call(
+                    body, &stack, context, function_type);
+                if (result != TURBOWASM_OK)
+                    goto done;
+                turbowasm_control_mark_unreachable(&stack);
+                break;
+            case 0x13u: /* return_call_indirect */
+                result = turbowasm_validate_return_call_indirect(
+                    body, &stack, context, function_type);
+                if (result != TURBOWASM_OK)
+                    goto done;
+                turbowasm_control_mark_unreachable(&stack);
                 break;
             case 0x1au: /* drop */
                 result = turbowasm_stack_pop_any(&stack, NULL);
