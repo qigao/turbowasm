@@ -1128,6 +1128,92 @@ static uint64_t turbowasm_sign_extend_u64(uint64_t value,
     return bits;
 }
 
+static turbowasm_status turbowasm_exec_trapping_conversion(
+    uint8_t opcode,
+    turbowasm_value_stack *stack,
+    turbowasm_trap *trap) {
+    turbowasm_value in;
+    turbowasm_value out = {0};
+    turbowasm_status status;
+    double value;
+    uint32_t bits32;
+    uint64_t bits64;
+
+    switch (opcode) {
+        case 0xa8u: case 0xa9u:
+        case 0xaeu: case 0xafu:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_F32, &in);
+            value = (double)in.as.f32;
+            break;
+        case 0xaau: case 0xabu:
+        case 0xb0u: case 0xb1u:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_F64, &in);
+            value = in.as.f64;
+            break;
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (value != value) {
+        *trap = TURBOWASM_TRAP_INVALID_CONVERSION_TO_INTEGER;
+        return TURBOWASM_TRAPPED;
+    }
+
+    switch (opcode) {
+        case 0xa8u: /* i32.trunc_f32_s */
+        case 0xaau: /* i32.trunc_f64_s */
+            if (value >= 2147483648.0 ||
+                value <= -2147483649.0) {
+                *trap = TURBOWASM_TRAP_INTEGER_OVERFLOW;
+                return TURBOWASM_TRAPPED;
+            }
+            out.kind = TURBOWASM_VALUE_I32;
+            out.as.i32 = (int32_t)value;
+            break;
+
+        case 0xa9u: /* i32.trunc_f32_u */
+        case 0xabu: /* i32.trunc_f64_u */
+            if (value >= 4294967296.0 || value <= -1.0) {
+                *trap = TURBOWASM_TRAP_INTEGER_OVERFLOW;
+                return TURBOWASM_TRAPPED;
+            }
+            bits32 = (uint32_t)value;
+            out.kind = TURBOWASM_VALUE_I32;
+            memcpy(&out.as.i32, &bits32, sizeof(bits32));
+            break;
+
+        case 0xaeu: /* i64.trunc_f32_s */
+        case 0xb0u: /* i64.trunc_f64_s */
+            if (value >= 0x1p63 || value < -0x1p63) {
+                *trap = TURBOWASM_TRAP_INTEGER_OVERFLOW;
+                return TURBOWASM_TRAPPED;
+            }
+            out.kind = TURBOWASM_VALUE_I64;
+            out.as.i64 = (int64_t)value;
+            break;
+
+        case 0xafu: /* i64.trunc_f32_u */
+        case 0xb1u: /* i64.trunc_f64_u */
+            if (value >= 0x1p64 || value <= -1.0) {
+                *trap = TURBOWASM_TRAP_INTEGER_OVERFLOW;
+                return TURBOWASM_TRAPPED;
+            }
+            bits64 = (uint64_t)value;
+            out.kind = TURBOWASM_VALUE_I64;
+            memcpy(&out.as.i64, &bits64, sizeof(bits64));
+            break;
+
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+
+    return turbowasm_stack_push(stack, out);
+}
+
 static turbowasm_status turbowasm_exec_nontrapping_conversion(
     uint8_t opcode,
     turbowasm_value_stack *stack) {
@@ -3305,6 +3391,15 @@ static turbowasm_status turbowasm_exec_function(
                 if (status != TURBOWASM_OK) goto done;
                 break;
 
+            case 0xa8u: case 0xa9u:
+            case 0xaau: case 0xabu:
+            case 0xaeu: case 0xafu:
+            case 0xb0u: case 0xb1u:
+                status = turbowasm_exec_trapping_conversion(
+                    opcode, &stack, trap);
+                if (status != TURBOWASM_OK) goto done;
+                break;
+
             case 0xa7u:
             case 0xacu: case 0xadu:
             case 0xb2u: case 0xb3u: case 0xb4u: case 0xb5u:
@@ -3890,6 +3985,8 @@ const char *turbowasm_trap_string(turbowasm_trap trap) {
             return "indirect_call_null";
         case TURBOWASM_TRAP_INDIRECT_CALL_TYPE_MISMATCH:
             return "indirect_call_type_mismatch";
+        case TURBOWASM_TRAP_INVALID_CONVERSION_TO_INTEGER:
+            return "invalid_conversion_to_integer";
         default: return "unknown";
     }
 }
