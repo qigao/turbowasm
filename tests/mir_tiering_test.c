@@ -13,13 +13,15 @@
     0x00, 0x61, 0x73, 0x6d, \
     0x01, 0x00, 0x00, 0x00
 
-static int32_t invoke_i32(turbowasm_instance *instance) {
+static int32_t invoke_i32_at(
+    turbowasm_instance *instance,
+    uint32_t function_index) {
     turbowasm_value result = {0};
     size_t result_count = 0u;
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
 
     assert(turbowasm_instance_invoke(
-               instance, 0u,
+               instance, function_index,
                NULL, 0u,
                &result, 1u,
                &result_count,
@@ -28,6 +30,10 @@ static int32_t invoke_i32(turbowasm_instance *instance) {
     assert(result.kind == TURBOWASM_VALUE_I32);
     assert(trap == TURBOWASM_TRAP_NONE);
     return result.as.i32;
+}
+
+static int32_t invoke_i32(turbowasm_instance *instance) {
+    return invoke_i32_at(instance, 0u);
 }
 
 int main(void) {
@@ -105,5 +111,59 @@ int main(void) {
 
     turbowasm_instance_destroy(&instance);
     turbowasm_module_destroy(&module);
+
+    /*
+     * Tail-call functions are not MIR-eligible yet. They must become
+     * interpreter-only per function rather than being miscompiled as an
+     * ordinary call followed by return.
+     */
+    {
+        static const uint8_t tail_bytes[] = {
+            WASM_HEADER,
+            0x01, 0x05,
+            0x01, 0x60, 0x00, 0x01, 0x7f,
+            0x03, 0x03,
+            0x02, 0x00, 0x00,
+            0x0a, 0x0b,
+            0x02,
+            0x04, 0x00, 0x41, 0x07, 0x0b,
+            0x04, 0x00, 0x12, 0x00, 0x0b
+        };
+        turbowasm_module tail_module = {0};
+        turbowasm_instance tail_instance = {0};
+        turbowasm_instance_impl *tail_impl;
+        turbowasm_jit_backend tail_backend = {0};
+
+        assert(turbowasm_module_load_borrowed(
+                   &tail_module,
+                   tail_bytes,
+                   sizeof(tail_bytes)) == TURBOWASM_OK);
+        assert(turbowasm_instance_create(
+                   &tail_instance,
+                   &tail_module) == TURBOWASM_OK);
+        tail_impl = (turbowasm_instance_impl *)tail_instance.impl;
+        assert(tail_impl != NULL);
+
+        assert(turbowasm_mir_backend_create(
+                   &tail_backend) == TURBOWASM_OK);
+        assert(turbowasm_jit_instance_attach_backend(
+                   tail_impl, &tail_backend, 1u) == TURBOWASM_OK);
+
+        assert(invoke_i32_at(&tail_instance, 1u) == 7);
+        assert(tail_impl->jit_functions[1].state ==
+               TURBOWASM_JIT_INTERPRET_ONLY);
+        assert(tail_impl->jit_functions[1].compiled.impl == NULL);
+        assert(tail_impl->jit_functions[0].state ==
+               TURBOWASM_JIT_INTERPRET);
+
+        assert(invoke_i32_at(&tail_instance, 1u) == 7);
+        assert(tail_impl->jit_functions[1].state ==
+               TURBOWASM_JIT_INTERPRET_ONLY);
+        assert(tail_impl->jit_functions[1].compiled.impl == NULL);
+
+        turbowasm_instance_destroy(&tail_instance);
+        turbowasm_module_destroy(&tail_module);
+    }
+
     return 0;
 }
