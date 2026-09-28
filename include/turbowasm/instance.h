@@ -29,6 +29,21 @@ typedef struct turbowasm_instance {
     void *impl;
 } turbowasm_instance;
 
+#define TURBOWASM_DEFAULT_MAX_MEMORY_BYTES UINT64_C(1073741824)
+#define TURBOWASM_DEFAULT_MAX_TABLE_ENTRIES UINT64_C(16777216)
+
+typedef struct turbowasm_instance_create_options {
+    /*
+     * Per locally-owned Wasm memory/table resource budgets.
+     *
+     * These are host resource limits, not Wasm type maxima. Imported
+     * resources retain and enforce the provider instance's budget.
+     * UINT64_MAX disables the corresponding policy limit.
+     */
+    uint64_t max_memory_bytes;
+    uint64_t max_table_entries;
+} turbowasm_instance_create_options;
+
 struct turbowasm_linker;
 
 typedef bool (*turbowasm_interrupt_check_fn)(void *context);
@@ -40,25 +55,39 @@ typedef struct turbowasm_execution_options {
     void *interrupt_context;
 } turbowasm_execution_options;
 
+/*
+ * Initialize caller-owned creation options to TurboWasm's documented
+ * host-safe defaults.
+ */
+void turbowasm_instance_create_options_init(
+    turbowasm_instance_create_options *options);
+
 /* The instance borrows an already validated module.  The module and its
  * borrowed source bytes must outlive the instance. */
 turbowasm_status turbowasm_instance_create(
     turbowasm_instance *instance,
     const turbowasm_module *module);
 
+turbowasm_status turbowasm_instance_create_with_options(
+    turbowasm_instance *instance,
+    const turbowasm_module *module,
+    const turbowasm_instance_create_options *options);
+
 /*
- * Resolve function imports through an explicit linker before executing the
- * module start function. Provider instances and their modules are borrowed and
- * must outlive the linked consumer instance.
- *
- * This first linker slice resolves function imports only. Imported memories,
- * tables and globals remain explicitly unsupported until their shared
- * ownership/lifetime model lands.
+ * Resolve imports through an explicit linker before executing the module
+ * start function. Provider instances and their modules are borrowed and must
+ * outlive the linked consumer instance.
  */
 turbowasm_status turbowasm_instance_create_linked(
     turbowasm_instance *instance,
     const turbowasm_module *module,
     const struct turbowasm_linker *linker);
+
+turbowasm_status turbowasm_instance_create_linked_with_options(
+    turbowasm_instance *instance,
+    const turbowasm_module *module,
+    const struct turbowasm_linker *linker,
+    const turbowasm_instance_create_options *options);
 
 void turbowasm_instance_destroy(turbowasm_instance *instance);
 
