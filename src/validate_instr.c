@@ -695,21 +695,33 @@ static turbowasm_status turbowasm_control_branch(
 
 static turbowasm_status turbowasm_read_locals(
     turbowasm_reader *body,
+    const turbowasm_validation_context *context,
     const turbowasm_validation_func_type *function_type,
     uint8_t **out_locals,
+    turbowasm_validation_value_type **out_semantics,
     uint32_t *out_count) {
     uint32_t group_count;
     uint32_t group;
     uint64_t total = function_type->param_count;
     uint8_t *locals = NULL;
+    turbowasm_validation_value_type *semantics = NULL;
     uint32_t used = 0u;
 
     typedef struct local_group {
         uint32_t count;
-        uint8_t type;
+        turbowasm_validation_value_type type;
     } local_group;
 
     local_group *groups = NULL;
+
+    if (body == NULL || context == NULL || function_type == NULL ||
+        out_locals == NULL || out_semantics == NULL ||
+        out_count == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *out_locals = NULL;
+    *out_semantics = NULL;
+    *out_count = 0u;
 
     if (!turbowasm_reader_uleb32(body, &group_count))
         return TURBOWASM_MALFORMED_MODULE;
@@ -725,15 +737,28 @@ static turbowasm_status turbowasm_read_locals(
     }
 
     for (group = 0u; group < group_count; ++group) {
-        if (!turbowasm_reader_uleb32(body, &groups[group].count) ||
-            !turbowasm_reader_u8(body, &groups[group].type)) {
+        bool generalized = false;
+        turbowasm_status status;
+
+        if (!turbowasm_reader_uleb32(body, &groups[group].count)) {
             free(groups);
             return TURBOWASM_MALFORMED_MODULE;
         }
-        if (!turbowasm_instr_valtype(groups[group].type)) {
+
+        status = turbowasm_validation_read_valtype(
+            body, &groups[group].type, &generalized);
+        if (status != TURBOWASM_OK) {
             free(groups);
-            return TURBOWASM_UNSUPPORTED;
+            return status;
         }
+
+        if (groups[group].type.heap_kind ==
+                TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+            groups[group].type.type_index >= context->type_count) {
+            free(groups);
+            return TURBOWASM_MALFORMED_MODULE;
+        }
+
         total += groups[group].count;
         if (total > UINT32_MAX) {
             free(groups);
@@ -743,7 +768,11 @@ static turbowasm_status turbowasm_read_locals(
 
     if (total != 0u) {
         locals = (uint8_t *)malloc((size_t)total);
-        if (locals == NULL) {
+        semantics = (turbowasm_validation_value_type *)malloc(
+            (size_t)total * sizeof(*semantics));
+        if (locals == NULL || semantics == NULL) {
+            free(locals);
+            free(semantics);
             free(groups);
             return TURBOWASM_OUT_OF_MEMORY;
         }
@@ -753,17 +782,25 @@ static turbowasm_status turbowasm_read_locals(
         memcpy(locals,
                function_type->params,
                (size_t)function_type->param_count);
+        memcpy(semantics,
+               function_type->param_semantics,
+               (size_t)function_type->param_count *
+                   sizeof(*semantics));
         used = function_type->param_count;
     }
 
     for (group = 0u; group < group_count; ++group) {
         uint32_t item;
-        for (item = 0u; item < groups[group].count; ++item)
-            locals[used++] = groups[group].type;
+        for (item = 0u; item < groups[group].count; ++item) {
+            locals[used] = groups[group].type.carrier;
+            semantics[used] = groups[group].type;
+            ++used;
+        }
     }
 
     free(groups);
     *out_locals = locals;
+    *out_semantics = semantics;
     *out_count = (uint32_t)total;
     return TURBOWASM_OK;
 }
@@ -1381,6 +1418,7 @@ turbowasm_status turbowasm_validate_function_body(
     turbowasm_type_stack stack = {0};
     turbowasm_control_stack controls = {0};
     uint8_t *locals = NULL;
+    turbowasm_validation_value_type *local_semantics = NULL;
     uint32_t local_count = 0u;
     const uint8_t *code_start = NULL;
     uint32_t code_size = 0u;
@@ -1398,7 +1436,8 @@ turbowasm_status turbowasm_validate_function_body(
         return TURBOWASM_MALFORMED_MODULE;
 
     result = turbowasm_read_locals(
-        body, function_type, &locals, &local_count);
+        body, context, function_type,
+        &locals, &local_semantics, &local_count);
     if (result != TURBOWASM_OK)
         goto done;
 
@@ -1692,19 +1731,23 @@ turbowasm_status turbowasm_validate_function_body(
             case 0x21u: /* local.set */
             case 0x22u: { /* local.tee */
                 uint32_t local_index;
-                uint8_t type;
+                const turbowasm_validation_value_type *type;
+
                 if (!turbowasm_reader_uleb32(body, &local_index) ||
                     local_index >= local_count) {
                     result = TURBOWASM_MALFORMED_MODULE;
                     goto done;
                 }
-                type = locals[local_index];
+
+                type = &local_semantics[local_index];
                 if (opcode != 0x20u) {
-                    result = turbowasm_stack_pop(&stack, type);
+                    result = turbowasm_stack_pop_semantic(
+                        &stack, type);
                     if (result != TURBOWASM_OK) goto done;
                 }
                 if (opcode != 0x21u) {
-                    result = turbowasm_stack_push(&stack, type);
+                    result = turbowasm_stack_push_semantic(
+                        &stack, *type);
                     if (result != TURBOWASM_OK) goto done;
                 }
                 break;
@@ -2185,18 +2228,23 @@ done:
                 context, function_index);
 
         if (function == NULL || function->imported ||
-            function->local_types != NULL || function->code != NULL) {
+            function->local_types != NULL ||
+            function->local_semantics != NULL ||
+            function->code != NULL) {
             result = TURBOWASM_MALFORMED_MODULE;
         } else {
             function->local_types = locals;
+            function->local_semantics = local_semantics;
             function->local_count = local_count;
             function->code = code_start;
             function->code_size = code_size;
             locals = NULL;
+            local_semantics = NULL;
         }
     }
 
     free(locals);
+    free(local_semantics);
     free(stack.values);
     turbowasm_control_stack_destroy(&controls);
     return result;
