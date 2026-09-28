@@ -10,6 +10,8 @@ typedef enum turbowasm_validation_heap_kind {
     TURBOWASM_VALIDATION_HEAP_NONE = 0,
     TURBOWASM_VALIDATION_HEAP_FUNC,
     TURBOWASM_VALIDATION_HEAP_EXTERN,
+    TURBOWASM_VALIDATION_HEAP_EXN,
+    TURBOWASM_VALIDATION_HEAP_NOEXN,
     TURBOWASM_VALIDATION_HEAP_TYPE_INDEX
 } turbowasm_validation_heap_kind;
 
@@ -34,8 +36,22 @@ typedef struct turbowasm_validation_func_type {
 typedef enum turbowasm_validation_control_kind {
     TURBOWASM_VALIDATION_CONTROL_BLOCK = 1,
     TURBOWASM_VALIDATION_CONTROL_LOOP,
-    TURBOWASM_VALIDATION_CONTROL_IF
+    TURBOWASM_VALIDATION_CONTROL_IF,
+    TURBOWASM_VALIDATION_CONTROL_TRY_TABLE
 } turbowasm_validation_control_kind;
+
+typedef enum turbowasm_validation_catch_kind {
+    TURBOWASM_VALIDATION_CATCH = 0,
+    TURBOWASM_VALIDATION_CATCH_REF = 1,
+    TURBOWASM_VALIDATION_CATCH_ALL = 2,
+    TURBOWASM_VALIDATION_CATCH_ALL_REF = 3
+} turbowasm_validation_catch_kind;
+
+typedef struct turbowasm_validation_catch {
+    turbowasm_validation_catch_kind kind;
+    uint32_t tag_index;
+    uint32_t label_depth;
+} turbowasm_validation_catch;
 
 typedef struct turbowasm_validation_control {
     turbowasm_validation_control_kind kind;
@@ -58,6 +74,14 @@ typedef struct turbowasm_validation_control {
      */
     uint32_t type_index;
     uint8_t inline_result_type;
+
+    /*
+     * try_table catches are retained in binary order so the interpreter can
+     * later select a handler without reparsing validation-only immediates.
+     * Non-try controls use catches == NULL and catch_count == 0.
+     */
+    turbowasm_validation_catch *catches;
+    uint32_t catch_count;
 } turbowasm_validation_control;
 
 typedef struct turbowasm_validation_function {
