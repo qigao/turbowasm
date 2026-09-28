@@ -4789,11 +4789,26 @@ turbowasm_status turbowasm_jit_direct_call(
         context->depth + 1u);
 }
 
+static void turbowasm_instance_dispose_unpublished(
+    turbowasm_instance_impl *impl) {
+    if (impl == NULL)
+        return;
+
+    turbowasm_jit_instance_detach_backend(impl);
+    turbowasm_instance_state_destroy(impl);
+    free(impl->linked_functions);
+    free(impl->linked_globals);
+    free(impl->linked_memories);
+    free(impl->linked_tables);
+    free(impl);
+}
+
 static turbowasm_status turbowasm_instance_create_internal(
     turbowasm_instance *instance,
     const turbowasm_module *module,
     const turbowasm_linker *linker,
-    bool resolve_imports) {
+    bool resolve_imports,
+    bool preserve_failed_instance) {
     const turbowasm_module_impl *module_impl;
     turbowasm_instance_impl *impl;
     turbowasm_status status;
@@ -4819,22 +4834,19 @@ static turbowasm_status turbowasm_instance_create_internal(
         status = turbowasm_linker_bind_instance(
             impl, module_impl, linker);
         if (status != TURBOWASM_OK) {
-            free(impl->linked_functions);
-            free(impl->linked_globals);
-            free(impl->linked_memories);
-            free(impl->linked_tables);
-            free(impl);
+            turbowasm_instance_dispose_unpublished(impl);
             return status;
         }
     }
 
     status = turbowasm_instance_state_init(impl, module_impl);
     if (status != TURBOWASM_OK) {
-        free(impl->linked_functions);
-        free(impl->linked_globals);
-        free(impl->linked_memories);
-        free(impl->linked_tables);
-        free(impl);
+        if (preserve_failed_instance &&
+            status == TURBOWASM_TRAPPED) {
+            instance->impl = impl;
+            return status;
+        }
+        turbowasm_instance_dispose_unpublished(impl);
         return status;
     }
 
@@ -4852,6 +4864,9 @@ static turbowasm_status turbowasm_instance_create_internal(
             &result_count,
             &trap);
         if (status != TURBOWASM_OK) {
+            if (preserve_failed_instance &&
+                status == TURBOWASM_TRAPPED)
+                return status;
             turbowasm_instance_destroy(instance);
             return status;
         }
@@ -4864,7 +4879,7 @@ turbowasm_status turbowasm_instance_create(
     turbowasm_instance *instance,
     const turbowasm_module *module) {
     return turbowasm_instance_create_internal(
-        instance, module, NULL, false);
+        instance, module, NULL, false, false);
 }
 
 turbowasm_status turbowasm_instance_create_linked(
@@ -4872,7 +4887,15 @@ turbowasm_status turbowasm_instance_create_linked(
     const turbowasm_module *module,
     const struct turbowasm_linker *linker) {
     return turbowasm_instance_create_internal(
-        instance, module, linker, true);
+        instance, module, linker, true, false);
+}
+
+turbowasm_status turbowasm_instance_create_linked_preserve_failure(
+    turbowasm_instance *instance,
+    const turbowasm_module *module,
+    const struct turbowasm_linker *linker) {
+    return turbowasm_instance_create_internal(
+        instance, module, linker, true, true);
 }
 
 void turbowasm_instance_destroy(turbowasm_instance *instance) {
