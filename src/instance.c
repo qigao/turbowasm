@@ -2143,6 +2143,23 @@ static void turbowasm_write_u64_le(uint8_t *p, uint64_t value) {
 
 static turbowasm_status turbowasm_exec_read_memarg(
     turbowasm_reader *reader,
+    uint32_t *out_offset) {
+    uint32_t alignment;
+    uint32_t offset;
+
+    if (reader == NULL || out_offset == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_uleb32(reader, &alignment) ||
+        !turbowasm_reader_uleb32(reader, &offset))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    (void)alignment;
+    *out_offset = offset;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_exec_read_indexed_memarg(
+    turbowasm_reader *reader,
     uint32_t *out_memory_index,
     uint32_t *out_offset) {
     uint32_t flags;
@@ -2182,7 +2199,7 @@ static turbowasm_status turbowasm_exec_memory_load(
     size_t width;
     turbowasm_status status;
 
-    status = turbowasm_exec_read_memarg(
+    status = turbowasm_exec_read_indexed_memarg(
         reader, &memory_index, &offset);
     if (status != TURBOWASM_OK)
         return status;
@@ -2299,7 +2316,7 @@ static turbowasm_status turbowasm_exec_memory_store(
     size_t width;
     turbowasm_status status;
 
-    status = turbowasm_exec_read_memarg(
+    status = turbowasm_exec_read_indexed_memarg(
         reader, &memory_index, &offset);
     if (status != TURBOWASM_OK)
         return status;
