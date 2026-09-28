@@ -65,6 +65,7 @@ typedef struct turbowasm_validation_function {
     bool imported;
 
     uint8_t *local_types;
+    turbowasm_validation_value_type *local_semantics;
     uint32_t local_count;
 
     const uint8_t *code;
