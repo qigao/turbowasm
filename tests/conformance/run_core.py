@@ -75,7 +75,41 @@ def encode_value(value, expected=False):
         return None, "externref payload encoding unsupported"
 
     if value_type == "v128":
-        return None, "v128 manifest comparison not yet qualified"
+        lane_type = value.get("lane_type")
+        lanes = value.get("value")
+        lane_counts = {
+            "i8": 16,
+            "i16": 8,
+            "i32": 4,
+            "i64": 2,
+            "f32": 4,
+            "f64": 2,
+        }
+        expected_count = lane_counts.get(lane_type)
+        if expected_count is None:
+            return None, f"v128 lane type {lane_type!r} unsupported"
+        if not isinstance(lanes, list) or len(lanes) != expected_count:
+            return None, "v128 lane count mismatch"
+
+        encoded_lanes = []
+        for lane in lanes:
+            if not isinstance(lane, str):
+                return None, "v128 lane value is not a string"
+            if (
+                expected
+                and lane_type in ("f32", "f64")
+                and lane in ("nan:canonical", "nan:arithmetic")
+            ):
+                encoded_lanes.append(lane)
+                continue
+            if not lane.isdigit():
+                return None, f"v128 {lane_type} non-decimal lane unsupported"
+            encoded_lanes.append(lane)
+
+        return (
+            f"v128:{lane_type}:" + ";".join(encoded_lanes),
+            None,
+        )
 
     if value_type == "exnref":
         return None, "exnref non-null/reference payload unsupported"
@@ -154,6 +188,27 @@ def convert_json(json_path, manifest_path):
             return
 
         if command_type == "assert_return":
+            either = command.get("either")
+            if either is not None:
+                if not isinstance(either, list) or not either:
+                    emit_unsupported(line, "either expectation is empty")
+                    return
+                encoded_alternatives = []
+                for alternative in either:
+                    token, reason = encode_value(
+                        alternative, expected=True
+                    )
+                    if token is None:
+                        emit_unsupported(line, reason)
+                        return
+                    encoded_alternatives.append(token)
+                lines.append(
+                    f"assert_return_either\t{line}\t{slot_text}"
+                    f"\t{field_hex}\t{args}\t"
+                    + "|".join(encoded_alternatives)
+                )
+                return
+
             encoded_expected, reason = encode_values(
                 expected or [], expected=True
             )
