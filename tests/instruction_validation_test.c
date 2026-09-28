@@ -199,6 +199,27 @@ static void test_basic_block_is_now_supported(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_typed_select_requires_one_result_type(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x08,
+        0x01, 0x60, 0x03, 0x7f, 0x7f, 0x7f, 0x01, 0x7f,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x0c, 0x01, 0x0a,
+        0x00,
+        0x20, 0x00,
+        0x20, 0x01,
+        0x20, 0x02,
+        0x1c, 0x00,
+        0x0b
+    };
+    turbowasm_module module = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) ==
+           TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
 static void test_unreachable_select_remains_polymorphic(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -231,6 +252,7 @@ int main(void) {
     test_simd_i32x4_add_typing();
     test_simd_binary_underflow();
     test_basic_block_is_now_supported();
+    test_typed_select_requires_one_result_type();
     test_unreachable_select_remains_polymorphic();
     return 0;
 }
