@@ -5,6 +5,7 @@
 #include "module_internal.h"
 #include "reader.h"
 #include "simd_exec_table.h"
+#include "validate_type.h"
 
 #include <limits.h>
 #include <math.h>
@@ -330,17 +331,38 @@ static turbowasm_status turbowasm_exec_read_block_signature(
         return TURBOWASM_INVALID_ARGUMENT;
 
     memset(signature, 0, sizeof(*signature));
-    if (!turbowasm_reader_u8(reader, &first))
+    if (turbowasm_reader_remaining(reader) == 0u)
         return TURBOWASM_MALFORMED_MODULE;
 
-    if (first == 0x40u)
+    first = *reader->cursor;
+    if (first == 0x40u) {
+        if (!turbowasm_reader_u8(reader, &first))
+            return TURBOWASM_MALFORMED_MODULE;
         return TURBOWASM_OK;
+    }
 
-    if (turbowasm_exec_valtype(first)) {
-        signature->inline_end_type = first;
+    if (turbowasm_exec_valtype(first) ||
+        first == 0x63u || first == 0x64u) {
+        turbowasm_validation_value_type type;
+        bool generalized = false;
+        turbowasm_status status =
+            turbowasm_validation_read_valtype(
+                reader, &type, &generalized);
+
+        if (status != TURBOWASM_OK)
+            return status;
+        if (type.heap_kind ==
+                TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+            type.type_index >= context->type_count)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        signature->inline_end_type = type.carrier;
         signature->has_inline_end_type = true;
         return TURBOWASM_OK;
     }
+
+    if (!turbowasm_reader_u8(reader, &first))
+        return TURBOWASM_MALFORMED_MODULE;
 
     {
         uint64_t value = (uint64_t)(first & 0x7fu);
@@ -3747,7 +3769,8 @@ static turbowasm_status turbowasm_exec_function(
             }
             case 0x1cu: { /* typed select */
                 uint32_t type_count;
-                uint8_t type;
+                turbowasm_validation_value_type type;
+                bool generalized = false;
                 turbowasm_value_kind kind;
                 turbowasm_value condition;
                 turbowasm_value right;
@@ -3755,13 +3778,23 @@ static turbowasm_status turbowasm_exec_function(
 
                 if (!turbowasm_reader_uleb32(
                         &reader, &type_count) ||
-                    type_count != 1u ||
-                    !turbowasm_reader_u8(&reader, &type)) {
+                    type_count != 1u) {
                     status = TURBOWASM_MALFORMED_MODULE;
                     goto done;
                 }
 
-                kind = turbowasm_kind_from_valtype(type);
+                status = turbowasm_validation_read_valtype(
+                    &reader, &type, &generalized);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                if (type.heap_kind ==
+                        TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+                    type.type_index >= context->type_count) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+
+                kind = turbowasm_kind_from_valtype(type.carrier);
                 if (kind == 0) {
                     status = TURBOWASM_UNSUPPORTED;
                     goto done;
@@ -4111,21 +4144,26 @@ static turbowasm_status turbowasm_exec_function(
                 break;
 
             case 0xd0u: { /* ref.null */
-                uint8_t reference_type;
+                turbowasm_validation_value_type reference_type;
                 turbowasm_value out = {0};
 
-                if (!turbowasm_reader_u8(
-                        &reader, &reference_type)) {
+                status = turbowasm_validation_read_heaptype(
+                    &reader, &reference_type);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                if (reference_type.heap_kind ==
+                        TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+                    reference_type.type_index >= context->type_count) {
                     status = TURBOWASM_MALFORMED_MODULE;
                     goto done;
                 }
 
-                if (reference_type == 0x70u) {
+                if (reference_type.carrier == 0x70u) {
                     out.kind = TURBOWASM_VALUE_FUNCREF;
                     out.as.funcref.is_null = true;
                     out.as.funcref.function_index = UINT32_MAX;
                     out.as.funcref.owner = NULL;
-                } else if (reference_type == 0x6fu) {
+                } else if (reference_type.carrier == 0x6fu) {
                     out.kind = TURBOWASM_VALUE_EXTERNREF;
                     out.as.externref.is_null = true;
                     out.as.externref.token = 0u;

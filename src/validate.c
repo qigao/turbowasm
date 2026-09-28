@@ -45,12 +45,16 @@ static unsigned turbowasm_section_rank(uint8_t id) {
     }
 }
 
-static turbowasm_status turbowasm_read_legacy_valtypes(
+static turbowasm_status turbowasm_read_valtypes_semantic(
     turbowasm_reader *reader,
+    const turbowasm_validation_context *context,
     uint8_t *values,
     turbowasm_validation_value_type *semantics,
     uint32_t count) {
     uint32_t index;
+
+    if (context == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
 
     for (index = 0u; index < count; ++index) {
         turbowasm_validation_value_type type;
@@ -60,8 +64,10 @@ static turbowasm_status turbowasm_read_legacy_valtypes(
 
         if (status != TURBOWASM_OK)
             return status;
-        if (generalized)
-            return TURBOWASM_UNSUPPORTED;
+        if (type.heap_kind ==
+                TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+            type.type_index >= context->type_count)
+            return TURBOWASM_MALFORMED_MODULE;
 
         if (values != NULL)
             values[index] = type.carrier;
@@ -111,8 +117,8 @@ static turbowasm_status turbowasm_validate_type_section(
             }
         }
 
-        status = turbowasm_read_legacy_valtypes(
-            section, params, param_semantics, param_count);
+        status = turbowasm_read_valtypes_semantic(
+            section, context, params, param_semantics, param_count);
         if (status != TURBOWASM_OK) {
             free(params);
             free(param_semantics);
@@ -147,8 +153,8 @@ static turbowasm_status turbowasm_validate_type_section(
         free(params);
         free(param_semantics);
 
-        status = turbowasm_read_legacy_valtypes(
-            section, type->results, type->result_semantics,
+        status = turbowasm_read_valtypes_semantic(
+            section, context, type->results, type->result_semantics,
             result_count);
         if (status != TURBOWASM_OK)
             return status;

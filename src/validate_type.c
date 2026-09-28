@@ -45,7 +45,7 @@ static bool turbowasm_validation_read_s33(
     return true;
 }
 
-static turbowasm_status turbowasm_validation_read_heaptype(
+turbowasm_status turbowasm_validation_read_heaptype(
     turbowasm_reader *reader,
     turbowasm_validation_value_type *out) {
     int64_t heap;

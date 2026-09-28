@@ -1,6 +1,7 @@
 #include "validate_element.h"
 
 #include "validate_data.h"
+#include "validate_type.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -15,24 +16,28 @@ enum {
 
 static turbowasm_status turbowasm_element_read_reftype(
     turbowasm_reader *reader,
-    uint8_t *out_type) {
-    uint8_t type;
+    const turbowasm_validation_context *context,
+    turbowasm_validation_value_type *out_type) {
+    bool generalized = false;
+    turbowasm_status status;
 
-    if (reader == NULL || out_type == NULL)
+    if (reader == NULL || context == NULL || out_type == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (!turbowasm_reader_u8(reader, &type))
-        return TURBOWASM_MALFORMED_MODULE;
-    if (type != TURBOWASM_ELEMENT_FUNCREF &&
-        type != TURBOWASM_ELEMENT_EXTERNREF)
-        return TURBOWASM_UNSUPPORTED;
 
-    *out_type = type;
+    status = turbowasm_validation_read_reftype(
+        reader, out_type, &generalized);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (out_type->heap_kind ==
+            TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+        out_type->type_index >= context->type_count)
+        return TURBOWASM_MALFORMED_MODULE;
     return TURBOWASM_OK;
 }
 
 static turbowasm_status turbowasm_element_read_elemkind(
     turbowasm_reader *reader,
-    uint8_t *out_type) {
+    turbowasm_validation_value_type *out_type) {
     uint8_t kind;
 
     if (reader == NULL || out_type == NULL)
@@ -42,7 +47,8 @@ static turbowasm_status turbowasm_element_read_elemkind(
     if (kind != 0x00u)
         return TURBOWASM_UNSUPPORTED;
 
-    *out_type = TURBOWASM_ELEMENT_FUNCREF;
+    *out_type = turbowasm_validation_value_type_legacy(
+        TURBOWASM_ELEMENT_FUNCREF);
     return TURBOWASM_OK;
 }
 
@@ -79,10 +85,12 @@ static turbowasm_status turbowasm_element_validate_offset(
 static turbowasm_status turbowasm_element_validate_table(
     const turbowasm_validation_context *context,
     uint32_t table_index,
-    uint8_t reference_type) {
-    if (context == NULL || table_index >= context->table_count)
+    const turbowasm_validation_value_type *reference_type) {
+    if (context == NULL || reference_type == NULL ||
+        table_index >= context->table_count)
         return TURBOWASM_MALFORMED_MODULE;
-    return context->tables[table_index].reference_type == reference_type
+    return turbowasm_validation_value_type_matches(
+        reference_type, &context->tables[table_index].semantic_type)
         ? TURBOWASM_OK
         : TURBOWASM_MALFORMED_MODULE;
 }
@@ -139,7 +147,7 @@ static turbowasm_status turbowasm_element_validate_funcidx_vector(
 static turbowasm_status turbowasm_element_validate_expr_vector(
     turbowasm_reader *reader,
     turbowasm_validation_context *context,
-    uint8_t reference_type,
+    const turbowasm_validation_value_type *reference_type,
     turbowasm_validation_element_item **out_items,
     uint32_t *out_count) {
     turbowasm_validation_element_item *items = NULL;
@@ -163,15 +171,17 @@ static turbowasm_status turbowasm_element_validate_expr_vector(
     for (index = 0u; index < count; ++index) {
         const uint8_t *start = reader->cursor;
         size_t size;
-        uint8_t type;
-        turbowasm_status status = turbowasm_validate_const_expr(
-            reader, context, &type);
+        turbowasm_validation_value_type type;
+        turbowasm_status status =
+            turbowasm_validate_const_expr_semantic(
+                reader, context, &type);
 
         if (status != TURBOWASM_OK) {
             free(items);
             return status;
         }
-        if (type != reference_type) {
+        if (!turbowasm_validation_value_type_matches(
+                &type, reference_type)) {
             free(items);
             return TURBOWASM_MALFORMED_MODULE;
         }
@@ -186,7 +196,7 @@ static turbowasm_status turbowasm_element_validate_expr_vector(
             TURBOWASM_VALIDATION_ELEMENT_CONST_EXPR;
         items[index].expression.bytes = start;
         items[index].expression.size = (uint32_t)size;
-        items[index].expression.result_type = type;
+        items[index].expression.result_type = type.carrier;
     }
 
     *out_items = items;
@@ -214,6 +224,9 @@ turbowasm_status turbowasm_validate_element_section(
         turbowasm_status status;
 
         descriptor.reference_type = TURBOWASM_ELEMENT_FUNCREF;
+        descriptor.semantic_type =
+            turbowasm_validation_value_type_legacy(
+                TURBOWASM_ELEMENT_FUNCREF);
 
         if (!turbowasm_reader_uleb32(section, &flags))
             return TURBOWASM_MALFORMED_MODULE;
@@ -245,27 +258,30 @@ turbowasm_status turbowasm_validate_element_section(
 
         if (flags == 1u || flags == 2u || flags == 3u) {
             status = turbowasm_element_read_elemkind(
-                section, &descriptor.reference_type);
+                section, &descriptor.semantic_type);
             if (status != TURBOWASM_OK)
                 return status;
         } else if (flags == 5u || flags == 6u || flags == 7u) {
             status = turbowasm_element_read_reftype(
-                section, &descriptor.reference_type);
+                section, context, &descriptor.semantic_type);
             if (status != TURBOWASM_OK)
                 return status;
         }
 
+        descriptor.reference_type =
+            descriptor.semantic_type.carrier;
+
         if (active) {
             status = turbowasm_element_validate_table(
                 context, descriptor.table_index,
-                descriptor.reference_type);
+                &descriptor.semantic_type);
             if (status != TURBOWASM_OK)
                 return status;
         }
 
         status = expression_items
             ? turbowasm_element_validate_expr_vector(
-                  section, context, descriptor.reference_type,
+                  section, context, &descriptor.semantic_type,
                   &descriptor.items, &descriptor.item_count)
             : turbowasm_element_validate_funcidx_vector(
                   section, context,

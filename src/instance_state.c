@@ -1,6 +1,7 @@
 #include "instance_internal.h"
 
 #include "reader.h"
+#include "validate_type.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -105,15 +106,30 @@ static turbowasm_status turbowasm_eval_value_expr(
             break;
         }
         case 0xd0u: {
-            uint8_t reference_type;
-            if (!turbowasm_reader_u8(&reader, &reference_type))
-                return TURBOWASM_MALFORMED_MODULE;
-            if (reference_type == 0x70u) {
+            turbowasm_validation_value_type reference_type;
+            turbowasm_status status =
+                turbowasm_validation_read_heaptype(
+                    &reader, &reference_type);
+
+            if (status != TURBOWASM_OK)
+                return status;
+            if (reference_type.heap_kind ==
+                    TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+                instance != NULL) {
+                const turbowasm_module_impl *module =
+                    turbowasm_module_impl_get(instance->module);
+                if (module == NULL ||
+                    reference_type.type_index >=
+                        module->validation.type_count)
+                    return TURBOWASM_MALFORMED_MODULE;
+            }
+
+            if (reference_type.carrier == 0x70u) {
                 out->kind = TURBOWASM_VALUE_FUNCREF;
                 out->as.funcref.is_null = true;
                 out->as.funcref.function_index = UINT32_MAX;
                 out->as.funcref.owner = NULL;
-            } else if (reference_type == 0x6fu) {
+            } else if (reference_type.carrier == 0x6fu) {
                 out->kind = TURBOWASM_VALUE_EXTERNREF;
                 out->as.externref.is_null = true;
                 out->as.externref.token = 0u;
@@ -176,11 +192,16 @@ static turbowasm_status turbowasm_eval_funcref_expr(
         return TURBOWASM_MALFORMED_MODULE;
 
     if (opcode == 0xd0u) {
-        uint8_t reference_type;
-        if (!turbowasm_reader_u8(
-                &reader, &reference_type) ||
-            reference_type != 0x70u)
-            return TURBOWASM_MALFORMED_MODULE;
+        turbowasm_validation_value_type reference_type;
+        turbowasm_status status =
+            turbowasm_validation_read_heaptype(
+                &reader, &reference_type);
+
+        if (status != TURBOWASM_OK ||
+            reference_type.carrier != 0x70u)
+            return status == TURBOWASM_OK
+                ? TURBOWASM_MALFORMED_MODULE
+                : status;
         out->is_null = true;
         out->function_index = UINT32_MAX;
         out->owner = NULL;

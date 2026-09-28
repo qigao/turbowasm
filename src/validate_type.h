@@ -8,6 +8,10 @@
 
 #include <stdbool.h>
 
+turbowasm_status turbowasm_validation_read_heaptype(
+    turbowasm_reader *reader,
+    turbowasm_validation_value_type *out);
+
 turbowasm_status turbowasm_validation_read_reftype(
     turbowasm_reader *reader,
     turbowasm_validation_value_type *out,

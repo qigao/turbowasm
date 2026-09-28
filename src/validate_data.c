@@ -1,8 +1,10 @@
 #include "validate_data.h"
+#include "validate_type.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 enum {
     TURBOWASM_VAL_I32 = 0x7f,
@@ -68,10 +70,10 @@ static bool turbowasm_memory_index_valid(
     return context != NULL && index < context->memory_count;
 }
 
-turbowasm_status turbowasm_validate_const_expr(
+turbowasm_status turbowasm_validate_const_expr_semantic(
     turbowasm_reader *reader,
     turbowasm_validation_context *context,
-    uint8_t *out_type) {
+    turbowasm_validation_value_type *out_type) {
     uint8_t opcode;
     uint8_t end;
     turbowasm_status status = TURBOWASM_OK;
@@ -87,7 +89,8 @@ turbowasm_status turbowasm_validate_const_expr(
             if (!turbowasm_reader_sleb32(reader, &value))
                 return TURBOWASM_MALFORMED_MODULE;
             (void)value;
-            *out_type = TURBOWASM_VAL_I32;
+            *out_type =
+                turbowasm_validation_value_type_legacy(TURBOWASM_VAL_I32);
             break;
         }
         case 0x42u: {
@@ -95,35 +98,42 @@ turbowasm_status turbowasm_validate_const_expr(
             if (!turbowasm_reader_sleb64(reader, &value))
                 return TURBOWASM_MALFORMED_MODULE;
             (void)value;
-            *out_type = TURBOWASM_VAL_I64;
+            *out_type =
+                turbowasm_validation_value_type_legacy(TURBOWASM_VAL_I64);
             break;
         }
         case 0x43u: {
             turbowasm_reader bytes;
             if (!turbowasm_reader_slice(reader, 4u, &bytes))
                 return TURBOWASM_MALFORMED_MODULE;
-            *out_type = TURBOWASM_VAL_F32;
+            *out_type =
+                turbowasm_validation_value_type_legacy(TURBOWASM_VAL_F32);
             break;
         }
         case 0x44u: {
             turbowasm_reader bytes;
             if (!turbowasm_reader_slice(reader, 8u, &bytes))
                 return TURBOWASM_MALFORMED_MODULE;
-            *out_type = TURBOWASM_VAL_F64;
+            *out_type =
+                turbowasm_validation_value_type_legacy(TURBOWASM_VAL_F64);
             break;
         }
         case 0xd0u: {
-            uint8_t reference_type;
-            if (!turbowasm_reader_u8(reader, &reference_type))
+            status = turbowasm_validation_read_heaptype(
+                reader, out_type);
+            if (status != TURBOWASM_OK)
+                return status;
+            if (out_type->heap_kind ==
+                    TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+                out_type->type_index >= context->type_count)
                 return TURBOWASM_MALFORMED_MODULE;
-            if (reference_type != TURBOWASM_VAL_FUNCREF &&
-                reference_type != TURBOWASM_VAL_EXTERNREF)
-                return TURBOWASM_UNSUPPORTED;
-            *out_type = reference_type;
+            out_type->nullable = true;
             break;
         }
         case 0xd2u: {
             uint32_t function_index;
+            const turbowasm_validation_function *function;
+
             if (!turbowasm_reader_uleb32(reader, &function_index))
                 return TURBOWASM_MALFORMED_MODULE;
             if (!turbowasm_function_index_valid(function_index, context))
@@ -131,7 +141,19 @@ turbowasm_status turbowasm_validate_const_expr(
             if (!turbowasm_validation_context_declare_function_ref(
                     context, function_index))
                 return TURBOWASM_OUT_OF_MEMORY;
-            *out_type = TURBOWASM_VAL_FUNCREF;
+
+            function = turbowasm_validation_context_function(
+                context, function_index);
+            if (function == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            memset(out_type, 0, sizeof(*out_type));
+            out_type->carrier = TURBOWASM_VAL_FUNCREF;
+            out_type->is_reference = true;
+            out_type->nullable = false;
+            out_type->heap_kind =
+                TURBOWASM_VALIDATION_HEAP_TYPE_INDEX;
+            out_type->type_index = function->type_index;
             break;
         }
         case 0xfdu: {
@@ -143,7 +165,8 @@ turbowasm_status turbowasm_validate_const_expr(
                 return TURBOWASM_UNSUPPORTED;
             if (!turbowasm_reader_slice(reader, 16u, &bytes))
                 return TURBOWASM_MALFORMED_MODULE;
-            *out_type = TURBOWASM_VAL_V128;
+            *out_type =
+                turbowasm_validation_value_type_legacy(TURBOWASM_VAL_V128);
             break;
         }
         case 0x23u: {
@@ -155,15 +178,9 @@ turbowasm_status turbowasm_validate_const_expr(
                 context, global_index);
             if (global == NULL)
                 return TURBOWASM_MALFORMED_MODULE;
-            /*
-             * Extended-const permits reading an already-declared immutable
-             * global. Because globals are appended only after their
-             * initializer validates, this admits imports and prior local
-             * immutable globals while still rejecting self/forward refs.
-             */
             if (global->mutable_value)
                 return TURBOWASM_MALFORMED_MODULE;
-            *out_type = global->value_type;
+            *out_type = global->semantic_type;
             break;
         }
         default:
@@ -175,6 +192,23 @@ turbowasm_status turbowasm_validate_const_expr(
     if (end != 0x0bu)
         status = TURBOWASM_UNSUPPORTED;
 
+    return status;
+}
+
+turbowasm_status turbowasm_validate_const_expr(
+    turbowasm_reader *reader,
+    turbowasm_validation_context *context,
+    uint8_t *out_type) {
+    turbowasm_validation_value_type type;
+    turbowasm_status status;
+
+    if (out_type == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = turbowasm_validate_const_expr_semantic(
+        reader, context, &type);
+    if (status == TURBOWASM_OK)
+        *out_type = type.carrier;
     return status;
 }
 

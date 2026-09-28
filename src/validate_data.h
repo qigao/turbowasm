@@ -7,6 +7,11 @@
 #include "reader.h"
 #include "validation_context.h"
 
+turbowasm_status turbowasm_validate_const_expr_semantic(
+    turbowasm_reader *reader,
+    turbowasm_validation_context *context,
+    turbowasm_validation_value_type *out_type);
+
 turbowasm_status turbowasm_validate_const_expr(
     turbowasm_reader *reader,
     turbowasm_validation_context *context,
