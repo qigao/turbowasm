@@ -162,6 +162,11 @@ def convert_json(json_path, manifest_path):
                 emit_unsupported(line, "module filename missing")
                 continue
 
+            path = os.path.abspath(os.path.join(json_dir, filename))
+            if command.get("definition") in (True, "true"):
+                lines.append(f"module_definition\t{line}\t{path}")
+                continue
+
             slot = next_slot
             next_slot += 1
             current_slot = slot
@@ -170,7 +175,6 @@ def convert_json(json_path, manifest_path):
             if isinstance(name, str):
                 named_slots[name] = slot
 
-            path = os.path.abspath(os.path.join(json_dir, filename))
             lines.append(f"module\t{line}\t{slot}\t{path}")
             continue
 
