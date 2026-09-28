@@ -16,10 +16,27 @@ typedef struct turbowasm_linker_entry {
     turbowasm_instance_impl *instance;
 } turbowasm_linker_entry;
 
+typedef struct turbowasm_linker_host_function {
+    uint8_t *module_name;
+    uint32_t module_name_size;
+    uint8_t *name;
+    uint32_t name_size;
+    turbowasm_value_kind *params;
+    uint32_t param_count;
+    turbowasm_value_kind *results;
+    uint32_t result_count;
+    turbowasm_host_function_fn function;
+    void *context;
+} turbowasm_linker_host_function;
+
 typedef struct turbowasm_linker_impl {
     turbowasm_linker_entry *entries;
     uint32_t count;
     uint32_t capacity;
+
+    turbowasm_linker_host_function *host_functions;
+    uint32_t host_function_count;
+    uint32_t host_function_capacity;
 } turbowasm_linker_impl;
 
 static bool turbowasm_link_name_equal(
@@ -81,6 +98,65 @@ static bool turbowasm_linker_reserve(
     return true;
 }
 
+static bool turbowasm_linker_host_reserve(
+    turbowasm_linker_impl *impl,
+    uint32_t required) {
+    uint32_t next;
+    turbowasm_linker_host_function *grown;
+
+    if (impl == NULL)
+        return false;
+    if (required <= impl->host_function_capacity)
+        return true;
+
+    next = impl->host_function_capacity == 0u
+        ? 4u
+        : impl->host_function_capacity;
+    while (next < required) {
+        if (next > UINT32_MAX / 2u) {
+            next = required;
+            break;
+        }
+        next *= 2u;
+    }
+
+    if ((uint64_t)next * (uint64_t)sizeof(*grown) >
+        (uint64_t)SIZE_MAX)
+        return false;
+
+    grown = (turbowasm_linker_host_function *)realloc(
+        impl->host_functions, (size_t)next * sizeof(*grown));
+    if (grown == NULL)
+        return false;
+
+    if (next > impl->host_function_capacity) {
+        memset(grown + impl->host_function_capacity, 0,
+               (size_t)(next - impl->host_function_capacity) *
+                   sizeof(*grown));
+    }
+
+    impl->host_functions = grown;
+    impl->host_function_capacity = next;
+    return true;
+}
+
+static bool turbowasm_host_value_kind_valid(
+    turbowasm_value_kind kind) {
+    switch (kind) {
+        case TURBOWASM_VALUE_I32:
+        case TURBOWASM_VALUE_I64:
+        case TURBOWASM_VALUE_F32:
+        case TURBOWASM_VALUE_F64:
+        case TURBOWASM_VALUE_V128:
+        case TURBOWASM_VALUE_FUNCREF:
+        case TURBOWASM_VALUE_EXTERNREF:
+        case TURBOWASM_VALUE_EXNREF:
+            return true;
+        default:
+            return false;
+    }
+}
+
 turbowasm_status turbowasm_linker_init(
     turbowasm_linker *linker) {
     turbowasm_linker_impl *impl;
@@ -107,6 +183,13 @@ void turbowasm_linker_destroy(
     impl = (turbowasm_linker_impl *)linker->impl;
     for (index = 0u; index < impl->count; ++index)
         free(impl->entries[index].module_name);
+    for (index = 0u; index < impl->host_function_count; ++index) {
+        free(impl->host_functions[index].module_name);
+        free(impl->host_functions[index].name);
+        free(impl->host_functions[index].params);
+        free(impl->host_functions[index].results);
+    }
+    free(impl->host_functions);
     free(impl->entries);
     free(impl);
     linker->impl = NULL;
@@ -135,6 +218,14 @@ turbowasm_status turbowasm_linker_define_instance(
             return TURBOWASM_LINK_ERROR;
     }
 
+    for (index = 0u; index < impl->host_function_count; ++index) {
+        if (turbowasm_link_name_equal(
+                impl->host_functions[index].module_name,
+                impl->host_functions[index].module_name_size,
+                module_name))
+            return TURBOWASM_LINK_ERROR;
+    }
+
     if (module_name.size != 0u) {
         name_copy = (uint8_t *)malloc(module_name.size);
         if (name_copy == NULL)
@@ -154,6 +245,145 @@ turbowasm_status turbowasm_linker_define_instance(
     entry->module_name_size = module_name.size;
     entry->instance = (turbowasm_instance_impl *)instance->impl;
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_linker_define_host_function(
+    turbowasm_linker *linker,
+    turbowasm_name module_name,
+    turbowasm_name name,
+    const turbowasm_host_function_type *type,
+    turbowasm_host_function_fn function,
+    void *context) {
+    turbowasm_linker_impl *impl;
+    turbowasm_linker_host_function *entry;
+    uint8_t *module_copy = NULL;
+    uint8_t *name_copy = NULL;
+    turbowasm_value_kind *params = NULL;
+    turbowasm_value_kind *results = NULL;
+    uint32_t index;
+
+    if (linker == NULL || linker->impl == NULL ||
+        type == NULL || function == NULL ||
+        (module_name.size != 0u && module_name.bytes == NULL) ||
+        (name.size != 0u && name.bytes == NULL) ||
+        (type->param_count != 0u && type->params == NULL) ||
+        (type->result_count != 0u && type->results == NULL) ||
+        type->param_count > UINT32_MAX ||
+        type->result_count > UINT32_MAX)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (index = 0u; index < (uint32_t)type->param_count; ++index) {
+        if (!turbowasm_host_value_kind_valid(type->params[index]))
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
+    for (index = 0u; index < (uint32_t)type->result_count; ++index) {
+        if (!turbowasm_host_value_kind_valid(type->results[index]))
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    impl = (turbowasm_linker_impl *)linker->impl;
+
+    for (index = 0u; index < impl->count; ++index) {
+        if (turbowasm_link_name_equal(
+                impl->entries[index].module_name,
+                impl->entries[index].module_name_size,
+                module_name))
+            return TURBOWASM_LINK_ERROR;
+    }
+
+    for (index = 0u; index < impl->host_function_count; ++index) {
+        turbowasm_linker_host_function *existing =
+            &impl->host_functions[index];
+        if (turbowasm_link_name_equal(
+                existing->module_name,
+                existing->module_name_size,
+                module_name) &&
+            turbowasm_link_name_equal(
+                existing->name,
+                existing->name_size,
+                name))
+            return TURBOWASM_LINK_ERROR;
+    }
+
+    if (module_name.size != 0u) {
+        module_copy = (uint8_t *)malloc(module_name.size);
+        if (module_copy == NULL)
+            goto out_of_memory;
+        memcpy(module_copy, module_name.bytes, module_name.size);
+    }
+    if (name.size != 0u) {
+        name_copy = (uint8_t *)malloc(name.size);
+        if (name_copy == NULL)
+            goto out_of_memory;
+        memcpy(name_copy, name.bytes, name.size);
+    }
+    if (type->param_count != 0u) {
+        params = (turbowasm_value_kind *)malloc(
+            type->param_count * sizeof(*params));
+        if (params == NULL)
+            goto out_of_memory;
+        memcpy(params, type->params,
+               type->param_count * sizeof(*params));
+    }
+    if (type->result_count != 0u) {
+        results = (turbowasm_value_kind *)malloc(
+            type->result_count * sizeof(*results));
+        if (results == NULL)
+            goto out_of_memory;
+        memcpy(results, type->results,
+               type->result_count * sizeof(*results));
+    }
+
+    if (impl->host_function_count == UINT32_MAX ||
+        !turbowasm_linker_host_reserve(
+            impl, impl->host_function_count + 1u))
+        goto out_of_memory;
+
+    entry = &impl->host_functions[impl->host_function_count++];
+    entry->module_name = module_copy;
+    entry->module_name_size = module_name.size;
+    entry->name = name_copy;
+    entry->name_size = name.size;
+    entry->params = params;
+    entry->param_count = (uint32_t)type->param_count;
+    entry->results = results;
+    entry->result_count = (uint32_t)type->result_count;
+    entry->function = function;
+    entry->context = context;
+    return TURBOWASM_OK;
+
+out_of_memory:
+    free(results);
+    free(params);
+    free(name_copy);
+    free(module_copy);
+    return TURBOWASM_OUT_OF_MEMORY;
+}
+
+static const turbowasm_linker_host_function *
+turbowasm_linker_find_host_function(
+    const turbowasm_linker_impl *impl,
+    turbowasm_name module_name,
+    turbowasm_name name) {
+    uint32_t index;
+
+    if (impl == NULL)
+        return NULL;
+
+    for (index = 0u; index < impl->host_function_count; ++index) {
+        const turbowasm_linker_host_function *entry =
+            &impl->host_functions[index];
+        if (turbowasm_link_name_equal(
+                entry->module_name,
+                entry->module_name_size,
+                module_name) &&
+            turbowasm_link_name_equal(
+                entry->name,
+                entry->name_size,
+                name))
+            return entry;
+    }
+    return NULL;
 }
 
 static const turbowasm_linker_entry *
@@ -184,6 +414,27 @@ static bool turbowasm_link_limits_match(
         if (!actual.has_maximum)
             return false;
         if (actual.maximum > expected.maximum)
+            return false;
+    }
+    return true;
+}
+
+static bool turbowasm_link_host_type_matches(
+    const turbowasm_validation_func_type *expected,
+    const turbowasm_linker_host_function *host) {
+    uint32_t index;
+
+    if (expected == NULL || !expected->defined || host == NULL ||
+        expected->param_count != host->param_count ||
+        expected->result_count != host->result_count)
+        return false;
+
+    for (index = 0u; index < expected->param_count; ++index) {
+        if (expected->params[index] != (uint8_t)host->params[index])
+            return false;
+    }
+    for (index = 0u; index < expected->result_count; ++index) {
+        if (expected->results[index] != (uint8_t)host->results[index])
             return false;
     }
     return true;
@@ -285,11 +536,46 @@ turbowasm_status turbowasm_linker_bind_instance(
         const turbowasm_import_desc *import_desc =
             &module->validation.imports[import_index];
         const turbowasm_linker_entry *provider_entry;
+        const turbowasm_linker_host_function *host_function = NULL;
         const turbowasm_module_impl *provider_module;
         const turbowasm_export_desc *export_desc;
 
         provider_entry = turbowasm_linker_find_module(
             linker_impl, import_desc->module_name);
+
+        if (import_desc->kind == TURBOWASM_EXTERN_FUNCTION) {
+            host_function = turbowasm_linker_find_host_function(
+                linker_impl,
+                import_desc->module_name,
+                import_desc->name);
+
+            if (provider_entry == NULL && host_function != NULL) {
+                const turbowasm_validation_func_type *expected_type;
+
+                if (import_desc->item_index >=
+                    module->summary.imported_function_count) {
+                    result = TURBOWASM_MALFORMED_MODULE;
+                    goto fail;
+                }
+
+                expected_type =
+                    turbowasm_validation_context_function_type(
+                        &module->validation,
+                        import_desc->item_index);
+                if (!turbowasm_link_host_type_matches(
+                        expected_type, host_function)) {
+                    result = TURBOWASM_TYPE_MISMATCH;
+                    goto fail;
+                }
+
+                function_bindings[import_desc->item_index].host_function =
+                    host_function->function;
+                function_bindings[import_desc->item_index].host_context =
+                    host_function->context;
+                continue;
+            }
+        }
+
         if (provider_entry == NULL ||
             provider_entry->instance == NULL) {
             result = TURBOWASM_LINK_ERROR;
@@ -348,14 +634,22 @@ turbowasm_status turbowasm_linker_bind_instance(
                 result = TURBOWASM_LINK_ERROR;
                 goto fail;
             }
-            if (provider_function->imported &&
-                (export_desc->item_index >=
-                     provider_entry->instance->linked_function_count ||
-                 provider_entry->instance
-                         ->linked_functions[export_desc->item_index]
-                         .provider == NULL)) {
-                result = TURBOWASM_LINK_ERROR;
-                goto fail;
+            if (provider_function->imported) {
+                const turbowasm_linked_function *linked;
+
+                if (export_desc->item_index >=
+                    provider_entry->instance->linked_function_count) {
+                    result = TURBOWASM_LINK_ERROR;
+                    goto fail;
+                }
+
+                linked = &provider_entry->instance
+                    ->linked_functions[export_desc->item_index];
+                if (linked->provider == NULL &&
+                    linked->host_function == NULL) {
+                    result = TURBOWASM_LINK_ERROR;
+                    goto fail;
+                }
             }
 
             function_bindings[import_desc->item_index].provider =

@@ -2,6 +2,7 @@
 #define TURBOWASM_INSTANCE_INTERNAL_H
 
 #include <turbowasm/instance.h>
+#include <turbowasm/link.h>
 
 #include "module_internal.h"
 #include "jit_backend.h"
@@ -46,6 +47,8 @@ typedef struct turbowasm_instance_table {
 typedef struct turbowasm_linked_function {
     struct turbowasm_instance_impl *provider;
     uint32_t function_index;
+    turbowasm_host_function_fn host_function;
+    void *host_context;
 } turbowasm_linked_function;
 
 typedef struct turbowasm_linked_global {

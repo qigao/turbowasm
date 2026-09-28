@@ -3840,6 +3840,70 @@ static turbowasm_status turbowasm_exec_simd(
 }
 
 
+static turbowasm_status turbowasm_exec_host_function(
+    turbowasm_instance_impl *instance,
+    const turbowasm_linked_function *binding,
+    const turbowasm_validation_func_type *type,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    turbowasm_instance caller = {0};
+    turbowasm_status status;
+    uint32_t index;
+
+    if (instance == NULL || binding == NULL ||
+        binding->host_function == NULL ||
+        type == NULL || !type->defined ||
+        result_count == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (argument_count != type->param_count ||
+        type->result_count > result_capacity ||
+        (argument_count != 0u && arguments == NULL) ||
+        (type->result_count != 0u && results == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (index = 0u; index < type->param_count; ++index) {
+        if (!turbowasm_value_matches_type(
+                &arguments[index], type->params[index]))
+            return TURBOWASM_TYPE_MISMATCH;
+    }
+
+    *result_count = 0u;
+    *trap = TURBOWASM_TRAP_NONE;
+    caller.impl = instance;
+
+    status = binding->host_function(
+        binding->host_context,
+        &caller,
+        arguments,
+        argument_count,
+        results,
+        result_capacity,
+        result_count,
+        trap);
+
+    if (status == TURBOWASM_EXCEPTION)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (*result_count != type->result_count)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    for (index = 0u; index < type->result_count; ++index) {
+        if (!turbowasm_value_matches_type(
+                &results[index], type->results[index]))
+            return TURBOWASM_TYPE_MISMATCH;
+    }
+
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status turbowasm_exec_function(
     turbowasm_instance_impl *instance,
     uint32_t function_index,
@@ -3904,6 +3968,21 @@ restart_frame:
             goto done;
         }
         binding = &instance->linked_functions[function_index];
+
+        if (binding->host_function != NULL) {
+            status = turbowasm_exec_host_function(
+                instance,
+                binding,
+                type,
+                arguments,
+                argument_count,
+                results,
+                result_capacity,
+                result_count,
+                trap);
+            goto done;
+        }
+
         if (binding->provider == NULL) {
             status = TURBOWASM_UNSUPPORTED;
             goto done;
