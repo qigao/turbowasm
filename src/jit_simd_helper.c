@@ -379,6 +379,7 @@ int64_t turbowasm_jit_simd_reduce(
 int64_t turbowasm_jit_simd_memory(
     turbowasm_jit_invocation_context *context,
     int64_t opcode,
+    int64_t memory_index,
     int64_t slot,
     int64_t address,
     int64_t offset) {
@@ -387,6 +388,7 @@ int64_t turbowasm_jit_simd_memory(
     turbowasm_status status;
 
     if (context == NULL || context->instance == NULL ||
+        memory_index < 0 || memory_index > UINT32_MAX ||
         address < INT32_MIN || address > UINT32_MAX ||
         offset < 0 || offset > UINT32_MAX) {
         return turbowasm_jit_simd_status(
@@ -402,7 +404,7 @@ int64_t turbowasm_jit_simd_memory(
 
     if ((uint32_t)opcode == 0x00u) {
         status = turbowasm_instance_memory_bounds(
-            context->instance, 0u,
+            context->instance, (uint32_t)memory_index,
             (uint32_t)address, (uint32_t)offset,
             16u, &memory);
         if (status != TURBOWASM_OK) {
@@ -421,7 +423,7 @@ int64_t turbowasm_jit_simd_memory(
 
     if ((uint32_t)opcode == 0x0bu) {
         status = turbowasm_instance_memory_bounds(
-            context->instance, 0u,
+            context->instance, (uint32_t)memory_index,
             (uint32_t)address, (uint32_t)offset,
             16u, &memory);
         if (status != TURBOWASM_OK) {
