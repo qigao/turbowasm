@@ -815,6 +815,273 @@ static turbowasm_status turbowasm_exec_indirect_call(
         stack, trap, execution, depth);
 }
 
+static uint32_t turbowasm_clz32(uint32_t value) {
+    uint32_t count = 0u;
+
+    if (value == 0u)
+        return 32u;
+    if ((value & UINT32_C(0xffff0000)) == 0u) {
+        count += 16u;
+        value <<= 16u;
+    }
+    if ((value & UINT32_C(0xff000000)) == 0u) {
+        count += 8u;
+        value <<= 8u;
+    }
+    if ((value & UINT32_C(0xf0000000)) == 0u) {
+        count += 4u;
+        value <<= 4u;
+    }
+    if ((value & UINT32_C(0xc0000000)) == 0u) {
+        count += 2u;
+        value <<= 2u;
+    }
+    if ((value & UINT32_C(0x80000000)) == 0u)
+        ++count;
+    return count;
+}
+
+static uint64_t turbowasm_clz64(uint64_t value) {
+    uint64_t count = 0u;
+
+    if (value == 0u)
+        return 64u;
+    if ((value & UINT64_C(0xffffffff00000000)) == 0u) {
+        count += 32u;
+        value <<= 32u;
+    }
+    if ((value & UINT64_C(0xffff000000000000)) == 0u) {
+        count += 16u;
+        value <<= 16u;
+    }
+    if ((value & UINT64_C(0xff00000000000000)) == 0u) {
+        count += 8u;
+        value <<= 8u;
+    }
+    if ((value & UINT64_C(0xf000000000000000)) == 0u) {
+        count += 4u;
+        value <<= 4u;
+    }
+    if ((value & UINT64_C(0xc000000000000000)) == 0u) {
+        count += 2u;
+        value <<= 2u;
+    }
+    if ((value & UINT64_C(0x8000000000000000)) == 0u)
+        ++count;
+    return count;
+}
+
+static uint32_t turbowasm_ctz32(uint32_t value) {
+    uint32_t count = 0u;
+
+    if (value == 0u)
+        return 32u;
+    if ((value & UINT32_C(0x0000ffff)) == 0u) {
+        count += 16u;
+        value >>= 16u;
+    }
+    if ((value & UINT32_C(0x000000ff)) == 0u) {
+        count += 8u;
+        value >>= 8u;
+    }
+    if ((value & UINT32_C(0x0000000f)) == 0u) {
+        count += 4u;
+        value >>= 4u;
+    }
+    if ((value & UINT32_C(0x00000003)) == 0u) {
+        count += 2u;
+        value >>= 2u;
+    }
+    if ((value & UINT32_C(0x00000001)) == 0u)
+        ++count;
+    return count;
+}
+
+static uint64_t turbowasm_ctz64(uint64_t value) {
+    uint64_t count = 0u;
+
+    if (value == 0u)
+        return 64u;
+    if ((value & UINT64_C(0x00000000ffffffff)) == 0u) {
+        count += 32u;
+        value >>= 32u;
+    }
+    if ((value & UINT64_C(0x000000000000ffff)) == 0u) {
+        count += 16u;
+        value >>= 16u;
+    }
+    if ((value & UINT64_C(0x00000000000000ff)) == 0u) {
+        count += 8u;
+        value >>= 8u;
+    }
+    if ((value & UINT64_C(0x000000000000000f)) == 0u) {
+        count += 4u;
+        value >>= 4u;
+    }
+    if ((value & UINT64_C(0x0000000000000003)) == 0u) {
+        count += 2u;
+        value >>= 2u;
+    }
+    if ((value & UINT64_C(0x0000000000000001)) == 0u)
+        ++count;
+    return count;
+}
+
+static uint32_t turbowasm_popcnt32(uint32_t value) {
+    value -= (value >> 1u) & UINT32_C(0x55555555);
+    value = (value & UINT32_C(0x33333333)) +
+            ((value >> 2u) & UINT32_C(0x33333333));
+    value = (value + (value >> 4u)) & UINT32_C(0x0f0f0f0f);
+    return (value * UINT32_C(0x01010101)) >> 24u;
+}
+
+static uint64_t turbowasm_popcnt64(uint64_t value) {
+    value -= (value >> 1u) & UINT64_C(0x5555555555555555);
+    value = (value & UINT64_C(0x3333333333333333)) +
+            ((value >> 2u) & UINT64_C(0x3333333333333333));
+    value = (value + (value >> 4u)) &
+            UINT64_C(0x0f0f0f0f0f0f0f0f);
+    return (value * UINT64_C(0x0101010101010101)) >> 56u;
+}
+
+static turbowasm_status turbowasm_exec_i32_test_or_compare(
+    uint8_t opcode,
+    turbowasm_value_stack *stack) {
+    turbowasm_value left;
+    turbowasm_value right;
+    turbowasm_value out = {0};
+    turbowasm_status status;
+    uint32_t a;
+    uint32_t b;
+
+    out.kind = TURBOWASM_VALUE_I32;
+    if (opcode == 0x45u) {
+        status = turbowasm_stack_pop_kind(
+            stack, TURBOWASM_VALUE_I32, &left);
+        if (status != TURBOWASM_OK)
+            return status;
+        out.as.i32 = left.as.i32 == 0;
+        return turbowasm_stack_push(stack, out);
+    }
+
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_I32, &right);
+    if (status != TURBOWASM_OK)
+        return status;
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_I32, &left);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    a = (uint32_t)left.as.i32;
+    b = (uint32_t)right.as.i32;
+    switch (opcode) {
+        case 0x46u: out.as.i32 = left.as.i32 == right.as.i32; break;
+        case 0x47u: out.as.i32 = left.as.i32 != right.as.i32; break;
+        case 0x48u: out.as.i32 = left.as.i32 <  right.as.i32; break;
+        case 0x49u: out.as.i32 = a < b; break;
+        case 0x4au: out.as.i32 = left.as.i32 >  right.as.i32; break;
+        case 0x4bu: out.as.i32 = a > b; break;
+        case 0x4cu: out.as.i32 = left.as.i32 <= right.as.i32; break;
+        case 0x4du: out.as.i32 = a <= b; break;
+        case 0x4eu: out.as.i32 = left.as.i32 >= right.as.i32; break;
+        case 0x4fu: out.as.i32 = a >= b; break;
+        default: return TURBOWASM_UNSUPPORTED;
+    }
+    return turbowasm_stack_push(stack, out);
+}
+
+static turbowasm_status turbowasm_exec_i64_test_or_compare(
+    uint8_t opcode,
+    turbowasm_value_stack *stack) {
+    turbowasm_value left;
+    turbowasm_value right;
+    turbowasm_value out = {0};
+    turbowasm_status status;
+    uint64_t a;
+    uint64_t b;
+
+    out.kind = TURBOWASM_VALUE_I32;
+    if (opcode == 0x50u) {
+        status = turbowasm_stack_pop_kind(
+            stack, TURBOWASM_VALUE_I64, &left);
+        if (status != TURBOWASM_OK)
+            return status;
+        out.as.i32 = left.as.i64 == 0;
+        return turbowasm_stack_push(stack, out);
+    }
+
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_I64, &right);
+    if (status != TURBOWASM_OK)
+        return status;
+    status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_I64, &left);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    a = (uint64_t)left.as.i64;
+    b = (uint64_t)right.as.i64;
+    switch (opcode) {
+        case 0x51u: out.as.i32 = left.as.i64 == right.as.i64; break;
+        case 0x52u: out.as.i32 = left.as.i64 != right.as.i64; break;
+        case 0x53u: out.as.i32 = left.as.i64 <  right.as.i64; break;
+        case 0x54u: out.as.i32 = a < b; break;
+        case 0x55u: out.as.i32 = left.as.i64 >  right.as.i64; break;
+        case 0x56u: out.as.i32 = a > b; break;
+        case 0x57u: out.as.i32 = left.as.i64 <= right.as.i64; break;
+        case 0x58u: out.as.i32 = a <= b; break;
+        case 0x59u: out.as.i32 = left.as.i64 >= right.as.i64; break;
+        case 0x5au: out.as.i32 = a >= b; break;
+        default: return TURBOWASM_UNSUPPORTED;
+    }
+    return turbowasm_stack_push(stack, out);
+}
+
+static turbowasm_status turbowasm_exec_i32_unary(
+    uint8_t opcode,
+    turbowasm_value_stack *stack) {
+    turbowasm_value in;
+    turbowasm_value out = {0};
+    turbowasm_status status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_I32, &in);
+    uint32_t value;
+
+    if (status != TURBOWASM_OK)
+        return status;
+    value = (uint32_t)in.as.i32;
+    out.kind = TURBOWASM_VALUE_I32;
+    switch (opcode) {
+        case 0x67u: out.as.i32 = (int32_t)turbowasm_clz32(value); break;
+        case 0x68u: out.as.i32 = (int32_t)turbowasm_ctz32(value); break;
+        case 0x69u: out.as.i32 = (int32_t)turbowasm_popcnt32(value); break;
+        default: return TURBOWASM_UNSUPPORTED;
+    }
+    return turbowasm_stack_push(stack, out);
+}
+
+static turbowasm_status turbowasm_exec_i64_unary(
+    uint8_t opcode,
+    turbowasm_value_stack *stack) {
+    turbowasm_value in;
+    turbowasm_value out = {0};
+    turbowasm_status status = turbowasm_stack_pop_kind(
+        stack, TURBOWASM_VALUE_I64, &in);
+    uint64_t value;
+
+    if (status != TURBOWASM_OK)
+        return status;
+    value = (uint64_t)in.as.i64;
+    out.kind = TURBOWASM_VALUE_I64;
+    switch (opcode) {
+        case 0x79u: out.as.i64 = (int64_t)turbowasm_clz64(value); break;
+        case 0x7au: out.as.i64 = (int64_t)turbowasm_ctz64(value); break;
+        case 0x7bu: out.as.i64 = (int64_t)turbowasm_popcnt64(value); break;
+        default: return TURBOWASM_UNSUPPORTED;
+    }
+    return turbowasm_stack_push(stack, out);
+}
+
 static turbowasm_status turbowasm_exec_i32_binary(
     uint8_t opcode,
     turbowasm_value_stack *stack,
@@ -3426,6 +3693,24 @@ static turbowasm_status turbowasm_exec_function(
                 break;
             }
 
+            case 0x45u:
+            case 0x46u: case 0x47u: case 0x48u: case 0x49u:
+            case 0x4au: case 0x4bu: case 0x4cu: case 0x4du:
+            case 0x4eu: case 0x4fu:
+                status = turbowasm_exec_i32_test_or_compare(
+                    opcode, &stack);
+                if (status != TURBOWASM_OK) goto done;
+                break;
+
+            case 0x50u:
+            case 0x51u: case 0x52u: case 0x53u: case 0x54u:
+            case 0x55u: case 0x56u: case 0x57u: case 0x58u:
+            case 0x59u: case 0x5au:
+                status = turbowasm_exec_i64_test_or_compare(
+                    opcode, &stack);
+                if (status != TURBOWASM_OK) goto done;
+                break;
+
             case 0x5bu: case 0x5cu: case 0x5du:
             case 0x5eu: case 0x5fu: case 0x60u:
                 status = turbowasm_exec_f32_compare(
@@ -3440,6 +3725,12 @@ static turbowasm_status turbowasm_exec_function(
                 if (status != TURBOWASM_OK) goto done;
                 break;
 
+            case 0x67u: case 0x68u: case 0x69u:
+                status = turbowasm_exec_i32_unary(
+                    opcode, &stack);
+                if (status != TURBOWASM_OK) goto done;
+                break;
+
             case 0x6au: case 0x6bu: case 0x6cu:
             case 0x6du: case 0x6eu: case 0x6fu: case 0x70u:
             case 0x71u: case 0x72u: case 0x73u:
@@ -3447,6 +3738,12 @@ static turbowasm_status turbowasm_exec_function(
             case 0x77u: case 0x78u:
                 status = turbowasm_exec_i32_binary(
                     opcode, &stack, trap);
+                if (status != TURBOWASM_OK) goto done;
+                break;
+
+            case 0x79u: case 0x7au: case 0x7bu:
+                status = turbowasm_exec_i64_unary(
+                    opcode, &stack);
                 if (status != TURBOWASM_OK) goto done;
                 break;
 
