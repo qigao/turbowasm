@@ -6,11 +6,28 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+typedef enum turbowasm_validation_heap_kind {
+    TURBOWASM_VALIDATION_HEAP_NONE = 0,
+    TURBOWASM_VALIDATION_HEAP_FUNC,
+    TURBOWASM_VALIDATION_HEAP_EXTERN,
+    TURBOWASM_VALIDATION_HEAP_TYPE_INDEX
+} turbowasm_validation_heap_kind;
+
+typedef struct turbowasm_validation_value_type {
+    uint8_t carrier;
+    bool is_reference;
+    bool nullable;
+    turbowasm_validation_heap_kind heap_kind;
+    uint32_t type_index;
+} turbowasm_validation_value_type;
+
 typedef struct turbowasm_validation_func_type {
     bool defined;
     uint8_t *params;
+    turbowasm_validation_value_type *param_semantics;
     uint32_t param_count;
     uint8_t *results;
+    turbowasm_validation_value_type *result_semantics;
     uint32_t result_count;
 } turbowasm_validation_func_type;
 
@@ -60,6 +77,7 @@ typedef struct turbowasm_validation_function {
 
 typedef struct turbowasm_validation_global {
     uint8_t value_type;
+    turbowasm_validation_value_type semantic_type;
     bool mutable_value;
     bool imported;
 
@@ -75,6 +93,7 @@ typedef struct turbowasm_validation_limits {
 
 typedef struct turbowasm_validation_table {
     uint8_t reference_type;
+    turbowasm_validation_value_type semantic_type;
     bool imported;
     turbowasm_validation_limits limits;
 } turbowasm_validation_table;
@@ -166,6 +185,13 @@ typedef struct turbowasm_validation_context {
     bool has_data_count;
     uint32_t data_count;
 } turbowasm_validation_context;
+
+turbowasm_validation_value_type
+turbowasm_validation_value_type_legacy(uint8_t carrier);
+
+bool turbowasm_validation_value_type_equal(
+    const turbowasm_validation_value_type *left,
+    const turbowasm_validation_value_type *right);
 
 void turbowasm_validation_context_destroy(
     turbowasm_validation_context *context);
