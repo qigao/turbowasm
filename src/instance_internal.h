@@ -73,6 +73,13 @@ typedef struct turbowasm_tag_identity {
     uint32_t tag_index;
 } turbowasm_tag_identity;
 
+typedef struct turbowasm_exception {
+    turbowasm_tag_identity tag;
+    turbowasm_value *payload;
+    uint32_t payload_count;
+    struct turbowasm_exception *next;
+} turbowasm_exception;
+
 typedef struct turbowasm_jit_execution_control {
     uint64_t fuel_remaining;
     bool fuel_limited;
@@ -109,6 +116,11 @@ typedef struct turbowasm_instance_impl {
 
     turbowasm_linked_tag *linked_tags;
     uint32_t linked_tag_count;
+
+    /* Instance-owned exception objects keep exnref values stable until the
+     * instance is destroyed. */
+    turbowasm_exception *exceptions;
+    turbowasm_exception *pending_exception;
 
     turbowasm_value *globals;
     uint32_t global_count;
