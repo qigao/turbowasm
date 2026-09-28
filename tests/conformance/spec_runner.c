@@ -503,6 +503,33 @@ static turbowasm_status spec_invoke(spec_state *state,
     return status;
 }
 
+static void spec_command_module_definition(spec_state *state,
+                                           unsigned line,
+                                           const char *path) {
+    size_t size = 0u;
+    uint8_t *bytes = spec_read_file(path, &size);
+    turbowasm_module module = {0};
+    turbowasm_status status;
+
+    if (bytes == NULL) {
+        spec_note_failure(state, line, "cannot read module definition");
+        return;
+    }
+
+    status = turbowasm_module_load_borrowed(&module, bytes, size);
+    if (status == TURBOWASM_UNSUPPORTED) {
+        spec_note_unsupported(state, line,
+                              "module definition validation unsupported");
+    } else if (status != TURBOWASM_OK) {
+        spec_note_failure(state, line, "valid module definition rejected");
+    } else {
+        spec_note_pass(state);
+    }
+
+    turbowasm_module_destroy(&module);
+    free(bytes);
+}
+
 static void spec_command_module(spec_state *state,
                                 unsigned line,
                                 size_t slot_index,
@@ -860,6 +887,12 @@ static int spec_run_manifest(spec_state *state, const char *path) {
 
         if (strcmp(fields[0], "unsupported") == 0) {
             spec_note_unsupported(state, line, fields[2]);
+            continue;
+        }
+
+        if (strcmp(fields[0], "module_definition") == 0 &&
+            field_count == 3u) {
+            spec_command_module_definition(state, line, fields[2]);
             continue;
         }
 
