@@ -621,6 +621,41 @@ static bool turbowasm_tag_identity_equal(
            left.tag_index == right.tag_index;
 }
 
+static turbowasm_exception *turbowasm_exception_take_pending(
+    turbowasm_instance_impl *instance) {
+    turbowasm_exception *exception;
+
+    if (instance == NULL)
+        return NULL;
+
+    exception = instance->pending_exception;
+    instance->pending_exception = NULL;
+    return exception;
+}
+
+static turbowasm_status turbowasm_exception_transfer_pending(
+    turbowasm_instance_impl *destination,
+    turbowasm_instance_impl *source) {
+    turbowasm_exception *exception;
+
+    if (destination == NULL || source == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    exception = source->pending_exception;
+    if (exception == NULL)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (destination == source)
+        return TURBOWASM_OK;
+
+    if (destination->pending_exception != NULL)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    source->pending_exception = NULL;
+    destination->pending_exception = exception;
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status turbowasm_exception_create(
     turbowasm_instance_impl *instance,
     const turbowasm_validation_context *context,
@@ -794,6 +829,25 @@ static turbowasm_status turbowasm_exec_handle_exception(
 
     instance->pending_exception = exception;
     return TURBOWASM_EXCEPTION;
+}
+
+static turbowasm_status turbowasm_exec_handle_pending_exception(
+    turbowasm_instance_impl *instance,
+    turbowasm_value_stack *stack,
+    turbowasm_exec_control_stack *controls,
+    turbowasm_reader *reader,
+    const turbowasm_validation_function *function,
+    bool *out_finished,
+    bool *out_returned) {
+    turbowasm_exception *exception =
+        turbowasm_exception_take_pending(instance);
+
+    if (exception == NULL)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    return turbowasm_exec_handle_exception(
+        instance, exception, stack, controls, reader, function,
+        out_finished, out_returned);
 }
 
 static turbowasm_status turbowasm_exec_br_table(
@@ -3769,6 +3823,7 @@ static turbowasm_status turbowasm_exec_function(
     turbowasm_trap *trap,
     turbowasm_jit_execution_control *execution,
     uint32_t depth) {
+    turbowasm_instance_impl *entry_instance = instance;
     const turbowasm_module_impl *module;
     const turbowasm_validation_context *context;
     const turbowasm_validation_function *function;
@@ -3843,6 +3898,13 @@ restart_frame:
             trap,
             execution,
             depth);
+        if (status == TURBOWASM_EXCEPTION) {
+            turbowasm_status transfer_status =
+                turbowasm_exception_transfer_pending(
+                    instance, binding->provider);
+            if (transfer_status != TURBOWASM_OK)
+                status = transfer_status;
+        }
         goto done;
     }
 
@@ -4150,12 +4212,22 @@ restart_frame:
             case 0x10u: /* call */
                 status = turbowasm_exec_direct_call(
                     instance, &reader, &stack, trap, execution, depth);
+                if (status == TURBOWASM_EXCEPTION) {
+                    status = turbowasm_exec_handle_pending_exception(
+                        instance, &stack, &controls, &reader, function,
+                        &finished, &returned);
+                }
                 if (status != TURBOWASM_OK)
                     goto done;
                 break;
             case 0x11u: /* call_indirect */
                 status = turbowasm_exec_indirect_call(
                     instance, &reader, &stack, trap, execution, depth);
+                if (status == TURBOWASM_EXCEPTION) {
+                    status = turbowasm_exec_handle_pending_exception(
+                        instance, &stack, &controls, &reader, function,
+                        &finished, &returned);
+                }
                 if (status != TURBOWASM_OK)
                     goto done;
                 break;
@@ -4824,6 +4896,17 @@ restart_frame:
     *result_count = type->result_count;
 
 done:
+    if (status == TURBOWASM_EXCEPTION &&
+        entry_instance != NULL &&
+        instance != NULL &&
+        entry_instance != instance) {
+        turbowasm_status transfer_status =
+            turbowasm_exception_transfer_pending(
+                entry_instance, instance);
+        if (transfer_status != TURBOWASM_OK)
+            status = transfer_status;
+    }
+
     free(owned_arguments);
     free(locals);
     free(stack.values);
@@ -5328,6 +5411,7 @@ turbowasm_status turbowasm_instance_invoke_with_options(
     }
 
     impl = (turbowasm_instance_impl *)instance->impl;
+    impl->pending_exception = NULL;
 
     return turbowasm_dispatch_function(
         impl,
