@@ -174,43 +174,6 @@ static turbowasm_status turbowasm_read_memory_type(
         reader, UINT32_C(65536), out_limits);
 }
 
-static bool turbowasm_global_valtype_supported(uint8_t type) {
-    switch (type) {
-        case 0x7fu:
-        case 0x7eu:
-        case 0x7du:
-        case 0x7cu:
-        case 0x7bu:
-        case 0x70u:
-        case 0x6fu:
-            return true;
-        default:
-            return false;
-    }
-}
-
-static turbowasm_status turbowasm_read_global_type(
-    turbowasm_reader *reader,
-    uint8_t *out_value_type,
-    bool *out_mutable) {
-    uint8_t value_type;
-    uint8_t mutability;
-
-    if (!turbowasm_reader_u8(reader, &value_type))
-        return TURBOWASM_MALFORMED_MODULE;
-    if (!turbowasm_global_valtype_supported(value_type))
-        return TURBOWASM_UNSUPPORTED;
-    if (!turbowasm_reader_u8(reader, &mutability))
-        return TURBOWASM_MALFORMED_MODULE;
-    if (mutability > 1u)
-        return TURBOWASM_MALFORMED_MODULE;
-    if (out_value_type != NULL)
-        *out_value_type = value_type;
-    if (out_mutable != NULL)
-        *out_mutable = mutability != 0u;
-    return TURBOWASM_OK;
-}
-
 static bool turbowasm_index_in_total(
     uint32_t index,
     uint32_t imported,
@@ -290,14 +253,14 @@ turbowasm_status turbowasm_validate_import_section(
                 break;
             }
             case 0x03u: {
-                uint8_t value_type;
+                turbowasm_validation_value_type value_type;
                 bool mutable_value;
                 import_desc.item_index =
                     summary->imported_global_count;
-                status = turbowasm_read_global_type(
-                    section, &value_type, &mutable_value);
+                status = turbowasm_validation_read_globaltype(
+                    section, context, &value_type, &mutable_value);
                 if (status != TURBOWASM_OK) return status;
-                if (!turbowasm_validation_context_append_global(
+                if (!turbowasm_validation_context_append_global_semantic(
                         context, value_type, mutable_value, true,
                         NULL, 0u))
                     return TURBOWASM_OUT_OF_MEMORY;

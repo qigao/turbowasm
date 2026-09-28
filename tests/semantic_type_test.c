@@ -121,6 +121,37 @@ static void test_legacy_function_type_retains_semantics(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_general_reference_global_retains_semantics(void) {
+    static const uint8_t bytes[] = {
+        0x00, 0x61, 0x73, 0x6d,
+        0x01, 0x00, 0x00, 0x00,
+
+        /* global0: immutable (ref null func) = ref.null func */
+        0x06, 0x07,
+        0x01,
+        0x63, 0x70, 0x00,
+        0xd0, 0x70, 0x0b
+    };
+    turbowasm_module module = {0};
+    const turbowasm_module_impl *impl;
+    const turbowasm_validation_global *global;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    impl = turbowasm_module_impl_get(&module);
+    assert(impl != NULL);
+    assert(impl->validation.global_count == 1u);
+
+    global = &impl->validation.globals[0];
+    assert(global->value_type == 0x70u);
+    assert(global->semantic_type.is_reference);
+    assert(global->semantic_type.nullable);
+    assert(global->semantic_type.heap_kind ==
+           TURBOWASM_VALIDATION_HEAP_FUNC);
+
+    turbowasm_module_destroy(&module);
+}
+
 static void test_unsupported_heap_type_stays_explicit(void) {
     static const uint8_t anyref[] = {0x63, 0x6e};
     turbowasm_validation_value_type type;
@@ -134,6 +165,7 @@ int main(void) {
     test_legacy_reference_types();
     test_general_function_reference_types();
     test_legacy_function_type_retains_semantics();
+    test_general_reference_global_retains_semantics();
     test_unsupported_heap_type_stays_explicit();
     return 0;
 }

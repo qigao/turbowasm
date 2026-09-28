@@ -18,45 +18,19 @@ enum {
 };
 
 typedef struct turbowasm_global_type {
-    uint8_t value_type;
+    turbowasm_validation_value_type semantic_type;
     bool is_mutable;
 } turbowasm_global_type;
 
-static bool turbowasm_const_valtype_supported(uint8_t type) {
-    switch (type) {
-        case TURBOWASM_VAL_I32:
-        case TURBOWASM_VAL_I64:
-        case TURBOWASM_VAL_F32:
-        case TURBOWASM_VAL_F64:
-        case TURBOWASM_VAL_V128:
-        case TURBOWASM_VAL_FUNCREF:
-        case TURBOWASM_VAL_EXTERNREF:
-            return true;
-        default:
-            return false;
-    }
-}
-
 static turbowasm_status turbowasm_read_global_type(
     turbowasm_reader *reader,
+    const turbowasm_validation_context *context,
     turbowasm_global_type *out) {
-    uint8_t value_type;
-    uint8_t mutability;
-
     if (reader == NULL || out == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (!turbowasm_reader_u8(reader, &value_type))
-        return TURBOWASM_MALFORMED_MODULE;
-    if (!turbowasm_const_valtype_supported(value_type))
-        return TURBOWASM_UNSUPPORTED;
-    if (!turbowasm_reader_u8(reader, &mutability))
-        return TURBOWASM_MALFORMED_MODULE;
-    if (mutability > 1u)
-        return TURBOWASM_MALFORMED_MODULE;
 
-    out->value_type = value_type;
-    out->is_mutable = mutability != 0u;
-    return TURBOWASM_OK;
+    return turbowasm_validation_read_globaltype(
+        reader, context, &out->semantic_type, &out->is_mutable);
 }
 
 static bool turbowasm_function_index_valid(
@@ -389,26 +363,27 @@ turbowasm_status turbowasm_validate_global_section(
 
     for (index = 0u; index < count; ++index) {
         turbowasm_global_type type;
-        uint8_t expression_type;
+        turbowasm_validation_value_type expression_type;
         const uint8_t *initializer_start;
         size_t initializer_size;
         turbowasm_status status = turbowasm_read_global_type(
-            section, &type);
+            section, context, &type);
 
         if (status != TURBOWASM_OK)
             return status;
         initializer_start = section->cursor;
-        status = turbowasm_validate_const_expr(
+        status = turbowasm_validate_const_expr_semantic(
             section, context, &expression_type);
         if (status != TURBOWASM_OK)
             return status;
         initializer_size = (size_t)(section->cursor - initializer_start);
         if (initializer_size > UINT32_MAX)
             return TURBOWASM_OUT_OF_MEMORY;
-        if (expression_type != type.value_type)
+        if (!turbowasm_validation_value_type_matches(
+                &expression_type, &type.semantic_type))
             return TURBOWASM_MALFORMED_MODULE;
-        if (!turbowasm_validation_context_append_global(
-                context, type.value_type, type.is_mutable, false,
+        if (!turbowasm_validation_context_append_global_semantic(
+                context, type.semantic_type, type.is_mutable, false,
                 initializer_start, (uint32_t)initializer_size))
             return TURBOWASM_OUT_OF_MEMORY;
     }

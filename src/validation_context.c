@@ -303,16 +303,21 @@ bool turbowasm_validation_context_append_function(
     return true;
 }
 
-bool turbowasm_validation_context_append_global(
+bool turbowasm_validation_context_append_global_semantic(
     turbowasm_validation_context *context,
-    uint8_t value_type,
+    turbowasm_validation_value_type value_type,
     bool mutable_value,
     bool imported,
     const uint8_t *initializer,
     uint32_t initializer_size) {
     uint32_t required;
+    turbowasm_validation_global *global;
 
     if (context == NULL || context->global_count == UINT32_MAX)
+        return false;
+    if ((initializer == NULL) != (initializer_size == 0u))
+        return false;
+    if (imported && initializer != NULL)
         return false;
 
     required = context->global_count + 1u;
@@ -323,16 +328,28 @@ bool turbowasm_validation_context_append_global(
             sizeof(*context->globals)))
         return false;
 
-    context->globals[context->global_count].value_type = value_type;
-    context->globals[context->global_count].semantic_type =
-        turbowasm_validation_value_type_legacy(value_type);
-    context->globals[context->global_count].mutable_value = mutable_value;
-    context->globals[context->global_count].imported = imported;
-    context->globals[context->global_count].initializer = initializer;
-    context->globals[context->global_count].initializer_size =
-        initializer_size;
+    global = &context->globals[context->global_count];
+    global->value_type = value_type.carrier;
+    global->semantic_type = value_type;
+    global->mutable_value = mutable_value;
+    global->imported = imported;
+    global->initializer = initializer;
+    global->initializer_size = initializer_size;
     ++context->global_count;
     return true;
+}
+
+bool turbowasm_validation_context_append_global(
+    turbowasm_validation_context *context,
+    uint8_t value_type,
+    bool mutable_value,
+    bool imported,
+    const uint8_t *initializer,
+    uint32_t initializer_size) {
+    return turbowasm_validation_context_append_global_semantic(
+        context,
+        turbowasm_validation_value_type_legacy(value_type),
+        mutable_value, imported, initializer, initializer_size);
 }
 
 static bool turbowasm_validation_context_append_table_full(

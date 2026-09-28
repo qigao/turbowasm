@@ -498,9 +498,11 @@ turbowasm_status turbowasm_linker_bind_instance(
                 &provider_module->validation.globals[
                     export_desc->item_index];
 
-            if (expected_global->value_type != actual_global->value_type ||
-                expected_global->mutable_value !=
-                    actual_global->mutable_value) {
+            if (expected_global->mutable_value !=
+                    actual_global->mutable_value ||
+                !turbowasm_validation_value_type_equal(
+                    &expected_global->semantic_type,
+                    &actual_global->semantic_type)) {
                 result = TURBOWASM_TYPE_MISMATCH;
                 goto fail;
             }

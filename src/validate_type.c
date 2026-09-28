@@ -145,3 +145,36 @@ turbowasm_status turbowasm_validation_read_valtype(
     return turbowasm_validation_read_reftype(
         reader, out, out_generalized);
 }
+
+
+turbowasm_status turbowasm_validation_read_globaltype(
+    turbowasm_reader *reader,
+    const turbowasm_validation_context *context,
+    turbowasm_validation_value_type *out_type,
+    bool *out_mutable) {
+    turbowasm_validation_value_type type;
+    bool generalized = false;
+    uint8_t mutability;
+    turbowasm_status status;
+
+    if (reader == NULL || out_type == NULL || out_mutable == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = turbowasm_validation_read_valtype(
+        reader, &type, &generalized);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (type.heap_kind == TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
+        (context == NULL || type.type_index >= context->type_count))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (!turbowasm_reader_u8(reader, &mutability))
+        return TURBOWASM_MALFORMED_MODULE;
+    if (mutability > 1u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    *out_type = type;
+    *out_mutable = mutability != 0u;
+    return TURBOWASM_OK;
+}
