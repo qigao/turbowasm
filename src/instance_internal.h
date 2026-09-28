@@ -19,6 +19,7 @@ typedef struct turbowasm_instance_memory {
     uint32_t pages;
     uint32_t maximum_pages;
     bool has_maximum;
+    uint64_t resource_max_bytes;
 } turbowasm_instance_memory;
 
 typedef struct turbowasm_instance_limits {
@@ -41,6 +42,7 @@ typedef struct turbowasm_instance_table {
     uint32_t maximum;
     bool has_maximum;
     uint8_t reference_type;
+    uint64_t resource_max_entries;
 } turbowasm_instance_table;
 
 typedef struct turbowasm_linked_function {
@@ -84,6 +86,7 @@ typedef struct turbowasm_jit_function_state {
 
 typedef struct turbowasm_instance_impl {
     const turbowasm_module *module;
+    turbowasm_instance_create_options create_options;
 
     turbowasm_linked_function *linked_functions;
     uint32_t linked_function_count;
