@@ -1,0 +1,9 @@
+{
+  "name": "turbowasm-mir",
+  "version-string": "1",
+  "description": "TurboWasm repository-owned MIR JIT CI manifest.",
+  "dependencies": [
+    "mir-jit"
+  ],
+  "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"
+}
