@@ -35,9 +35,13 @@ qigao/vcpkg-cache
     -> SIMDe package cache
     -> MIR JIT package + executable-memory limit
 
-Salts master
+Salts 1.8.2
     -> CMeta
     -> Salts::SIMD (SIMDe is private)
+
+SaltsUtils 4.1.2
+    -> ecosystem companion baseline only
+    -> not linked by TurboWasm
 
 TurboWasm
     -> Wasm decoding / validation / sandbox semantics
@@ -51,8 +55,9 @@ the installed `TurboWasm::Runtime` target.
 
 ## Build
 
-Install Salts from its current `master` branch and point `SALTS_ROOT` at the
-installed SDK:
+Install the Salts 1.8.2 SDK and point `SALTS_ROOT` at it. The current
+ecosystem companion baseline is SaltsUtils 4.1.2, but TurboWasm does not link
+SaltsUtils directly:
 
 ```sh
 export SALTS_ROOT=/path/to/salts-sdk
@@ -71,8 +76,8 @@ cmake -S . -B build-mir -G Ninja \
   -DTURBOWASM_ENABLE_MIR_JIT=ON
 ```
 
-CI builds Salts from `master` and restores MIR from the shared binary cache on
-Linux and macOS. The installed Runtime export remains MIR-free.
+CI restores the pinned Salts 1.8.2 SDK from GitHub Packages and restores MIR
+from the shared binary cache on Linux and macOS. The installed Runtime export remains MIR-free.
 
 ## SIMD
 
