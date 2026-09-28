@@ -427,6 +427,7 @@ bool turbowasm_validation_context_append_table(
 bool turbowasm_validation_context_append_memory(
     turbowasm_validation_context *context,
     turbowasm_validation_limits limits,
+    uint32_t page_size,
     bool imported) {
     uint32_t required;
 
@@ -442,6 +443,7 @@ bool turbowasm_validation_context_append_memory(
         return false;
 
     context->memories[context->memory_count].imported = imported;
+    context->memories[context->memory_count].page_size = page_size;
     context->memories[context->memory_count].limits = limits;
     ++context->memory_count;
     return true;
