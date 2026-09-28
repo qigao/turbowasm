@@ -138,6 +138,18 @@ add_test(NAME turbowasm_instance_test
          COMMAND turbowasm_instance_test)
 
 
+add_executable(turbowasm_scalar_numeric_runtime_test
+  scalar_numeric_runtime_test.c)
+target_link_libraries(turbowasm_scalar_numeric_runtime_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_scalar_numeric_runtime_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_scalar_numeric_runtime_test
+         COMMAND turbowasm_scalar_numeric_runtime_test)
+
+
 add_executable(turbowasm_linker_test
   linker_test.c)
 target_link_libraries(turbowasm_linker_test
