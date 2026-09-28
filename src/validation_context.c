@@ -130,6 +130,7 @@ void turbowasm_validation_context_destroy(
 
     for (index = 0u; index < context->function_count; ++index) {
         free(context->functions[index].local_types);
+        free(context->functions[index].local_semantics);
         free(context->functions[index].controls);
     }
     free(context->functions);
