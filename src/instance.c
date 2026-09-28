@@ -3840,17 +3840,34 @@ static turbowasm_status turbowasm_exec_simd(
 }
 
 
+typedef struct turbowasm_host_call_impl {
+    turbowasm_instance caller;
+    turbowasm_jit_execution_control *execution;
+} turbowasm_host_call_impl;
+
+turbowasm_instance *turbowasm_host_call_instance(
+    turbowasm_host_call *call) {
+    turbowasm_host_call_impl *impl;
+
+    if (call == NULL || call->impl == NULL)
+        return NULL;
+    impl = (turbowasm_host_call_impl *)call->impl;
+    return &impl->caller;
+}
+
 static turbowasm_status turbowasm_exec_host_function(
     turbowasm_instance_impl *instance,
     const turbowasm_linked_function *binding,
     const turbowasm_validation_func_type *type,
+    turbowasm_jit_execution_control *execution,
     const turbowasm_value *arguments,
     size_t argument_count,
     turbowasm_value *results,
     size_t result_capacity,
     size_t *result_count,
     turbowasm_trap *trap) {
-    turbowasm_instance caller = {0};
+    turbowasm_host_call_impl call_impl = {0};
+    turbowasm_host_call call = {0};
     turbowasm_status status;
     uint32_t index;
 
@@ -3874,11 +3891,13 @@ static turbowasm_status turbowasm_exec_host_function(
 
     *result_count = 0u;
     *trap = TURBOWASM_TRAP_NONE;
-    caller.impl = instance;
+    call_impl.caller.impl = instance;
+    call_impl.execution = execution;
+    call.impl = &call_impl;
 
     status = binding->host_function(
         binding->host_context,
-        &caller,
+        &call,
         arguments,
         argument_count,
         results,
@@ -3974,6 +3993,7 @@ restart_frame:
                 instance,
                 binding,
                 type,
+                execution,
                 arguments,
                 argument_count,
                 results,
