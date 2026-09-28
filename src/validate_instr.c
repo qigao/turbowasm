@@ -1551,7 +1551,7 @@ turbowasm_status turbowasm_validate_function_body(
                     result = TURBOWASM_MALFORMED_MODULE;
                     goto done;
                 }
-                if (!turbowasm_is_valtype(type)) {
+                if (!turbowasm_instr_valtype(type)) {
                     /*
                      * General reference types carry a heap type after their
                      * prefix. They are a later Reference Types slice; fail
