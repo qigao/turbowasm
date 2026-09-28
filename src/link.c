@@ -215,6 +215,7 @@ turbowasm_status turbowasm_linker_bind_instance(
     turbowasm_linked_global *global_bindings = NULL;
     turbowasm_linked_memory *memory_bindings = NULL;
     turbowasm_linked_table *table_bindings = NULL;
+    turbowasm_linked_tag *tag_bindings = NULL;
     turbowasm_status result = TURBOWASM_OK;
     uint32_t import_index;
 
@@ -261,6 +262,19 @@ turbowasm_status turbowasm_linker_bind_instance(
             free(function_bindings);
             free(global_bindings);
             free(memory_bindings);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
+    }
+
+    if (module->summary.imported_tag_count != 0u) {
+        tag_bindings = (turbowasm_linked_tag *)calloc(
+            (size_t)module->summary.imported_tag_count,
+            sizeof(*tag_bindings));
+        if (tag_bindings == NULL) {
+            free(function_bindings);
+            free(global_bindings);
+            free(memory_bindings);
+            free(table_bindings);
             return TURBOWASM_OUT_OF_MEMORY;
         }
     }
@@ -526,6 +540,72 @@ turbowasm_status turbowasm_linker_bind_instance(
             continue;
         }
 
+        if (import_desc->kind == TURBOWASM_EXTERN_TAG) {
+            const turbowasm_validation_tag *expected_tag;
+            const turbowasm_validation_tag *actual_tag;
+            const turbowasm_validation_func_type *expected_type;
+            const turbowasm_validation_func_type *actual_type;
+
+            if (import_desc->item_index >=
+                    module->summary.imported_tag_count ||
+                export_desc->item_index >=
+                    provider_module->validation.tag_count) {
+                result = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+
+            expected_tag = turbowasm_validation_context_tag(
+                &module->validation, import_desc->item_index);
+            actual_tag = turbowasm_validation_context_tag(
+                &provider_module->validation, export_desc->item_index);
+            if (expected_tag == NULL || actual_tag == NULL) {
+                result = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+
+            expected_type = turbowasm_validation_context_type(
+                &module->validation, expected_tag->type_index);
+            actual_type = turbowasm_validation_context_type(
+                &provider_module->validation, actual_tag->type_index);
+            if (!turbowasm_validation_func_type_equal(
+                    expected_type, actual_type)) {
+                result = TURBOWASM_TYPE_MISMATCH;
+                goto fail;
+            }
+
+            /*
+             * Tag types are structurally checked at the import boundary, but
+             * exception matching is nominal.  Re-exported imported tags must
+             * therefore preserve the original defining instance/tag identity
+             * rather than acquiring a fresh identity at each hop.
+             */
+            if (actual_tag->imported) {
+                const turbowasm_linked_tag *actual_binding;
+
+                if (export_desc->item_index >=
+                        provider_entry->instance->linked_tag_count) {
+                    result = TURBOWASM_LINK_ERROR;
+                    goto fail;
+                }
+                actual_binding =
+                    &provider_entry->instance
+                         ->linked_tags[export_desc->item_index];
+                if (actual_binding->provider == NULL) {
+                    result = TURBOWASM_LINK_ERROR;
+                    goto fail;
+                }
+
+                tag_bindings[import_desc->item_index] =
+                    *actual_binding;
+            } else {
+                tag_bindings[import_desc->item_index].provider =
+                    provider_entry->instance;
+                tag_bindings[import_desc->item_index].tag_index =
+                    export_desc->item_index;
+            }
+            continue;
+        }
+
         result = TURBOWASM_UNSUPPORTED;
         goto fail;
     }
@@ -542,6 +622,9 @@ turbowasm_status turbowasm_linker_bind_instance(
     instance->linked_tables = table_bindings;
     instance->linked_table_count =
         module->summary.imported_table_count;
+    instance->linked_tags = tag_bindings;
+    instance->linked_tag_count =
+        module->summary.imported_tag_count;
     return TURBOWASM_OK;
 
 fail:
@@ -549,5 +632,6 @@ fail:
     free(global_bindings);
     free(memory_bindings);
     free(table_bindings);
+    free(tag_bindings);
     return result;
 }
