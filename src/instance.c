@@ -815,17 +815,15 @@ static turbowasm_status turbowasm_exec_indirect_call(
     if (status != TURBOWASM_OK)
         return status;
 
-    if (entry.value.kind != TURBOWASM_VALUE_FUNCREF)
+    if (entry.kind != TURBOWASM_VALUE_FUNCREF)
         return TURBOWASM_TYPE_MISMATCH;
-
-    if (entry.value.as.funcref.is_null) {
+    if (entry.as.funcref.is_null) {
         *trap = TURBOWASM_TRAP_INDIRECT_CALL_NULL;
         return TURBOWASM_TRAPPED;
     }
 
-    target_instance = entry.value.as.funcref.owner != NULL
-        ? (turbowasm_instance_impl *)
-            entry.value.as.funcref.owner
+    target_instance = entry.as.funcref.owner != NULL
+        ? (turbowasm_instance_impl *)entry.as.funcref.owner
         : instance;
     target_module = turbowasm_module_impl_get(
         target_instance->module);
@@ -834,7 +832,7 @@ static turbowasm_status turbowasm_exec_indirect_call(
 
     actual_type = turbowasm_validation_context_function_type(
         &target_module->validation,
-        entry.value.as.funcref.function_index);
+        entry.as.funcref.function_index);
     if (!turbowasm_validation_func_type_equal(
             expected_type, actual_type)) {
         *trap = TURBOWASM_TRAP_INDIRECT_CALL_TYPE_MISMATCH;
@@ -842,8 +840,7 @@ static turbowasm_status turbowasm_exec_indirect_call(
     }
 
     return turbowasm_exec_call_index(
-        target_instance,
-        entry.value.as.funcref.function_index,
+        target_instance, entry.as.funcref.function_index,
         stack, trap, execution, depth);
 }
 
@@ -2596,8 +2593,8 @@ static turbowasm_status turbowasm_exec_fc(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &delta);
             if (status != TURBOWASM_OK) return status;
-            status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_FUNCREF, &initial);
+            status = turbowasm_stack_pop(
+                stack, &initial);
             if (status != TURBOWASM_OK) return status;
 
             status = turbowasm_instance_table_grow(
@@ -2644,8 +2641,8 @@ static turbowasm_status turbowasm_exec_fc(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &length);
             if (status != TURBOWASM_OK) return status;
-            status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_FUNCREF, &value);
+            status = turbowasm_stack_pop(
+                stack, &value);
             if (status != TURBOWASM_OK) return status;
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &destination);
@@ -3919,8 +3916,8 @@ static turbowasm_status turbowasm_exec_function(
                         goto done;
                     status = turbowasm_stack_push(&stack, value);
                 } else {
-                    status = turbowasm_stack_pop_kind(
-                        &stack, TURBOWASM_VALUE_FUNCREF, &value);
+                    status = turbowasm_stack_pop(
+                        &stack, &value);
                     if (status != TURBOWASM_OK)
                         goto done;
                     status = turbowasm_stack_pop_kind(
