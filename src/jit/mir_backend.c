@@ -4236,13 +4236,20 @@ static turbowasm_status turbowasm_mir_compile_function(
             "tw_call_f32_1_p: proto f, p:ctx, i64:index, f:a0\n"
             "tw_call_f64_0_p: proto d, p:ctx, i64:index\n"
             "tw_call_f64_1_p: proto d, p:ctx, i64:index, d:a0\n"
+            "tw_tail_0_p: proto i64, p:ctx, i64:index\n"
+            "tw_tail_i64_1_p: proto i64, p:ctx, i64:index, i64:a0\n"
+            "tw_tail_i64_2_p: proto i64, p:ctx, i64:index, i64:a0, i64:a1\n"
+            "tw_tail_f32_1_p: proto i64, p:ctx, i64:index, f:a0\n"
+            "tw_tail_f64_1_p: proto i64, p:ctx, i64:index, d:a0\n"
             "tw_call_status_p: proto i64, p:ctx\n"
             "tw_checkpoint_p: proto i64, p:ctx\n"
             "import tw_jit_call_i64_0, tw_jit_call_i64_1, "
             "tw_jit_call_i64_2, tw_jit_call_f32_0, "
             "tw_jit_call_f32_1, tw_jit_call_f64_0, "
-            "tw_jit_call_f64_1, tw_jit_call_status, "
-            "tw_jit_checkpoint\n"
+            "tw_jit_call_f64_1, tw_jit_tail_0, "
+            "tw_jit_tail_i64_1, tw_jit_tail_i64_2, "
+            "tw_jit_tail_f32_1, tw_jit_tail_f64_1, "
+            "tw_jit_call_status, tw_jit_checkpoint\n"
             "export %s\n"
             "%s: func %s, p:jit_ctx",
             module_id, function_name, function_name,
@@ -4420,6 +4427,106 @@ static turbowasm_status turbowasm_mir_compile_function(
                 callee_type->results[0];
             ++stack_size;
             continue;
+        }
+
+        if (opcode == 0x12u) { /* return_call */
+            uint32_t callee_index;
+            const turbowasm_validation_function *callee;
+            const turbowasm_validation_func_type *callee_type;
+            const char *proto_name = NULL;
+            const char *external_name = NULL;
+            const char *fail_move;
+            const char *fail_zero;
+            uint32_t arg_index;
+            uint32_t base;
+
+            if (!turbowasm_reader_uleb32(
+                    &reader, &callee_index))
+                goto done;
+
+            callee = turbowasm_validation_context_function(
+                validation, callee_index);
+            callee_type =
+                turbowasm_validation_context_function_type(
+                    validation, callee_index);
+            if (callee == NULL || callee->imported ||
+                !turbowasm_mir_call_signature_supported(
+                    callee_type) ||
+                callee_type->results[0] != result_type ||
+                stack_size < callee_type->param_count ||
+                turbowasm_reader_remaining(&reader) != 1u ||
+                reader.cursor[0] != 0x0bu)
+                goto done;
+
+            base = stack_size - callee_type->param_count;
+            for (arg_index = 0u;
+                 arg_index < callee_type->param_count;
+                 ++arg_index) {
+                if (stack[base + arg_index].type !=
+                    callee_type->params[arg_index])
+                    goto done;
+            }
+
+            if (callee_type->param_count == 0u) {
+                proto_name = "tw_tail_0_p";
+                external_name = "tw_jit_tail_0";
+            } else if (callee_type->param_count == 1u) {
+                if (turbowasm_mir_integer_type(
+                        callee_type->params[0])) {
+                    proto_name = "tw_tail_i64_1_p";
+                    external_name = "tw_jit_tail_i64_1";
+                } else if (callee_type->params[0] == 0x7du) {
+                    proto_name = "tw_tail_f32_1_p";
+                    external_name = "tw_jit_tail_f32_1";
+                } else if (callee_type->params[0] == 0x7cu) {
+                    proto_name = "tw_tail_f64_1_p";
+                    external_name = "tw_jit_tail_f64_1";
+                }
+            } else if (callee_type->param_count == 2u &&
+                       turbowasm_mir_integer_type(
+                           callee_type->params[0]) &&
+                       turbowasm_mir_integer_type(
+                           callee_type->params[1])) {
+                proto_name = "tw_tail_i64_2_p";
+                external_name = "tw_jit_tail_i64_2";
+            }
+
+            fail_move = turbowasm_mir_move_name(result_type);
+            fail_zero = turbowasm_mir_zero_literal(result_type);
+            if (proto_name == NULL || external_name == NULL ||
+                fail_move == NULL || fail_zero == NULL)
+                goto done;
+
+            if (!turbowasm_mir_text_appendf(
+                    &text,
+                    "call %s, %s, jit_status, jit_ctx, %u",
+                    proto_name, external_name, callee_index))
+                goto oom;
+
+            for (arg_index = 0u;
+                 arg_index < callee_type->param_count;
+                 ++arg_index) {
+                if (!turbowasm_mir_text_appendf(
+                        &text, ", r%u",
+                        stack[base + arg_index].reg))
+                    goto oom;
+            }
+
+            if (!turbowasm_mir_text_appendf(
+                    &text,
+                    "\n"
+                    "bne jit_fail, jit_status, 0\n"
+                    "ret %s\n"
+                    "jit_fail:\n"
+                    "%s jit_fail_value, %s\n"
+                    "ret jit_fail_value\n"
+                    "endfunc\n"
+                    "endmodule\n",
+                    fail_zero, fail_move, fail_zero))
+                goto oom;
+
+            finished = true;
+            break;
         }
 
         if (opcode == 0x20u) {
