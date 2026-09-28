@@ -370,71 +370,21 @@ static turbowasm_status turbowasm_eval_funcref_expr(
     const turbowasm_instance_impl *instance,
     const turbowasm_validation_expr_span *expression,
     turbowasm_instance_table_entry *out) {
-    turbowasm_reader reader;
-    uint8_t opcode;
-    uint8_t end;
+    turbowasm_value value;
+    turbowasm_status status;
 
-    if (expression == NULL || out == NULL ||
-        expression->bytes == NULL)
+    if (expression == NULL || out == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    turbowasm_reader_init(
-        &reader, expression->bytes, expression->size);
-    if (!turbowasm_reader_u8(&reader, &opcode))
-        return TURBOWASM_MALFORMED_MODULE;
-
-    if (opcode == 0xd0u) {
-        turbowasm_validation_value_type reference_type;
-        turbowasm_status status =
-            turbowasm_validation_read_heaptype(
-                &reader, &reference_type);
-
-        if (status != TURBOWASM_OK ||
-            reference_type.carrier != 0x70u)
-            return status == TURBOWASM_OK
-                ? TURBOWASM_MALFORMED_MODULE
-                : status;
-        out->is_null = true;
-        out->function_index = UINT32_MAX;
-        out->owner = NULL;
-    } else if (opcode == 0xd2u) {
-        if (!turbowasm_reader_uleb32(
-                &reader, &out->function_index))
-            return TURBOWASM_MALFORMED_MODULE;
-        out->is_null = false;
-        out->owner = (turbowasm_instance_impl *)instance;
-    } else if (opcode == 0x23u) {
-        uint32_t global_index;
-        turbowasm_value value;
-        turbowasm_status status;
-
-        if (instance == NULL ||
-            !turbowasm_reader_uleb32(
-                &reader, &global_index))
-            return TURBOWASM_MALFORMED_MODULE;
-
-        status = turbowasm_instance_global_get(
-            instance, global_index, &value);
-        if (status != TURBOWASM_OK)
-            return status;
-        if (value.kind != TURBOWASM_VALUE_FUNCREF)
-            return TURBOWASM_UNSUPPORTED;
-
-        out->is_null = value.as.funcref.is_null;
-        out->function_index =
-            value.as.funcref.function_index;
-        out->owner = value.as.funcref.is_null
-            ? NULL
-            : (turbowasm_instance_impl *)
-                value.as.funcref.owner;
-    } else {
+    status = turbowasm_eval_value_expr(
+        instance, expression, &value);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (value.kind != TURBOWASM_VALUE_FUNCREF)
         return TURBOWASM_UNSUPPORTED;
-    }
 
-    if (!turbowasm_reader_u8(&reader, &end) ||
-        end != 0x0bu ||
-        turbowasm_reader_remaining(&reader) != 0u)
-        return TURBOWASM_MALFORMED_MODULE;
+    memset(out, 0, sizeof(*out));
+    out->value = value;
     return TURBOWASM_OK;
 }
 
@@ -586,8 +536,12 @@ static turbowasm_status turbowasm_allocate_tables(
         }
 
         for (item = 0u; item < table->size; ++item) {
-            table->entries[item].is_null = true;
-            table->entries[item].function_index = UINT32_MAX;
+            table->entries[item].value.kind =
+                TURBOWASM_VALUE_FUNCREF;
+            table->entries[item].value.as.funcref.is_null = true;
+            table->entries[item].value.as.funcref.function_index =
+                UINT32_MAX;
+            table->entries[item].value.as.funcref.owner = NULL;
         }
     }
 
@@ -738,9 +692,12 @@ static turbowasm_status turbowasm_element_item_value(
     memset(out, 0, sizeof(*out));
     if (item->kind ==
         TURBOWASM_VALIDATION_ELEMENT_FUNCTION_INDEX) {
-        out->is_null = false;
-        out->function_index = item->function_index;
-        out->owner = (turbowasm_instance_impl *)instance;
+        out->value.kind = TURBOWASM_VALUE_FUNCREF;
+        out->value.as.funcref.is_null = false;
+        out->value.as.funcref.function_index =
+            item->function_index;
+        out->value.as.funcref.owner =
+            (turbowasm_instance_impl *)instance;
         return TURBOWASM_OK;
     }
 
@@ -1214,8 +1171,10 @@ static bool turbowasm_instance_funcref_owner_visible(
         if (table == NULL)
             continue;
         for (element = 0u; element < table->size; ++element) {
-            if (!table->entries[element].is_null &&
-                table->entries[element].owner == owner)
+            if (table->entries[element].value.kind ==
+                    TURBOWASM_VALUE_FUNCREF &&
+                !table->entries[element].value.as.funcref.is_null &&
+                table->entries[element].value.as.funcref.owner == owner)
                 return true;
         }
     }
@@ -1237,9 +1196,9 @@ static turbowasm_status turbowasm_funcref_to_table_entry(
 
     memset(out, 0, sizeof(*out));
     if (value.as.funcref.is_null) {
-        out->is_null = true;
-        out->function_index = UINT32_MAX;
-        out->owner = NULL;
+        value.as.funcref.function_index = UINT32_MAX;
+        value.as.funcref.owner = NULL;
+        out->value = value;
         return TURBOWASM_OK;
     }
 
@@ -1258,9 +1217,8 @@ static turbowasm_status turbowasm_funcref_to_table_entry(
             module->validation.function_count)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    out->is_null = false;
-    out->function_index = value.as.funcref.function_index;
-    out->owner = owner;
+    value.as.funcref.owner = owner;
+    out->value = value;
     return TURBOWASM_OK;
 }
 
@@ -1312,13 +1270,7 @@ turbowasm_status turbowasm_instance_table_get_value(
     if (status != TURBOWASM_OK)
         return status;
 
-    memset(out, 0, sizeof(*out));
-    out->kind = TURBOWASM_VALUE_FUNCREF;
-    out->as.funcref.is_null = entry.is_null;
-    out->as.funcref.function_index = entry.function_index;
-    out->as.funcref.owner = entry.is_null
-        ? NULL
-        : entry.owner;
+    *out = entry.value;
     return TURBOWASM_OK;
 }
 
