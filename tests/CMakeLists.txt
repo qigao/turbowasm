@@ -547,6 +547,21 @@ if(TURBOWASM_ENABLE_MIR_JIT)
   add_test(NAME turbowasm_mir_tiering_test
            COMMAND turbowasm_mir_tiering_test)
 
+  add_executable(turbowasm_mir_tail_call_test
+    mir_tail_call_test.c)
+  target_link_libraries(turbowasm_mir_tail_call_test
+    PRIVATE
+      turbowasm_mir_backend
+      TurboWasm::Runtime)
+  target_include_directories(turbowasm_mir_tail_call_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_mir_tail_call_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_mir_tail_call_test
+           COMMAND turbowasm_mir_tail_call_test)
+
   add_executable(turbowasm_mir_simd_helper_lowering_test
     mir_simd_helper_lowering_test.c)
   target_link_libraries(turbowasm_mir_simd_helper_lowering_test

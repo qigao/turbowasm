@@ -1376,6 +1376,21 @@ static bool turbowasm_mir_scan_structured_scalar(
                 break;
             }
 
+            case 0x12u: { /* return_call */
+                uint32_t callee_index;
+
+                /*
+                 * MIR has no general typed tail-call ABI.  The exact subset
+                 * we can lower without growing native stack is self-tail
+                 * recursion, which becomes an intra-function jump.
+                 */
+                if (!turbowasm_reader_uleb32(
+                        &reader, &callee_index) ||
+                    callee_index != function_index)
+                    goto done;
+                break;
+            }
+
             case 0x1au: /* drop */
                 break;
 
@@ -2488,6 +2503,14 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             structured_result_name))
         goto oom;
 
+    /*
+     * Self return_call re-enters here after replacing parameter locals.
+     * Wasm function locals are freshly zero-initialized for every logical
+     * invocation, so non-parameter locals must be reset on each tail loop.
+     */
+    if (!turbowasm_mir_text_appendf(&text, "tail_entry:\n"))
+        goto oom;
+
     for (index = type->param_count;
          index < function->local_count;
          ++index) {
@@ -2993,6 +3016,47 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                         &text, validation, callee_index,
                         stack, &stack_size, &next_reg))
                     goto done;
+                break;
+            }
+
+            case 0x12u: { /* return_call */
+                uint32_t callee_index;
+                uint32_t base;
+                uint32_t arg_index;
+
+                if (!turbowasm_reader_uleb32(
+                        &reader, &callee_index) ||
+                    callee_index != function_index ||
+                    stack_size < type->param_count)
+                    goto done;
+
+                base = stack_size - type->param_count;
+                for (arg_index = 0u;
+                     arg_index < type->param_count;
+                     ++arg_index) {
+                    turbowasm_mir_stack_value value =
+                        stack[base + arg_index];
+                    const char *move_name =
+                        turbowasm_mir_move_name(type->params[arg_index]);
+                    const char *prefix =
+                        turbowasm_mir_reg_prefix(type->params[arg_index]);
+
+                    if (value.type != type->params[arg_index] ||
+                        move_name == NULL || prefix == NULL ||
+                        !turbowasm_mir_text_appendf(
+                            &text,
+                            "%s l%u, %s%u\n",
+                            move_name, arg_index,
+                            prefix, value.reg))
+                        goto done;
+                }
+
+                if (!turbowasm_mir_text_appendf(
+                        &text, "jmp tail_entry\n"))
+                    goto oom;
+
+                stack_size = controls[0].height;
+                reachable = false;
                 break;
             }
 
