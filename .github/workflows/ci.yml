@@ -16,6 +16,10 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
+      - name: Guard unversioned dependency policy
+        shell: bash
+        run: python3 cmake/ci/check-unversioned-policy.py
+
       - name: Restore latest Salts SDK
         shell: pwsh
         env:
