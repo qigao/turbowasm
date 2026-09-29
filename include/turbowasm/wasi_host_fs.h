@@ -14,6 +14,12 @@ extern "C" {
  *
  * The adapter depends only on the Salts secure root-relative filesystem
  * capability. Native fd/HANDLE values never enter TurboWasm public ABI.
+ *
+ * Salts root file/directory close consumes its opaque identity even if the
+ * underlying native close reports an error. WASIHostFS therefore treats close
+ * as ownership-consuming and reports success once that close has been
+ * attempted, so the generic descriptor table never retains a dangling Salts
+ * identity.
  */
 enum {
     TURBOWASM_WASI_HOST_FS_PATH_MAX = 4096
