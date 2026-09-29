@@ -11,6 +11,8 @@ typedef struct turbowasm_wasi_fs_slot {
     uint32_t guest_fd;
     turbowasm_wasi_fs_file file;
     char *guest_path;
+    uint64_t rights_base;
+    uint64_t rights_inheriting;
 } turbowasm_wasi_fs_slot;
 
 typedef struct turbowasm_wasi_fs_impl {
@@ -90,7 +92,7 @@ turbowasm_status turbowasm_wasi_fs_init(
     if (filesystem == NULL || filesystem->impl != NULL ||
         config == NULL ||
         config->descriptor_capacity == 0u ||
-        config->descriptor_capacity > UINT32_MAX ||
+        config->descriptor_capacity > UINT32_MAX - 3u ||
         config->descriptor_capacity >
             SIZE_MAX / sizeof(turbowasm_wasi_fs_slot) ||
         config->provider.close == NULL ||
@@ -139,6 +141,26 @@ turbowasm_status turbowasm_wasi_fs_bind_descriptor(
     turbowasm_wasi_fs_file file,
     bool preopen,
     const char *guest_path,
+    turbowasm_wasi_fs_descriptor *out_descriptor) {
+    return turbowasm_wasi_fs_bind_descriptor_with_rights(
+        filesystem,
+        guest_fd,
+        file,
+        preopen,
+        guest_path,
+        UINT64_MAX,
+        UINT64_MAX,
+        out_descriptor);
+}
+
+turbowasm_status turbowasm_wasi_fs_bind_descriptor_with_rights(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t guest_fd,
+    turbowasm_wasi_fs_file file,
+    bool preopen,
+    const char *guest_path,
+    uint64_t rights_base,
+    uint64_t rights_inheriting,
     turbowasm_wasi_fs_descriptor *out_descriptor) {
     turbowasm_wasi_fs_impl *impl =
         turbowasm_wasi_fs_impl_mut(filesystem);
@@ -190,6 +212,8 @@ turbowasm_status turbowasm_wasi_fs_bind_descriptor(
     slot->guest_fd = guest_fd;
     slot->file = file;
     slot->guest_path = path_copy;
+    slot->rights_base = rights_base;
+    slot->rights_inheriting = rights_inheriting;
     ++impl->active_count;
 
     out_descriptor->slot = (uint32_t)(slot - impl->slots);
@@ -219,6 +243,8 @@ bool turbowasm_wasi_fs_descriptor_info_get(
     out_info->file = slot->file;
     out_info->preopen = slot->preopen;
     out_info->guest_path = slot->guest_path;
+    out_info->rights_base = slot->rights_base;
+    out_info->rights_inheriting = slot->rights_inheriting;
     return true;
 }
 
@@ -245,7 +271,126 @@ uint32_t turbowasm_wasi_fs_close_descriptor(
     slot->preopen = false;
     slot->guest_fd = 0u;
     slot->file = (turbowasm_wasi_fs_file){0};
+    slot->rights_base = 0u;
+    slot->rights_inheriting = 0u;
     --impl->active_count;
+    return TURBOWASM_WASI_ERRNO_SUCCESS;
+}
+
+turbowasm_status turbowasm_wasi_fs_bind_next_descriptor(
+    turbowasm_wasi_fs *filesystem,
+    turbowasm_wasi_fs_file file,
+    uint64_t rights_base,
+    uint64_t rights_inheriting,
+    turbowasm_wasi_fs_descriptor *out_descriptor,
+    uint32_t *out_guest_fd) {
+    turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_mut(filesystem);
+    uint32_t offset;
+
+    if (impl == NULL || out_descriptor == NULL ||
+        out_guest_fd == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *out_descriptor = (turbowasm_wasi_fs_descriptor){0};
+    *out_guest_fd = 0u;
+
+    if (impl->active_count >= impl->capacity)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    for (offset = 0u; offset <= impl->capacity; ++offset) {
+        uint32_t candidate = 3u + offset;
+        if (turbowasm_wasi_fs_find_fd(impl, candidate) == NULL) {
+            turbowasm_status status =
+                turbowasm_wasi_fs_bind_descriptor_with_rights(
+                    filesystem,
+                    candidate,
+                    file,
+                    false,
+                    NULL,
+                    rights_base,
+                    rights_inheriting,
+                    out_descriptor);
+            if (status == TURBOWASM_OK)
+                *out_guest_fd = candidate;
+            return status;
+        }
+    }
+
+    return TURBOWASM_OUT_OF_MEMORY;
+}
+
+uint32_t turbowasm_wasi_fs_path_open(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    uint32_t dirflags,
+    const uint8_t *path,
+    size_t path_length,
+    uint32_t oflags,
+    uint64_t rights_base,
+    uint64_t rights_inheriting,
+    uint32_t fdflags,
+    uint32_t *out_guest_fd) {
+    turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_mut(filesystem);
+    turbowasm_wasi_fs_slot *directory;
+    turbowasm_wasi_fs_file opened = {0};
+    turbowasm_wasi_fs_descriptor descriptor = {0};
+    turbowasm_status bind_status;
+    uint32_t error;
+
+    if (impl == NULL || out_guest_fd == NULL ||
+        (path_length != 0u && path == NULL))
+        return TURBOWASM_WASI_ERRNO_INVAL;
+
+    *out_guest_fd = 0u;
+    directory = turbowasm_wasi_fs_find_fd(
+        impl, directory_fd);
+    if (directory == NULL)
+        return TURBOWASM_WASI_ERRNO_BADF;
+    if (!directory->preopen ||
+        (directory->rights_base &
+         TURBOWASM_WASI_RIGHT_PATH_OPEN) == 0u)
+        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+
+    if ((rights_base & ~directory->rights_inheriting) != 0u ||
+        (rights_inheriting & ~directory->rights_inheriting) != 0u)
+        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+
+    if (impl->provider.path_open == NULL)
+        return TURBOWASM_WASI_ERRNO_NOSYS;
+
+    error = impl->provider.path_open(
+        impl->provider.context,
+        directory->file,
+        dirflags,
+        path,
+        path_length,
+        oflags,
+        rights_base,
+        rights_inheriting,
+        fdflags,
+        &opened);
+    if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
+        return error;
+
+    bind_status = turbowasm_wasi_fs_bind_next_descriptor(
+        filesystem,
+        opened,
+        rights_base,
+        rights_inheriting,
+        &descriptor,
+        out_guest_fd);
+    if (bind_status != TURBOWASM_OK) {
+        uint32_t close_error = impl->provider.close(
+            impl->provider.context, opened);
+        (void)close_error;
+        *out_guest_fd = 0u;
+        return bind_status == TURBOWASM_OUT_OF_MEMORY
+            ? TURBOWASM_WASI_ERRNO_MFILE
+            : TURBOWASM_WASI_ERRNO_IO;
+    }
+
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
@@ -282,6 +427,9 @@ uint32_t turbowasm_wasi_fs_fd_read(
 
     if (slot == NULL)
         return TURBOWASM_WASI_ERRNO_BADF;
+    if ((slot->rights_base &
+         TURBOWASM_WASI_RIGHT_FD_READ) == 0u)
+        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
 
     return impl->provider.read(
         impl->provider.context,
@@ -306,6 +454,9 @@ uint32_t turbowasm_wasi_fs_fd_write(
 
     if (slot == NULL)
         return TURBOWASM_WASI_ERRNO_BADF;
+    if ((slot->rights_base &
+         TURBOWASM_WASI_RIGHT_FD_WRITE) == 0u)
+        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
 
     return impl->provider.write(
         impl->provider.context,

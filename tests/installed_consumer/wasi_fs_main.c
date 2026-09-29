@@ -40,6 +40,33 @@ static uint32_t write_file(
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
+static uint32_t path_open_file(
+    void *context,
+    turbowasm_wasi_fs_file directory,
+    uint32_t dirflags,
+    const uint8_t *path,
+    size_t path_length,
+    uint32_t oflags,
+    uint64_t rights_base,
+    uint64_t rights_inheriting,
+    uint32_t fdflags,
+    turbowasm_wasi_fs_file *out_file) {
+    (void)context;
+    (void)directory;
+    (void)dirflags;
+    (void)path;
+    (void)path_length;
+    (void)oflags;
+    (void)rights_base;
+    (void)rights_inheriting;
+    (void)fdflags;
+    if (out_file == NULL)
+        return TURBOWASM_WASI_ERRNO_INVAL;
+    out_file->object = 2u;
+    out_file->generation = 1u;
+    return TURBOWASM_WASI_ERRNO_SUCCESS;
+}
+
 int main(void) {
     turbowasm_wasi_fs filesystem = {0};
     turbowasm_wasi_fs_config config = {0};
@@ -50,12 +77,16 @@ int main(void) {
     config.provider.close = close_file;
     config.provider.read = read_file;
     config.provider.write = write_file;
+    config.provider.path_open = path_open_file;
 
     if (turbowasm_wasi_fs_init(
             &filesystem, &config) != TURBOWASM_OK)
         return 1;
-    if (turbowasm_wasi_fs_bind_descriptor(
+    if (turbowasm_wasi_fs_bind_descriptor_with_rights(
             &filesystem, 3u, root, true, "/",
+            TURBOWASM_WASI_RIGHT_PATH_OPEN,
+            TURBOWASM_WASI_RIGHT_FD_READ |
+                TURBOWASM_WASI_RIGHT_FD_WRITE,
             &descriptor) != TURBOWASM_OK)
         return 2;
     if (descriptor.generation == 0u)
