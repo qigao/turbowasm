@@ -17,18 +17,31 @@
 
 enum {
     TURBOWASM_WASM_PAGE_SIZE = 65536u,
-    TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT = 2u
+    TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT = 2u,
+    TURBOWASM_MEMORY_WAITER_CAPACITY = 64u
 };
+
+typedef struct turbowasm_memory_waiter {
+    salts_cond_t condition;
+    uint64_t address;
+    bool active;
+    bool notified;
+} turbowasm_memory_waiter;
 
 typedef struct turbowasm_instance_memory {
     uint8_t *data;
     salts_rwlock_t access_lock;
+    salts_mutex_t waiter_mutex;
+    turbowasm_memory_waiter *waiters;
+    uint32_t waiter_count;
+    uint32_t waiter_capacity;
     uint32_t pages;
     uint32_t maximum_pages;
     uint32_t page_size;
     bool has_maximum;
     bool shared;
     bool access_lock_initialized;
+    bool waiter_mutex_initialized;
     bool storage_initialized;
 } turbowasm_instance_memory;
 
@@ -335,6 +348,28 @@ turbowasm_status turbowasm_instance_memory_atomic(
     uint64_t replacement,
     uint64_t *out_old,
     turbowasm_trap *trap);
+
+turbowasm_status turbowasm_instance_memory_wait(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    uint8_t width,
+    uint64_t expected,
+    int64_t timeout_ns,
+    uint32_t *out_result,
+    turbowasm_trap *trap);
+
+turbowasm_status turbowasm_instance_memory_notify(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    uint32_t count,
+    uint32_t *out_woken,
+    turbowasm_trap *trap);
+
+turbowasm_status turbowasm_threads_sc_fence(void);
 
 turbowasm_status turbowasm_instance_memory_bounds(
     const turbowasm_instance_impl *instance,

@@ -1505,16 +1505,16 @@ static turbowasm_status turbowasm_validate_fc(
     }
 }
 
-static turbowasm_status turbowasm_validate_atomic_memarg(
+static turbowasm_status turbowasm_validate_atomic_memarg_alignment(
     turbowasm_reader *body,
     const turbowasm_validation_context *context,
-    const turbowasm_atomic_descriptor *descriptor) {
+    uint32_t required_alignment) {
     uint32_t flags;
     uint32_t memory_index = 0u;
     uint32_t offset;
     uint32_t alignment;
 
-    if (body == NULL || context == NULL || descriptor == NULL)
+    if (body == NULL || context == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     if (!turbowasm_reader_uleb32(body, &flags) ||
@@ -1533,9 +1533,19 @@ static turbowasm_status turbowasm_validate_atomic_memarg(
         return TURBOWASM_MALFORMED_MODULE;
 
     alignment = flags & UINT32_C(0x3f);
-    return alignment == descriptor->alignment_log2
+    return alignment == required_alignment
         ? TURBOWASM_OK
         : TURBOWASM_MALFORMED_MODULE;
+}
+
+static turbowasm_status turbowasm_validate_atomic_memarg(
+    turbowasm_reader *body,
+    const turbowasm_validation_context *context,
+    const turbowasm_atomic_descriptor *descriptor) {
+    if (descriptor == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_validate_atomic_memarg_alignment(
+        body, context, descriptor->alignment_log2);
 }
 
 static turbowasm_status turbowasm_validate_atomic(
@@ -1552,6 +1562,64 @@ static turbowasm_status turbowasm_validate_atomic(
 
     if (!turbowasm_reader_uleb32(body, &subopcode))
         return TURBOWASM_MALFORMED_MODULE;
+
+    switch (subopcode) {
+        case 0x00u: /* memory.atomic.notify */
+            status = turbowasm_validate_atomic_memarg_alignment(
+                body, context, 2u);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_push(stack, TW_I32);
+
+        case 0x01u: /* memory.atomic.wait32 */
+            status = turbowasm_validate_atomic_memarg_alignment(
+                body, context, 2u);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I64);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_push(stack, TW_I32);
+
+        case 0x02u: /* memory.atomic.wait64 */
+            status = turbowasm_validate_atomic_memarg_alignment(
+                body, context, 3u);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I64);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I64);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_push(stack, TW_I32);
+
+        case 0x03u: { /* atomic.fence */
+            uint8_t reserved;
+            if (!turbowasm_reader_u8(body, &reserved) ||
+                reserved != 0u)
+                return TURBOWASM_MALFORMED_MODULE;
+            return TURBOWASM_OK;
+        }
+
+        default:
+            break;
+    }
 
     descriptor = turbowasm_atomic_descriptor_find(subopcode);
     if (descriptor == NULL)

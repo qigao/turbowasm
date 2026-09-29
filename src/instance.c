@@ -2821,9 +2821,9 @@ static turbowasm_status turbowasm_exec_trunc_sat(
     return turbowasm_stack_push(stack, out);
 }
 
-static turbowasm_status turbowasm_exec_atomic_memarg(
+static turbowasm_status turbowasm_exec_atomic_memarg_alignment(
     turbowasm_reader *reader,
-    const turbowasm_atomic_descriptor *descriptor,
+    uint32_t required_alignment,
     uint32_t *out_memory_index,
     uint32_t *out_offset) {
     uint32_t flags;
@@ -2831,7 +2831,7 @@ static turbowasm_status turbowasm_exec_atomic_memarg(
     uint32_t offset;
     uint32_t alignment;
 
-    if (reader == NULL || descriptor == NULL ||
+    if (reader == NULL ||
         out_memory_index == NULL || out_offset == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
@@ -2847,12 +2847,24 @@ static turbowasm_status turbowasm_exec_atomic_memarg(
         return TURBOWASM_MALFORMED_MODULE;
 
     alignment = flags & UINT32_C(0x3f);
-    if (alignment != descriptor->alignment_log2)
+    if (alignment != required_alignment)
         return TURBOWASM_MALFORMED_MODULE;
 
     *out_memory_index = memory_index;
     *out_offset = offset;
     return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_exec_atomic_memarg(
+    turbowasm_reader *reader,
+    const turbowasm_atomic_descriptor *descriptor,
+    uint32_t *out_memory_index,
+    uint32_t *out_offset) {
+    if (descriptor == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_exec_atomic_memarg_alignment(
+        reader, descriptor->alignment_log2,
+        out_memory_index, out_offset);
 }
 
 static uint64_t turbowasm_atomic_value_bits(
@@ -2919,6 +2931,146 @@ static turbowasm_status turbowasm_exec_atomic(
 
     if (!turbowasm_reader_uleb32(reader, &subopcode))
         return TURBOWASM_MALFORMED_MODULE;
+
+    switch (subopcode) {
+        case 0x00u: { /* memory.atomic.notify */
+            turbowasm_value count = {0};
+            uint32_t woken = 0u;
+
+            status = turbowasm_exec_atomic_memarg_alignment(
+                reader, 2u, &memory_index, &offset);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &count);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &address);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            status = turbowasm_instance_memory_notify(
+                instance,
+                memory_index,
+                (uint32_t)address.as.i32,
+                offset,
+                (uint32_t)count.as.i32,
+                &woken,
+                trap);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            return turbowasm_atomic_push_result(
+                stack, TURBOWASM_ATOMIC_I32, woken);
+        }
+
+        case 0x01u: { /* memory.atomic.wait32 */
+            turbowasm_value timeout = {0};
+            turbowasm_value expected_value = {0};
+            uint32_t wait_result = 0u;
+            uint32_t expected32 = 0u;
+
+            status = turbowasm_exec_atomic_memarg_alignment(
+                reader, 2u, &memory_index, &offset);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I64, &timeout);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32,
+                &expected_value);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &address);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            memcpy(
+                &expected32,
+                &expected_value.as.i32,
+                sizeof(expected32));
+            status = turbowasm_instance_memory_wait(
+                instance,
+                memory_index,
+                (uint32_t)address.as.i32,
+                offset,
+                4u,
+                expected32,
+                timeout.as.i64,
+                &wait_result,
+                trap);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            return turbowasm_atomic_push_result(
+                stack, TURBOWASM_ATOMIC_I32,
+                wait_result);
+        }
+
+        case 0x02u: { /* memory.atomic.wait64 */
+            turbowasm_value timeout = {0};
+            turbowasm_value expected_value = {0};
+            uint32_t wait_result = 0u;
+            uint64_t expected64 = 0u;
+
+            status = turbowasm_exec_atomic_memarg_alignment(
+                reader, 3u, &memory_index, &offset);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I64, &timeout);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I64,
+                &expected_value);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &address);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            memcpy(
+                &expected64,
+                &expected_value.as.i64,
+                sizeof(expected64));
+            status = turbowasm_instance_memory_wait(
+                instance,
+                memory_index,
+                (uint32_t)address.as.i32,
+                offset,
+                8u,
+                expected64,
+                timeout.as.i64,
+                &wait_result,
+                trap);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            return turbowasm_atomic_push_result(
+                stack, TURBOWASM_ATOMIC_I32,
+                wait_result);
+        }
+
+        case 0x03u: { /* atomic.fence */
+            uint8_t reserved;
+            if (!turbowasm_reader_u8(reader, &reserved) ||
+                reserved != 0u)
+                return TURBOWASM_MALFORMED_MODULE;
+            return turbowasm_threads_sc_fence();
+        }
+
+        default:
+            break;
+    }
 
     descriptor = turbowasm_atomic_descriptor_find(subopcode);
     if (descriptor == NULL)
@@ -5993,6 +6145,10 @@ const char *turbowasm_trap_string(turbowasm_trap trap) {
             return "memory_out_of_bounds";
         case TURBOWASM_TRAP_UNALIGNED_ATOMIC:
             return "unaligned_atomic";
+        case TURBOWASM_TRAP_EXPECTED_SHARED_MEMORY:
+            return "expected_shared_memory";
+        case TURBOWASM_TRAP_TOO_MANY_WAITERS:
+            return "too_many_waiters";
         case TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS:
             return "table_out_of_bounds";
         case TURBOWASM_TRAP_INDIRECT_CALL_NULL:

@@ -3,6 +3,9 @@
 #include "reader.h"
 #include "validate_type.h"
 
+#include <salts/clock.h>
+
+#include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +22,33 @@ static turbowasm_value_kind turbowasm_state_kind_from_valtype(
         case 0x6fu: return TURBOWASM_VALUE_EXTERNREF;
         default: return (turbowasm_value_kind)0;
     }
+}
+
+static salts_once_t turbowasm_sc_once = SALTS_ONCE_INIT;
+static salts_mutex_t turbowasm_sc_mutex = NULL;
+
+static void turbowasm_sc_mutex_init_once(void) {
+    salts_mutex_init(&turbowasm_sc_mutex);
+}
+
+static bool turbowasm_sc_lock(void) {
+    salts_once(&turbowasm_sc_once, turbowasm_sc_mutex_init_once);
+    if (turbowasm_sc_mutex == NULL)
+        return false;
+    salts_mutex_lock(&turbowasm_sc_mutex);
+    return true;
+}
+
+static void turbowasm_sc_unlock(void) {
+    if (turbowasm_sc_mutex != NULL)
+        salts_mutex_unlock(&turbowasm_sc_mutex);
+}
+
+turbowasm_status turbowasm_threads_sc_fence(void) {
+    if (!turbowasm_sc_lock())
+        return TURBOWASM_OUT_OF_MEMORY;
+    turbowasm_sc_unlock();
+    return TURBOWASM_OK;
 }
 
 typedef struct turbowasm_const_value_stack {
@@ -447,38 +477,105 @@ turbowasm_status turbowasm_instance_memory_storage_init(
     turbowasm_instance_memory *memory,
     bool shared,
     size_t bytes) {
+    turbowasm_memory_waiter *waiters = NULL;
     uint8_t *data = NULL;
+    uint32_t initialized_waiters = 0u;
     bool lock_initialized = false;
+    bool waiter_mutex_initialized = false;
 
     if (memory == NULL || memory->storage_initialized)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    if (shared) {
-        if (salts_rwlock_init(&memory->access_lock) != 0)
-            return TURBOWASM_OUT_OF_MEMORY;
-        lock_initialized = true;
-    }
-
     if (bytes != 0u) {
         data = (uint8_t *)calloc(bytes, 1u);
-        if (data == NULL) {
-            if (lock_initialized)
-                salts_rwlock_destroy(&memory->access_lock);
+        if (data == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    if (shared) {
+        if (salts_rwlock_init(&memory->access_lock) != 0)
+            goto out_of_memory;
+        lock_initialized = true;
+
+        salts_mutex_init(&memory->waiter_mutex);
+        if (memory->waiter_mutex == NULL)
+            goto out_of_memory;
+        waiter_mutex_initialized = true;
+
+        waiters = (turbowasm_memory_waiter *)calloc(
+            TURBOWASM_MEMORY_WAITER_CAPACITY,
+            sizeof(*waiters));
+        if (waiters == NULL)
+            goto out_of_memory;
+
+        while (initialized_waiters <
+               TURBOWASM_MEMORY_WAITER_CAPACITY) {
+            salts_cond_init(
+                &waiters[initialized_waiters].condition);
+            if (waiters[initialized_waiters].condition == NULL)
+                goto out_of_memory;
+            ++initialized_waiters;
         }
     }
 
     memory->data = data;
+    memory->waiters = waiters;
+    memory->waiter_count = 0u;
+    memory->waiter_capacity = shared
+        ? TURBOWASM_MEMORY_WAITER_CAPACITY
+        : 0u;
     memory->shared = shared;
     memory->access_lock_initialized = lock_initialized;
+    memory->waiter_mutex_initialized =
+        waiter_mutex_initialized;
     memory->storage_initialized = true;
     return TURBOWASM_OK;
+
+out_of_memory:
+    while (initialized_waiters != 0u) {
+        --initialized_waiters;
+        salts_cond_destroy(
+            &waiters[initialized_waiters].condition);
+    }
+    free(waiters);
+    if (waiter_mutex_initialized)
+        salts_mutex_destroy(&memory->waiter_mutex);
+    if (lock_initialized)
+        salts_rwlock_destroy(&memory->access_lock);
+    free(data);
+    memory->access_lock = NULL;
+    memory->waiter_mutex = NULL;
+    return TURBOWASM_OUT_OF_MEMORY;
 }
 
 void turbowasm_instance_memory_storage_destroy(
     turbowasm_instance_memory *memory) {
+    uint32_t index;
+
     if (memory == NULL || !memory->storage_initialized)
         return;
+
+    /*
+     * Instance lifetime is externally synchronized. Active waiters therefore
+     * must have completed before the backing is destroyed.
+     */
+
+    if (memory->waiters != NULL) {
+        for (index = 0u;
+             index < memory->waiter_capacity;
+             ++index) {
+            salts_cond_destroy(
+                &memory->waiters[index].condition);
+        }
+    }
+    free(memory->waiters);
+    memory->waiters = NULL;
+    memory->waiter_capacity = 0u;
+
+    if (memory->waiter_mutex_initialized)
+        salts_mutex_destroy(&memory->waiter_mutex);
+    memory->waiter_mutex = NULL;
+    memory->waiter_mutex_initialized = false;
 
     free(memory->data);
     memory->data = NULL;
@@ -1492,16 +1589,19 @@ turbowasm_status turbowasm_instance_memory_atomic(
     }
 
     /*
-     * Use the backing write lock for every atomic operation, including loads.
-     * This gives one total order for atomic accesses on a shared backing and
-     * makes each RMW/cmpxchg one indivisible transaction.
+     * The Runtime-wide SC lock gives one total order across different linear
+     * memories. The backing write lock then makes this individual memory
+     * transaction indivisible.
      */
+    if (!turbowasm_sc_lock())
+        return TURBOWASM_OUT_OF_MEMORY;
     turbowasm_instance_memory_wrlock(memory);
     status = turbowasm_instance_memory_storage_range(
         memory, address, offset,
         descriptor->width, &effective);
     if (status != TURBOWASM_OK) {
         turbowasm_instance_memory_wrunlock(memory);
+        turbowasm_sc_unlock();
         if (status == TURBOWASM_TRAPPED)
             *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
         return status;
@@ -1547,6 +1647,7 @@ turbowasm_status turbowasm_instance_memory_atomic(
                     break;
                 default:
                     turbowasm_instance_memory_wrunlock(memory);
+                    turbowasm_sc_unlock();
                     return TURBOWASM_INVALID_ARGUMENT;
             }
             turbowasm_atomic_store_le(
@@ -1568,11 +1669,290 @@ turbowasm_status turbowasm_instance_memory_atomic(
 
         default:
             turbowasm_instance_memory_wrunlock(memory);
+            turbowasm_sc_unlock();
             return TURBOWASM_INVALID_ARGUMENT;
     }
 
     *out_old = old_value & mask;
     turbowasm_instance_memory_wrunlock(memory);
+    turbowasm_sc_unlock();
+    return TURBOWASM_OK;
+}
+
+static turbowasm_memory_waiter *
+turbowasm_memory_waiter_acquire_slot(
+    turbowasm_instance_memory *memory) {
+    uint32_t index;
+
+    if (memory == NULL || memory->waiters == NULL)
+        return NULL;
+
+    for (index = 0u; index < memory->waiter_capacity; ++index) {
+        if (!memory->waiters[index].active)
+            return &memory->waiters[index];
+    }
+    return NULL;
+}
+
+turbowasm_status turbowasm_instance_memory_wait(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    uint8_t width,
+    uint64_t expected,
+    int64_t timeout_ns,
+    uint32_t *out_result,
+    turbowasm_trap *trap) {
+    turbowasm_instance_memory *memory;
+    turbowasm_memory_waiter *waiter = NULL;
+    uint64_t effective64;
+    uint64_t observed;
+    uint64_t deadline = 0u;
+    size_t effective = 0u;
+    turbowasm_status status;
+    int wait_status = 0;
+
+    if (instance == NULL || out_result == NULL || trap == NULL ||
+        memory_index >= instance->memory_count ||
+        (width != 4u && width != 8u))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *out_result = 0u;
+    *trap = TURBOWASM_TRAP_NONE;
+
+    memory = turbowasm_instance_memory_resolve(
+        instance, memory_index);
+    if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    effective64 = (uint64_t)address + (uint64_t)offset;
+    if ((effective64 % width) != 0u) {
+        *trap = TURBOWASM_TRAP_UNALIGNED_ATOMIC;
+        return TURBOWASM_TRAPPED;
+    }
+
+    /*
+     * Per the core execution order, wait on an unshared memory traps before
+     * performing the shared-memory bounds/value action.
+     */
+    if (!memory->shared) {
+        *trap = TURBOWASM_TRAP_EXPECTED_SHARED_MEMORY;
+        return TURBOWASM_TRAPPED;
+    }
+
+    if (!memory->waiter_mutex_initialized ||
+        memory->waiter_mutex == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    if (!turbowasm_sc_lock())
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    /*
+     * Registry mutex closes the notify race between the expected-value load
+     * and publishing this waiter. Data lock is never held across sleeping.
+     */
+    salts_mutex_lock(&memory->waiter_mutex);
+    turbowasm_instance_memory_wrlock(memory);
+    status = turbowasm_instance_memory_storage_range(
+        memory, address, offset, width, &effective);
+    if (status == TURBOWASM_OK) {
+        observed = turbowasm_atomic_load_le(
+            memory->data + effective, width);
+    } else {
+        observed = 0u;
+    }
+    turbowasm_instance_memory_wrunlock(memory);
+
+    if (status != TURBOWASM_OK) {
+        salts_mutex_unlock(&memory->waiter_mutex);
+        turbowasm_sc_unlock();
+        if (status == TURBOWASM_TRAPPED)
+            *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        return status;
+    }
+
+    if (observed !=
+        (expected & turbowasm_atomic_width_mask(width))) {
+        salts_mutex_unlock(&memory->waiter_mutex);
+        turbowasm_sc_unlock();
+        *out_result = 1u;
+        return TURBOWASM_OK;
+    }
+
+    if (timeout_ns == 0) {
+        salts_mutex_unlock(&memory->waiter_mutex);
+        turbowasm_sc_unlock();
+        *out_result = 2u;
+        return TURBOWASM_OK;
+    }
+
+    waiter = turbowasm_memory_waiter_acquire_slot(memory);
+    if (waiter == NULL) {
+        salts_mutex_unlock(&memory->waiter_mutex);
+        turbowasm_sc_unlock();
+        *trap = TURBOWASM_TRAP_TOO_MANY_WAITERS;
+        return TURBOWASM_TRAPPED;
+    }
+
+    waiter->address = effective64;
+    waiter->notified = false;
+    waiter->active = true;
+    ++memory->waiter_count;
+
+    if (timeout_ns > 0) {
+        uint64_t now = salts_hrtime();
+        uint64_t timeout = (uint64_t)timeout_ns;
+        deadline = UINT64_MAX - now < timeout
+            ? UINT64_MAX
+            : now + timeout;
+    }
+
+    /*
+     * Registration is now visible to notify under waiter_mutex. Release the
+     * global SC point before blocking, while retaining waiter_mutex until the
+     * cond wait atomically releases it.
+     */
+    turbowasm_sc_unlock();
+
+    while (!waiter->notified) {
+        if (timeout_ns < 0) {
+            salts_cond_wait(
+                &waiter->condition,
+                &memory->waiter_mutex);
+            continue;
+        }
+
+        {
+            uint64_t now = salts_hrtime();
+            uint64_t remaining;
+            if (now >= deadline) {
+                wait_status = -ETIMEDOUT;
+                break;
+            }
+            remaining = deadline - now;
+            wait_status = salts_cond_timedwait(
+                &waiter->condition,
+                &memory->waiter_mutex,
+                remaining);
+        }
+
+        if (waiter->notified)
+            break;
+        if (wait_status == -ETIMEDOUT)
+            break;
+        if (wait_status != 0)
+            break;
+        /* Spurious wake: loop with the original absolute deadline. */
+    }
+
+    if (waiter->notified)
+        *out_result = 0u;
+    else if (wait_status == -ETIMEDOUT)
+        *out_result = 2u;
+
+    waiter->active = false;
+    waiter->notified = false;
+    waiter->address = 0u;
+    if (memory->waiter_count != 0u)
+        --memory->waiter_count;
+    salts_mutex_unlock(&memory->waiter_mutex);
+
+    if (wait_status != 0 &&
+        wait_status != -ETIMEDOUT)
+        return TURBOWASM_UNSUPPORTED;
+
+    /*
+     * Place successful wake completion after the notifying SC action in the
+     * global order without inverting SC->waiter_mutex lock ordering.
+     */
+    if (*out_result == 0u)
+        return turbowasm_threads_sc_fence();
+
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_memory_notify(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    uint32_t count,
+    uint32_t *out_woken,
+    turbowasm_trap *trap) {
+    turbowasm_instance_memory *memory;
+    uint64_t effective64;
+    size_t effective = 0u;
+    uint32_t woken = 0u;
+    uint32_t index;
+    turbowasm_status status;
+
+    if (instance == NULL || out_woken == NULL || trap == NULL ||
+        memory_index >= instance->memory_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *out_woken = 0u;
+    *trap = TURBOWASM_TRAP_NONE;
+
+    memory = turbowasm_instance_memory_resolve(
+        instance, memory_index);
+    if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    effective64 = (uint64_t)address + (uint64_t)offset;
+    if ((effective64 % 4u) != 0u) {
+        *trap = TURBOWASM_TRAP_UNALIGNED_ATOMIC;
+        return TURBOWASM_TRAPPED;
+    }
+
+    if (!turbowasm_sc_lock())
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    turbowasm_instance_memory_rdlock(memory);
+    status = turbowasm_instance_memory_storage_range(
+        memory, address, offset, 4u, &effective);
+    turbowasm_instance_memory_rdunlock(memory);
+    (void)effective;
+
+    if (status != TURBOWASM_OK) {
+        turbowasm_sc_unlock();
+        if (status == TURBOWASM_TRAPPED)
+            *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        return status;
+    }
+
+    if (!memory->shared) {
+        turbowasm_sc_unlock();
+        return TURBOWASM_OK;
+    }
+
+    if (!memory->waiter_mutex_initialized ||
+        memory->waiter_mutex == NULL) {
+        turbowasm_sc_unlock();
+        return TURBOWASM_UNSUPPORTED;
+    }
+
+    salts_mutex_lock(&memory->waiter_mutex);
+    for (index = 0u;
+         index < memory->waiter_capacity &&
+         woken < count;
+         ++index) {
+        turbowasm_memory_waiter *waiter =
+            &memory->waiters[index];
+
+        if (!waiter->active ||
+            waiter->notified ||
+            waiter->address != effective64)
+            continue;
+
+        waiter->notified = true;
+        ++woken;
+        salts_cond_signal(&waiter->condition);
+    }
+    salts_mutex_unlock(&memory->waiter_mutex);
+    turbowasm_sc_unlock();
+
+    *out_woken = woken;
     return TURBOWASM_OK;
 }
 
