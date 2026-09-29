@@ -15,6 +15,10 @@ extern "C" {
  * The adapter depends only on the Salts secure root-relative filesystem
  * capability. Native fd/HANDLE values never enter TurboWasm public ABI.
  */
+enum {
+    TURBOWASM_WASI_HOST_FS_PATH_MAX = 4096
+};
+
 typedef struct turbowasm_wasi_host_fs {
     void *impl;
 } turbowasm_wasi_host_fs;
@@ -28,7 +32,8 @@ typedef struct turbowasm_wasi_host_fs_config {
 
     /*
      * Maximum root-relative path bytes retained per directory identity,
-     * excluding the trailing NUL. This bound is fixed at initialization.
+     * excluding the trailing NUL. Must not exceed
+     * TURBOWASM_WASI_HOST_FS_PATH_MAX and is fixed at initialization.
      */
     size_t path_capacity;
 } turbowasm_wasi_host_fs_config;
