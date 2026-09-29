@@ -766,7 +766,6 @@ static turbowasm_status turbowasm_apply_data_segments(
         const turbowasm_validation_data_segment *segment =
             &context->data_segments[index];
         uint32_t offset;
-        uint8_t *destination;
         turbowasm_status status;
 
         if (segment->mode !=
@@ -777,19 +776,17 @@ static turbowasm_status turbowasm_apply_data_segments(
             instance, &segment->offset, &offset);
         if (status != TURBOWASM_OK)
             return status;
-        status = turbowasm_instance_memory_bounds(
+        status = turbowasm_instance_memory_write_bytes(
             instance,
             segment->memory_index,
             offset,
             0u,
-            segment->data_size,
-            &destination);
+            segment->data,
+            segment->data_size);
         if (status != TURBOWASM_OK)
-            return TURBOWASM_TRAPPED;
-        if (segment->data_size != 0u)
-            memcpy(destination,
-                   segment->data,
-                   segment->data_size);
+            return status == TURBOWASM_TRAPPED
+                ? TURBOWASM_TRAPPED
+                : status;
     }
 
     return TURBOWASM_OK;
@@ -1174,6 +1171,25 @@ turbowasm_instance_memory_resolve(
     return turbowasm_instance_memory_resolve(
         binding->provider,
         binding->memory_index);
+}
+
+turbowasm_status turbowasm_instance_memory_shared(
+    const turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    bool *out_shared) {
+    const turbowasm_instance_memory *memory;
+
+    if (instance == NULL || out_shared == NULL ||
+        memory_index >= instance->memory_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memory = turbowasm_instance_memory_resolve_const(
+        instance, memory_index);
+    if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    *out_shared = memory->shared;
+    return TURBOWASM_OK;
 }
 
 static turbowasm_status turbowasm_instance_memory_storage_range(
@@ -1763,7 +1779,6 @@ turbowasm_status turbowasm_instance_memory_init(
     const turbowasm_module_impl *module;
     const turbowasm_validation_data_segment *segment;
     uint64_t source_size;
-    uint8_t *destination_bytes;
     turbowasm_status status;
 
     if (instance == NULL ||
@@ -1783,16 +1798,12 @@ turbowasm_status turbowasm_instance_memory_init(
     if (!turbowasm_range_fits(source, length, source_size))
         return TURBOWASM_TRAPPED;
 
-    status = turbowasm_instance_memory_bounds(
+    status = turbowasm_instance_memory_write_bytes(
         instance, memory_index,
-        destination, 0u, length,
-        &destination_bytes);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    if (length != 0u)
-        memcpy(destination_bytes, segment->data + source, length);
-    return TURBOWASM_OK;
+        destination, 0u,
+        segment->data + source,
+        length);
+    return status;
 }
 
 turbowasm_status turbowasm_instance_data_drop(
@@ -1812,27 +1823,13 @@ turbowasm_status turbowasm_instance_memory_copy(
     uint32_t destination,
     uint32_t source,
     uint32_t length) {
-    uint8_t *destination_bytes;
-    uint8_t *source_bytes;
-    turbowasm_status status;
-
-    status = turbowasm_instance_memory_bounds(
-        instance, destination_memory,
-        destination, 0u, length,
-        &destination_bytes);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    status = turbowasm_instance_memory_bounds(
-        instance, source_memory,
-        source, 0u, length,
-        &source_bytes);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    if (length != 0u)
-        memmove(destination_bytes, source_bytes, length);
-    return TURBOWASM_OK;
+    return turbowasm_instance_memory_copy_bytes(
+        instance,
+        destination_memory,
+        source_memory,
+        destination,
+        source,
+        length);
 }
 
 turbowasm_status turbowasm_instance_memory_fill(
@@ -1841,18 +1838,12 @@ turbowasm_status turbowasm_instance_memory_fill(
     uint32_t destination,
     uint8_t value,
     uint32_t length) {
-    uint8_t *destination_bytes;
-    turbowasm_status status =
-        turbowasm_instance_memory_bounds(
-            instance, memory_index,
-            destination, 0u, length,
-            &destination_bytes);
-
-    if (status != TURBOWASM_OK)
-        return status;
-    if (length != 0u)
-        memset(destination_bytes, value, length);
-    return TURBOWASM_OK;
+    return turbowasm_instance_memory_fill_bytes(
+        instance,
+        memory_index,
+        destination,
+        value,
+        length);
 }
 
 turbowasm_status turbowasm_instance_table_init(

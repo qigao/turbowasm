@@ -286,6 +286,11 @@ turbowasm_status turbowasm_instance_memory_storage_init(
 void turbowasm_instance_memory_storage_destroy(
     turbowasm_instance_memory *memory);
 
+turbowasm_status turbowasm_instance_memory_shared(
+    const turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    bool *out_shared);
+
 turbowasm_status turbowasm_instance_memory_read_bytes(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
