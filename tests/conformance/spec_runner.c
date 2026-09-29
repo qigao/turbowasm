@@ -2073,7 +2073,8 @@ static int spec_run_manifest(spec_state *state, const char *path) {
 
         if (first) {
             first = false;
-            if (strcmp(buffer, "TWCF1") != 0) {
+            if (strcmp(buffer, "TWCF1") != 0 &&
+                strcmp(buffer, "TWCF2") != 0) {
                 fprintf(stderr, "unsupported manifest version\n");
                 fclose(file);
                 return 2;
@@ -2102,6 +2103,19 @@ static int spec_run_manifest(spec_state *state, const char *path) {
 
         if (strcmp(fields[0], "unsupported") == 0) {
             spec_note_unsupported(state, line, fields[2]);
+            goto command_done;
+        }
+
+        if (strcmp(fields[0], "thread") == 0 &&
+            field_count == 5u) {
+            spec_command_thread(
+                state, line, fields[2], fields[3], fields[4]);
+            goto command_done;
+        }
+
+        if (strcmp(fields[0], "wait") == 0 &&
+            field_count == 3u) {
+            spec_command_wait(state, line, fields[2]);
             goto command_done;
         }
 
@@ -2208,16 +2222,8 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    memset(&state, 0, sizeof(state));
-    state.current_slot = -1;
-
-    if (turbowasm_linker_init(&state.linker) != TURBOWASM_OK) {
-        fprintf(stderr, "failed to initialize linker\n");
-        return 2;
-    }
-    if (!spec_init_spectest(&state)) {
-        fprintf(stderr, "failed to initialize spectest provider\n");
-        turbowasm_linker_destroy(&state.linker);
+    if (!spec_state_init(&state)) {
+        fprintf(stderr, "failed to initialize conformance state\n");
         return 2;
     }
 
@@ -2243,31 +2249,7 @@ int main(int argc, char **argv) {
            mir_calls);
 #endif
 
-    index = state.slot_count;
-    while (index != 0u) {
-        --index;
-        if (state.slots[index] != NULL) {
-            spec_slot_destroy(state.slots[index]);
-            free(state.slots[index]);
-        }
-    }
-    free(state.slots);
-
-    index = state.retained_failure_count;
-    while (index != 0u) {
-        --index;
-        if (state.retained_failures[index] != NULL) {
-            spec_slot_destroy(state.retained_failures[index]);
-            free(state.retained_failures[index]);
-        }
-    }
-    free(state.retained_failures);
-
-    if (state.spectest_ready) {
-        turbowasm_instance_destroy(&state.spectest_instance);
-        turbowasm_module_destroy(&state.spectest_module);
-    }
-    turbowasm_linker_destroy(&state.linker);
+    spec_state_destroy(&state);
 
     if (rc != 0)
         return rc;
