@@ -33,7 +33,8 @@ if ([string]::IsNullOrWhiteSpace($SaltsRid)) {
   }
 }
 
-$saltsVersion = if ($env:SALTS_SDK_VERSION) { $env:SALTS_SDK_VERSION } else { "1.8.3" }
+$requestedVersion = if ($env:SALTS_SDK_VERSION) { $env:SALTS_SDK_VERSION } else { "*" }
+$versionSpec = if ($requestedVersion -eq "*") { "*" } else { "[$requestedVersion]" }
 $packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $env:RUNNER_TEMP "qigao-nuget" }
 $config = Join-Path $env:RUNNER_TEMP "qigao-nuget.config"
 $project = Join-Path $env:RUNNER_TEMP "turbowasm-salts-sdk-restore.csproj"
@@ -52,13 +53,27 @@ if ($LASTEXITCODE -ne 0) { throw "failed to configure GitHub Packages source" }
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="[$saltsVersion]" />
+    <PackageReference Include="Salts.Native" Version="$versionSpec" />
   </ItemGroup>
 </Project>
 "@ | Set-Content -LiteralPath $project
 
 dotnet restore $project --packages $packages --configfile $config --no-cache
-if ($LASTEXITCODE -ne 0) { throw "failed to restore Salts.Native $saltsVersion" }
+if ($LASTEXITCODE -ne 0) { throw "failed to restore Salts.Native $requestedVersion" }
+
+$assetsPath = Join-Path $env:RUNNER_TEMP "obj/project.assets.json"
+if (-not (Test-Path -LiteralPath $assetsPath -PathType Leaf)) {
+  throw "missing NuGet restore assets: $assetsPath"
+}
+$assets = Get-Content -LiteralPath $assetsPath -Raw | ConvertFrom-Json
+$saltsLibraries = @(
+  $assets.libraries.PSObject.Properties.Name |
+    Where-Object { $_ -like "Salts.Native/*" }
+)
+if ($saltsLibraries.Count -ne 1) {
+  throw "expected exactly one restored Salts.Native package, found $($saltsLibraries.Count)"
+}
+$saltsVersion = ($saltsLibraries[0] -split "/", 2)[1]
 
 $packageRoot = Join-Path (Join-Path $packages "salts.native") $saltsVersion
 $saltsRoot = Join-Path (Join-Path $packageRoot "sdk") $SaltsRid
@@ -68,7 +83,7 @@ $functionHeader = Join-Path $saltsRoot "include/cmeta/function.h"
 
 foreach ($path in @($configPath, $targetsPath, $functionHeader)) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-    throw "missing restored Salts 1.8.3 SDK file: $path"
+    throw "missing restored Salts SDK file: $path"
   }
 }
 

@@ -1,9 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(
-  TurboWasm
-  VERSION 0.1.0
-  LANGUAGES C CXX)
+project(TurboWasm LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -36,22 +33,22 @@ find_package(Salts CONFIG REQUIRED
 
 if(NOT TARGET Salts::CMeta)
   message(FATAL_ERROR
-    "TurboWasm requires Salts 1.8.3 with the canonical Salts::CMeta target")
+    "TurboWasm requires a Salts SDK that exports Salts::CMeta")
 endif()
 
 if(NOT TARGET Salts::SIMD)
   message(FATAL_ERROR
-    "TurboWasm requires Salts 1.8.3 with the canonical Salts::SIMD target")
+    "TurboWasm requires a Salts SDK that exports Salts::SIMD")
 endif()
 
 if(NOT TARGET Salts::Coroutine)
   message(FATAL_ERROR
-    "TurboWasm requires Salts 1.8.3 with the canonical Salts::Coroutine target")
+    "TurboWasm requires a Salts SDK that exports Salts::Coroutine")
 endif()
 
 if(NOT TARGET Salts::Platform)
   message(FATAL_ERROR
-    "TurboWasm requires Salts 1.8.3 with the canonical Salts::Platform target")
+    "TurboWasm requires a Salts SDK that exports Salts::Platform")
 endif()
 
 add_library(turbowasm
@@ -80,9 +77,7 @@ add_library(turbowasm
 add_library(TurboWasm::Runtime ALIAS turbowasm)
 
 set_target_properties(turbowasm PROPERTIES
-  EXPORT_NAME Runtime
-  VERSION ${PROJECT_VERSION}
-  SOVERSION 0)
+  EXPORT_NAME Runtime)
 
 target_compile_features(turbowasm PUBLIC c_std_11)
 target_include_directories(turbowasm
@@ -106,9 +101,7 @@ if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
     src/cflow_adapter.c)
   add_library(TurboWasm::CFlow ALIAS turbowasm_cflow)
   set_target_properties(turbowasm_cflow PROPERTIES
-    EXPORT_NAME CFlow
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 0)
+    EXPORT_NAME CFlow)
   target_compile_features(turbowasm_cflow PUBLIC c_std_11)
   target_include_directories(turbowasm_cflow
     PUBLIC
@@ -129,16 +122,14 @@ endif()
 if(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)
   if(NOT TARGET Salts::NativeIO)
     message(FATAL_ERROR
-      "TurboWasm NativeIO adapter requires Salts 1.8.3 Salts::NativeIO")
+      "TurboWasm NativeIO adapter requires a Salts SDK that exports Salts::NativeIO")
   endif()
 
   add_library(turbowasm_native_io
     src/native_io_adapter.c)
   add_library(TurboWasm::NativeIO ALIAS turbowasm_native_io)
   set_target_properties(turbowasm_native_io PROPERTIES
-    EXPORT_NAME NativeIO
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 0)
+    EXPORT_NAME NativeIO)
   target_compile_features(turbowasm_native_io PUBLIC c_std_11)
   target_include_directories(turbowasm_native_io
     PUBLIC
@@ -162,9 +153,7 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
     src/wasi_fs.c)
   add_library(TurboWasm::WASI ALIAS turbowasm_wasi)
   set_target_properties(turbowasm_wasi PROPERTIES
-    EXPORT_NAME WASI
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 0)
+    EXPORT_NAME WASI)
   target_compile_features(turbowasm_wasi PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi
     PUBLIC
@@ -190,9 +179,7 @@ if(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER)
     src/wasi_native_io.c)
   add_library(TurboWasm::WASINativeIO ALIAS turbowasm_wasi_native_io)
   set_target_properties(turbowasm_wasi_native_io PROPERTIES
-    EXPORT_NAME WASINativeIO
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 0)
+    EXPORT_NAME WASINativeIO)
   target_compile_features(turbowasm_wasi_native_io PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi_native_io
     PUBLIC
@@ -214,16 +201,14 @@ endif()
 if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
   if(NOT TARGET Salts::CFlow)
     message(FATAL_ERROR
-      "TurboWasm WASIThreads adapter requires Salts 1.8.3 Salts::CFlow")
+      "TurboWasm WASIThreads adapter requires a Salts SDK that exports Salts::CFlow")
   endif()
 
   add_library(turbowasm_wasi_threads
     src/wasi_threads.c)
   add_library(TurboWasm::WASIThreads ALIAS turbowasm_wasi_threads)
   set_target_properties(turbowasm_wasi_threads PROPERTIES
-    EXPORT_NAME WASIThreads
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 0)
+    EXPORT_NAME WASIThreads)
   target_compile_features(turbowasm_wasi_threads PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi_threads
     PUBLIC
@@ -363,15 +348,9 @@ configure_package_config_file(
   "${CMAKE_CURRENT_BINARY_DIR}/TurboWasmConfig.cmake"
   INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/TurboWasm")
 
-write_basic_package_version_file(
-  "${CMAKE_CURRENT_BINARY_DIR}/TurboWasmConfigVersion.cmake"
-  VERSION ${PROJECT_VERSION}
-  COMPATIBILITY SameMajorVersion)
-
 install(
   FILES
     "${CMAKE_CURRENT_BINARY_DIR}/TurboWasmConfig.cmake"
-    "${CMAKE_CURRENT_BINARY_DIR}/TurboWasmConfigVersion.cmake"
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/TurboWasm")
 
 install(
