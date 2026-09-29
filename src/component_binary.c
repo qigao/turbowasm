@@ -255,6 +255,26 @@ static bool append_core_function_alias(
     return true;
 }
 
+static bool append_core_memory_alias(
+    turbowasm_component_binary *component,
+    turbowasm_component_core_memory_alias alias) {
+    uint32_t required;
+
+    if (component == NULL ||
+        component->core_memory_alias_count == UINT32_MAX)
+        return false;
+    required = component->core_memory_alias_count + 1u;
+    if (!reserve_array(
+            (void **)&component->core_memory_aliases,
+            &component->core_memory_alias_capacity,
+            required,
+            sizeof(*component->core_memory_aliases)))
+        return false;
+    component->core_memory_aliases[
+        component->core_memory_alias_count++] = alias;
+    return true;
+}
+
 static bool append_canon_lift(
     turbowasm_component_binary *component,
     turbowasm_component_canon_lift lift) {
