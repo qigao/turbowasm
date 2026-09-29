@@ -642,6 +642,7 @@ static uint32_t littlefs_path_stat(
     struct lfs_info info;
     turbowasm_wasi_fs_file anonymous = {0};
     uint32_t error;
+    size_t index;
     int result;
 
     if (impl == NULL || out_stat == NULL)
@@ -654,6 +655,37 @@ static uint32_t littlefs_path_stat(
         impl, directory, path, path_length, full_path);
     if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
         return error;
+
+    /*
+     * littlefs does not necessarily publish an open file's buffered size to
+     * path metadata until sync/close. Preserve provider coherence by serving
+     * live metadata from an already-open identity before consulting lfs_stat.
+     */
+    for (index = 0u; index < impl->slot_capacity; ++index) {
+        turbowasm_wasi_littlefs_slot *slot = &impl->slots[index];
+
+        if (!slot->used || strcmp(slot->path, full_path) != 0)
+            continue;
+        if (slot->directory) {
+            littlefs_fill_stat(
+                littlefs_file_from_slot(impl, slot),
+                true,
+                0u,
+                out_stat);
+            return TURBOWASM_WASI_ERRNO_SUCCESS;
+        } else {
+            lfs_soff_t size =
+                lfs_file_size(impl->filesystem, &slot->file);
+            if (size < 0)
+                return littlefs_errno((int)size);
+            littlefs_fill_stat(
+                littlefs_file_from_slot(impl, slot),
+                false,
+                (uint64_t)size,
+                out_stat);
+            return TURBOWASM_WASI_ERRNO_SUCCESS;
+        }
+    }
 
     result = lfs_stat(impl->filesystem, full_path, &info);
     if (result < 0)
