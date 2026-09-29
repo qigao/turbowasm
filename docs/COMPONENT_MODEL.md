@@ -168,6 +168,49 @@ C3 in this slice is metadata-only: it does not read/write linear memory, invoke
 `realloc`, validate UTF encodings, or create resource handles. Those execution
 operations remain later C3/C4 work.
 
+## C3 canonical ABI boundary
+
+C3a retains deterministic canonical layout and flat-Core carrier metadata for
+the supported synchronous value subset.
+
+C3b adds the first execution-time memory codec. It operates on an explicit Core
+instance/memory plus an explicit realloc callback. This keeps canonical memory
+semantics independent from Component instantiation:
+
+```text
+Component value
+    |
+    v
+canonical layout/type metadata
+    |
+    +-- Core instance + memory index
+    +-- memory32 or memory64 pointer width
+    +-- explicit realloc callback
+    |
+    v
+Runtime memory bounds/read/write helpers
+```
+
+The first codec supports:
+
+- Component integer/float/bool/char scalars;
+- UTF-8 strings;
+- dynamic lists recursively containing the currently-supported scalar/string/
+  list subset.
+
+Lifted string/list host storage uses the owning Core module's Runtime allocator
+scope, so #300 per-allocation policy applies. Lowering never writes directly to
+a raw guest pointer: guest storage is obtained through the realloc callback and
+all reads/writes are checked by Runtime memory helpers.
+
+Pinned safety limits are retained for strings/lists (2^28-1 bytes), invalid
+UTF-8/bool/char values trap, memory32/memory64 pointer-width mismatches fail
+closed, and recursive value traversal is depth-bounded.
+
+Resource handle lift/lower is deliberately excluded from C3b and remains C4.
+UTF-16 and latin1+utf16 string encodings are not yet exposed by this first
+memory codec.
+
 ## Deferred work
 
 C1 intentionally does not implement:
