@@ -79,6 +79,19 @@ turbowasm_status turbowasm_host_call_memory_span(
     turbowasm_trap *trap);
 
 /*
+ * 64-bit address form for memory64 guests. The returned host span is still
+ * bounded by size_t and by the Runtime's physical allocation/resource policy.
+ * The memory32 helper above remains the source-compatible convenience API.
+ */
+turbowasm_status turbowasm_host_call_memory_span64(
+    turbowasm_host_call *call,
+    uint32_t memory_index,
+    uint64_t address,
+    size_t length,
+    turbowasm_host_memory_span *out_span,
+    turbowasm_trap *trap);
+
+/*
  * Suspend the current async-capable host callback after an external operation
  * has been accepted. This only succeeds inside a resumable execution. The same
  * callback frame continues after the matching wait is completed and the
