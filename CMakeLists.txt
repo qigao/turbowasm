@@ -63,6 +63,7 @@ add_library(turbowasm
   src/artifact.c
   src/atomic.c
   src/component_binary.c
+  src/component_canonical.c
   src/component_type_graph.c
   src/execution.c
   src/instance.c
