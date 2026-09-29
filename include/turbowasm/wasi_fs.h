@@ -48,6 +48,18 @@ typedef struct turbowasm_wasi_fs_stat {
     uint64_t changed_ns;
 } turbowasm_wasi_fs_stat;
 
+enum {
+    TURBOWASM_WASI_FS_DIRENT_NAME_MAX = 255
+};
+
+typedef struct turbowasm_wasi_fs_dirent {
+    uint64_t next_cookie;
+    uint64_t inode;
+    uint32_t name_length;
+    uint8_t file_type;
+    uint8_t name[TURBOWASM_WASI_FS_DIRENT_NAME_MAX];
+} turbowasm_wasi_fs_dirent;
+
 typedef uint32_t (*turbowasm_wasi_fs_close_fn)(
     void *context,
     turbowasm_wasi_fs_file file);
@@ -109,6 +121,13 @@ typedef uint32_t (*turbowasm_wasi_fs_path_mutation_fn)(
     const uint8_t *path,
     size_t path_length);
 
+typedef uint32_t (*turbowasm_wasi_fs_readdir_fn)(
+    void *context,
+    turbowasm_wasi_fs_file directory,
+    uint64_t cookie,
+    turbowasm_wasi_fs_dirent *out_entry,
+    bool *out_has_entry);
+
 typedef struct turbowasm_wasi_fs_provider {
     void *context;
     turbowasm_wasi_fs_close_fn close;
@@ -122,6 +141,7 @@ typedef struct turbowasm_wasi_fs_provider {
     turbowasm_wasi_fs_path_mutation_fn path_create_directory;
     turbowasm_wasi_fs_path_mutation_fn path_remove_directory;
     turbowasm_wasi_fs_path_mutation_fn path_unlink_file;
+    turbowasm_wasi_fs_readdir_fn readdir;
 } turbowasm_wasi_fs_provider;
 
 typedef struct turbowasm_wasi_fs_config {
@@ -267,6 +287,13 @@ uint32_t turbowasm_wasi_fs_path_unlink_file(
     uint32_t directory_fd,
     const uint8_t *path,
     size_t path_length);
+
+uint32_t turbowasm_wasi_fs_fd_readdir(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t fd,
+    uint64_t cookie,
+    turbowasm_wasi_fs_dirent *out_entry,
+    bool *out_has_entry);
 
 #ifdef __cplusplus
 }
