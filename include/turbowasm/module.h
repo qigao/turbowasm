@@ -146,6 +146,26 @@ turbowasm_status turbowasm_module_load_borrowed_from_artifact_with_config(
     const uint8_t *artifact,
     size_t artifact_size,
     const turbowasm_runtime_config *config);
+
+/*
+ * Measure and serialize the validated retained-metadata artifact associated
+ * with a loaded module. The artifact contains no native/JIT code and is tied
+ * to the exact borrowed Wasm byte sequence by source SHA-256 plus the current
+ * Runtime feature fingerprint.
+ *
+ * Measure first, allocate at least the returned number of bytes, then write.
+ * If output is NULL or capacity is too small, write returns
+ * TURBOWASM_OUT_OF_MEMORY and still reports the required size.
+ */
+turbowasm_status turbowasm_module_artifact_measure(
+    const turbowasm_module *module,
+    size_t *out_size);
+
+turbowasm_status turbowasm_module_artifact_write(
+    const turbowasm_module *module,
+    uint8_t *output,
+    size_t capacity,
+    size_t *out_size);
 void turbowasm_module_destroy(turbowasm_module *module);
 
 const uint8_t *turbowasm_module_bytes(const turbowasm_module *module);
