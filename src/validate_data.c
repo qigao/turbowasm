@@ -1,5 +1,6 @@
 #include "validate_data.h"
 #include "validate_type.h"
+#include "runtime_alloc.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -73,7 +74,7 @@ static bool turbowasm_const_type_stack_reserve(
 
     if ((uint64_t)next * sizeof(*grown) > (uint64_t)SIZE_MAX)
         return false;
-    grown = (turbowasm_validation_value_type *)realloc(
+    grown = (turbowasm_validation_value_type *)turbowasm_rt_realloc(
         stack->values, (size_t)next * sizeof(*grown));
     if (grown == NULL)
         return false;
@@ -346,7 +347,7 @@ turbowasm_status turbowasm_validate_const_expr_semantic(
         }
     }
 
-    free(stack.values);
+    turbowasm_rt_free(stack.values);
     return status;
 }
 

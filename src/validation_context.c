@@ -1,4 +1,5 @@
 #include "validation_context.h"
+#include "runtime_alloc.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -102,7 +103,7 @@ static bool turbowasm_validation_reserve(
     if ((uint64_t)next * (uint64_t)element_size > (uint64_t)SIZE_MAX)
         return false;
 
-    grown = realloc(*storage, (size_t)next * element_size);
+    grown = turbowasm_rt_realloc(*storage, (size_t)next * element_size);
     if (grown == NULL)
         return false;
 
@@ -126,36 +127,36 @@ void turbowasm_validation_context_destroy(
         return;
 
     for (index = 0u; index < context->type_count; ++index) {
-        free(context->types[index].params);
-        free(context->types[index].param_semantics);
-        free(context->types[index].results);
-        free(context->types[index].result_semantics);
+        turbowasm_rt_free(context->types[index].params);
+        turbowasm_rt_free(context->types[index].param_semantics);
+        turbowasm_rt_free(context->types[index].results);
+        turbowasm_rt_free(context->types[index].result_semantics);
     }
 
-    free(context->imports);
-    free(context->exports);
-    free(context->types);
+    turbowasm_rt_free(context->imports);
+    turbowasm_rt_free(context->exports);
+    turbowasm_rt_free(context->types);
 
     for (index = 0u; index < context->function_count; ++index) {
         uint32_t control_index;
-        free(context->functions[index].local_types);
-        free(context->functions[index].local_semantics);
+        turbowasm_rt_free(context->functions[index].local_types);
+        turbowasm_rt_free(context->functions[index].local_semantics);
         for (control_index = 0u;
              control_index < context->functions[index].control_count;
              ++control_index)
-            free(context->functions[index].controls[control_index].catches);
-        free(context->functions[index].controls);
+            turbowasm_rt_free(context->functions[index].controls[control_index].catches);
+        turbowasm_rt_free(context->functions[index].controls);
     }
-    free(context->functions);
-    free(context->globals);
-    free(context->tables);
-    free(context->memories);
-    free(context->tags);
-    free(context->data_segments);
+    turbowasm_rt_free(context->functions);
+    turbowasm_rt_free(context->globals);
+    turbowasm_rt_free(context->tables);
+    turbowasm_rt_free(context->memories);
+    turbowasm_rt_free(context->tags);
+    turbowasm_rt_free(context->data_segments);
     for (index = 0u; index < context->element_segment_count; ++index)
-        free(context->element_segments[index].items);
-    free(context->element_segments);
-    free(context->declared_refs);
+        turbowasm_rt_free(context->element_segments[index].items);
+    turbowasm_rt_free(context->element_segments);
+    turbowasm_rt_free(context->declared_refs);
     memset(context, 0, sizeof(*context));
 }
 
@@ -214,7 +215,7 @@ bool turbowasm_validation_context_allocate_types(
         (uint64_t)SIZE_MAX)
         return false;
 
-    context->types = (turbowasm_validation_func_type *)calloc(
+    context->types = (turbowasm_validation_func_type *)turbowasm_rt_calloc(
         (size_t)count, sizeof(*context->types));
     if (context->types == NULL)
         return false;
@@ -238,13 +239,13 @@ bool turbowasm_validation_context_define_type(
         return false;
 
     if (param_count != 0u) {
-        type->params = (uint8_t *)calloc((size_t)param_count, 1u);
+        type->params = (uint8_t *)turbowasm_rt_calloc((size_t)param_count, 1u);
         type->param_semantics =
-            (turbowasm_validation_value_type *)calloc(
+            (turbowasm_validation_value_type *)turbowasm_rt_calloc(
                 (size_t)param_count, sizeof(*type->param_semantics));
         if (type->params == NULL || type->param_semantics == NULL) {
-            free(type->params);
-            free(type->param_semantics);
+            turbowasm_rt_free(type->params);
+            turbowasm_rt_free(type->param_semantics);
             type->params = NULL;
             type->param_semantics = NULL;
             return false;
@@ -252,15 +253,15 @@ bool turbowasm_validation_context_define_type(
     }
 
     if (result_count != 0u) {
-        type->results = (uint8_t *)calloc((size_t)result_count, 1u);
+        type->results = (uint8_t *)turbowasm_rt_calloc((size_t)result_count, 1u);
         type->result_semantics =
-            (turbowasm_validation_value_type *)calloc(
+            (turbowasm_validation_value_type *)turbowasm_rt_calloc(
                 (size_t)result_count, sizeof(*type->result_semantics));
         if (type->results == NULL || type->result_semantics == NULL) {
-            free(type->params);
-            free(type->param_semantics);
-            free(type->results);
-            free(type->result_semantics);
+            turbowasm_rt_free(type->params);
+            turbowasm_rt_free(type->param_semantics);
+            turbowasm_rt_free(type->results);
+            turbowasm_rt_free(type->result_semantics);
             type->params = NULL;
             type->param_semantics = NULL;
             type->results = NULL;
@@ -717,7 +718,7 @@ bool turbowasm_validation_context_declare_function_ref(
     if (context->declared_refs == NULL) {
         if (context->function_count == 0u)
             return false;
-        context->declared_refs = (uint8_t *)calloc(
+        context->declared_refs = (uint8_t *)turbowasm_rt_calloc(
             (size_t)context->function_count, 1u);
         if (context->declared_refs == NULL)
             return false;

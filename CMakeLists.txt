@@ -69,6 +69,7 @@ add_library(turbowasm
   src/module.c
   src/reader.c
   src/relaxed_simd.c
+  src/runtime_alloc.c
   src/simd.c
   src/simd_exec_table.c
   src/status.c

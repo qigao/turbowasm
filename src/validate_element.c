@@ -2,6 +2,7 @@
 
 #include "validate_data.h"
 #include "validate_type.h"
+#include "runtime_alloc.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -113,7 +114,7 @@ static turbowasm_status turbowasm_element_validate_funcidx_vector(
     if (count != 0u) {
         if ((uint64_t)count * sizeof(*items) > (uint64_t)SIZE_MAX)
             return TURBOWASM_OUT_OF_MEMORY;
-        items = (turbowasm_validation_element_item *)calloc(
+        items = (turbowasm_validation_element_item *)turbowasm_rt_calloc(
             (size_t)count, sizeof(*items));
         if (items == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
@@ -122,16 +123,16 @@ static turbowasm_status turbowasm_element_validate_funcidx_vector(
     for (index = 0u; index < count; ++index) {
         uint32_t function_index;
         if (!turbowasm_reader_uleb32(reader, &function_index)) {
-            free(items);
+            turbowasm_rt_free(items);
             return TURBOWASM_MALFORMED_MODULE;
         }
         if (function_index >= context->function_count) {
-            free(items);
+            turbowasm_rt_free(items);
             return TURBOWASM_MALFORMED_MODULE;
         }
         if (!turbowasm_validation_context_declare_function_ref(
                 context, function_index)) {
-            free(items);
+            turbowasm_rt_free(items);
             return TURBOWASM_OUT_OF_MEMORY;
         }
 
@@ -163,7 +164,7 @@ static turbowasm_status turbowasm_element_validate_expr_vector(
     if (count != 0u) {
         if ((uint64_t)count * sizeof(*items) > (uint64_t)SIZE_MAX)
             return TURBOWASM_OUT_OF_MEMORY;
-        items = (turbowasm_validation_element_item *)calloc(
+        items = (turbowasm_validation_element_item *)turbowasm_rt_calloc(
             (size_t)count, sizeof(*items));
         if (items == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
@@ -178,18 +179,18 @@ static turbowasm_status turbowasm_element_validate_expr_vector(
                 reader, context, &type);
 
         if (status != TURBOWASM_OK) {
-            free(items);
+            turbowasm_rt_free(items);
             return status;
         }
         if (!turbowasm_validation_value_type_matches(
                 &type, reference_type)) {
-            free(items);
+            turbowasm_rt_free(items);
             return TURBOWASM_MALFORMED_MODULE;
         }
 
         size = (size_t)(reader->cursor - start);
         if (size > UINT32_MAX) {
-            free(items);
+            turbowasm_rt_free(items);
             return TURBOWASM_OUT_OF_MEMORY;
         }
 
@@ -302,13 +303,13 @@ turbowasm_status turbowasm_validate_element_section(
                   section, context,
                   &descriptor.items, &descriptor.item_count);
         if (status != TURBOWASM_OK) {
-            free(descriptor.items);
+            turbowasm_rt_free(descriptor.items);
             return status;
         }
 
         if (!turbowasm_validation_context_append_element_segment(
                 context, descriptor)) {
-            free(descriptor.items);
+            turbowasm_rt_free(descriptor.items);
             return TURBOWASM_OUT_OF_MEMORY;
         }
     }

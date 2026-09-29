@@ -2,6 +2,7 @@
 
 #include "instance_internal.h"
 #include "module_internal.h"
+#include "runtime_alloc.h"
 
 #include <salts_coro.h>
 
@@ -224,12 +225,19 @@ turbowasm_status turbowasm_execution_create(
         type->result_count > SIZE_MAX / sizeof(turbowasm_value))
         return TURBOWASM_OUT_OF_MEMORY;
 
-    impl = (turbowasm_execution_impl *)calloc(1u, sizeof(*impl));
-    if (impl == NULL)
-        return TURBOWASM_OUT_OF_MEMORY;
+    {
+        turbowasm_runtime_scope scope =
+            turbowasm_runtime_scope_enter(&module->config);
 
-    if (argument_count != 0u) {
-        impl->arguments = (turbowasm_value *)malloc(
+        impl = (turbowasm_execution_impl *)turbowasm_rt_calloc(
+            1u, sizeof(*impl));
+        if (impl == NULL) {
+            turbowasm_runtime_scope_leave(scope);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
+
+        if (argument_count != 0u) {
+        impl->arguments = (turbowasm_value *)turbowasm_rt_malloc(
             argument_count * sizeof(*impl->arguments));
         if (impl->arguments == NULL)
             goto out_of_memory;
@@ -241,7 +249,7 @@ turbowasm_status turbowasm_execution_create(
 
     impl->result_capacity = type->result_count;
     if (impl->result_capacity != 0u) {
-        impl->results = (turbowasm_value *)calloc(
+        impl->results = (turbowasm_value *)turbowasm_rt_calloc(
             impl->result_capacity, sizeof(*impl->results));
         if (impl->results == NULL)
             goto out_of_memory;
@@ -267,14 +275,17 @@ turbowasm_status turbowasm_execution_create(
     if (impl->coroutine == NULL)
         goto out_of_memory;
 
-    execution->impl = impl;
-    return TURBOWASM_OK;
+        execution->impl = impl;
+        turbowasm_runtime_scope_leave(scope);
+        return TURBOWASM_OK;
 
 out_of_memory:
-    free(impl->results);
-    free(impl->arguments);
-    free(impl);
-    return TURBOWASM_OUT_OF_MEMORY;
+        turbowasm_rt_free(impl->results);
+        turbowasm_rt_free(impl->arguments);
+        turbowasm_rt_free(impl);
+        turbowasm_runtime_scope_leave(scope);
+        return TURBOWASM_OUT_OF_MEMORY;
+    }
 }
 
 void turbowasm_execution_destroy(turbowasm_execution *execution) {
@@ -286,9 +297,9 @@ void turbowasm_execution_destroy(turbowasm_execution *execution) {
 
     if (impl->coroutine != NULL)
         coro_destroy(impl->coroutine);
-    free(impl->results);
-    free(impl->arguments);
-    free(impl);
+    turbowasm_rt_free(impl->results);
+    turbowasm_rt_free(impl->arguments);
+    turbowasm_rt_free(impl);
     execution->impl = NULL;
 }
 
@@ -321,10 +332,22 @@ turbowasm_status turbowasm_execution_resume(
     impl->yield_reason = TURBOWASM_YIELD_NONE;
     impl->state = TURBOWASM_EXECUTION_RUNNING;
 
-    if (coro_resume(impl->coroutine) != 0) {
-        impl->state = TURBOWASM_EXECUTION_FAILED;
-        impl->terminal_status = TURBOWASM_INVALID_ARGUMENT;
-        return TURBOWASM_INVALID_ARGUMENT;
+    {
+        const turbowasm_module_impl *module =
+            turbowasm_module_impl_get(impl->instance->module);
+        turbowasm_runtime_scope scope;
+        int resume_status;
+
+        if (module == NULL)
+            return TURBOWASM_INVALID_ARGUMENT;
+        scope = turbowasm_runtime_scope_enter(&module->config);
+        resume_status = coro_resume(impl->coroutine);
+        turbowasm_runtime_scope_leave(scope);
+        if (resume_status != 0) {
+            impl->state = TURBOWASM_EXECUTION_FAILED;
+            impl->terminal_status = TURBOWASM_INVALID_ARGUMENT;
+            return TURBOWASM_INVALID_ARGUMENT;
+        }
     }
 
     if (impl->state == TURBOWASM_EXECUTION_YIELDED)

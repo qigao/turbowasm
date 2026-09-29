@@ -2,6 +2,7 @@
 #define TURBOWASM_MODULE_H
 
 #include <turbowasm/status.h>
+#include <turbowasm/runtime.h>
 
 #include <cmeta/cmeta.h>
 
@@ -107,6 +108,15 @@ typedef struct turbowasm_module_summary {
 turbowasm_status turbowasm_module_load_borrowed(turbowasm_module *module,
                                                 const uint8_t *bytes,
                                                 size_t size);
+
+/* Load with caller-supplied allocation/resource policy. The config is copied;
+ * any allocator context it references must remain valid until all objects
+ * derived from the module are destroyed. Zero limits mean unlimited. */
+turbowasm_status turbowasm_module_load_borrowed_with_config(
+    turbowasm_module *module,
+    const uint8_t *bytes,
+    size_t size,
+    const turbowasm_runtime_config *config);
 void turbowasm_module_destroy(turbowasm_module *module);
 
 const uint8_t *turbowasm_module_bytes(const turbowasm_module *module);

@@ -2,6 +2,7 @@
 #include "atomic.h"
 #include "validate_simd_table.h"
 #include "validate_type.h"
+#include "runtime_alloc.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -114,7 +115,7 @@ static bool turbowasm_control_reserve(
     if ((uint64_t)next * sizeof(*grown) > (uint64_t)SIZE_MAX)
         return false;
 
-    grown = (turbowasm_control_frame *)realloc(
+    grown = (turbowasm_control_frame *)turbowasm_rt_realloc(
         controls->frames, (size_t)next * sizeof(*grown));
     if (grown == NULL)
         return false;
@@ -135,7 +136,7 @@ static bool turbowasm_copy_types(
     if (out == NULL)
         return false;
     if (count != 0u) {
-        copy = (turbowasm_validation_value_type *)malloc(
+        copy = (turbowasm_validation_value_type *)turbowasm_rt_malloc(
             (size_t)count * sizeof(*copy));
         if (copy == NULL)
             return false;
@@ -149,8 +150,8 @@ static void turbowasm_control_frame_destroy(
     turbowasm_control_frame *frame) {
     if (frame == NULL)
         return;
-    free(frame->start_types);
-    free(frame->end_types);
+    turbowasm_rt_free(frame->start_types);
+    turbowasm_rt_free(frame->end_types);
     memset(frame, 0, sizeof(*frame));
 }
 
@@ -162,7 +163,7 @@ static void turbowasm_control_stack_destroy(
         return;
     for (index = 0u; index < controls->size; ++index)
         turbowasm_control_frame_destroy(&controls->frames[index]);
-    free(controls->frames);
+    turbowasm_rt_free(controls->frames);
     memset(controls, 0, sizeof(*controls));
 }
 
@@ -201,7 +202,7 @@ static bool turbowasm_stack_reserve(
 
     if ((uint64_t)next * sizeof(*grown) > (uint64_t)SIZE_MAX)
         return false;
-    grown = (turbowasm_validation_value_type *)realloc(
+    grown = (turbowasm_validation_value_type *)turbowasm_rt_realloc(
         stack->values, (size_t)next * sizeof(*grown));
     if (grown == NULL)
         return false;
@@ -671,7 +672,7 @@ static turbowasm_status turbowasm_control_end(
 
     status = turbowasm_stack_push_types(
         stack, end_types, end_count);
-    free(end_types);
+    turbowasm_rt_free(end_types);
     return status;
 }
 
@@ -745,7 +746,7 @@ static turbowasm_status turbowasm_read_locals(
         if ((uint64_t)group_count * sizeof(*groups) >
             (uint64_t)SIZE_MAX)
             return TURBOWASM_OUT_OF_MEMORY;
-        groups = (local_group *)calloc(
+        groups = (local_group *)turbowasm_rt_calloc(
             (size_t)group_count, sizeof(*groups));
         if (groups == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
@@ -756,39 +757,39 @@ static turbowasm_status turbowasm_read_locals(
         turbowasm_status status;
 
         if (!turbowasm_reader_uleb32(body, &groups[group].count)) {
-            free(groups);
+            turbowasm_rt_free(groups);
             return TURBOWASM_MALFORMED_MODULE;
         }
 
         status = turbowasm_validation_read_valtype(
             body, &groups[group].type, &generalized);
         if (status != TURBOWASM_OK) {
-            free(groups);
+            turbowasm_rt_free(groups);
             return status;
         }
 
         if (groups[group].type.heap_kind ==
                 TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
             groups[group].type.type_index >= context->type_count) {
-            free(groups);
+            turbowasm_rt_free(groups);
             return TURBOWASM_MALFORMED_MODULE;
         }
 
         total += groups[group].count;
         if (total > UINT32_MAX) {
-            free(groups);
+            turbowasm_rt_free(groups);
             return TURBOWASM_OUT_OF_MEMORY;
         }
     }
 
     if (total != 0u) {
-        locals = (uint8_t *)malloc((size_t)total);
-        semantics = (turbowasm_validation_value_type *)malloc(
+        locals = (uint8_t *)turbowasm_rt_malloc((size_t)total);
+        semantics = (turbowasm_validation_value_type *)turbowasm_rt_malloc(
             (size_t)total * sizeof(*semantics));
         if (locals == NULL || semantics == NULL) {
-            free(locals);
-            free(semantics);
-            free(groups);
+            turbowasm_rt_free(locals);
+            turbowasm_rt_free(semantics);
+            turbowasm_rt_free(groups);
             return TURBOWASM_OUT_OF_MEMORY;
         }
     }
@@ -813,7 +814,7 @@ static turbowasm_status turbowasm_read_locals(
         }
     }
 
-    free(groups);
+    turbowasm_rt_free(groups);
     *out_locals = locals;
     *out_semantics = semantics;
     *out_count = (uint32_t)total;
@@ -1141,7 +1142,7 @@ static turbowasm_status turbowasm_read_try_catches(
     if (count != 0u) {
         if ((uint64_t)count * sizeof(*catches) > (uint64_t)SIZE_MAX)
             return TURBOWASM_OUT_OF_MEMORY;
-        catches = (turbowasm_validation_catch *)calloc(
+        catches = (turbowasm_validation_catch *)turbowasm_rt_calloc(
             (size_t)count, sizeof(*catches));
         if (catches == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
@@ -1155,7 +1156,7 @@ static turbowasm_status turbowasm_read_try_catches(
 
         if (!turbowasm_reader_u8(body, &kind) ||
             kind > (uint8_t)TURBOWASM_VALIDATION_CATCH_ALL_REF) {
-            free(catches);
+            turbowasm_rt_free(catches);
             return TURBOWASM_MALFORMED_MODULE;
         }
         catches[index].kind = (turbowasm_validation_catch_kind)kind;
@@ -1164,14 +1165,14 @@ static turbowasm_status turbowasm_read_try_catches(
             kind == (uint8_t)TURBOWASM_VALIDATION_CATCH_REF) {
             if (!turbowasm_reader_uleb32(
                     body, &catches[index].tag_index)) {
-                free(catches);
+                turbowasm_rt_free(catches);
                 return TURBOWASM_MALFORMED_MODULE;
             }
         }
 
         if (!turbowasm_reader_uleb32(
                 body, &catches[index].label_depth)) {
-            free(catches);
+            turbowasm_rt_free(catches);
             return TURBOWASM_MALFORMED_MODULE;
         }
 
@@ -1185,7 +1186,7 @@ static turbowasm_status turbowasm_read_try_catches(
             !turbowasm_catch_payload_matches_label(
                 context, target, catches[index].kind,
                 catches[index].tag_index)) {
-            free(catches);
+            turbowasm_rt_free(catches);
             return TURBOWASM_MALFORMED_MODULE;
         }
     }
@@ -1258,26 +1259,26 @@ static turbowasm_status turbowasm_validate_br_table(
         return TURBOWASM_MALFORMED_MODULE;
 
     if (count != 0u) {
-        depths = (uint32_t *)calloc((size_t)count, sizeof(*depths));
+        depths = (uint32_t *)turbowasm_rt_calloc((size_t)count, sizeof(*depths));
         if (depths == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
     }
 
     for (index = 0u; index < count; ++index) {
         if (!turbowasm_reader_uleb32(body, &depths[index])) {
-            free(depths);
+            turbowasm_rt_free(depths);
             return TURBOWASM_MALFORMED_MODULE;
         }
     }
     if (!turbowasm_reader_uleb32(body, &default_depth)) {
-        free(depths);
+        turbowasm_rt_free(depths);
         return TURBOWASM_MALFORMED_MODULE;
     }
 
     default_target = turbowasm_control_target(
         controls, default_depth);
     if (default_target == NULL) {
-        free(depths);
+        turbowasm_rt_free(depths);
         return TURBOWASM_MALFORMED_MODULE;
     }
     turbowasm_control_label_types(
@@ -1285,15 +1286,15 @@ static turbowasm_status turbowasm_validate_br_table(
 
     status = turbowasm_stack_pop(stack, TW_I32);
     if (status != TURBOWASM_OK) {
-        free(depths);
+        turbowasm_rt_free(depths);
         return status;
     }
 
     if (arity != 0u) {
-        actual = (turbowasm_validation_value_type *)calloc(
+        actual = (turbowasm_validation_value_type *)turbowasm_rt_calloc(
             (size_t)arity, sizeof(*actual));
         if (actual == NULL) {
-            free(depths);
+            turbowasm_rt_free(depths);
             return TURBOWASM_OUT_OF_MEMORY;
         }
     }
@@ -1335,8 +1336,8 @@ static turbowasm_status turbowasm_validate_br_table(
     status = TURBOWASM_OK;
 
 done_br_table:
-    free(actual);
-    free(depths);
+    turbowasm_rt_free(actual);
+    turbowasm_rt_free(depths);
     return status;
 }
 
@@ -2216,7 +2217,7 @@ turbowasm_status turbowasm_validate_function_body(
                     goto done;
 
                 if ((size_t)(body->cursor - code_start) > UINT32_MAX) {
-                    free(catches);
+                    turbowasm_rt_free(catches);
                     result = TURBOWASM_OUT_OF_MEMORY;
                     goto done;
                 }
@@ -2233,7 +2234,7 @@ turbowasm_status turbowasm_validate_function_body(
                         function_metadata,
                         annotation,
                         &annotation_index)) {
-                    free(catches);
+                    turbowasm_rt_free(catches);
                     result = TURBOWASM_OUT_OF_MEMORY;
                     goto done;
                 }
@@ -2768,9 +2769,9 @@ done:
         }
     }
 
-    free(locals);
-    free(local_semantics);
-    free(stack.values);
+    turbowasm_rt_free(locals);
+    turbowasm_rt_free(local_semantics);
+    turbowasm_rt_free(stack.values);
     turbowasm_control_stack_destroy(&controls);
     return result;
 }

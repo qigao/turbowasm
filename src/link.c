@@ -5,6 +5,7 @@
 #include "link_internal.h"
 #include "module_internal.h"
 #include "validation_context.h"
+#include "runtime_alloc.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -30,6 +31,7 @@ typedef struct turbowasm_linker_host_function {
 } turbowasm_linker_host_function;
 
 typedef struct turbowasm_linker_impl {
+    turbowasm_runtime_config config;
     turbowasm_linker_entry *entries;
     uint32_t count;
     uint32_t capacity;
@@ -82,7 +84,7 @@ static bool turbowasm_linker_reserve(
         (uint64_t)SIZE_MAX)
         return false;
 
-    grown = (turbowasm_linker_entry *)realloc(
+    grown = (turbowasm_linker_entry *)turbowasm_rt_realloc(
         impl->entries, (size_t)next * sizeof(*grown));
     if (grown == NULL)
         return false;
@@ -124,7 +126,7 @@ static bool turbowasm_linker_host_reserve(
         (uint64_t)SIZE_MAX)
         return false;
 
-    grown = (turbowasm_linker_host_function *)realloc(
+    grown = (turbowasm_linker_host_function *)turbowasm_rt_realloc(
         impl->host_functions, (size_t)next * sizeof(*grown));
     if (grown == NULL)
         return false;
@@ -159,15 +161,29 @@ static bool turbowasm_host_value_kind_valid(
 
 turbowasm_status turbowasm_linker_init(
     turbowasm_linker *linker) {
+    return turbowasm_linker_init_with_config(linker, NULL);
+}
+
+turbowasm_status turbowasm_linker_init_with_config(
+    turbowasm_linker *linker,
+    const turbowasm_runtime_config *config) {
     turbowasm_linker_impl *impl;
+    turbowasm_runtime_config normalized;
+    turbowasm_runtime_scope scope;
 
     if (linker == NULL || linker->impl != NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_runtime_config_normalize(config, &normalized))
+        return TURBOWASM_INVALID_ARGUMENT;
 
-    impl = (turbowasm_linker_impl *)calloc(1u, sizeof(*impl));
+    scope = turbowasm_runtime_scope_enter(&normalized);
+    impl = (turbowasm_linker_impl *)turbowasm_rt_calloc(
+        1u, sizeof(*impl));
+    turbowasm_runtime_scope_leave(scope);
     if (impl == NULL)
         return TURBOWASM_OUT_OF_MEMORY;
 
+    impl->config = normalized;
     linker->impl = impl;
     return TURBOWASM_OK;
 }
@@ -182,16 +198,16 @@ void turbowasm_linker_destroy(
 
     impl = (turbowasm_linker_impl *)linker->impl;
     for (index = 0u; index < impl->count; ++index)
-        free(impl->entries[index].module_name);
+        turbowasm_rt_free(impl->entries[index].module_name);
     for (index = 0u; index < impl->host_function_count; ++index) {
-        free(impl->host_functions[index].module_name);
-        free(impl->host_functions[index].name);
-        free(impl->host_functions[index].params);
-        free(impl->host_functions[index].results);
+        turbowasm_rt_free(impl->host_functions[index].module_name);
+        turbowasm_rt_free(impl->host_functions[index].name);
+        turbowasm_rt_free(impl->host_functions[index].params);
+        turbowasm_rt_free(impl->host_functions[index].results);
     }
-    free(impl->host_functions);
-    free(impl->entries);
-    free(impl);
+    turbowasm_rt_free(impl->host_functions);
+    turbowasm_rt_free(impl->entries);
+    turbowasm_rt_free(impl);
     linker->impl = NULL;
 }
 
@@ -226,18 +242,28 @@ turbowasm_status turbowasm_linker_define_instance(
             return TURBOWASM_LINK_ERROR;
     }
 
-    if (module_name.size != 0u) {
-        name_copy = (uint8_t *)malloc(module_name.size);
-        if (name_copy == NULL)
-            return TURBOWASM_OUT_OF_MEMORY;
-        memcpy(name_copy, module_name.bytes, module_name.size);
-    }
+    {
+        turbowasm_runtime_scope scope =
+            turbowasm_runtime_scope_enter(&impl->config);
 
-    if (impl->count == UINT32_MAX ||
-        !turbowasm_linker_reserve(
-            impl, impl->count + 1u)) {
-        free(name_copy);
-        return TURBOWASM_OUT_OF_MEMORY;
+        if (module_name.size != 0u) {
+            name_copy = (uint8_t *)turbowasm_rt_malloc(
+                module_name.size);
+            if (name_copy == NULL) {
+                turbowasm_runtime_scope_leave(scope);
+                return TURBOWASM_OUT_OF_MEMORY;
+            }
+            memcpy(name_copy, module_name.bytes, module_name.size);
+        }
+
+        if (impl->count == UINT32_MAX ||
+            !turbowasm_linker_reserve(
+                impl, impl->count + 1u)) {
+            turbowasm_rt_free(name_copy);
+            turbowasm_runtime_scope_leave(scope);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
+        turbowasm_runtime_scope_leave(scope);
     }
 
     entry = &impl->entries[impl->count++];
@@ -261,6 +287,7 @@ turbowasm_status turbowasm_linker_define_host_function(
     turbowasm_value_kind *params = NULL;
     turbowasm_value_kind *results = NULL;
     uint32_t index;
+    turbowasm_runtime_scope scope;
 
     if (linker == NULL || linker->impl == NULL ||
         type == NULL || function == NULL ||
@@ -282,7 +309,6 @@ turbowasm_status turbowasm_linker_define_host_function(
     }
 
     impl = (turbowasm_linker_impl *)linker->impl;
-
     for (index = 0u; index < impl->count; ++index) {
         if (turbowasm_link_name_equal(
                 impl->entries[index].module_name,
@@ -290,7 +316,6 @@ turbowasm_status turbowasm_linker_define_host_function(
                 module_name))
             return TURBOWASM_LINK_ERROR;
     }
-
     for (index = 0u; index < impl->host_function_count; ++index) {
         turbowasm_linker_host_function *existing =
             &impl->host_functions[index];
@@ -305,35 +330,33 @@ turbowasm_status turbowasm_linker_define_host_function(
             return TURBOWASM_LINK_ERROR;
     }
 
+    scope = turbowasm_runtime_scope_enter(&impl->config);
     if (module_name.size != 0u) {
-        module_copy = (uint8_t *)malloc(module_name.size);
+        module_copy = (uint8_t *)turbowasm_rt_malloc(module_name.size);
         if (module_copy == NULL)
             goto out_of_memory;
         memcpy(module_copy, module_name.bytes, module_name.size);
     }
     if (name.size != 0u) {
-        name_copy = (uint8_t *)malloc(name.size);
+        name_copy = (uint8_t *)turbowasm_rt_malloc(name.size);
         if (name_copy == NULL)
             goto out_of_memory;
         memcpy(name_copy, name.bytes, name.size);
     }
     if (type->param_count != 0u) {
-        params = (turbowasm_value_kind *)malloc(
+        params = (turbowasm_value_kind *)turbowasm_rt_malloc(
             type->param_count * sizeof(*params));
         if (params == NULL)
             goto out_of_memory;
-        memcpy(params, type->params,
-               type->param_count * sizeof(*params));
+        memcpy(params, type->params, type->param_count * sizeof(*params));
     }
     if (type->result_count != 0u) {
-        results = (turbowasm_value_kind *)malloc(
+        results = (turbowasm_value_kind *)turbowasm_rt_malloc(
             type->result_count * sizeof(*results));
         if (results == NULL)
             goto out_of_memory;
-        memcpy(results, type->results,
-               type->result_count * sizeof(*results));
+        memcpy(results, type->results, type->result_count * sizeof(*results));
     }
-
     if (impl->host_function_count == UINT32_MAX ||
         !turbowasm_linker_host_reserve(
             impl, impl->host_function_count + 1u))
@@ -350,13 +373,15 @@ turbowasm_status turbowasm_linker_define_host_function(
     entry->result_count = (uint32_t)type->result_count;
     entry->function = function;
     entry->context = context;
+    turbowasm_runtime_scope_leave(scope);
     return TURBOWASM_OK;
 
 out_of_memory:
-    free(results);
-    free(params);
-    free(name_copy);
-    free(module_copy);
+    turbowasm_rt_free(results);
+    turbowasm_rt_free(params);
+    turbowasm_rt_free(name_copy);
+    turbowasm_rt_free(module_copy);
+    turbowasm_runtime_scope_leave(scope);
     return TURBOWASM_OUT_OF_MEMORY;
 }
 
@@ -477,7 +502,7 @@ turbowasm_status turbowasm_linker_bind_instance(
     linker_impl = (const turbowasm_linker_impl *)linker->impl;
 
     if (module->summary.imported_function_count != 0u) {
-        function_bindings = (turbowasm_linked_function *)calloc(
+        function_bindings = (turbowasm_linked_function *)turbowasm_rt_calloc(
             (size_t)module->summary.imported_function_count,
             sizeof(*function_bindings));
         if (function_bindings == NULL)
@@ -485,47 +510,47 @@ turbowasm_status turbowasm_linker_bind_instance(
     }
 
     if (module->summary.imported_global_count != 0u) {
-        global_bindings = (turbowasm_linked_global *)calloc(
+        global_bindings = (turbowasm_linked_global *)turbowasm_rt_calloc(
             (size_t)module->summary.imported_global_count,
             sizeof(*global_bindings));
         if (global_bindings == NULL) {
-            free(function_bindings);
+            turbowasm_rt_free(function_bindings);
             return TURBOWASM_OUT_OF_MEMORY;
         }
     }
 
     if (module->summary.imported_memory_count != 0u) {
-        memory_bindings = (turbowasm_linked_memory *)calloc(
+        memory_bindings = (turbowasm_linked_memory *)turbowasm_rt_calloc(
             (size_t)module->summary.imported_memory_count,
             sizeof(*memory_bindings));
         if (memory_bindings == NULL) {
-            free(function_bindings);
-            free(global_bindings);
+            turbowasm_rt_free(function_bindings);
+            turbowasm_rt_free(global_bindings);
             return TURBOWASM_OUT_OF_MEMORY;
         }
     }
 
     if (module->summary.imported_table_count != 0u) {
-        table_bindings = (turbowasm_linked_table *)calloc(
+        table_bindings = (turbowasm_linked_table *)turbowasm_rt_calloc(
             (size_t)module->summary.imported_table_count,
             sizeof(*table_bindings));
         if (table_bindings == NULL) {
-            free(function_bindings);
-            free(global_bindings);
-            free(memory_bindings);
+            turbowasm_rt_free(function_bindings);
+            turbowasm_rt_free(global_bindings);
+            turbowasm_rt_free(memory_bindings);
             return TURBOWASM_OUT_OF_MEMORY;
         }
     }
 
     if (module->summary.imported_tag_count != 0u) {
-        tag_bindings = (turbowasm_linked_tag *)calloc(
+        tag_bindings = (turbowasm_linked_tag *)turbowasm_rt_calloc(
             (size_t)module->summary.imported_tag_count,
             sizeof(*tag_bindings));
         if (tag_bindings == NULL) {
-            free(function_bindings);
-            free(global_bindings);
-            free(memory_bindings);
-            free(table_bindings);
+            turbowasm_rt_free(function_bindings);
+            turbowasm_rt_free(global_bindings);
+            turbowasm_rt_free(memory_bindings);
+            turbowasm_rt_free(table_bindings);
             return TURBOWASM_OUT_OF_MEMORY;
         }
     }
@@ -909,10 +934,10 @@ turbowasm_status turbowasm_linker_bind_instance(
     return TURBOWASM_OK;
 
 fail:
-    free(function_bindings);
-    free(global_bindings);
-    free(memory_bindings);
-    free(table_bindings);
-    free(tag_bindings);
+    turbowasm_rt_free(function_bindings);
+    turbowasm_rt_free(global_bindings);
+    turbowasm_rt_free(memory_bindings);
+    turbowasm_rt_free(table_bindings);
+    turbowasm_rt_free(tag_bindings);
     return result;
 }

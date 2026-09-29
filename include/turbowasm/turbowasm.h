@@ -2,6 +2,7 @@
 #define TURBOWASM_H
 
 #include <turbowasm/status.h>
+#include <turbowasm/runtime.h>
 #include <turbowasm/value.h>
 #include <turbowasm/module.h>
 #include <turbowasm/link.h>

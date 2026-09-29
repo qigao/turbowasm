@@ -37,6 +37,10 @@ FORBIDDEN_PATTERNS = (
     (r"\bkqueue\s*\(", "kqueue"),
     (r"\bkevent\s*\(", "kevent"),
     (r"\bio_uring_[A-Za-z0-9_]+\s*\(", "io_uring API"),
+    (r"(?<![A-Za-z0-9_])malloc\s*\(", "direct malloc"),
+    (r"(?<![A-Za-z0-9_])calloc\s*\(", "direct calloc"),
+    (r"(?<![A-Za-z0-9_])realloc\s*\(", "direct realloc"),
+    (r"(?<![A-Za-z0-9_])free\s*\(", "direct free"),
 )
 
 
@@ -88,8 +92,11 @@ def main() -> int:
                 failures.append(f"{rel}: direct platform header <{header}>")
 
         for pattern, label in FORBIDDEN_PATTERNS:
+            if (rel == Path("src/runtime_alloc.c") and
+                    label.startswith("direct ")):
+                continue
             if re.search(pattern, text):
-                failures.append(f"{rel}: direct platform API {label}")
+                failures.append(f"{rel}: forbidden Runtime API {label}")
 
     if failures:
         print("Runtime portability boundary violations:", file=sys.stderr)
