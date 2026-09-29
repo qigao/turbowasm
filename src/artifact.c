@@ -766,30 +766,32 @@ turbowasm_status turbowasm_artifact_inspect(
         r.offset=end;
     }
 
-    if(!have_summary||!have_core_metadata||r.offset!=r.size)
+    if(!have_summary||r.offset!=r.size)
         return TURBOWASM_MALFORMED_MODULE;
 
-    if(metadata_counts.type_count!=out->summary.type_count ||
-       metadata_counts.function_count!=
-           out->summary.imported_function_count+
-           out->summary.function_count ||
-       metadata_counts.import_count!=
-           out->summary.imported_function_count+
-           out->summary.imported_table_count+
-           out->summary.imported_memory_count+
-           out->summary.imported_global_count+
-           out->summary.imported_tag_count ||
-       metadata_counts.export_count!=out->summary.export_count ||
-       metadata_counts.memory_count!=
-           out->summary.imported_memory_count+
-           out->summary.memory_count)
-        return TURBOWASM_MALFORMED_MODULE;
+    if(have_core_metadata) {
+        if(metadata_counts.type_count!=out->summary.type_count ||
+           metadata_counts.function_count!=
+               out->summary.imported_function_count+
+               out->summary.function_count ||
+           metadata_counts.import_count!=
+               out->summary.imported_function_count+
+               out->summary.imported_table_count+
+               out->summary.imported_memory_count+
+               out->summary.imported_global_count+
+               out->summary.imported_tag_count ||
+           metadata_counts.export_count!=out->summary.export_count ||
+           metadata_counts.memory_count!=
+               out->summary.imported_memory_count+
+               out->summary.memory_count)
+            return TURBOWASM_MALFORMED_MODULE;
 
-    out->has_core_metadata=true;
-    out->metadata_type_count=metadata_counts.type_count;
-    out->metadata_function_count=metadata_counts.function_count;
-    out->metadata_import_count=metadata_counts.import_count;
-    out->metadata_export_count=metadata_counts.export_count;
-    out->metadata_memory_count=metadata_counts.memory_count;
+        out->has_core_metadata=true;
+        out->metadata_type_count=metadata_counts.type_count;
+        out->metadata_function_count=metadata_counts.function_count;
+        out->metadata_import_count=metadata_counts.import_count;
+        out->metadata_export_count=metadata_counts.export_count;
+        out->metadata_memory_count=metadata_counts.memory_count;
+    }
     return TURBOWASM_OK;
 }
