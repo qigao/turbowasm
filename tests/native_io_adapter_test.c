@@ -7,6 +7,7 @@
 #undef NDEBUG
 #endif
 #include <assert.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -110,6 +111,46 @@ static turbowasm_status host_read_one(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status host_read_completion_kind(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    io_host_context *host = (io_host_context *)context;
+    native_io_operation operation = {0};
+
+    assert(host != NULL);
+    assert(call != NULL);
+    assert(argument_count == 0u);
+    assert(arguments == NULL);
+    assert(results != NULL && result_capacity >= 1u);
+    assert(result_count != NULL && trap != NULL);
+
+    ++host->calls;
+    operation.kind = NATIVE_IO_OPERATION_PIPE_READ;
+    operation.endpoint = host->endpoint;
+    operation.buffer = &host->byte;
+    operation.length = 1u;
+    operation.user_data = (uintptr_t)0xcafeu;
+
+    memset(&host->completion, 0, sizeof(host->completion));
+    host->await_status = turbowasm_native_io_await(
+        host->bridge, call, &operation, &host->completion);
+    if (host->await_status != SALTS_OK)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    assert(host->completion.user_data == (uintptr_t)0xcafeu);
+    results[0].kind = TURBOWASM_VALUE_I32;
+    results[0].as.i32 = (int32_t)host->completion.kind;
+    *result_count = 1u;
+    *trap = TURBOWASM_TRAP_NONE;
+    return TURBOWASM_OK;
+}
+
 static const uint8_t host_read_module[] = {
     WASM_HEADER,
     /* type0: () -> i32 */
@@ -132,7 +173,8 @@ static void make_nonblocking(int fd) {
 static void create_host_instance(
     turbowasm_module *module,
     turbowasm_instance *instance,
-    io_host_context *context) {
+    io_host_context *context,
+    turbowasm_host_function_fn function) {
     static const turbowasm_value_kind results[] = {
         TURBOWASM_VALUE_I32
     };
@@ -150,20 +192,21 @@ static void create_host_instance(
                name_span("host", 4u),
                name_span("read", 4u),
                &type,
-               host_read_one,
+               function,
                context) == TURBOWASM_OK);
     assert(turbowasm_instance_create_linked(
                instance, module, &linker) == TURBOWASM_OK);
     turbowasm_linker_destroy(&linker);
 }
 
-static void test_real_pipe_bridge_and_capacity(void) {
+static bool run_real_pipe_bridge_and_capacity(
+    native_io_backend_kind kind) {
     int descriptors[2] = {-1, -1};
     native_io_backend backend = {0};
     native_io_endpoint endpoint = {0};
     turbowasm_native_io_bridge bridge = {0};
     const native_io_backend_config config = {
-        test_backend_kind(), 1u, 2u, 2u
+        kind, 1u, 2u, 2u
     };
     turbowasm_module module1 = {0};
     turbowasm_module module2 = {0};
@@ -183,7 +226,15 @@ static void test_real_pipe_bridge_and_capacity(void) {
     make_nonblocking(descriptors[0]);
     make_nonblocking(descriptors[1]);
 
-    assert(native_io_backend_init(&backend, &config) == SALTS_OK);
+    {
+        int status = native_io_backend_init(&backend, &config);
+        if (status == SALTS_ENOTSUP) {
+            close(descriptors[0]);
+            close(descriptors[1]);
+            return false;
+        }
+        assert(status == SALTS_OK);
+    }
     assert(native_io_backend_attach_pipe(
                &backend,
                (uintptr_t)descriptors[0],
@@ -196,8 +247,10 @@ static void test_real_pipe_bridge_and_capacity(void) {
     host1.endpoint = endpoint;
     host2.bridge = &bridge;
     host2.endpoint = endpoint;
-    create_host_instance(&module1, &instance1, &host1);
-    create_host_instance(&module2, &instance2, &host2);
+    create_host_instance(
+        &module1, &instance1, &host1, host_read_one);
+    create_host_instance(
+        &module2, &instance2, &host2, host_read_one);
 
     assert(turbowasm_execution_create(
                &execution1, &instance1, 0u,
@@ -261,6 +314,100 @@ static void test_real_pipe_bridge_and_capacity(void) {
                &bridge) == SALTS_OK);
     assert(native_io_backend_release_pipe(
                &backend, endpoint) == SALTS_OK);
+
+    close(descriptors[0]);
+    close(descriptors[1]);
+    assert(native_io_backend_close(&backend) == SALTS_OK);
+    assert(native_io_backend_destroy(&backend) == SALTS_OK);
+    return true;
+}
+
+static void test_real_pipe_cancellation(void) {
+    int descriptors[2] = {-1, -1};
+    native_io_backend backend = {0};
+    native_io_endpoint endpoint = {0};
+    turbowasm_native_io_bridge bridge = {0};
+    const native_io_backend_config config = {
+        test_backend_kind(), 1u, 2u, 2u
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_execution execution = {0};
+    io_host_context host = {0};
+    native_io_request request = {0};
+    native_io_completion event = {0};
+    size_t event_count = 0u;
+    const turbowasm_value *result;
+    int cancel_status;
+
+    assert(pipe(descriptors) == 0);
+    make_nonblocking(descriptors[0]);
+    make_nonblocking(descriptors[1]);
+
+    assert(native_io_backend_init(&backend, &config) == SALTS_OK);
+    assert(native_io_backend_attach_pipe(
+               &backend,
+               (uintptr_t)descriptors[0],
+               NATIVE_IO_PIPE_ENDPOINT_ASYNC_CAPABLE,
+               &endpoint) == SALTS_OK);
+    assert(turbowasm_native_io_bridge_init(
+               &bridge, &backend, 1u) == SALTS_OK);
+
+    host.bridge = &bridge;
+    host.endpoint = endpoint;
+    create_host_instance(
+        &module, &instance, &host,
+        host_read_completion_kind);
+
+    assert(turbowasm_execution_create(
+               &execution, &instance, 0u,
+               NULL, 0u) == TURBOWASM_OK);
+    assert(turbowasm_execution_resume(
+               &execution, NULL) == TURBOWASM_YIELDED);
+    assert(turbowasm_native_io_pending_request(
+               &bridge, &execution, &request));
+    assert(native_io_request_valid(request));
+
+    cancel_status = turbowasm_native_io_cancel_execution(
+        &bridge, &execution);
+    assert(cancel_status == SALTS_OK ||
+           cancel_status == SALTS_EALREADY);
+
+    /* Cancellation request alone is not terminal. */
+    assert(turbowasm_execution_resume(
+               &execution, NULL) == TURBOWASM_YIELDED);
+
+    assert(native_io_backend_observe(
+               &backend, &event, 1u, 1000u,
+               &event_count) == SALTS_OK);
+    assert(event_count == 1u);
+    assert(event.kind == NATIVE_IO_COMPLETION_CANCELLED);
+    assert(turbowasm_native_io_bridge_complete(
+               &bridge, &event) == SALTS_OK);
+    assert(turbowasm_native_io_bridge_complete(
+               &bridge, &event) == SALTS_EALREADY);
+
+    assert(turbowasm_execution_resume(
+               &execution, NULL) == TURBOWASM_OK);
+    result = turbowasm_execution_result_at(
+        &execution, 0u);
+    assert(result != NULL);
+    assert(result->kind == TURBOWASM_VALUE_I32);
+    assert(result->as.i32 ==
+           (int32_t)NATIVE_IO_COMPLETION_CANCELLED);
+    assert(host.calls == 1u);
+
+    /* After callback consumption the routed completion is stale. */
+    assert(turbowasm_native_io_bridge_complete(
+               &bridge, &event) == SALTS_ENOENT);
+
+    turbowasm_execution_destroy(&execution);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+    assert(turbowasm_native_io_bridge_destroy(
+               &bridge) == SALTS_OK);
+    assert(native_io_backend_release_pipe(
+               &backend, endpoint) == SALTS_OK);
     close(descriptors[0]);
     close(descriptors[1]);
     assert(native_io_backend_close(&backend) == SALTS_OK);
@@ -272,7 +419,22 @@ static void test_real_pipe_bridge_and_capacity(void) {
 int main(void) {
     test_bridge_lifecycle();
 #if !defined(_WIN32)
-    test_real_pipe_bridge_and_capacity();
+    assert(run_real_pipe_bridge_and_capacity(
+        test_backend_kind()));
+    test_real_pipe_cancellation();
+#if defined(__linux__)
+    if (native_io_backend_kind_supported(
+            NATIVE_IO_BACKEND_IO_URING) &&
+        native_io_backend_kind_supports_pipe(
+            NATIVE_IO_BACKEND_IO_URING)) {
+        /*
+         * Runtime unavailability is an explicit ENOTSUP skip inside the
+         * helper. The requested kind is never substituted with epoll.
+         */
+        (void)run_real_pipe_bridge_and_capacity(
+            NATIVE_IO_BACKEND_IO_URING);
+    }
+#endif
 #endif
     return 0;
 }
