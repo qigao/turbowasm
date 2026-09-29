@@ -71,6 +71,10 @@ struct spec_state {
     bool printed_first_runtime_unsupported;
 };
 
+static int spec_run_manifest(spec_state *state, const char *path);
+static bool spec_state_init(spec_state *state);
+static void spec_state_destroy(spec_state *state);
+
 typedef enum spec_expected_pattern {
     SPEC_EXPECT_EXACT = 0,
     SPEC_EXPECT_NAN_CANONICAL,
@@ -323,9 +327,11 @@ static unsigned char *spec_read_file(const char *path,
 static void spec_slot_destroy(spec_slot *slot) {
     if (slot == NULL)
         return;
-    turbowasm_instance_destroy(&slot->instance);
-    turbowasm_module_destroy(&slot->module);
-    free(slot->bytes);
+    if (!slot->borrowed) {
+        turbowasm_instance_destroy(&slot->instance);
+        turbowasm_module_destroy(&slot->module);
+        free(slot->bytes);
+    }
     memset(slot, 0, sizeof(*slot));
 }
 
