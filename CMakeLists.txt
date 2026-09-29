@@ -16,6 +16,8 @@ option(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER
   "Build optional Salts NativeIO host-wait adapter" ON)
 option(TURBOWASM_ENABLE_WASI_ADAPTER
   "Build optional WASI Preview1 capability adapter" ON)
+option(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN
+  "Regenerate the checked Preview1 adapter plan with SaltsUtils tooling" OFF)
 option(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER
   "Build optional legacy WASI Preview1 threads adapter" ON)
 option(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER
@@ -169,6 +171,64 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
     target_compile_options(turbowasm_wasi PRIVATE /W4)
   else()
     target_compile_options(turbowasm_wasi PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
+if(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN)
+  if(NOT TURBOWASM_ENABLE_WASI_ADAPTER)
+    message(FATAL_ERROR
+      "Preview1 adapter-plan qualification requires TURBOWASM_ENABLE_WASI_ADAPTER")
+  endif()
+  if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR
+     "$ENV{SALTS_UTILS_ROOT}" STREQUAL "")
+    message(FATAL_ERROR
+      "SALTS_UTILS_ROOT must point at an installed SaltsUtils SDK for adapter-plan qualification")
+  endif()
+
+  file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" SALTS_UTILS_ROOT_PATH)
+  find_package(SaltsUtils CONFIG REQUIRED
+    PATHS "${SALTS_UTILS_ROOT_PATH}"
+    NO_DEFAULT_PATH
+    NO_CMAKE_FIND_ROOT_PATH)
+  if(NOT TARGET Salts::DataBindProducer)
+    message(FATAL_ERROR
+      "SaltsUtils SDK must export Salts::DataBindProducer")
+  endif()
+
+  add_executable(turbowasm_wasi_adapter_plan_generator
+    tools/generate_wasi_preview1_adapter_plan.c)
+  target_compile_features(turbowasm_wasi_adapter_plan_generator
+    PRIVATE c_std_11)
+  target_link_libraries(turbowasm_wasi_adapter_plan_generator
+    PRIVATE
+      TurboWasm::WASI
+      Salts::DataBindProducer)
+
+  set(TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/wasi_preview1_adapter_plan.h")
+  add_custom_command(
+    OUTPUT "${TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+      "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    COMMAND $<TARGET_FILE:turbowasm_wasi_adapter_plan_generator>
+      "${TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED}"
+    DEPENDS
+      turbowasm_wasi_adapter_plan_generator
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/wasi_preview1.c"
+    VERBATIM)
+
+  add_custom_target(turbowasm_wasi_adapter_plan_check ALL
+    COMMAND "${CMAKE_COMMAND}" -E compare_files
+      "${TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/wasi_preview1_adapter_plan.h"
+    DEPENDS "${TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED}"
+    VERBATIM)
+
+  if(TURBOWASM_BUILD_TESTS AND BUILD_TESTING)
+    add_test(NAME turbowasm_wasi_adapter_plan_regeneration
+      COMMAND "${CMAKE_COMMAND}" -E compare_files
+        "${TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/wasi_preview1_adapter_plan.h")
   endif()
 endif()
 
