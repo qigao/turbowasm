@@ -60,6 +60,7 @@ if(NOT TARGET Salts::Platform)
 endif()
 
 add_library(turbowasm
+  src/artifact.c
   src/atomic.c
   src/execution.c
   src/instance.c
@@ -70,6 +71,7 @@ add_library(turbowasm
   src/reader.c
   src/relaxed_simd.c
   src/runtime_alloc.c
+  src/sha256.c
   src/simd.c
   src/simd_exec_table.c
   src/status.c
