@@ -1,0 +1,65 @@
+#ifndef TURBOWASM_COMPONENT_BINARY_H
+#define TURBOWASM_COMPONENT_BINARY_H
+
+#include <turbowasm/runtime.h>
+#include <turbowasm/status.h>
+
+#include <stddef.h>
+#include <stdint.h>
+
+enum {
+    TURBOWASM_COMPONENT_BINARY_VERSION = 0x000du,
+    TURBOWASM_COMPONENT_BINARY_LAYER = 0x0001u
+};
+
+typedef struct turbowasm_component_section {
+    uint8_t id;
+    const uint8_t *payload;
+    uint32_t size;
+} turbowasm_component_section;
+
+typedef struct turbowasm_component_core_module {
+    const uint8_t *bytes;
+    uint32_t size;
+} turbowasm_component_core_module;
+
+typedef struct turbowasm_component_binary {
+    const uint8_t *bytes;
+    size_t size;
+
+    turbowasm_component_section *sections;
+    uint32_t section_count;
+    uint32_t section_capacity;
+
+    turbowasm_component_core_module *core_modules;
+    uint32_t core_module_count;
+    uint32_t core_module_capacity;
+
+    turbowasm_runtime_config config;
+} turbowasm_component_binary;
+
+turbowasm_status turbowasm_component_binary_load(
+    turbowasm_component_binary *component,
+    const uint8_t *bytes,
+    size_t size);
+
+turbowasm_status turbowasm_component_binary_load_with_config(
+    turbowasm_component_binary *component,
+    const uint8_t *bytes,
+    size_t size,
+    const turbowasm_runtime_config *config);
+
+void turbowasm_component_binary_destroy(
+    turbowasm_component_binary *component);
+
+const turbowasm_component_section *
+turbowasm_component_binary_section_at(
+    const turbowasm_component_binary *component,
+    uint32_t index);
+
+const turbowasm_component_core_module *
+turbowasm_component_binary_core_module_at(
+    const turbowasm_component_binary *component,
+    uint32_t index);
+
+#endif /* TURBOWASM_COMPONENT_BINARY_H */
