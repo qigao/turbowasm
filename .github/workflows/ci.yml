@@ -16,6 +16,12 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
+      - name: Checkout latest littlefs for optional provider qualification
+        uses: actions/checkout@v4
+        with:
+          repository: littlefs-project/littlefs
+          path: build/littlefs
+
       - name: Guard unversioned dependency policy
         shell: bash
         run: python3 cmake/ci/check-unversioned-policy.py
@@ -43,7 +49,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/turbowasm-sdk" \
             -DTURBOWASM_BUILD_TESTS=ON \
-            -DTURBOWASM_BUILD_TOOLS=ON
+            -DTURBOWASM_BUILD_TOOLS=ON \
+            -DTURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER=ON \
+            -DTURBOWASM_LITTLEFS_SOURCE_DIR="$GITHUB_WORKSPACE/build/littlefs"
 
       - name: Build and test TurboWasm
         shell: bash
