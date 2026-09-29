@@ -32,7 +32,6 @@ permissions:
   packages: read
 
 env:
-  SALTS_SDK_VERSION: 1.8.3
   WASM_SPEC_COMMIT: 608711107b7f1edb13efd57b7d79b49477462d36
 
 jobs:
@@ -45,7 +44,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -161,7 +160,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -273,7 +272,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -362,7 +361,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -452,7 +451,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -541,7 +540,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -630,7 +629,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -719,7 +718,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -808,7 +807,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -896,7 +895,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
