@@ -763,10 +763,17 @@ turbowasm_status turbowasm_component_binary_load_with_config(
     if (component == NULL || bytes == NULL ||
         component->bytes != NULL ||
         component->sections != NULL ||
-        component->core_modules != NULL)
+        component->core_modules != NULL ||
+        component->type_graph.types != NULL ||
+        component->type_graph.count != 0u ||
+        component->imports != NULL ||
+        component->exports != NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_runtime_config_normalize(config, &normalized))
         return TURBOWASM_INVALID_ARGUMENT;
+    if (normalized.limits.max_module_bytes != 0u &&
+        size > normalized.limits.max_module_bytes)
+        return TURBOWASM_OUT_OF_MEMORY;
 
     scope = turbowasm_runtime_scope_enter(&normalized);
     turbowasm_reader_init(&reader, bytes, size);
