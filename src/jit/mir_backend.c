@@ -1779,7 +1779,8 @@ static bool turbowasm_mir_is_function_eligible(
     for (memory_index = 0u;
          memory_index < validation->memory_count;
          ++memory_index) {
-        if (validation->memories[memory_index].shared)
+        if (validation->memories[memory_index].shared ||
+            validation->memories[memory_index].memory64)
             return false;
     }
 
