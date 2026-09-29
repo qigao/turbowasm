@@ -17,6 +17,17 @@ typedef struct turbowasm_component_exec_core_function {
     uint32_t function_index;
 } turbowasm_component_exec_core_function;
 
+typedef struct turbowasm_component_exec_core_memory {
+    uint32_t instance_index;
+    uint32_t memory_index;
+} turbowasm_component_exec_core_memory;
+
+typedef struct turbowasm_component_exec_realloc_context {
+    turbowasm_instance *instance;
+    uint32_t function_index;
+    turbowasm_component_pointer_type pointer_type;
+} turbowasm_component_exec_realloc_context;
+
 typedef struct turbowasm_component_exec {
     const turbowasm_component_binary *binary;
 
@@ -28,6 +39,11 @@ typedef struct turbowasm_component_exec {
 
     turbowasm_component_exec_core_function *core_functions;
     uint32_t core_function_count;
+
+    turbowasm_component_exec_core_memory *core_memories;
+    uint32_t core_memory_count;
+
+    turbowasm_component_exec_realloc_context *realloc_contexts;
 
     turbowasm_component_core_call_adapter *functions;
     uint32_t function_count;
