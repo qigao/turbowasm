@@ -129,4 +129,5 @@ TurboWasm does not claim a native MIR-v128 ABI. Helper-backed SIMD is the
 canonical compiled path for this backend.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete ownership and execution
-model.
+model, and [docs/PORTABILITY.md](docs/PORTABILITY.md) for the C11, hosted-libc,
+optional-service, and embedded build boundary.
