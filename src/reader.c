@@ -59,6 +59,28 @@ bool turbowasm_reader_uleb32(turbowasm_reader *reader, uint32_t *out) {
     return true;
 }
 
+bool turbowasm_reader_uleb64(turbowasm_reader *reader, uint64_t *out) {
+    uint64_t value = 0u;
+    unsigned shift = 0u;
+    unsigned count = 0u;
+    uint8_t byte = 0u;
+
+    if (reader == NULL || out == NULL) return false;
+
+    do {
+        if (count == 10u || !turbowasm_reader_u8(reader, &byte))
+            return false;
+        if (count == 9u && (byte & 0xfeu) != 0u)
+            return false;
+        value |= (uint64_t)(byte & 0x7fu) << shift;
+        shift += 7u;
+        ++count;
+    } while ((byte & 0x80u) != 0u);
+
+    *out = value;
+    return true;
+}
+
 bool turbowasm_reader_sleb32(turbowasm_reader *reader, int32_t *out) {
     uint32_t value = 0u;
     unsigned shift = 0u;

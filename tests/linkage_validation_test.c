@@ -293,7 +293,7 @@ static void test_shared_memory_requires_maximum(void) {
     assert(module.impl == NULL);
 }
 
-static void test_memory64_remains_explicitly_unsupported(void) {
+static void test_memory64_metadata_is_retained(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
         /* memory64 + maximum, min=1, max=2 */
@@ -301,10 +301,15 @@ static void test_memory64_remains_explicitly_unsupported(void) {
         0x01, 0x05, 0x01, 0x02
     };
     turbowasm_module module = {0};
+    turbowasm_memory_desc desc = {0};
 
-    assert(load(bytes, sizeof(bytes), &module) ==
-           TURBOWASM_UNSUPPORTED);
-    assert(module.impl == NULL);
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_module_memory_at(&module, 0u, &desc));
+    assert(desc.memory64);
+    assert(desc.minimum64 == 1u);
+    assert(desc.maximum64 == 2u);
+    assert(desc.has_maximum);
+    turbowasm_module_destroy(&module);
 }
 
 static void test_export_index_out_of_range(void) {
@@ -430,7 +435,7 @@ int main(void) {
     test_memory_max_less_than_min();
     test_shared_memory_metadata_is_retained_and_executable();
     test_shared_memory_requires_maximum();
-    test_memory64_remains_explicitly_unsupported();
+    test_memory64_metadata_is_retained();
     test_export_index_out_of_range();
     test_data_count_zero_without_data();
     test_data_count_nonzero_requires_data();

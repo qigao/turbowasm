@@ -431,9 +431,10 @@ static turbowasm_status turbowasm_read_byte_vector(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status turbowasm_read_i32_offset_expr(
+static turbowasm_status turbowasm_read_memory_offset_expr(
     turbowasm_reader *reader,
     turbowasm_validation_context *context,
+    uint32_t memory_index,
     turbowasm_validation_expr_span *out) {
     const uint8_t *start;
     size_t size;
@@ -448,7 +449,11 @@ static turbowasm_status turbowasm_read_i32_offset_expr(
         reader, context, &type);
     if (status != TURBOWASM_OK)
         return status;
-    if (type != TURBOWASM_VAL_I32)
+    if (memory_index >= context->memory_count)
+        return TURBOWASM_MALFORMED_MODULE;
+    if (type != (context->memories[memory_index].memory64
+                    ? TURBOWASM_VAL_I64
+                    : TURBOWASM_VAL_I32))
         return TURBOWASM_MALFORMED_MODULE;
 
     size = (size_t)(reader->cursor - start);
@@ -487,8 +492,9 @@ turbowasm_status turbowasm_validate_data_section(
                 segment.memory_index = 0u;
                 if (!turbowasm_memory_index_valid(0u, context))
                     return TURBOWASM_MALFORMED_MODULE;
-                status = turbowasm_read_i32_offset_expr(
-                    section, context, &segment.offset);
+                status = turbowasm_read_memory_offset_expr(
+                    section, context, segment.memory_index,
+                    &segment.offset);
                 if (status != TURBOWASM_OK) return status;
                 break;
             case 1u:
@@ -502,8 +508,9 @@ turbowasm_status turbowasm_validate_data_section(
                 if (!turbowasm_memory_index_valid(
                         segment.memory_index, context))
                     return TURBOWASM_MALFORMED_MODULE;
-                status = turbowasm_read_i32_offset_expr(
-                    section, context, &segment.offset);
+                status = turbowasm_read_memory_offset_expr(
+                    section, context, segment.memory_index,
+                    &segment.offset);
                 if (status != TURBOWASM_OK) return status;
                 break;
             default:

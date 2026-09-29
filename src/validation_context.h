@@ -131,11 +131,18 @@ typedef struct turbowasm_validation_table {
     uint32_t initializer_size;
 } turbowasm_validation_table;
 
+typedef struct turbowasm_validation_memory_limits {
+    uint64_t minimum;
+    uint64_t maximum;
+    bool has_maximum;
+} turbowasm_validation_memory_limits;
+
 typedef struct turbowasm_validation_memory {
     bool imported;
     bool shared;
+    bool memory64;
     uint32_t page_size;
-    turbowasm_validation_limits limits;
+    turbowasm_validation_memory_limits limits;
 } turbowasm_validation_memory;
 
 typedef struct turbowasm_validation_tag {
@@ -315,9 +322,10 @@ bool turbowasm_validation_context_append_table_semantic_initialized(
 
 bool turbowasm_validation_context_append_memory(
     turbowasm_validation_context *context,
-    turbowasm_validation_limits limits,
+    turbowasm_validation_memory_limits limits,
     uint32_t page_size,
     bool shared,
+    bool memory64,
     bool imported);
 
 bool turbowasm_validation_context_append_tag(
