@@ -1125,12 +1125,27 @@ turbowasm_status turbowasm_component_canonical_lift_value(
     turbowasm_component_value *out) {
     turbowasm_instance_impl *instance;
     const turbowasm_module_impl *module;
+    turbowasm_component_layout layout;
     turbowasm_runtime_scope scope;
     turbowasm_status status;
+    uint8_t *range = NULL;
 
     if (graph == NULL || out == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     status = canonical_memory_validate(memory, &instance);
+    if (status != TURBOWASM_OK)
+        return status;
+    status = turbowasm_component_canonical_layout(
+        graph, type, memory->pointer_type, &layout);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (layout.alignment == 0u ||
+        address % layout.alignment != 0u ||
+        layout.size > (uint64_t)SIZE_MAX)
+        return TURBOWASM_TRAPPED;
+    status = turbowasm_instance_memory_bounds(
+        instance, memory->memory_index,
+        address, 0u, (size_t)layout.size, &range);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -1155,11 +1170,26 @@ turbowasm_status turbowasm_component_canonical_lower_value(
     uint64_t address,
     const turbowasm_component_value *value) {
     turbowasm_instance_impl *instance;
+    turbowasm_component_layout layout;
     turbowasm_status status;
+    uint8_t *range = NULL;
 
     if (graph == NULL || value == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     status = canonical_memory_validate(memory, &instance);
+    if (status != TURBOWASM_OK)
+        return status;
+    status = turbowasm_component_canonical_layout(
+        graph, type, memory->pointer_type, &layout);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (layout.alignment == 0u ||
+        address % layout.alignment != 0u ||
+        layout.size > (uint64_t)SIZE_MAX)
+        return TURBOWASM_TRAPPED;
+    status = turbowasm_instance_memory_bounds(
+        instance, memory->memory_index,
+        address, 0u, (size_t)layout.size, &range);
     if (status != TURBOWASM_OK)
         return status;
 
