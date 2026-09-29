@@ -1641,26 +1641,95 @@ void turbowasm_wasi_preview1_destroy(
     wasi->impl = NULL;
 }
 
-static turbowasm_status turbowasm_wasi_define_function(
+size_t turbowasm_wasi_preview1_function_count(void) {
+    return sizeof(turbowasm_wasi_preview1_manifest) /
+           sizeof(turbowasm_wasi_preview1_manifest[0]);
+}
+
+const cmeta_function_desc *turbowasm_wasi_preview1_function_at(
+    size_t index) {
+    if (index >= turbowasm_wasi_preview1_function_count())
+        return NULL;
+    return turbowasm_wasi_preview1_manifest[index];
+}
+
+const cmeta_function_desc *turbowasm_wasi_preview1_find_function(
+    const char *name) {
+    size_t index;
+
+    if (name == NULL || name[0] == '\0')
+        return NULL;
+    for (index = 0u;
+         index < turbowasm_wasi_preview1_function_count();
+         ++index) {
+        const cmeta_function_desc *function =
+            turbowasm_wasi_preview1_manifest[index];
+        if (function != NULL &&
+            function->name != NULL &&
+            strcmp(function->name, name) == 0)
+            return function;
+    }
+    return NULL;
+}
+
+static bool turbowasm_wasi_cmeta_value_kind(
+    const cmeta_type_desc *type,
+    turbowasm_value_kind *out_kind) {
+    if (type == NULL || out_kind == NULL)
+        return false;
+
+    if (cmeta_type_equal(type, &cmeta_type_uint32) ||
+        cmeta_type_equal(type, &cmeta_type_int32)) {
+        *out_kind = TURBOWASM_VALUE_I32;
+        return true;
+    }
+    if (cmeta_type_equal(type, &cmeta_type_uint64) ||
+        cmeta_type_equal(type, &cmeta_type_int64)) {
+        *out_kind = TURBOWASM_VALUE_I64;
+        return true;
+    }
+    return false;
+}
+
+static turbowasm_status turbowasm_wasi_define_cmeta_function(
     turbowasm_linker *linker,
-    turbowasm_name name,
+    const cmeta_function_desc *metadata,
     turbowasm_host_function_fn function,
     void *context) {
-    static const turbowasm_value_kind params[] = {
-        TURBOWASM_VALUE_I32,
-        TURBOWASM_VALUE_I32
-    };
-    static const turbowasm_value_kind results[] = {
-        TURBOWASM_VALUE_I32
-    };
-    const turbowasm_host_function_type type = {
-        params, 2u, results, 1u
-    };
+    turbowasm_value_kind params[9];
+    turbowasm_value_kind result;
+    turbowasm_host_function_type type = {0};
+    size_t index;
+
+    if (linker == NULL || metadata == NULL || function == NULL ||
+        !cmeta_function_desc_valid(metadata) ||
+        metadata->param_count > sizeof(params) / sizeof(params[0]))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (index = 0u; index < metadata->param_count; ++index) {
+        const cmeta_param_desc *param =
+            cmeta_function_param(metadata, index);
+        if (param == NULL ||
+            !turbowasm_wasi_cmeta_value_kind(
+                param->type, &params[index]))
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    type.params = params;
+    type.param_count = metadata->param_count;
+    if (!cmeta_type_equal(
+            metadata->return_type, &cmeta_type_void)) {
+        if (!turbowasm_wasi_cmeta_value_kind(
+                metadata->return_type, &result))
+            return TURBOWASM_INVALID_ARGUMENT;
+        type.results = &result;
+        type.result_count = 1u;
+    }
 
     return turbowasm_linker_define_host_function(
         linker,
         turbowasm_wasi_namespace(),
-        name,
+        turbowasm_wasi_name(metadata->name),
         &type,
         function,
         context);
