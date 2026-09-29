@@ -16,12 +16,18 @@ typedef struct turbowasm_wasi_preview1_impl {
     bool allow_environ;
     bool allow_clock;
     bool allow_random;
+    bool allow_fd_write;
+    bool allow_fd_read;
     turbowasm_wasi_string_list args;
     turbowasm_wasi_string_list environment;
     turbowasm_wasi_clock_time_fn clock_time;
     void *clock_context;
     turbowasm_wasi_random_fill_fn random_fill;
     void *random_context;
+    turbowasm_wasi_fd_write_fn fd_write;
+    void *fd_write_context;
+    turbowasm_wasi_fd_read_fn fd_read;
+    void *fd_read_context;
 } turbowasm_wasi_preview1_impl;
 
 static const uint8_t turbowasm_wasi_namespace_bytes[] =
@@ -123,6 +129,14 @@ static void turbowasm_wasi_store_u32(
     destination[1] = (uint8_t)((value >> 8u) & UINT32_C(0xff));
     destination[2] = (uint8_t)((value >> 16u) & UINT32_C(0xff));
     destination[3] = (uint8_t)((value >> 24u) & UINT32_C(0xff));
+}
+
+static uint32_t turbowasm_wasi_load_u32(
+    const uint8_t *source) {
+    return (uint32_t)source[0] |
+           ((uint32_t)source[1] << 8u) |
+           ((uint32_t)source[2] << 16u) |
+           ((uint32_t)source[3] << 24u);
 }
 
 static void turbowasm_wasi_store_u64(
@@ -428,6 +442,182 @@ static turbowasm_status turbowasm_wasi_random_get(
         results, result_capacity, result_count, trap, error);
 }
 
+static uint32_t turbowasm_wasi_collect_iovecs(
+    turbowasm_host_call *call,
+    uint32_t table_address,
+    uint32_t iov_count,
+    bool writable,
+    turbowasm_wasi_const_buffer *const_buffers,
+    turbowasm_wasi_buffer *mutable_buffers,
+    uint64_t *out_capacity) {
+    turbowasm_host_memory_span table = {0};
+    uint64_t capacity = 0u;
+    uint32_t index;
+    uint32_t error;
+
+    if (call == NULL || out_capacity == NULL ||
+        (iov_count != 0u &&
+         ((writable && mutable_buffers == NULL) ||
+          (!writable && const_buffers == NULL))))
+        return TURBOWASM_WASI_ERRNO_INVAL;
+
+    *out_capacity = 0u;
+    if (iov_count > TURBOWASM_WASI_IOV_MAX)
+        return TURBOWASM_WASI_ERRNO_INVAL;
+
+    error = turbowasm_wasi_memory_span(
+        call, table_address, (size_t)iov_count * 8u, &table);
+    if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
+        return error;
+
+    for (index = 0u; index < iov_count; ++index) {
+        const uint8_t *entry =
+            table.data + (size_t)index * 8u;
+        uint32_t address = turbowasm_wasi_load_u32(entry);
+        uint32_t length = turbowasm_wasi_load_u32(entry + 4u);
+        turbowasm_host_memory_span span = {0};
+
+        error = turbowasm_wasi_memory_span(
+            call, address, length, &span);
+        if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
+            return error;
+
+        capacity += length;
+        if (writable) {
+            mutable_buffers[index].data = span.data;
+            mutable_buffers[index].size = span.size;
+        } else {
+            const_buffers[index].data = span.data;
+            const_buffers[index].size = span.size;
+        }
+    }
+
+    *out_capacity = capacity;
+    return TURBOWASM_WASI_ERRNO_SUCCESS;
+}
+
+static turbowasm_status turbowasm_wasi_fd_write(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    turbowasm_wasi_preview1_impl *impl =
+        (turbowasm_wasi_preview1_impl *)context;
+    turbowasm_wasi_const_buffer buffers[TURBOWASM_WASI_IOV_MAX] = {{0}};
+    turbowasm_host_memory_span written_span = {0};
+    uint64_t capacity = 0u;
+    uint32_t written = 0u;
+    uint32_t error;
+
+    if (impl == NULL || !impl->allow_fd_write ||
+        impl->fd_write == NULL ||
+        call == NULL || arguments == NULL ||
+        argument_count != 4u ||
+        arguments[0].kind != TURBOWASM_VALUE_I32 ||
+        arguments[1].kind != TURBOWASM_VALUE_I32 ||
+        arguments[2].kind != TURBOWASM_VALUE_I32 ||
+        arguments[3].kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    error = turbowasm_wasi_memory_span(
+        call, (uint32_t)arguments[3].as.i32,
+        4u, &written_span);
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = turbowasm_wasi_collect_iovecs(
+            call,
+            (uint32_t)arguments[1].as.i32,
+            (uint32_t)arguments[2].as.i32,
+            false,
+            buffers,
+            NULL,
+            &capacity);
+    }
+
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = impl->fd_write(
+            impl->fd_write_context,
+            (uint32_t)arguments[0].as.i32,
+            buffers,
+            (uint32_t)arguments[2].as.i32,
+            &written);
+        if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+            if ((uint64_t)written > capacity)
+                error = TURBOWASM_WASI_ERRNO_IO;
+            else
+                turbowasm_wasi_store_u32(
+                    written_span.data, written);
+        }
+    }
+
+    return turbowasm_wasi_return_errno(
+        results, result_capacity, result_count, trap, error);
+}
+
+static turbowasm_status turbowasm_wasi_fd_read(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    turbowasm_wasi_preview1_impl *impl =
+        (turbowasm_wasi_preview1_impl *)context;
+    turbowasm_wasi_buffer buffers[TURBOWASM_WASI_IOV_MAX] = {{0}};
+    turbowasm_host_memory_span read_span = {0};
+    uint64_t capacity = 0u;
+    uint32_t read_count = 0u;
+    uint32_t error;
+
+    if (impl == NULL || !impl->allow_fd_read ||
+        impl->fd_read == NULL ||
+        call == NULL || arguments == NULL ||
+        argument_count != 4u ||
+        arguments[0].kind != TURBOWASM_VALUE_I32 ||
+        arguments[1].kind != TURBOWASM_VALUE_I32 ||
+        arguments[2].kind != TURBOWASM_VALUE_I32 ||
+        arguments[3].kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    error = turbowasm_wasi_memory_span(
+        call, (uint32_t)arguments[3].as.i32,
+        4u, &read_span);
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = turbowasm_wasi_collect_iovecs(
+            call,
+            (uint32_t)arguments[1].as.i32,
+            (uint32_t)arguments[2].as.i32,
+            true,
+            NULL,
+            buffers,
+            &capacity);
+    }
+
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = impl->fd_read(
+            impl->fd_read_context,
+            (uint32_t)arguments[0].as.i32,
+            buffers,
+            (uint32_t)arguments[2].as.i32,
+            &read_count);
+        if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+            if ((uint64_t)read_count > capacity)
+                error = TURBOWASM_WASI_ERRNO_IO;
+            else
+                turbowasm_wasi_store_u32(
+                    read_span.data, read_count);
+        }
+    }
+
+    return turbowasm_wasi_return_errno(
+        results, result_capacity, result_count, trap, error);
+}
+
 turbowasm_status turbowasm_wasi_preview1_init(
     turbowasm_wasi_preview1 *wasi,
     const turbowasm_wasi_preview1_config *config) {
@@ -443,7 +633,9 @@ turbowasm_status turbowasm_wasi_preview1_init(
         return TURBOWASM_OUT_OF_MEMORY;
 
     if ((config->allow_clock && config->clock_time == NULL) ||
-        (config->allow_random && config->random_fill == NULL)) {
+        (config->allow_random && config->random_fill == NULL) ||
+        (config->allow_fd_write && config->fd_write == NULL) ||
+        (config->allow_fd_read && config->fd_read == NULL)) {
         free(impl);
         return TURBOWASM_INVALID_ARGUMENT;
     }
@@ -452,10 +644,16 @@ turbowasm_status turbowasm_wasi_preview1_init(
     impl->allow_environ = config->allow_environ;
     impl->allow_clock = config->allow_clock;
     impl->allow_random = config->allow_random;
+    impl->allow_fd_write = config->allow_fd_write;
+    impl->allow_fd_read = config->allow_fd_read;
     impl->clock_time = config->clock_time;
     impl->clock_context = config->clock_context;
     impl->random_fill = config->random_fill;
     impl->random_context = config->random_context;
+    impl->fd_write = config->fd_write;
+    impl->fd_write_context = config->fd_write_context;
+    impl->fd_read = config->fd_read;
+    impl->fd_read_context = config->fd_read_context;
 
     status = turbowasm_wasi_string_list_copy(
         &impl->args, config->args, config->arg_count);
@@ -598,6 +796,45 @@ turbowasm_status turbowasm_wasi_preview1_define(
             impl);
         if (status != TURBOWASM_OK)
             return status;
+    }
+
+    if (impl->allow_fd_write || impl->allow_fd_read) {
+        static const turbowasm_value_kind fd_params[] = {
+            TURBOWASM_VALUE_I32,
+            TURBOWASM_VALUE_I32,
+            TURBOWASM_VALUE_I32,
+            TURBOWASM_VALUE_I32
+        };
+        static const turbowasm_value_kind result_type[] = {
+            TURBOWASM_VALUE_I32
+        };
+        const turbowasm_host_function_type fd_type = {
+            fd_params, 4u, result_type, 1u
+        };
+
+        if (impl->allow_fd_write) {
+            status = turbowasm_linker_define_host_function(
+                linker,
+                turbowasm_wasi_namespace(),
+                turbowasm_wasi_name("fd_write"),
+                &fd_type,
+                turbowasm_wasi_fd_write,
+                impl);
+            if (status != TURBOWASM_OK)
+                return status;
+        }
+
+        if (impl->allow_fd_read) {
+            status = turbowasm_linker_define_host_function(
+                linker,
+                turbowasm_wasi_namespace(),
+                turbowasm_wasi_name("fd_read"),
+                &fd_type,
+                turbowasm_wasi_fd_read,
+                impl);
+            if (status != TURBOWASM_OK)
+                return status;
+        }
     }
 
     return TURBOWASM_OK;

@@ -13,6 +13,7 @@ extern "C" {
 
 enum {
     TURBOWASM_WASI_ERRNO_SUCCESS = 0,
+    TURBOWASM_WASI_ERRNO_BADF = 8,
     TURBOWASM_WASI_ERRNO_FAULT = 21,
     TURBOWASM_WASI_ERRNO_INVAL = 28,
     TURBOWASM_WASI_ERRNO_IO = 29
@@ -22,6 +23,20 @@ enum {
     TURBOWASM_WASI_CLOCKID_REALTIME = 0,
     TURBOWASM_WASI_CLOCKID_MONOTONIC = 1
 };
+
+enum {
+    TURBOWASM_WASI_IOV_MAX = 64
+};
+
+typedef struct turbowasm_wasi_const_buffer {
+    const uint8_t *data;
+    size_t size;
+} turbowasm_wasi_const_buffer;
+
+typedef struct turbowasm_wasi_buffer {
+    uint8_t *data;
+    size_t size;
+} turbowasm_wasi_buffer;
 
 typedef uint32_t (*turbowasm_wasi_clock_time_fn)(
     void *context,
@@ -33,6 +48,20 @@ typedef uint32_t (*turbowasm_wasi_random_fill_fn)(
     void *context,
     uint8_t *buffer,
     size_t length);
+
+typedef uint32_t (*turbowasm_wasi_fd_write_fn)(
+    void *context,
+    uint32_t fd,
+    const turbowasm_wasi_const_buffer *buffers,
+    size_t buffer_count,
+    uint32_t *out_written);
+
+typedef uint32_t (*turbowasm_wasi_fd_read_fn)(
+    void *context,
+    uint32_t fd,
+    const turbowasm_wasi_buffer *buffers,
+    size_t buffer_count,
+    uint32_t *out_read);
 
 typedef struct turbowasm_wasi_preview1 {
     void *impl;
@@ -54,6 +83,14 @@ typedef struct turbowasm_wasi_preview1_config {
     bool allow_random;
     turbowasm_wasi_random_fill_fn random_fill;
     void *random_context;
+
+    bool allow_fd_write;
+    turbowasm_wasi_fd_write_fn fd_write;
+    void *fd_write_context;
+
+    bool allow_fd_read;
+    turbowasm_wasi_fd_read_fn fd_read;
+    void *fd_read_context;
 } turbowasm_wasi_preview1_config;
 
 /*
