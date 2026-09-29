@@ -1,6 +1,8 @@
 #include <turbowasm/wasi.h>
 #include <turbowasm/wasi_fs.h>
 
+#include "wasi_preview1_adapter_plan.h"
+
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -1672,21 +1674,38 @@ const cmeta_function_desc *turbowasm_wasi_preview1_find_function(
     return NULL;
 }
 
-static bool turbowasm_wasi_cmeta_value_kind(
-    const cmeta_type_desc *type,
+static const turbowasm_wasi_preview1_adapter_function_plan *
+turbowasm_wasi_adapter_plan_for_metadata(
+    const cmeta_function_desc *metadata) {
+    size_t index;
+    size_t count = turbowasm_wasi_preview1_function_count();
+
+    if (metadata == NULL ||
+        count != turbowasm_wasi_preview1_adapter_function_count)
+        return NULL;
+
+    for (index = 0u; index < count; ++index) {
+        if (turbowasm_wasi_preview1_manifest[index] == metadata)
+            return &turbowasm_wasi_preview1_adapter_functions[index];
+    }
+    return NULL;
+}
+
+static bool turbowasm_wasi_adapter_value_kind(
+    turbowasm_wasi_preview1_adapter_carrier carrier,
     turbowasm_value_kind *out_kind) {
-    if (type == NULL || out_kind == NULL)
+    if (out_kind == NULL)
         return false;
 
-    if (cmeta_type_equal(type, &cmeta_type_uint32) ||
-        cmeta_type_equal(type, &cmeta_type_int32)) {
+    switch (carrier) {
+    case turbowasm_wasi_preview1_adapter_carrier_u32:
         *out_kind = TURBOWASM_VALUE_I32;
         return true;
-    }
-    if (cmeta_type_equal(type, &cmeta_type_uint64) ||
-        cmeta_type_equal(type, &cmeta_type_int64)) {
+    case turbowasm_wasi_preview1_adapter_carrier_u64:
         *out_kind = TURBOWASM_VALUE_I64;
         return true;
+    case turbowasm_wasi_preview1_adapter_carrier_void:
+        break;
     }
     return false;
 }
@@ -1696,31 +1715,33 @@ static turbowasm_status turbowasm_wasi_define_cmeta_function(
     const cmeta_function_desc *metadata,
     turbowasm_host_function_fn function,
     void *context) {
+    const turbowasm_wasi_preview1_adapter_function_plan *plan;
     turbowasm_value_kind params[9];
     turbowasm_value_kind result;
     turbowasm_host_function_type type = {0};
     size_t index;
 
-    if (linker == NULL || metadata == NULL || function == NULL ||
-        !cmeta_function_desc_valid(metadata) ||
-        metadata->param_count > sizeof(params) / sizeof(params[0]))
+    if (linker == NULL || metadata == NULL || function == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    for (index = 0u; index < metadata->param_count; ++index) {
-        const cmeta_param_desc *param =
-            cmeta_function_param(metadata, index);
-        if (param == NULL ||
-            !turbowasm_wasi_cmeta_value_kind(
-                param->type, &params[index]))
+    plan = turbowasm_wasi_adapter_plan_for_metadata(metadata);
+    if (plan == NULL ||
+        plan->param_count > sizeof(params) / sizeof(params[0]))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (index = 0u; index < plan->param_count; ++index) {
+        if (plan->params == NULL ||
+            !turbowasm_wasi_adapter_value_kind(
+                plan->params[index].carrier, &params[index]))
             return TURBOWASM_INVALID_ARGUMENT;
     }
 
     type.params = params;
-    type.param_count = metadata->param_count;
-    if (!cmeta_type_equal(
-            metadata->return_type, &cmeta_type_void)) {
-        if (!turbowasm_wasi_cmeta_value_kind(
-                metadata->return_type, &result))
+    type.param_count = plan->param_count;
+    if (plan->return_carrier !=
+        turbowasm_wasi_preview1_adapter_carrier_void) {
+        if (!turbowasm_wasi_adapter_value_kind(
+                plan->return_carrier, &result))
             return TURBOWASM_INVALID_ARGUMENT;
         type.results = &result;
         type.result_count = 1u;
@@ -1729,7 +1750,7 @@ static turbowasm_status turbowasm_wasi_define_cmeta_function(
     return turbowasm_linker_define_host_function(
         linker,
         turbowasm_wasi_namespace(),
-        turbowasm_wasi_name(metadata->name),
+        turbowasm_wasi_name(plan->function_name),
         &type,
         function,
         context);

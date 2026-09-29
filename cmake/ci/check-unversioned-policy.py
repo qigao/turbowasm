@@ -108,12 +108,13 @@ def check_salts_restore() -> None:
     path = ROOT / "cmake" / "ci" / "restore-salts-sdk.ps1"
     text = path.read_text(encoding="utf-8")
 
-    if re.search(
-        r'PackageReference[^>]*Include="Salts\.Native"[^>]*Version="\s*[\[\(]?\d',
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    ):
-        fail(path, "Salts.Native PackageReference uses a literal numeric version")
+    for package_id in ("Salts.Native", "SaltsUtils.Native"):
+        if re.search(
+            rf'PackageReference[^>]*Include="{re.escape(package_id)}"[^>]*Version="\s*[\[\(]?\d',
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            fail(path, f"{package_id} PackageReference uses a literal numeric version")
 
     if re.search(
         r"SALTS_SDK_VERSION.{0,200}?else\s*\{\s*['\"]\d",

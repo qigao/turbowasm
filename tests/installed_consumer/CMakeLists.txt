@@ -37,6 +37,15 @@ if("Salts::CFlow" IN_LIST _turbowasm_runtime_links)
   message(FATAL_ERROR
     "TurboWasm::Runtime must remain CFlow-free")
 endif()
+foreach(_turbowasm_forbidden_tooling_target IN ITEMS
+    Salts::DataBindProducer
+    Salts::DataBind
+    Salts::DataBindCore)
+  if("${_turbowasm_forbidden_tooling_target}" IN_LIST _turbowasm_runtime_links)
+    message(FATAL_ERROR
+      "TurboWasm::Runtime must remain free of ${_turbowasm_forbidden_tooling_target}")
+  endif()
+endforeach()
 
 if("Salts::NativeIO" IN_LIST _turbowasm_runtime_links)
   message(FATAL_ERROR
@@ -79,6 +88,15 @@ if(TARGET TurboWasm::WASI)
     message(FATAL_ERROR
       "TurboWasm::WASI must remain littlefs-adapter-free")
   endif()
+  foreach(_turbowasm_forbidden_tooling_target IN ITEMS
+      Salts::DataBindProducer
+      Salts::DataBind
+      Salts::DataBindCore)
+    if("${_turbowasm_forbidden_tooling_target}" IN_LIST _turbowasm_wasi_links)
+      message(FATAL_ERROR
+        "TurboWasm::WASI must remain free of ${_turbowasm_forbidden_tooling_target}")
+    endif()
+  endforeach()
 endif()
 
 if(TARGET TurboWasm::WASINativeIO)

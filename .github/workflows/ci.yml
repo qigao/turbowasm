@@ -30,7 +30,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: ./cmake/ci/restore-salts-sdk.ps1
+        run: ./cmake/ci/restore-salts-sdk.ps1 -WithSaltsUtils
 
       - name: Ensure Ninja
         shell: bash
@@ -50,6 +50,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/turbowasm-sdk" \
             -DTURBOWASM_BUILD_TESTS=ON \
             -DTURBOWASM_BUILD_TOOLS=ON \
+            -DTURBOWASM_QUALIFY_WASI_ADAPTER_PLAN=ON \
             -DTURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER=ON \
             -DTURBOWASM_LITTLEFS_SOURCE_DIR="$GITHUB_WORKSPACE/build/littlefs"
 
@@ -89,7 +90,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: ./cmake/ci/restore-salts-sdk.ps1
+        run: ./cmake/ci/restore-salts-sdk.ps1 -WithSaltsUtils
 
       - name: Ensure Ninja
         shell: pwsh
@@ -116,7 +117,7 @@ jobs:
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
           set "PATH=%SALTS_ROOT%\bin;%PATH%"
-          cmake -S . -B build\turbowasm-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="%RUNNER_TEMP%\turbowasm-sdk-windows" -DTURBOWASM_BUILD_TESTS=ON -DTURBOWASM_BUILD_TOOLS=ON -DTURBOWASM_ENABLE_MIR_JIT=OFF
+          cmake -S . -B build\turbowasm-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="%RUNNER_TEMP%\turbowasm-sdk-windows" -DTURBOWASM_BUILD_TESTS=ON -DTURBOWASM_BUILD_TOOLS=ON -DTURBOWASM_QUALIFY_WASI_ADAPTER_PLAN=ON -DTURBOWASM_ENABLE_MIR_JIT=OFF
           if errorlevel 1 exit /b 1
           cmake --build build\turbowasm-windows --parallel 2
           if errorlevel 1 exit /b 1
