@@ -2821,6 +2821,184 @@ static turbowasm_status turbowasm_exec_trunc_sat(
     return turbowasm_stack_push(stack, out);
 }
 
+static turbowasm_status turbowasm_exec_atomic_memarg(
+    turbowasm_reader *reader,
+    const turbowasm_atomic_descriptor *descriptor,
+    uint32_t *out_memory_index,
+    uint32_t *out_offset) {
+    uint32_t flags;
+    uint32_t memory_index = 0u;
+    uint32_t offset;
+    uint32_t alignment;
+
+    if (reader == NULL || descriptor == NULL ||
+        out_memory_index == NULL || out_offset == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!turbowasm_reader_uleb32(reader, &flags) ||
+        flags >= UINT32_C(0x80))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if ((flags & UINT32_C(0x40)) != 0u &&
+        !turbowasm_reader_uleb32(reader, &memory_index))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (!turbowasm_reader_uleb32(reader, &offset))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    alignment = flags & UINT32_C(0x3f);
+    if (alignment != descriptor->alignment_log2)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    *out_memory_index = memory_index;
+    *out_offset = offset;
+    return TURBOWASM_OK;
+}
+
+static uint64_t turbowasm_atomic_value_bits(
+    const turbowasm_value *value,
+    turbowasm_atomic_value_type type) {
+    uint64_t bits = 0u;
+
+    if (value == NULL)
+        return 0u;
+
+    if (type == TURBOWASM_ATOMIC_I32) {
+        uint32_t bits32 = 0u;
+        memcpy(&bits32, &value->as.i32, sizeof(bits32));
+        bits = bits32;
+    } else {
+        memcpy(&bits, &value->as.i64, sizeof(bits));
+    }
+    return bits;
+}
+
+static turbowasm_status turbowasm_atomic_push_result(
+    turbowasm_value_stack *stack,
+    turbowasm_atomic_value_type type,
+    uint64_t bits) {
+    turbowasm_value out = {0};
+
+    if (stack == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (type == TURBOWASM_ATOMIC_I32) {
+        uint32_t bits32 = (uint32_t)bits;
+        out.kind = TURBOWASM_VALUE_I32;
+        memcpy(&out.as.i32, &bits32, sizeof(bits32));
+    } else {
+        out.kind = TURBOWASM_VALUE_I64;
+        memcpy(&out.as.i64, &bits, sizeof(bits));
+    }
+
+    return turbowasm_stack_push(stack, out);
+}
+
+static turbowasm_status turbowasm_exec_atomic(
+    turbowasm_instance_impl *instance,
+    turbowasm_reader *reader,
+    turbowasm_value_stack *stack,
+    turbowasm_trap *trap) {
+    const turbowasm_atomic_descriptor *descriptor;
+    turbowasm_value address = {0};
+    turbowasm_value first = {0};
+    turbowasm_value second = {0};
+    uint32_t subopcode;
+    uint32_t memory_index;
+    uint32_t offset;
+    uint64_t value = 0u;
+    uint64_t expected = 0u;
+    uint64_t replacement = 0u;
+    uint64_t old_value = 0u;
+    turbowasm_value_kind value_kind;
+    turbowasm_status status;
+
+    if (instance == NULL || reader == NULL ||
+        stack == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!turbowasm_reader_uleb32(reader, &subopcode))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    descriptor = turbowasm_atomic_descriptor_find(subopcode);
+    if (descriptor == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    status = turbowasm_exec_atomic_memarg(
+        reader, descriptor, &memory_index, &offset);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    value_kind = descriptor->value_type == TURBOWASM_ATOMIC_I32
+        ? TURBOWASM_VALUE_I32
+        : TURBOWASM_VALUE_I64;
+
+    switch (descriptor->kind) {
+        case TURBOWASM_ATOMIC_LOAD:
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &address);
+            if (status != TURBOWASM_OK)
+                return status;
+            break;
+
+        case TURBOWASM_ATOMIC_STORE:
+        case TURBOWASM_ATOMIC_RMW:
+            status = turbowasm_stack_pop_kind(
+                stack, value_kind, &first);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &address);
+            if (status != TURBOWASM_OK)
+                return status;
+            value = turbowasm_atomic_value_bits(
+                &first, descriptor->value_type);
+            break;
+
+        case TURBOWASM_ATOMIC_CMPXCHG:
+            status = turbowasm_stack_pop_kind(
+                stack, value_kind, &second);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, value_kind, &first);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop_kind(
+                stack, TURBOWASM_VALUE_I32, &address);
+            if (status != TURBOWASM_OK)
+                return status;
+            expected = turbowasm_atomic_value_bits(
+                &first, descriptor->value_type);
+            replacement = turbowasm_atomic_value_bits(
+                &second, descriptor->value_type);
+            break;
+
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+
+    status = turbowasm_instance_memory_atomic(
+        instance,
+        memory_index,
+        (uint32_t)address.as.i32,
+        offset,
+        descriptor,
+        value,
+        expected,
+        replacement,
+        &old_value,
+        trap);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (descriptor->kind == TURBOWASM_ATOMIC_STORE)
+        return TURBOWASM_OK;
+
+    return turbowasm_atomic_push_result(
+        stack, descriptor->value_type, old_value);
+}
+
 static turbowasm_status turbowasm_exec_fc(
     turbowasm_instance_impl *instance,
     turbowasm_reader *reader,
@@ -5205,6 +5383,13 @@ restart_frame:
                     goto done;
                 break;
 
+            case 0xfeu:
+                status = turbowasm_exec_atomic(
+                    instance, &reader, &stack, trap);
+                if (status != TURBOWASM_OK)
+                    goto done;
+                break;
+
             default:
                 status = TURBOWASM_UNSUPPORTED;
                 goto done;
@@ -5806,6 +5991,8 @@ const char *turbowasm_trap_string(turbowasm_trap trap) {
             return "integer_overflow";
         case TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS:
             return "memory_out_of_bounds";
+        case TURBOWASM_TRAP_UNALIGNED_ATOMIC:
+            return "unaligned_atomic";
         case TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS:
             return "table_out_of_bounds";
         case TURBOWASM_TRAP_INDIRECT_CALL_NULL:

@@ -4,6 +4,8 @@
 #include <turbowasm/instance.h>
 #include <turbowasm/link.h>
 
+#include "atomic.h"
+
 #include <salts/thread.h>
 
 #include "module_internal.h"
@@ -321,6 +323,18 @@ turbowasm_status turbowasm_instance_memory_copy_bytes(
     uint32_t destination,
     uint32_t source,
     size_t length);
+
+turbowasm_status turbowasm_instance_memory_atomic(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    const turbowasm_atomic_descriptor *descriptor,
+    uint64_t value,
+    uint64_t expected,
+    uint64_t replacement,
+    uint64_t *out_old,
+    turbowasm_trap *trap);
 
 turbowasm_status turbowasm_instance_memory_bounds(
     const turbowasm_instance_impl *instance,

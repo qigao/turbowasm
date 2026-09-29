@@ -1421,6 +1421,161 @@ turbowasm_status turbowasm_instance_memory_copy_bytes(
     return status;
 }
 
+static uint64_t turbowasm_atomic_load_le(
+    const uint8_t *data,
+    uint8_t width) {
+    uint64_t value = 0u;
+    uint8_t index;
+
+    for (index = 0u; index < width; ++index)
+        value |= (uint64_t)data[index] << (8u * index);
+    return value;
+}
+
+static void turbowasm_atomic_store_le(
+    uint8_t *data,
+    uint8_t width,
+    uint64_t value) {
+    uint8_t index;
+
+    for (index = 0u; index < width; ++index)
+        data[index] = (uint8_t)(value >> (8u * index));
+}
+
+static uint64_t turbowasm_atomic_width_mask(
+    uint8_t width) {
+    if (width >= 8u)
+        return UINT64_MAX;
+    return (UINT64_C(1) << (width * 8u)) - UINT64_C(1);
+}
+
+turbowasm_status turbowasm_instance_memory_atomic(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    const turbowasm_atomic_descriptor *descriptor,
+    uint64_t value,
+    uint64_t expected,
+    uint64_t replacement,
+    uint64_t *out_old,
+    turbowasm_trap *trap) {
+    turbowasm_instance_memory *memory;
+    uint64_t effective64;
+    uint64_t mask;
+    uint64_t old_value;
+    uint64_t new_value = 0u;
+    size_t effective = 0u;
+    turbowasm_status status;
+
+    if (instance == NULL || descriptor == NULL ||
+        out_old == NULL || trap == NULL ||
+        memory_index >= instance->memory_count ||
+        (descriptor->width != 1u &&
+         descriptor->width != 2u &&
+         descriptor->width != 4u &&
+         descriptor->width != 8u))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *trap = TURBOWASM_TRAP_NONE;
+    *out_old = 0u;
+
+    memory = turbowasm_instance_memory_resolve(
+        instance, memory_index);
+    if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    effective64 = (uint64_t)address + (uint64_t)offset;
+    if ((effective64 % descriptor->width) != 0u) {
+        *trap = TURBOWASM_TRAP_UNALIGNED_ATOMIC;
+        return TURBOWASM_TRAPPED;
+    }
+
+    /*
+     * Use the backing write lock for every atomic operation, including loads.
+     * This gives one total order for atomic accesses on a shared backing and
+     * makes each RMW/cmpxchg one indivisible transaction.
+     */
+    turbowasm_instance_memory_wrlock(memory);
+    status = turbowasm_instance_memory_storage_range(
+        memory, address, offset,
+        descriptor->width, &effective);
+    if (status != TURBOWASM_OK) {
+        turbowasm_instance_memory_wrunlock(memory);
+        if (status == TURBOWASM_TRAPPED)
+            *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        return status;
+    }
+
+    old_value = turbowasm_atomic_load_le(
+        memory->data + effective,
+        descriptor->width);
+    mask = turbowasm_atomic_width_mask(
+        descriptor->width);
+
+    switch (descriptor->kind) {
+        case TURBOWASM_ATOMIC_LOAD:
+            break;
+
+        case TURBOWASM_ATOMIC_STORE:
+            turbowasm_atomic_store_le(
+                memory->data + effective,
+                descriptor->width,
+                value & mask);
+            break;
+
+        case TURBOWASM_ATOMIC_RMW:
+            value &= mask;
+            switch (descriptor->op) {
+                case TURBOWASM_ATOMIC_OP_ADD:
+                    new_value = (old_value + value) & mask;
+                    break;
+                case TURBOWASM_ATOMIC_OP_SUB:
+                    new_value = (old_value - value) & mask;
+                    break;
+                case TURBOWASM_ATOMIC_OP_AND:
+                    new_value = old_value & value;
+                    break;
+                case TURBOWASM_ATOMIC_OP_OR:
+                    new_value = old_value | value;
+                    break;
+                case TURBOWASM_ATOMIC_OP_XOR:
+                    new_value = old_value ^ value;
+                    break;
+                case TURBOWASM_ATOMIC_OP_XCHG:
+                    new_value = value;
+                    break;
+                default:
+                    turbowasm_instance_memory_wrunlock(memory);
+                    return TURBOWASM_INVALID_ARGUMENT;
+            }
+            turbowasm_atomic_store_le(
+                memory->data + effective,
+                descriptor->width,
+                new_value & mask);
+            break;
+
+        case TURBOWASM_ATOMIC_CMPXCHG:
+            expected &= mask;
+            replacement &= mask;
+            if (old_value == expected) {
+                turbowasm_atomic_store_le(
+                    memory->data + effective,
+                    descriptor->width,
+                    replacement);
+            }
+            break;
+
+        default:
+            turbowasm_instance_memory_wrunlock(memory);
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    *out_old = old_value & mask;
+    turbowasm_instance_memory_wrunlock(memory);
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_instance_memory_bounds(
     const turbowasm_instance_impl *instance,
     uint32_t memory_index,
