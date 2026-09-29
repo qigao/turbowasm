@@ -62,7 +62,7 @@ static void test_memory64_load_requires_i64_address(void) {
     turbowasm_module_destroy(&module);
     assert(turbowasm_module_load_borrowed(
                &module, invalid, sizeof(invalid)) ==
-           TURBOWASM_TYPE_MISMATCH);
+           TURBOWASM_MALFORMED_MODULE);
 }
 
 static void test_shared_memory64_is_explicitly_unsupported(void) {
