@@ -2,6 +2,8 @@
 
 #include "instance_internal.h"
 
+#include <salts/thread.h>
+
 #ifdef TURBOWASM_SPEC_ENABLE_MIR
 #include "jit/mir_backend.h"
 #endif
@@ -23,11 +25,28 @@ typedef struct spec_slot {
     bool loaded;
     bool ready;
     bool unsupported;
+    bool borrowed;
 } spec_slot;
 
-typedef struct spec_state {
+typedef struct spec_state spec_state;
+
+typedef struct spec_thread {
+    char *name_hex;
+    char *manifest_path;
+    salts_thread_t handle;
+    spec_state *child;
+    int rc;
+    bool joined;
+    bool aggregated;
+} spec_thread;
+
+struct spec_state {
     spec_slot **slots;
     size_t slot_count;
+
+    spec_thread **threads;
+    size_t thread_count;
+    size_t thread_capacity;
 
     /*
      * WebAssembly store allocations created by assertions that trap during
@@ -50,7 +69,11 @@ typedef struct spec_state {
     bool printed_first_failure;
     bool printed_first_unsupported;
     bool printed_first_runtime_unsupported;
-} spec_state;
+};
+
+static int spec_run_manifest(spec_state *state, const char *path);
+static bool spec_state_init(spec_state *state);
+static void spec_state_destroy(spec_state *state);
 
 typedef enum spec_expected_pattern {
     SPEC_EXPECT_EXACT = 0,
@@ -304,9 +327,11 @@ static unsigned char *spec_read_file(const char *path,
 static void spec_slot_destroy(spec_slot *slot) {
     if (slot == NULL)
         return;
-    turbowasm_instance_destroy(&slot->instance);
-    turbowasm_module_destroy(&slot->module);
-    free(slot->bytes);
+    if (!slot->borrowed) {
+        turbowasm_instance_destroy(&slot->instance);
+        turbowasm_module_destroy(&slot->module);
+        free(slot->bytes);
+    }
     memset(slot, 0, sizeof(*slot));
 }
 
@@ -412,6 +437,372 @@ static bool spec_ensure_slot(spec_state *state, size_t slot_index) {
     }
 
     return true;
+}
+
+
+static char *spec_strdup_text(const char *text) {
+    size_t size;
+    char *copy;
+
+    if (text == NULL)
+        return NULL;
+    size = strlen(text) + 1u;
+    copy = (char *)malloc(size);
+    if (copy != NULL)
+        memcpy(copy, text, size);
+    return copy;
+}
+
+static bool spec_state_init(spec_state *state) {
+    if (state == NULL)
+        return false;
+
+    memset(state, 0, sizeof(*state));
+    state->current_slot = -1;
+
+    if (turbowasm_linker_init(&state->linker) != TURBOWASM_OK)
+        return false;
+    if (!spec_init_spectest(state)) {
+        turbowasm_linker_destroy(&state->linker);
+        memset(state, 0, sizeof(*state));
+        return false;
+    }
+    return true;
+}
+
+static spec_thread *spec_find_thread(
+    spec_state *state,
+    const char *name_hex) {
+    size_t index;
+
+    if (state == NULL || name_hex == NULL)
+        return NULL;
+
+    for (index = 0u; index < state->thread_count; ++index) {
+        spec_thread *thread = state->threads[index];
+        if (thread != NULL &&
+            thread->name_hex != NULL &&
+            strcmp(thread->name_hex, name_hex) == 0)
+            return thread;
+    }
+    return NULL;
+}
+
+static bool spec_reserve_thread(spec_state *state) {
+    spec_thread **grown;
+    size_t next;
+
+    if (state == NULL)
+        return false;
+    if (state->thread_count < state->thread_capacity)
+        return true;
+
+    next = state->thread_capacity == 0u
+        ? 4u
+        : state->thread_capacity * 2u;
+    if (next < state->thread_capacity ||
+        next > SIZE_MAX / sizeof(*grown))
+        return false;
+
+    grown = (spec_thread **)realloc(
+        state->threads, next * sizeof(*grown));
+    if (grown == NULL)
+        return false;
+
+    memset(
+        grown + state->thread_capacity, 0,
+        (next - state->thread_capacity) * sizeof(*grown));
+    state->threads = grown;
+    state->thread_capacity = next;
+    return true;
+}
+
+static bool spec_parse_slot_index(
+    const char *text,
+    size_t *out) {
+    char *end = NULL;
+    unsigned long long value;
+
+    if (text == NULL || out == NULL || *text == '\0')
+        return false;
+
+    errno = 0;
+    value = strtoull(text, &end, 10);
+    if (errno != 0 || end == NULL || *end != '\0' ||
+        value > (unsigned long long)SIZE_MAX)
+        return false;
+
+    *out = (size_t)value;
+    return true;
+}
+
+static bool spec_bind_shared_slot(
+    spec_state *parent,
+    spec_state *child,
+    size_t child_index,
+    size_t parent_index) {
+    const spec_slot *source;
+    spec_slot *target;
+
+    if (parent == NULL || child == NULL ||
+        parent_index >= parent->slot_count ||
+        parent->slots[parent_index] == NULL)
+        return false;
+
+    source = parent->slots[parent_index];
+    if (!source->loaded || !source->ready || source->unsupported)
+        return false;
+
+    if (!spec_ensure_slot(child, child_index))
+        return false;
+
+    target = child->slots[child_index];
+    spec_slot_destroy(target);
+    target->size = source->size;
+    target->module = source->module;
+    target->instance = source->instance;
+    target->loaded = source->loaded;
+    target->ready = source->ready;
+    target->unsupported = source->unsupported;
+    target->borrowed = true;
+    return true;
+}
+
+static bool spec_apply_shared_bindings(
+    spec_state *parent,
+    spec_state *child,
+    const char *bindings) {
+    char *copy;
+    char *cursor;
+
+    if (bindings == NULL)
+        return false;
+    if (strcmp(bindings, "-") == 0)
+        return true;
+
+    copy = spec_strdup_text(bindings);
+    if (copy == NULL)
+        return false;
+
+    cursor = copy;
+    while (cursor != NULL && *cursor != '\0') {
+        char *next = strchr(cursor, ',');
+        char *colon;
+        size_t child_index;
+        size_t parent_index;
+
+        if (next != NULL)
+            *next = '\0';
+        colon = strchr(cursor, ':');
+        if (colon == NULL) {
+            free(copy);
+            return false;
+        }
+        *colon = '\0';
+
+        if (!spec_parse_slot_index(cursor, &child_index) ||
+            !spec_parse_slot_index(colon + 1u, &parent_index) ||
+            !spec_bind_shared_slot(
+                parent, child, child_index, parent_index)) {
+            free(copy);
+            return false;
+        }
+
+        cursor = next == NULL ? NULL : next + 1u;
+    }
+
+    free(copy);
+    return true;
+}
+
+static void spec_thread_main(void *argument) {
+    spec_thread *thread = (spec_thread *)argument;
+
+    if (thread == NULL ||
+        thread->child == NULL ||
+        thread->manifest_path == NULL)
+        return;
+
+    thread->rc = spec_run_manifest(
+        thread->child, thread->manifest_path);
+}
+
+static void spec_command_thread(
+    spec_state *state,
+    unsigned line,
+    const char *name_hex,
+    const char *bindings,
+    const char *manifest_path) {
+    spec_thread *thread;
+
+    if (state == NULL || name_hex == NULL ||
+        bindings == NULL || manifest_path == NULL) {
+        spec_note_failure(state, line, "invalid thread command");
+        return;
+    }
+    if (spec_find_thread(state, name_hex) != NULL) {
+        spec_note_failure(state, line, "duplicate thread name");
+        return;
+    }
+    if (!spec_reserve_thread(state)) {
+        spec_note_failure(state, line, "thread registry allocation failed");
+        return;
+    }
+
+    thread = (spec_thread *)calloc(1u, sizeof(*thread));
+    if (thread == NULL) {
+        spec_note_failure(state, line, "thread allocation failed");
+        return;
+    }
+
+    thread->name_hex = spec_strdup_text(name_hex);
+    thread->manifest_path = spec_strdup_text(manifest_path);
+    thread->child = (spec_state *)calloc(1u, sizeof(*thread->child));
+    if (thread->name_hex == NULL ||
+        thread->manifest_path == NULL ||
+        thread->child == NULL) {
+        free(thread->name_hex);
+        free(thread->manifest_path);
+        free(thread->child);
+        free(thread);
+        spec_note_failure(state, line, "thread allocation failed");
+        return;
+    }
+
+    if (!spec_state_init(thread->child)) {
+        free(thread->name_hex);
+        free(thread->manifest_path);
+        free(thread->child);
+        free(thread);
+        spec_note_failure(state, line, "thread state init failed");
+        return;
+    }
+
+    if (!spec_apply_shared_bindings(
+            state, thread->child, bindings)) {
+        spec_state_destroy(thread->child);
+        free(thread->child);
+        free(thread->name_hex);
+        free(thread->manifest_path);
+        free(thread);
+        spec_note_failure(state, line, "thread shared binding failed");
+        return;
+    }
+
+    if (salts_thread_create(
+            &thread->handle,
+            spec_thread_main,
+            thread) != 0) {
+        spec_state_destroy(thread->child);
+        free(thread->child);
+        free(thread->name_hex);
+        free(thread->manifest_path);
+        free(thread);
+        spec_note_failure(state, line, "thread creation failed");
+        return;
+    }
+
+    state->threads[state->thread_count++] = thread;
+    spec_note_pass(state);
+}
+
+static void spec_command_wait(
+    spec_state *state,
+    unsigned line,
+    const char *name_hex) {
+    spec_thread *thread;
+
+    if (state == NULL || name_hex == NULL) {
+        spec_note_failure(state, line, "invalid wait command");
+        return;
+    }
+
+    thread = spec_find_thread(state, name_hex);
+    if (thread == NULL) {
+        spec_note_failure(state, line, "wait target unavailable");
+        return;
+    }
+    if (thread->joined) {
+        spec_note_failure(state, line, "thread already joined");
+        return;
+    }
+
+    if (salts_thread_join(&thread->handle) != 0) {
+        spec_note_failure(state, line, "thread join failed");
+        return;
+    }
+    thread->joined = true;
+
+    if (thread->child != NULL && !thread->aggregated) {
+        state->passed += thread->child->passed;
+        state->failed += thread->child->failed;
+        state->unsupported += thread->child->unsupported;
+        if (thread->rc != 0 && thread->child->failed == 0u)
+            spec_note_failure(state, line, "thread manifest failed");
+        thread->aggregated = true;
+
+        spec_state_destroy(thread->child);
+        free(thread->child);
+        thread->child = NULL;
+    }
+
+    spec_note_pass(state);
+}
+
+static void spec_state_destroy(spec_state *state) {
+    size_t index;
+
+    if (state == NULL)
+        return;
+
+    index = state->thread_count;
+    while (index != 0u) {
+        spec_thread *thread;
+        --index;
+        thread = state->threads[index];
+        if (thread == NULL)
+            continue;
+
+        if (!thread->joined && thread->handle != NULL) {
+            (void)salts_thread_join(&thread->handle);
+            thread->joined = true;
+        }
+        if (thread->child != NULL) {
+            spec_state_destroy(thread->child);
+            free(thread->child);
+        }
+        free(thread->name_hex);
+        free(thread->manifest_path);
+        free(thread);
+    }
+    free(state->threads);
+
+    index = state->slot_count;
+    while (index != 0u) {
+        --index;
+        if (state->slots[index] != NULL) {
+            spec_slot_destroy(state->slots[index]);
+            free(state->slots[index]);
+        }
+    }
+    free(state->slots);
+
+    index = state->retained_failure_count;
+    while (index != 0u) {
+        --index;
+        if (state->retained_failures[index] != NULL) {
+            spec_slot_destroy(state->retained_failures[index]);
+            free(state->retained_failures[index]);
+        }
+    }
+    free(state->retained_failures);
+
+    if (state->spectest_ready) {
+        turbowasm_instance_destroy(&state->spectest_instance);
+        turbowasm_module_destroy(&state->spectest_module);
+    }
+    turbowasm_linker_destroy(&state->linker);
+    memset(state, 0, sizeof(*state));
 }
 
 static int spec_hex_nibble(char ch) {
@@ -1682,7 +2073,8 @@ static int spec_run_manifest(spec_state *state, const char *path) {
 
         if (first) {
             first = false;
-            if (strcmp(buffer, "TWCF1") != 0) {
+            if (strcmp(buffer, "TWCF1") != 0 &&
+                strcmp(buffer, "TWCF2") != 0) {
                 fprintf(stderr, "unsupported manifest version\n");
                 fclose(file);
                 return 2;
@@ -1711,6 +2103,19 @@ static int spec_run_manifest(spec_state *state, const char *path) {
 
         if (strcmp(fields[0], "unsupported") == 0) {
             spec_note_unsupported(state, line, fields[2]);
+            goto command_done;
+        }
+
+        if (strcmp(fields[0], "thread") == 0 &&
+            field_count == 5u) {
+            spec_command_thread(
+                state, line, fields[2], fields[3], fields[4]);
+            goto command_done;
+        }
+
+        if (strcmp(fields[0], "wait") == 0 &&
+            field_count == 3u) {
+            spec_command_wait(state, line, fields[2]);
             goto command_done;
         }
 
@@ -1803,8 +2208,8 @@ command_done:
 
 int main(int argc, char **argv) {
     spec_state state;
-    size_t index;
     int rc;
+    bool failed;
 #ifdef TURBOWASM_SPEC_ENABLE_MIR
     size_t mir_compiled = 0u;
     size_t mir_interpret_only = 0u;
@@ -1817,16 +2222,8 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    memset(&state, 0, sizeof(state));
-    state.current_slot = -1;
-
-    if (turbowasm_linker_init(&state.linker) != TURBOWASM_OK) {
-        fprintf(stderr, "failed to initialize linker\n");
-        return 2;
-    }
-    if (!spec_init_spectest(&state)) {
-        fprintf(stderr, "failed to initialize spectest provider\n");
-        turbowasm_linker_destroy(&state.linker);
+    if (!spec_state_init(&state)) {
+        fprintf(stderr, "failed to initialize conformance state\n");
         return 2;
     }
 
@@ -1852,33 +2249,10 @@ int main(int argc, char **argv) {
            mir_calls);
 #endif
 
-    index = state.slot_count;
-    while (index != 0u) {
-        --index;
-        if (state.slots[index] != NULL) {
-            spec_slot_destroy(state.slots[index]);
-            free(state.slots[index]);
-        }
-    }
-    free(state.slots);
-
-    index = state.retained_failure_count;
-    while (index != 0u) {
-        --index;
-        if (state.retained_failures[index] != NULL) {
-            spec_slot_destroy(state.retained_failures[index]);
-            free(state.retained_failures[index]);
-        }
-    }
-    free(state.retained_failures);
-
-    if (state.spectest_ready) {
-        turbowasm_instance_destroy(&state.spectest_instance);
-        turbowasm_module_destroy(&state.spectest_module);
-    }
-    turbowasm_linker_destroy(&state.linker);
+    failed = state.failed != 0u;
+    spec_state_destroy(&state);
 
     if (rc != 0)
         return rc;
-    return state.failed == 0u ? 0 : 1;
+    return failed ? 1 : 0;
 }

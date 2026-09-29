@@ -1,5 +1,5 @@
 add_executable(turbowasm_spec_runner spec_runner.c)
-target_link_libraries(turbowasm_spec_runner PRIVATE TurboWasm::Runtime)
+target_link_libraries(turbowasm_spec_runner PRIVATE TurboWasm::Runtime Salts::Platform)
 target_include_directories(turbowasm_spec_runner
   PRIVATE "${PROJECT_SOURCE_DIR}/src")
 set_target_properties(turbowasm_spec_runner PROPERTIES
@@ -24,7 +24,8 @@ if(TURBOWASM_ENABLE_MIR_JIT)
   target_link_libraries(turbowasm_spec_runner_mir
     PRIVATE
       turbowasm_mir_backend
-      TurboWasm::Runtime)
+      TurboWasm::Runtime
+      Salts::Platform)
   set_target_properties(turbowasm_spec_runner_mir PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
