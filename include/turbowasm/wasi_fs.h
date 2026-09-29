@@ -200,6 +200,23 @@ uint32_t turbowasm_wasi_fs_fd_write(
     size_t buffer_count,
     uint32_t *out_written);
 
+uint32_t turbowasm_wasi_fs_fd_seek(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t fd,
+    int64_t offset,
+    uint8_t whence,
+    uint64_t *out_offset);
+
+uint32_t turbowasm_wasi_fs_fd_tell(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t fd,
+    uint64_t *out_offset);
+
+uint32_t turbowasm_wasi_fs_fd_filestat_get(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t fd,
+    turbowasm_wasi_fs_stat *out_stat);
+
 #ifdef __cplusplus
 }
 #endif
