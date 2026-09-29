@@ -36,10 +36,26 @@ typedef struct turbowasm_component_core_instantiate_arg {
     uint32_t instance_index;
 } turbowasm_component_core_instantiate_arg;
 
+typedef enum turbowasm_component_core_instance_kind {
+    TURBOWASM_COMPONENT_CORE_INSTANCE_INSTANTIATE = 0,
+    TURBOWASM_COMPONENT_CORE_INSTANCE_INLINE
+} turbowasm_component_core_instance_kind;
+
+typedef struct turbowasm_component_core_inline_export {
+    turbowasm_component_name name;
+    uint8_t sort;
+    uint32_t item_index;
+} turbowasm_component_core_inline_export;
+
 typedef struct turbowasm_component_core_instance_def {
+    turbowasm_component_core_instance_kind kind;
+
     uint32_t module_index;
     turbowasm_component_core_instantiate_arg *arguments;
     uint32_t argument_count;
+
+    turbowasm_component_core_inline_export *exports;
+    uint32_t export_count;
 } turbowasm_component_core_instance_def;
 
 typedef struct turbowasm_component_core_function_alias {
@@ -67,6 +83,18 @@ typedef struct turbowasm_component_canon_lift {
 
     turbowasm_component_string_encoding string_encoding;
 } turbowasm_component_canon_lift;
+
+typedef enum turbowasm_component_resource_builtin_kind {
+    TURBOWASM_COMPONENT_RESOURCE_BUILTIN_NEW = 0,
+    TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP,
+    TURBOWASM_COMPONENT_RESOURCE_BUILTIN_REP
+} turbowasm_component_resource_builtin_kind;
+
+typedef struct turbowasm_component_resource_builtin {
+    uint32_t core_function_index;
+    turbowasm_component_resource_builtin_kind kind;
+    uint32_t resource_type;
+} turbowasm_component_resource_builtin;
 
 typedef enum turbowasm_component_external_kind {
     TURBOWASM_COMPONENT_EXTERN_CORE_MODULE = 0,
@@ -118,6 +146,12 @@ typedef struct turbowasm_component_binary {
     turbowasm_component_canon_lift *canon_lifts;
     uint32_t canon_lift_count;
     uint32_t canon_lift_capacity;
+
+    turbowasm_component_resource_builtin *resource_builtins;
+    uint32_t resource_builtin_count;
+    uint32_t resource_builtin_capacity;
+
+    uint32_t core_function_count;
 
     turbowasm_component_type_graph type_graph;
 
@@ -173,6 +207,11 @@ turbowasm_component_binary_core_memory_alias_at(
 
 const turbowasm_component_canon_lift *
 turbowasm_component_binary_canon_lift_at(
+    const turbowasm_component_binary *component,
+    uint32_t index);
+
+const turbowasm_component_resource_builtin *
+turbowasm_component_binary_resource_builtin_at(
     const turbowasm_component_binary *component,
     uint32_t index);
 
