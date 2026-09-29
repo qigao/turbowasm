@@ -56,7 +56,8 @@ typedef struct turbowasm_jit_artifact_view {
  * A lookup hit returns a borrowed view that remains valid until release().
  * max_blob_bytes is mandatory and bounds both restore input and store output.
  * Cache I/O failure is advisory: execution must fall back to ordinary compile
- * or interpreter behavior.
+ * or interpreter behavior. store() consumes/copies its input synchronously;
+ * the Runtime releases the temporary buffer when store() returns.
  */
 typedef struct turbowasm_jit_artifact_cache {
     void *context;
