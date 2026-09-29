@@ -246,7 +246,7 @@ static void test_memory_max_less_than_min(void) {
     assert(module.impl == NULL);
 }
 
-static void test_shared_memory_metadata_is_retained_but_not_executable(void) {
+static void test_shared_memory_metadata_is_retained_and_executable(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
         /* memory0: shared memory32, min=1, max=2 */
@@ -269,13 +269,13 @@ static void test_shared_memory_metadata_is_retained_but_not_executable(void) {
     assert(!turbowasm_module_memory_at(&module, 1u, &memory));
 
     /*
-     * T1 retains the type but deliberately refuses executable shared memory
-     * until T2 provides a C-data-race-safe backing/access model.
+     * T2c enables ordinary shared memory through the guarded backing.
      */
     assert(turbowasm_instance_create(
-               &instance, &module) == TURBOWASM_UNSUPPORTED);
-    assert(instance.impl == NULL);
+               &instance, &module) == TURBOWASM_OK);
+    assert(instance.impl != NULL);
 
+    turbowasm_instance_destroy(&instance);
     turbowasm_module_destroy(&module);
 }
 
@@ -428,7 +428,7 @@ int main(void) {
     test_duplicate_export_name();
     test_invalid_utf8_import_name();
     test_memory_max_less_than_min();
-    test_shared_memory_metadata_is_retained_but_not_executable();
+    test_shared_memory_metadata_is_retained_and_executable();
     test_shared_memory_requires_maximum();
     test_memory64_remains_explicitly_unsupported();
     test_export_index_out_of_range();
