@@ -33,8 +33,8 @@ static void test_memory64_size_and_grow_typing(void) {
     assert(desc.minimum64 == 1u);
     assert(desc.maximum64 == 2u);
     assert(turbowasm_instance_create(
-               &instance, &module) == TURBOWASM_UNSUPPORTED);
-    assert(instance.impl == NULL);
+               &instance, &module) == TURBOWASM_OK);
+    turbowasm_instance_destroy(&instance);
     turbowasm_module_destroy(&module);
 }
 
