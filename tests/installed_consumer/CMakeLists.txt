@@ -38,6 +38,11 @@ if("Salts::CFlow" IN_LIST _turbowasm_runtime_links)
     "TurboWasm::Runtime must remain CFlow-free")
 endif()
 
+if("Salts::NativeIO" IN_LIST _turbowasm_runtime_links)
+  message(FATAL_ERROR
+    "TurboWasm::Runtime must remain NativeIO-free")
+endif()
+
 if(TARGET TurboWasm::CFlow)
   add_executable(turbowasm_installed_cflow_consumer cflow_main.c)
   target_link_libraries(turbowasm_installed_cflow_consumer
@@ -48,4 +53,16 @@ if(TARGET TurboWasm::CFlow)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_installed_cflow_consumer
            COMMAND turbowasm_installed_cflow_consumer)
+endif()
+
+if(TARGET TurboWasm::NativeIO)
+  add_executable(turbowasm_installed_native_io_consumer native_io_main.c)
+  target_link_libraries(turbowasm_installed_native_io_consumer
+    PRIVATE TurboWasm::NativeIO)
+  set_target_properties(turbowasm_installed_native_io_consumer PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_native_io_consumer
+           COMMAND turbowasm_installed_native_io_consumer)
 endif()
