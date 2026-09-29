@@ -512,6 +512,8 @@ static turbowasm_status decode_core_instance_section(
         turbowasm_component_core_instance_def definition = {0};
         uint8_t opcode;
         uint32_t argument_count;
+        uint32_t j;
+        turbowasm_status status = TURBOWASM_OK;
 
         if (!turbowasm_reader_u8(&section, &opcode) ||
             opcode != 0x00u ||
@@ -522,11 +524,55 @@ static turbowasm_status decode_core_instance_section(
                 &section, &argument_count))
             return TURBOWASM_MALFORMED_MODULE;
 
-        if (argument_count != 0u)
-            return TURBOWASM_UNSUPPORTED;
+        if (argument_count != 0u) {
+            if ((size_t)argument_count >
+                SIZE_MAX / sizeof(*definition.arguments))
+                return TURBOWASM_OUT_OF_MEMORY;
+            definition.arguments =
+                (turbowasm_component_core_instantiate_arg *)
+                    turbowasm_rt_calloc(
+                        argument_count,
+                        sizeof(*definition.arguments));
+            if (definition.arguments == NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+        }
+        definition.argument_count = argument_count;
 
-        if (!append_core_instance(component, definition))
-            return TURBOWASM_OUT_OF_MEMORY;
+        for (j = 0u; j < argument_count; ++j) {
+            uint8_t sort;
+            status = read_component_name(
+                &section, &definition.arguments[j].name);
+            if (status != TURBOWASM_OK)
+                goto fail_definition;
+            if (!turbowasm_reader_u8(&section, &sort) ||
+                sort != 0x12u ||
+                !turbowasm_reader_uleb32(
+                    &section,
+                    &definition.arguments[j].instance_index)) {
+                status = TURBOWASM_MALFORMED_MODULE;
+                goto fail_definition;
+            }
+            /*
+             * Core instantiate arguments can only reference an already
+             * retained Core instance. This also allows earlier definitions in
+             * the same section vector.
+             */
+            if (definition.arguments[j].instance_index >=
+                component->core_instance_count) {
+                status = TURBOWASM_MALFORMED_MODULE;
+                goto fail_definition;
+            }
+        }
+
+        if (!append_core_instance(component, definition)) {
+            status = TURBOWASM_OUT_OF_MEMORY;
+            goto fail_definition;
+        }
+        continue;
+
+fail_definition:
+        turbowasm_rt_free(definition.arguments);
+        return status;
     }
 
     return turbowasm_reader_remaining(&section) == 0u
