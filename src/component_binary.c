@@ -519,7 +519,8 @@ done:
 static turbowasm_status decode_core_instance_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
-    uint32_t current_core_modules) {
+    uint32_t current_core_modules,
+    uint32_t current_core_functions) {
     uint32_t count;
     uint32_t i;
 
@@ -531,57 +532,112 @@ static turbowasm_status decode_core_instance_section(
     for (i = 0u; i < count; ++i) {
         turbowasm_component_core_instance_def definition = {0};
         uint8_t opcode;
-        uint32_t argument_count;
-        uint32_t j;
         turbowasm_status status = TURBOWASM_OK;
 
-        if (!turbowasm_reader_u8(&section, &opcode) ||
-            opcode != 0x00u ||
-            !turbowasm_reader_uleb32(
-                &section, &definition.module_index) ||
-            definition.module_index >= current_core_modules ||
-            !turbowasm_reader_uleb32(
-                &section, &argument_count))
+        if (!turbowasm_reader_u8(&section, &opcode))
             return TURBOWASM_MALFORMED_MODULE;
 
-        if (argument_count != 0u) {
-            if ((size_t)argument_count >
-                SIZE_MAX / sizeof(*definition.arguments))
-                return TURBOWASM_OUT_OF_MEMORY;
-            definition.arguments =
-                (turbowasm_component_core_instantiate_arg *)
-                    turbowasm_rt_calloc(
-                        argument_count,
-                        sizeof(*definition.arguments));
-            if (definition.arguments == NULL)
-                return TURBOWASM_OUT_OF_MEMORY;
-        }
-        definition.argument_count = argument_count;
+        if (opcode == 0x00u) {
+            uint32_t argument_count;
+            uint32_t j;
 
-        for (j = 0u; j < argument_count; ++j) {
-            uint8_t sort;
-            status = read_component_name(
-                &section, &definition.arguments[j].name);
-            if (status != TURBOWASM_OK)
-                goto fail_definition;
-            if (!turbowasm_reader_u8(&section, &sort) ||
-                sort != 0x12u ||
+            definition.kind =
+                TURBOWASM_COMPONENT_CORE_INSTANCE_INSTANTIATE;
+
+            if (!turbowasm_reader_uleb32(
+                    &section, &definition.module_index) ||
+                definition.module_index >= current_core_modules ||
                 !turbowasm_reader_uleb32(
-                    &section,
-                    &definition.arguments[j].instance_index)) {
-                status = TURBOWASM_MALFORMED_MODULE;
-                goto fail_definition;
+                    &section, &argument_count))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            if (argument_count != 0u) {
+                if ((size_t)argument_count >
+                    SIZE_MAX / sizeof(*definition.arguments))
+                    return TURBOWASM_OUT_OF_MEMORY;
+                definition.arguments =
+                    (turbowasm_component_core_instantiate_arg *)
+                        turbowasm_rt_calloc(
+                            argument_count,
+                            sizeof(*definition.arguments));
+                if (definition.arguments == NULL)
+                    return TURBOWASM_OUT_OF_MEMORY;
             }
-            /*
-             * Core instantiate arguments can only reference an already
-             * retained Core instance. This also allows earlier definitions in
-             * the same section vector.
-             */
-            if (definition.arguments[j].instance_index >=
-                component->core_instance_count) {
-                status = TURBOWASM_MALFORMED_MODULE;
-                goto fail_definition;
+            definition.argument_count = argument_count;
+
+            for (j = 0u; j < argument_count; ++j) {
+                uint8_t sort;
+                status = read_component_name(
+                    &section, &definition.arguments[j].name);
+                if (status != TURBOWASM_OK)
+                    goto fail_definition;
+                if (!turbowasm_reader_u8(&section, &sort) ||
+                    sort != 0x12u ||
+                    !turbowasm_reader_uleb32(
+                        &section,
+                        &definition.arguments[j].instance_index)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail_definition;
+                }
+                /*
+                 * Core instantiate arguments can only reference an already
+                 * retained Core instance. This includes inline provider
+                 * instances introduced earlier in the stream.
+                 */
+                if (definition.arguments[j].instance_index >=
+                    component->core_instance_count) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail_definition;
+                }
             }
+        } else if (opcode == 0x01u) {
+            uint32_t export_count;
+            uint32_t j;
+
+            definition.kind =
+                TURBOWASM_COMPONENT_CORE_INSTANCE_INLINE;
+
+            if (!turbowasm_reader_uleb32(
+                    &section, &export_count))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            if (export_count != 0u) {
+                if ((size_t)export_count >
+                    SIZE_MAX / sizeof(*definition.exports))
+                    return TURBOWASM_OUT_OF_MEMORY;
+                definition.exports =
+                    (turbowasm_component_core_inline_export *)
+                        turbowasm_rt_calloc(
+                            export_count,
+                            sizeof(*definition.exports));
+                if (definition.exports == NULL)
+                    return TURBOWASM_OUT_OF_MEMORY;
+            }
+            definition.export_count = export_count;
+
+            for (j = 0u; j < export_count; ++j) {
+                uint8_t sort;
+                status = read_component_name(
+                    &section, &definition.exports[j].name);
+                if (status != TURBOWASM_OK)
+                    goto fail_definition;
+                if (!turbowasm_reader_u8(&section, &sort) ||
+                    sort != 0x00u ||
+                    !turbowasm_reader_uleb32(
+                        &section,
+                        &definition.exports[j].item_index)) {
+                    status = TURBOWASM_UNSUPPORTED;
+                    goto fail_definition;
+                }
+                definition.exports[j].sort = sort;
+                if (definition.exports[j].item_index >=
+                    current_core_functions) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail_definition;
+                }
+            }
+        } else {
+            return TURBOWASM_MALFORMED_MODULE;
         }
 
         if (!append_core_instance(component, definition)) {
@@ -592,6 +648,7 @@ static turbowasm_status decode_core_instance_section(
 
 fail_definition:
         turbowasm_rt_free(definition.arguments);
+        turbowasm_rt_free(definition.exports);
         return status;
     }
 
