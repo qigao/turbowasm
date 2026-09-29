@@ -104,6 +104,73 @@ static void test_new_rep_lend_drop(void) {
     turbowasm_component_resource_table_destroy(&table);
 }
 
+static void test_owned_take_and_borrowed_drop(void) {
+    turbowasm_component_resource_table table = {0};
+    turbowasm_component_resource_handle owned;
+    turbowasm_component_resource_handle borrowed;
+    turbowasm_value rep = {0};
+    destructor_probe probe = {0};
+
+    assert(turbowasm_component_resource_table_init(&table, 4u));
+
+    assert(turbowasm_component_resource_new_owned(
+               &table, UINT64_C(0x2001), i32_rep(77),
+               &owned) == TURBOWASM_OK);
+    assert(turbowasm_component_resource_take_owned(
+               &table, owned, UINT64_C(0x2001),
+               &rep) == TURBOWASM_OK);
+    assert(rep.kind == TURBOWASM_VALUE_I32);
+    assert(rep.as.i32 == 77);
+    assert(table.live_count == 0u);
+    assert(turbowasm_component_resource_rep(
+               &table, owned, UINT64_C(0x2001),
+               &rep) == TURBOWASM_TRAPPED);
+
+    assert(turbowasm_component_resource_new_borrowed(
+               &table, UINT64_C(0x2001), i32_rep(88),
+               &borrowed) == TURBOWASM_OK);
+    assert(turbowasm_component_resource_rep(
+               &table, borrowed, UINT64_C(0x2001),
+               &rep) == TURBOWASM_OK);
+    assert(rep.as.i32 == 88);
+
+    assert(turbowasm_component_resource_take_owned(
+               &table, borrowed, UINT64_C(0x2001),
+               &rep) == TURBOWASM_TRAPPED);
+
+    assert(turbowasm_component_resource_drop(
+               &table, borrowed, UINT64_C(0x2001),
+               probe_destructor, &probe) == TURBOWASM_OK);
+    assert(probe.calls == 0u);
+    assert(table.live_count == 0u);
+
+    turbowasm_component_resource_table_destroy(&table);
+}
+
+static void test_take_owned_rejects_active_lend(void) {
+    turbowasm_component_resource_table table = {0};
+    turbowasm_component_resource_handle handle;
+    turbowasm_value rep = {0};
+
+    assert(turbowasm_component_resource_table_init(&table, 2u));
+    assert(turbowasm_component_resource_new_owned(
+               &table, UINT64_C(0x3001), i32_rep(99),
+               &handle) == TURBOWASM_OK);
+    assert(turbowasm_component_resource_lend_acquire(
+               &table, handle, UINT64_C(0x3001)) == TURBOWASM_OK);
+    assert(turbowasm_component_resource_take_owned(
+               &table, handle, UINT64_C(0x3001),
+               &rep) == TURBOWASM_TRAPPED);
+    assert(turbowasm_component_resource_lend_release(
+               &table, handle, UINT64_C(0x3001)) == TURBOWASM_OK);
+    assert(turbowasm_component_resource_take_owned(
+               &table, handle, UINT64_C(0x3001),
+               &rep) == TURBOWASM_OK);
+    assert(rep.as.i32 == 99);
+
+    turbowasm_component_resource_table_destroy(&table);
+}
+
 static void test_generation_never_wraps(void) {
     turbowasm_component_resource_table table = {0};
     turbowasm_component_resource_handle first = 0u;
@@ -224,6 +291,8 @@ static void test_invalid_inputs(void) {
 
 int main(void) {
     test_new_rep_lend_drop();
+    test_owned_take_and_borrowed_drop();
+    test_take_owned_rejects_active_lend();
     test_generation_never_wraps();
     test_capacity_is_bounded();
     test_runtime_allocation_limit();
