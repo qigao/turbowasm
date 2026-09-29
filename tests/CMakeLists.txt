@@ -802,6 +802,19 @@ if(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_native_io_adapter_test
            COMMAND turbowasm_native_io_adapter_test)
+
+  add_executable(turbowasm_native_io_deterministic_test
+    native_io_deterministic_test.c)
+  target_link_libraries(turbowasm_native_io_deterministic_test
+    PRIVATE
+      TurboWasm::Runtime
+      Salts::NativeIO)
+  set_target_properties(turbowasm_native_io_deterministic_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_native_io_deterministic_test
+           COMMAND turbowasm_native_io_deterministic_test)
 endif()
 
 if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
