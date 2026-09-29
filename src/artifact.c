@@ -1,6 +1,7 @@
 #include "artifact.h"
 
 #include "module_internal.h"
+#include "runtime_alloc.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1141,5 +1142,639 @@ turbowasm_status turbowasm_artifact_inspect(
             state_counts.declared_ref_count;
     }
 
+    return TURBOWASM_OK;
+}
+
+
+static bool restore_semantic_value(
+    tw_reader *r,
+    turbowasm_validation_value_type *out) {
+    uint32_t carrier;
+    uint32_t is_reference;
+    uint32_t nullable;
+    uint32_t heap_kind;
+    uint32_t type_index;
+
+    if(r==NULL||out==NULL ||
+       !get_u32(r,&carrier) ||
+       !get_u32(r,&is_reference) ||
+       !get_u32(r,&nullable) ||
+       !get_u32(r,&heap_kind) ||
+       !get_u32(r,&type_index) ||
+       carrier>UINT8_MAX ||
+       is_reference>1u ||
+       nullable>1u ||
+       heap_kind>(uint32_t)TURBOWASM_VALIDATION_HEAP_TYPE_INDEX)
+        return false;
+
+    memset(out,0,sizeof(*out));
+    out->carrier=(uint8_t)carrier;
+    out->is_reference=is_reference!=0u;
+    out->nullable=nullable!=0u;
+    out->heap_kind=(turbowasm_validation_heap_kind)heap_kind;
+    out->type_index=type_index;
+    return true;
+}
+
+static bool restore_source_span(
+    tw_reader *r,
+    const uint8_t *source,
+    size_t source_size,
+    const uint8_t **out_bytes,
+    uint32_t *out_size) {
+    uint64_t offset;
+    uint32_t size;
+
+    if(r==NULL||out_bytes==NULL||out_size==NULL ||
+       !get_u64(r,&offset)||!get_u32(r,&size))
+        return false;
+
+    if(offset==UINT64_MAX) {
+        if(size!=0u)
+            return false;
+        *out_bytes=NULL;
+        *out_size=0u;
+        return true;
+    }
+
+    if(offset>(uint64_t)source_size ||
+       (uint64_t)size>(uint64_t)source_size-offset)
+        return false;
+
+    *out_bytes=source+(size_t)offset;
+    *out_size=size;
+    return true;
+}
+
+static bool restore_expr_span(
+    tw_reader *r,
+    const uint8_t *source,
+    size_t source_size,
+    turbowasm_validation_expr_span *out) {
+    uint32_t result_type;
+
+    if(out==NULL ||
+       !restore_source_span(
+           r,source,source_size,&out->bytes,&out->size) ||
+       !get_u32(r,&result_type) ||
+       result_type>UINT8_MAX)
+        return false;
+    out->result_type=(uint8_t)result_type;
+    return true;
+}
+
+static bool artifact_find_section(
+    const uint8_t *artifact,
+    size_t artifact_size,
+    uint32_t section_count,
+    uint32_t wanted_type,
+    tw_reader *out) {
+    tw_reader r;
+    uint32_t index;
+
+    if(artifact==NULL||out==NULL ||
+       artifact_size<TW_ARTIFACT_HEADER_SIZE)
+        return false;
+
+    r.data=artifact;
+    r.size=artifact_size;
+    r.offset=TW_ARTIFACT_HEADER_SIZE;
+
+    for(index=0u;index<section_count;++index) {
+        uint32_t type;
+        uint32_t size;
+
+        if(!get_u32(&r,&type)||!get_u32(&r,&size) ||
+           r.offset>r.size || (size_t)size>r.size-r.offset)
+            return false;
+
+        if(type==wanted_type) {
+            out->data=r.data+r.offset;
+            out->size=(size_t)size;
+            out->offset=0u;
+            return true;
+        }
+        r.offset+=(size_t)size;
+    }
+    return false;
+}
+
+static turbowasm_status restore_core_metadata(
+    tw_reader *r,
+    const uint8_t *source,
+    size_t source_size,
+    turbowasm_validation_context *context) {
+    uint32_t type_count;
+    uint32_t function_count;
+    uint32_t import_count;
+    uint32_t export_count;
+    uint32_t memory_count;
+    uint32_t i;
+    uint32_t j;
+
+    if(r==NULL||context==NULL ||
+       !get_u32(r,&type_count) ||
+       !get_u32(r,&function_count) ||
+       !get_u32(r,&import_count) ||
+       !get_u32(r,&export_count) ||
+       !get_u32(r,&memory_count))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if(!turbowasm_validation_context_allocate_types(
+            context,type_count))
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    for(i=0u;i<type_count;++i) {
+        uint32_t defined;
+        uint32_t param_count;
+        uint32_t result_count;
+        turbowasm_validation_func_type *type;
+
+        if(!get_u32(r,&defined) ||
+           !get_u32(r,&param_count) ||
+           !get_u32(r,&result_count) ||
+           defined>1u)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        if(defined==0u) {
+            if(param_count!=0u||result_count!=0u)
+                return TURBOWASM_MALFORMED_MODULE;
+            continue;
+        }
+
+        if(!turbowasm_validation_context_define_type(
+                context,i,param_count,result_count))
+            return TURBOWASM_OUT_OF_MEMORY;
+        type=turbowasm_validation_context_type_mut(context,i);
+        if(type==NULL)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        for(j=0u;j<param_count;++j) {
+            uint32_t carrier;
+            if(!get_u32(r,&carrier) ||
+               carrier>UINT8_MAX ||
+               !restore_semantic_value(
+                   r,&type->param_semantics[j]))
+                return TURBOWASM_MALFORMED_MODULE;
+            type->params[j]=(uint8_t)carrier;
+            if(type->param_semantics[j].carrier!=
+               type->params[j])
+                return TURBOWASM_MALFORMED_MODULE;
+        }
+        for(j=0u;j<result_count;++j) {
+            uint32_t carrier;
+            if(!get_u32(r,&carrier) ||
+               carrier>UINT8_MAX ||
+               !restore_semantic_value(
+                   r,&type->result_semantics[j]))
+                return TURBOWASM_MALFORMED_MODULE;
+            type->results[j]=(uint8_t)carrier;
+            if(type->result_semantics[j].carrier!=
+               type->results[j])
+                return TURBOWASM_MALFORMED_MODULE;
+        }
+    }
+
+    for(i=0u;i<function_count;++i) {
+        uint32_t type_index;
+        uint32_t imported;
+        uint32_t local_count;
+        const uint8_t *code;
+        uint32_t code_size;
+        uint32_t control_count;
+        turbowasm_validation_function *function;
+
+        if(!get_u32(r,&type_index) ||
+           !get_u32(r,&imported) ||
+           imported>1u ||
+           !get_u32(r,&local_count) ||
+           !restore_source_span(
+               r,source,source_size,&code,&code_size) ||
+           !get_u32(r,&control_count) ||
+           type_index>=type_count)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        if(!turbowasm_validation_context_append_function(
+                context,type_index,imported!=0u))
+            return TURBOWASM_OUT_OF_MEMORY;
+
+        function=turbowasm_validation_context_function_mut(
+            context,i);
+        if(function==NULL)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        function->code=code;
+        function->code_size=code_size;
+
+        if(local_count!=0u) {
+            function->local_types=(uint8_t *)turbowasm_rt_calloc(
+                (size_t)local_count,1u);
+            function->local_semantics=
+                (turbowasm_validation_value_type *)
+                turbowasm_rt_calloc(
+                    (size_t)local_count,
+                    sizeof(*function->local_semantics));
+            if(function->local_types==NULL ||
+               function->local_semantics==NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+        }
+        function->local_count=local_count;
+
+        for(j=0u;j<local_count;++j) {
+            uint32_t carrier;
+            if(!get_u32(r,&carrier) ||
+               carrier>UINT8_MAX ||
+               !restore_semantic_value(
+                   r,&function->local_semantics[j]))
+                return TURBOWASM_MALFORMED_MODULE;
+            function->local_types[j]=(uint8_t)carrier;
+            if(function->local_semantics[j].carrier!=
+               function->local_types[j])
+                return TURBOWASM_MALFORMED_MODULE;
+        }
+
+        for(j=0u;j<control_count;++j) {
+            turbowasm_validation_control control={0};
+            uint32_t kind;
+            uint32_t inline_result_type;
+            uint32_t catch_count;
+            uint32_t k;
+
+            if(!get_u32(r,&kind) ||
+               !get_u32(r,&control.opcode_offset) ||
+               !get_u32(r,&control.body_offset) ||
+               !get_u32(r,&control.else_offset) ||
+               !get_u32(r,&control.end_offset) ||
+               !get_u32(r,&control.type_index) ||
+               !get_u32(r,&inline_result_type) ||
+               !get_u32(r,&catch_count) ||
+               kind<(uint32_t)TURBOWASM_VALIDATION_CONTROL_BLOCK ||
+               kind>(uint32_t)TURBOWASM_VALIDATION_CONTROL_TRY_TABLE ||
+               inline_result_type>UINT8_MAX ||
+               (control.type_index!=UINT32_MAX &&
+                control.type_index>=type_count))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            control.kind=(turbowasm_validation_control_kind)kind;
+            control.inline_result_type=(uint8_t)inline_result_type;
+            control.catch_count=catch_count;
+
+            if(catch_count!=0u) {
+                control.catches=(turbowasm_validation_catch *)
+                    turbowasm_rt_calloc(
+                        (size_t)catch_count,
+                        sizeof(*control.catches));
+                if(control.catches==NULL)
+                    return TURBOWASM_OUT_OF_MEMORY;
+            }
+
+            for(k=0u;k<catch_count;++k) {
+                uint32_t catch_kind;
+                if(!get_u32(r,&catch_kind) ||
+                   !get_u32(r,&control.catches[k].tag_index) ||
+                   !get_u32(r,&control.catches[k].label_depth) ||
+                   catch_kind>
+                       (uint32_t)TURBOWASM_VALIDATION_CATCH_ALL_REF) {
+                    turbowasm_rt_free(control.catches);
+                    return TURBOWASM_MALFORMED_MODULE;
+                }
+                control.catches[k].kind=
+                    (turbowasm_validation_catch_kind)catch_kind;
+            }
+
+            if(!turbowasm_validation_function_append_control(
+                    function,control,NULL)) {
+                turbowasm_rt_free(control.catches);
+                return TURBOWASM_OUT_OF_MEMORY;
+            }
+        }
+    }
+
+    for(i=0u;i<import_count;++i) {
+        turbowasm_import_desc import_desc={0};
+        uint32_t kind;
+
+        if(!restore_source_span(
+                r,source,source_size,
+                &import_desc.module_name.bytes,
+                &import_desc.module_name.size) ||
+           !restore_source_span(
+                r,source,source_size,
+                &import_desc.name.bytes,
+                &import_desc.name.size) ||
+           !get_u32(r,&kind) ||
+           !get_u32(r,&import_desc.item_index) ||
+           !get_u32(r,&import_desc.type_index) ||
+           kind>(uint32_t)TURBOWASM_EXTERN_TAG)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        import_desc.kind=(turbowasm_external_kind)kind;
+        if(!turbowasm_validation_context_append_import(
+                context,import_desc))
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    for(i=0u;i<export_count;++i) {
+        turbowasm_export_desc export_desc={0};
+        uint32_t kind;
+
+        if(!restore_source_span(
+                r,source,source_size,
+                &export_desc.name.bytes,
+                &export_desc.name.size) ||
+           !get_u32(r,&kind) ||
+           !get_u32(r,&export_desc.item_index) ||
+           kind>(uint32_t)TURBOWASM_EXTERN_TAG)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        export_desc.kind=(turbowasm_external_kind)kind;
+        if(!turbowasm_validation_context_append_export(
+                context,export_desc))
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    for(i=0u;i<memory_count;++i) {
+        turbowasm_validation_memory_limits limits={0};
+        uint32_t imported;
+        uint32_t shared;
+        uint32_t memory64;
+        uint32_t page_size;
+        uint32_t has_maximum;
+
+        if(!get_u32(r,&imported) ||
+           !get_u32(r,&shared) ||
+           !get_u32(r,&memory64) ||
+           !get_u32(r,&page_size) ||
+           !get_u64(r,&limits.minimum) ||
+           !get_u64(r,&limits.maximum) ||
+           !get_u32(r,&has_maximum) ||
+           imported>1u || shared>1u || memory64>1u ||
+           has_maximum>1u || page_size==0u)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        limits.has_maximum=has_maximum!=0u;
+        if(!turbowasm_validation_context_append_memory(
+                context,limits,page_size,
+                shared!=0u,memory64!=0u,imported!=0u))
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    return r->offset==r->size
+        ? TURBOWASM_OK
+        : TURBOWASM_MALFORMED_MODULE;
+}
+
+static turbowasm_status restore_state_metadata(
+    tw_reader *r,
+    const uint8_t *source,
+    size_t source_size,
+    turbowasm_validation_context *context) {
+    uint32_t global_count;
+    uint32_t table_count;
+    uint32_t tag_count;
+    uint32_t data_segment_count;
+    uint32_t element_segment_count;
+    uint32_t declared_ref_count;
+    uint32_t has_data_count;
+    uint32_t data_count;
+    uint32_t i;
+    uint32_t j;
+
+    if(r==NULL||context==NULL ||
+       !get_u32(r,&global_count) ||
+       !get_u32(r,&table_count) ||
+       !get_u32(r,&tag_count) ||
+       !get_u32(r,&data_segment_count) ||
+       !get_u32(r,&element_segment_count) ||
+       !get_u32(r,&declared_ref_count) ||
+       !get_u32(r,&has_data_count) ||
+       !get_u32(r,&data_count) ||
+       has_data_count>1u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    for(i=0u;i<global_count;++i) {
+        uint32_t value_type;
+        turbowasm_validation_value_type semantic;
+        uint32_t mutable_value;
+        uint32_t imported;
+        const uint8_t *initializer;
+        uint32_t initializer_size;
+
+        if(!get_u32(r,&value_type) ||
+           value_type>UINT8_MAX ||
+           !restore_semantic_value(r,&semantic) ||
+           semantic.carrier!=(uint8_t)value_type ||
+           !get_u32(r,&mutable_value) ||
+           !get_u32(r,&imported) ||
+           mutable_value>1u || imported>1u ||
+           !restore_source_span(
+               r,source,source_size,
+               &initializer,&initializer_size))
+            return TURBOWASM_MALFORMED_MODULE;
+
+        if(!turbowasm_validation_context_append_global_semantic(
+                context,semantic,
+                mutable_value!=0u,imported!=0u,
+                initializer,initializer_size))
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    for(i=0u;i<table_count;++i) {
+        uint32_t reference_type;
+        turbowasm_validation_value_type semantic;
+        uint32_t imported;
+        turbowasm_validation_limits limits={0};
+        uint32_t has_maximum;
+        const uint8_t *initializer;
+        uint32_t initializer_size;
+        bool ok;
+
+        if(!get_u32(r,&reference_type) ||
+           reference_type>UINT8_MAX ||
+           !restore_semantic_value(r,&semantic) ||
+           semantic.carrier!=(uint8_t)reference_type ||
+           !get_u32(r,&imported) ||
+           !get_u32(r,&limits.minimum) ||
+           !get_u32(r,&limits.maximum) ||
+           !get_u32(r,&has_maximum) ||
+           imported>1u || has_maximum>1u ||
+           !restore_source_span(
+               r,source,source_size,
+               &initializer,&initializer_size))
+            return TURBOWASM_MALFORMED_MODULE;
+
+        limits.has_maximum=has_maximum!=0u;
+        if(initializer!=NULL) {
+            if(imported!=0u)
+                return TURBOWASM_MALFORMED_MODULE;
+            ok=turbowasm_validation_context_append_table_semantic_initialized(
+                context,semantic,limits,
+                initializer,initializer_size);
+        } else {
+            ok=turbowasm_validation_context_append_table_semantic(
+                context,semantic,limits,imported!=0u);
+        }
+        if(!ok)
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    for(i=0u;i<tag_count;++i) {
+        uint32_t type_index;
+        uint32_t imported;
+        if(!get_u32(r,&type_index) ||
+           !get_u32(r,&imported) ||
+           imported>1u)
+            return TURBOWASM_MALFORMED_MODULE;
+        if(!turbowasm_validation_context_append_tag(
+                context,type_index,imported!=0u))
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    for(i=0u;i<data_segment_count;++i) {
+        turbowasm_validation_data_segment segment={0};
+        uint32_t mode;
+
+        if(!get_u32(r,&mode) ||
+           mode>(uint32_t)TURBOWASM_VALIDATION_SEGMENT_DECLARATIVE ||
+           !get_u32(r,&segment.memory_index) ||
+           !restore_expr_span(
+               r,source,source_size,&segment.offset) ||
+           !restore_source_span(
+               r,source,source_size,
+               &segment.data,&segment.data_size))
+            return TURBOWASM_MALFORMED_MODULE;
+
+        segment.mode=(turbowasm_validation_segment_mode)mode;
+        if(!turbowasm_validation_context_append_data_segment(
+                context,segment))
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    for(i=0u;i<element_segment_count;++i) {
+        turbowasm_validation_element_segment segment={0};
+        uint32_t mode;
+        uint32_t reference_type;
+        uint32_t item_count;
+
+        if(!get_u32(r,&mode) ||
+           !get_u32(r,&segment.table_index) ||
+           !get_u32(r,&reference_type) ||
+           reference_type>UINT8_MAX ||
+           !restore_semantic_value(r,&segment.semantic_type) ||
+           segment.semantic_type.carrier!=(uint8_t)reference_type ||
+           !restore_expr_span(
+               r,source,source_size,&segment.offset) ||
+           !get_u32(r,&item_count) ||
+           mode>(uint32_t)TURBOWASM_VALIDATION_SEGMENT_DECLARATIVE)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        segment.mode=(turbowasm_validation_segment_mode)mode;
+        segment.reference_type=(uint8_t)reference_type;
+        segment.item_count=item_count;
+
+        if(item_count!=0u) {
+            segment.items=(turbowasm_validation_element_item *)
+                turbowasm_rt_calloc(
+                    (size_t)item_count,sizeof(*segment.items));
+            if(segment.items==NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+        }
+
+        for(j=0u;j<item_count;++j) {
+            uint32_t kind;
+            if(!get_u32(r,&kind) ||
+               !get_u32(r,&segment.items[j].function_index) ||
+               !restore_expr_span(
+                   r,source,source_size,
+                   &segment.items[j].expression) ||
+               kind>(uint32_t)TURBOWASM_VALIDATION_ELEMENT_CONST_EXPR) {
+                turbowasm_rt_free(segment.items);
+                return TURBOWASM_MALFORMED_MODULE;
+            }
+            segment.items[j].kind=
+                (turbowasm_validation_element_item_kind)kind;
+        }
+
+        if(!turbowasm_validation_context_append_element_segment(
+                context,segment)) {
+            turbowasm_rt_free(segment.items);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
+    }
+
+    if(declared_ref_count!=0u) {
+        if(declared_ref_count!=context->function_count ||
+           r->offset>r->size ||
+           (size_t)declared_ref_count>r->size-r->offset)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        context->declared_refs=(uint8_t *)turbowasm_rt_calloc(
+            (size_t)declared_ref_count,1u);
+        if(context->declared_refs==NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+        if(!get_bytes(
+                r,context->declared_refs,
+                (size_t)declared_ref_count))
+            return TURBOWASM_MALFORMED_MODULE;
+        context->declared_ref_count=declared_ref_count;
+    }
+
+    context->has_data_count=has_data_count!=0u;
+    context->data_count=data_count;
+
+    return r->offset==r->size
+        ? TURBOWASM_OK
+        : TURBOWASM_MALFORMED_MODULE;
+}
+
+turbowasm_status turbowasm_artifact_restore(
+    const uint8_t *artifact,
+    size_t artifact_size,
+    const uint8_t *source,
+    size_t source_size,
+    turbowasm_module_summary *out_summary,
+    turbowasm_validation_context *out_validation) {
+    turbowasm_artifact_info info={0};
+    tw_reader core;
+    tw_reader state;
+    turbowasm_status status;
+
+    if(out_summary==NULL||out_validation==NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memset(out_validation,0,sizeof(*out_validation));
+    status=turbowasm_artifact_inspect(
+        artifact,artifact_size,source,source_size,&info);
+    if(status!=TURBOWASM_OK)
+        return status;
+
+    if((info.flags&TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA)==0u ||
+       !info.has_core_metadata ||
+       !info.has_state_metadata)
+        return TURBOWASM_UNSUPPORTED;
+
+    if(!artifact_find_section(
+            artifact,artifact_size,info.section_count,
+            TURBOWASM_ARTIFACT_SECTION_CORE_METADATA,&core) ||
+       !artifact_find_section(
+            artifact,artifact_size,info.section_count,
+            TURBOWASM_ARTIFACT_SECTION_STATE_METADATA,&state))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    status=restore_core_metadata(
+        &core,source,source_size,out_validation);
+    if(status!=TURBOWASM_OK) {
+        turbowasm_validation_context_destroy(out_validation);
+        return status;
+    }
+
+    status=restore_state_metadata(
+        &state,source,source_size,out_validation);
+    if(status!=TURBOWASM_OK) {
+        turbowasm_validation_context_destroy(out_validation);
+        return status;
+    }
+
+    *out_summary=info.summary;
     return TURBOWASM_OK;
 }

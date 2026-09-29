@@ -2,6 +2,7 @@
 #include <turbowasm/value.h>
 
 #include "module_internal.h"
+#include "artifact.h"
 #include "reader.h"
 #include "validate.h"
 #include "runtime_alloc.h"
@@ -76,6 +77,69 @@ turbowasm_status turbowasm_module_load_borrowed_with_config(
     turbowasm_runtime_scope_leave(scope);
     return TURBOWASM_OK;
 }
+
+turbowasm_status turbowasm_module_load_borrowed_from_artifact(
+    turbowasm_module *module,
+    const uint8_t *bytes,
+    size_t size,
+    const uint8_t *artifact,
+    size_t artifact_size) {
+    return turbowasm_module_load_borrowed_from_artifact_with_config(
+        module,bytes,size,artifact,artifact_size,NULL);
+}
+
+turbowasm_status turbowasm_module_load_borrowed_from_artifact_with_config(
+    turbowasm_module *module,
+    const uint8_t *bytes,
+    size_t size,
+    const uint8_t *artifact,
+    size_t artifact_size,
+    const turbowasm_runtime_config *config) {
+    turbowasm_module_impl *impl;
+    turbowasm_module_summary summary={0};
+    turbowasm_validation_context validation={0};
+    turbowasm_runtime_config normalized;
+    turbowasm_runtime_scope scope;
+    turbowasm_status status;
+
+    if(module==NULL||bytes==NULL||artifact==NULL||
+       module->impl!=NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if(!turbowasm_runtime_config_normalize(config,&normalized))
+        return TURBOWASM_INVALID_ARGUMENT;
+    if(normalized.limits.max_module_bytes!=0u &&
+       size>normalized.limits.max_module_bytes)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    scope=turbowasm_runtime_scope_enter(&normalized);
+    status=turbowasm_artifact_restore(
+        artifact,artifact_size,
+        bytes,size,
+        &summary,&validation);
+    if(status!=TURBOWASM_OK) {
+        turbowasm_validation_context_destroy(&validation);
+        turbowasm_runtime_scope_leave(scope);
+        return status;
+    }
+
+    impl=(turbowasm_module_impl *)turbowasm_rt_calloc(
+        1u,sizeof(*impl));
+    if(impl==NULL) {
+        turbowasm_validation_context_destroy(&validation);
+        turbowasm_runtime_scope_leave(scope);
+        return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    impl->bytes=bytes;
+    impl->size=size;
+    impl->summary=summary;
+    impl->config=normalized;
+    impl->validation=validation;
+    module->impl=impl;
+    turbowasm_runtime_scope_leave(scope);
+    return TURBOWASM_OK;
+}
+
 
 void turbowasm_module_destroy(turbowasm_module *module) {
     turbowasm_module_impl *impl;
