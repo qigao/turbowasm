@@ -19,6 +19,8 @@ option(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER
   "Build optional Salts NativeIO host-wait adapter" ON)
 option(TURBOWASM_ENABLE_WASI_ADAPTER
   "Build optional WASI Preview1 capability adapter" ON)
+option(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER
+  "Build optional legacy WASI Preview1 threads adapter" ON)
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
   message(FATAL_ERROR "SALTS_ROOT must point at an installed Salts SDK")
@@ -175,6 +177,41 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
   endif()
 endif()
 
+if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
+  if(NOT TARGET Salts::CFlow)
+    message(FATAL_ERROR
+      "TurboWasm WASIThreads adapter requires Salts 1.8.3 Salts::CFlow")
+  endif()
+
+  add_library(turbowasm_wasi_threads
+    src/wasi_threads.c)
+  add_library(TurboWasm::WASIThreads ALIAS turbowasm_wasi_threads)
+  set_target_properties(turbowasm_wasi_threads PROPERTIES
+    EXPORT_NAME WASIThreads
+    VERSION ${PROJECT_VERSION}
+    SOVERSION 0)
+  target_compile_features(turbowasm_wasi_threads PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi_threads
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(turbowasm_wasi_threads
+    PUBLIC
+      TurboWasm::Runtime
+      Salts::CFlow
+    PRIVATE
+      Salts::Platform)
+
+  if(MSVC)
+    target_compile_options(turbowasm_wasi_threads PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_wasi_threads PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
 if(TURBOWASM_ENABLE_MIR_JIT)
   find_package(MIR CONFIG REQUIRED)
 
@@ -252,6 +289,15 @@ endif()
 if(TURBOWASM_ENABLE_WASI_ADAPTER)
   install(
     TARGETS turbowasm_wasi
+    EXPORT TurboWasmTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
+  install(
+    TARGETS turbowasm_wasi_threads
     EXPORT TurboWasmTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

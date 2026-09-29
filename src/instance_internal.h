@@ -280,6 +280,17 @@ turbowasm_status turbowasm_instance_create_linked_preserve_failure(
     const turbowasm_module *module,
     const struct turbowasm_linker *linker);
 
+/*
+ * Runtime-internal sibling instantiation used by WASI threads.
+ *
+ * The sibling gets fresh defined state but copies the parent's already-resolved
+ * import bindings, preserving provider identity for imported memories/tables/
+ * globals/tags/functions without retaining or rebuilding a linker.
+ */
+turbowasm_status turbowasm_instance_create_sibling_internal(
+    turbowasm_instance *instance,
+    const turbowasm_instance *parent);
+
 void turbowasm_instance_state_destroy(
     turbowasm_instance_impl *instance);
 
