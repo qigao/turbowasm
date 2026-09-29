@@ -71,6 +71,30 @@ The graph uses TurboWasm runtime allocation helpers, so graph construction
 inherits the active `turbowasm_runtime_config` allocation policy. C1 adds no
 new allocator or global registry.
 
+## C2 binary container boundary
+
+The pinned MVP component preamble is:
+
+```text
+00 61 73 6d   # \0asm
+0d 00         # pre-standard Component version
+01 00         # Component layer
+```
+
+C2a reuses TurboWasm's bounded reader for the outer container. Section ids are
+single bytes in the range 0 through 12 and section payload lengths are u32
+LEB128. The first implementation retains borrowed section spans without
+interpreting later canonical/instance semantics.
+
+Core module sections (id 1) are special: their payload remains a borrowed span
+of the original Component bytes and is validated by the existing Core module
+loader. TurboWasm does not create a second Core decoder inside the Component
+layer.
+
+Custom sections validate their length-prefixed UTF-8 name but otherwise remain
+semantically ignorable. Nested component sections validate the Component
+preamble boundary in C2a; recursive semantic decoding is deferred.
+
 ## Deferred work
 
 C1 intentionally does not implement:
