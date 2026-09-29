@@ -397,6 +397,31 @@ static turbowasm_status turbowasm_eval_i32_expr(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status turbowasm_eval_memory_offset_expr(
+    const turbowasm_instance_impl *instance,
+    const turbowasm_validation_expr_span *expression,
+    uint64_t *out) {
+    turbowasm_value value;
+    turbowasm_status status;
+
+    if (out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = turbowasm_eval_value_expr(instance, expression, &value);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (value.kind == TURBOWASM_VALUE_I32) {
+        *out = (uint32_t)value.as.i32;
+        return TURBOWASM_OK;
+    }
+    if (value.kind == TURBOWASM_VALUE_I64) {
+        *out = (uint64_t)value.as.i64;
+        return TURBOWASM_OK;
+    }
+    return TURBOWASM_MALFORMED_MODULE;
+}
+
 static turbowasm_status turbowasm_eval_table_expr(
     const turbowasm_instance_impl *instance,
     const turbowasm_validation_expr_span *expression,
@@ -615,9 +640,7 @@ static turbowasm_status turbowasm_allocate_memories(
             &context->memories[index];
         turbowasm_instance_memory *memory =
             &instance->memories[index];
-        uint64_t bytes =
-            (uint64_t)source->limits.minimum *
-            source->page_size;
+        size_t bytes;
 
         if (source->imported) {
             if (index >= instance->linked_memory_count ||
@@ -625,24 +648,29 @@ static turbowasm_status turbowasm_allocate_memories(
                 return TURBOWASM_UNSUPPORTED;
             continue;
         }
-        if (bytes > (uint64_t)SIZE_MAX)
+        if (source->page_size == 0u ||
+            source->limits.minimum >
+                (uint64_t)SIZE_MAX / source->page_size)
             return TURBOWASM_OUT_OF_MEMORY;
+        bytes = (size_t)source->limits.minimum *
+                (size_t)source->page_size;
 
-        memory->pages = (uint32_t)source->limits.minimum;
-        memory->maximum_pages = (uint32_t)source->limits.maximum;
+        memory->pages = source->limits.minimum;
+        memory->maximum_pages = source->limits.maximum;
         memory->page_size = source->page_size;
         memory->resource_max_bytes =
             module->config.limits.max_linear_memory_bytes;
         memory->has_maximum = source->limits.has_maximum;
+        memory->memory64 = source->memory64;
 
         if (memory->resource_max_bytes != 0u &&
-            bytes > (uint64_t)memory->resource_max_bytes)
+            bytes > memory->resource_max_bytes)
             return TURBOWASM_OUT_OF_MEMORY;
 
         {
             turbowasm_status status =
                 turbowasm_instance_memory_storage_init(
-                    memory, source->shared, (size_t)bytes);
+                    memory, source->shared, bytes);
             if (status != TURBOWASM_OK)
                 return status;
         }
@@ -877,14 +905,14 @@ static turbowasm_status turbowasm_apply_data_segments(
     for (index = 0u; index < context->data_segment_count; ++index) {
         const turbowasm_validation_data_segment *segment =
             &context->data_segments[index];
-        uint32_t offset;
+        uint64_t offset;
         turbowasm_status status;
 
         if (segment->mode !=
             TURBOWASM_VALIDATION_SEGMENT_ACTIVE)
             continue;
 
-        status = turbowasm_eval_i32_expr(
+        status = turbowasm_eval_memory_offset_expr(
             instance, &segment->offset, &offset);
         if (status != TURBOWASM_OK)
             return status;
@@ -1047,16 +1075,6 @@ turbowasm_status turbowasm_instance_state_init(
 
     if (instance == NULL || module == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-
-    {
-        uint32_t memory_index;
-        for (memory_index = 0u;
-             memory_index < module->validation.memory_count;
-             ++memory_index) {
-            if (module->validation.memories[memory_index].memory64)
-                return TURBOWASM_UNSUPPORTED;
-        }
-    }
 
     status = turbowasm_allocate_globals(
         instance, &module->validation);
@@ -1316,25 +1334,28 @@ turbowasm_status turbowasm_instance_memory_shared(
 
 static turbowasm_status turbowasm_instance_memory_storage_range(
     const turbowasm_instance_memory *memory,
-    uint32_t address,
-    uint32_t offset,
-    size_t width,
+    uint64_t address,
+    uint64_t offset,
+    uint64_t width,
     size_t *out_effective) {
     uint64_t effective;
     uint64_t size;
 
     if (memory == NULL || out_effective == NULL ||
-        !memory->storage_initialized)
+        !memory->storage_initialized || memory->page_size == 0u)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    effective = (uint64_t)address + (uint64_t)offset;
-    size = (uint64_t)memory->pages *
-           (uint64_t)memory->page_size;
-
-    if (effective > size ||
-        (uint64_t)width > size - effective)
+    if (address > UINT64_MAX - offset)
         return TURBOWASM_TRAPPED;
-    if (effective > (uint64_t)SIZE_MAX)
+    effective = address + offset;
+
+    if (memory->pages > UINT64_MAX / memory->page_size)
+        return TURBOWASM_TRAPPED;
+    size = memory->pages * (uint64_t)memory->page_size;
+
+    if (effective > size || width > size - effective ||
+        effective > (uint64_t)SIZE_MAX ||
+        width > (uint64_t)SIZE_MAX)
         return TURBOWASM_TRAPPED;
 
     *out_effective = (size_t)effective;
@@ -1372,8 +1393,8 @@ static void turbowasm_instance_memory_wrunlock(
 turbowasm_status turbowasm_instance_memory_read_bytes(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     void *out,
     size_t width) {
     turbowasm_instance_memory *memory;
@@ -1401,8 +1422,8 @@ turbowasm_status turbowasm_instance_memory_read_bytes(
 turbowasm_status turbowasm_instance_memory_write_bytes(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     const void *source,
     size_t width) {
     turbowasm_instance_memory *memory;
@@ -1430,9 +1451,9 @@ turbowasm_status turbowasm_instance_memory_write_bytes(
 turbowasm_status turbowasm_instance_memory_fill_bytes(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t destination,
+    uint64_t destination,
     uint8_t value,
-    size_t length) {
+    uint64_t length) {
     turbowasm_instance_memory *memory;
     size_t effective = 0u;
     turbowasm_status status;
@@ -1449,7 +1470,7 @@ turbowasm_status turbowasm_instance_memory_fill_bytes(
     status = turbowasm_instance_memory_storage_range(
         memory, destination, 0u, length, &effective);
     if (status == TURBOWASM_OK && length != 0u)
-        memset(memory->data + effective, value, length);
+        memset(memory->data + effective, value, (size_t)length);
     turbowasm_instance_memory_wrunlock(memory);
     return status;
 }
@@ -1458,9 +1479,9 @@ turbowasm_status turbowasm_instance_memory_copy_bytes(
     turbowasm_instance_impl *instance,
     uint32_t destination_memory,
     uint32_t source_memory,
-    uint32_t destination,
-    uint32_t source,
-    size_t length) {
+    uint64_t destination,
+    uint64_t source,
+    uint64_t length) {
     turbowasm_instance_memory *dst;
     turbowasm_instance_memory *src;
     turbowasm_instance_memory *first;
@@ -1497,7 +1518,7 @@ turbowasm_status turbowasm_instance_memory_copy_bytes(
             memmove(
                 dst->data + destination_effective,
                 src->data + source_effective,
-                length);
+                (size_t)length);
         }
         turbowasm_instance_memory_wrunlock(dst);
         return status;
@@ -1536,7 +1557,7 @@ turbowasm_status turbowasm_instance_memory_copy_bytes(
         memmove(
             dst->data + destination_effective,
             src->data + source_effective,
-            length);
+            (size_t)length);
     }
 
     if (second_write)
@@ -2076,8 +2097,8 @@ turbowasm_status turbowasm_instance_memory_notify(
 turbowasm_status turbowasm_instance_memory_bounds(
     const turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     size_t width,
     uint8_t **out) {
     const turbowasm_instance_memory *memory;
@@ -2101,12 +2122,17 @@ turbowasm_status turbowasm_instance_memory_bounds(
     if (memory->shared)
         return TURBOWASM_UNSUPPORTED;
 
-    effective = (uint64_t)address + offset;
-    size = (uint64_t)memory->pages *
-           memory->page_size;
+    if (address > UINT64_MAX - offset)
+        return TURBOWASM_TRAPPED;
+    effective = address + offset;
+    if (memory->page_size == 0u ||
+        memory->pages > UINT64_MAX / memory->page_size)
+        return TURBOWASM_TRAPPED;
+    size = memory->pages * (uint64_t)memory->page_size;
 
     if (effective > size ||
-        (uint64_t)width > size - effective)
+        (uint64_t)width > size - effective ||
+        effective > (uint64_t)SIZE_MAX)
         return TURBOWASM_TRAPPED;
 
     *out = memory->data == NULL
@@ -2115,10 +2141,10 @@ turbowasm_status turbowasm_instance_memory_bounds(
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_instance_memory_size(
+turbowasm_status turbowasm_instance_memory_size64(
     const turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t *out_pages) {
+    uint64_t *out_pages) {
     const turbowasm_instance_memory *memory;
 
     if (instance == NULL || out_pages == NULL ||
@@ -2135,6 +2161,25 @@ turbowasm_status turbowasm_instance_memory_size(
     *out_pages = memory->pages;
     turbowasm_instance_memory_rdunlock(
         (turbowasm_instance_memory *)memory);
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_memory_size(
+    const turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t *out_pages) {
+    uint64_t pages;
+    turbowasm_status status;
+
+    if (out_pages == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    status = turbowasm_instance_memory_size64(
+        instance, memory_index, &pages);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (pages > UINT32_MAX)
+        return TURBOWASM_UNSUPPORTED;
+    *out_pages = (uint32_t)pages;
     return TURBOWASM_OK;
 }
 
@@ -2163,11 +2208,11 @@ turbowasm_status turbowasm_instance_memory_limits(
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_instance_memory_grow(
+turbowasm_status turbowasm_instance_memory_grow64(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t delta_pages,
-    uint32_t *out_previous_pages) {
+    uint64_t delta_pages,
+    uint64_t *out_previous_pages) {
     turbowasm_instance_memory *memory;
     uint64_t next_pages;
     uint64_t maximum_pages;
@@ -2179,41 +2224,50 @@ turbowasm_status turbowasm_instance_memory_grow(
         memory_index >= instance->memory_count)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    memory = turbowasm_instance_memory_resolve(
-        instance, memory_index);
+    memory = turbowasm_instance_memory_resolve(instance, memory_index);
     if (memory == NULL)
         return TURBOWASM_UNSUPPORTED;
 
     turbowasm_instance_memory_wrlock(memory);
-
     *out_previous_pages = memory->pages;
 
-    next_pages = (uint64_t)memory->pages + delta_pages;
-    maximum_pages = memory->page_size == UINT32_C(1)
-        ? UINT32_MAX
-        : (UINT64_C(1) << 32) / memory->page_size;
+    maximum_pages = memory->memory64
+        ? (memory->page_size == UINT32_C(1)
+            ? UINT64_MAX
+            : (UINT64_C(1) << 48))
+        : (memory->page_size == UINT32_C(1)
+            ? UINT32_MAX
+            : UINT32_C(65536));
+
     if (memory->page_size == 0u ||
-        next_pages > maximum_pages ||
-        (memory->has_maximum &&
-         next_pages > memory->maximum_pages)) {
-        *out_previous_pages = UINT32_MAX;
+        memory->pages > UINT64_MAX - delta_pages) {
+        *out_previous_pages = UINT64_MAX;
         turbowasm_instance_memory_wrunlock(memory);
         return TURBOWASM_OK;
     }
 
-    next_bytes = next_pages * memory->page_size;
+    next_pages = memory->pages + delta_pages;
+    if (next_pages > maximum_pages ||
+        (memory->has_maximum &&
+         next_pages > memory->maximum_pages) ||
+        next_pages > (uint64_t)SIZE_MAX / memory->page_size) {
+        *out_previous_pages = UINT64_MAX;
+        turbowasm_instance_memory_wrunlock(memory);
+        return TURBOWASM_OK;
+    }
+
+    next_bytes = next_pages * (uint64_t)memory->page_size;
     previous_bytes =
-        (uint64_t)memory->pages * memory->page_size;
-    if (next_bytes > (uint64_t)SIZE_MAX ||
-        (memory->resource_max_bytes != 0u &&
+        memory->pages * (uint64_t)memory->page_size;
+    if ((memory->resource_max_bytes != 0u &&
          next_bytes > (uint64_t)memory->resource_max_bytes)) {
-        *out_previous_pages = UINT32_MAX;
+        *out_previous_pages = UINT64_MAX;
         turbowasm_instance_memory_wrunlock(memory);
         return TURBOWASM_OK;
     }
 
     if (next_bytes == 0u) {
-        memory->pages = (uint32_t)next_pages;
+        memory->pages = next_pages;
         turbowasm_instance_memory_wrunlock(memory);
         return TURBOWASM_OK;
     }
@@ -2221,7 +2275,7 @@ turbowasm_status turbowasm_instance_memory_grow(
     grown = (uint8_t *)turbowasm_rt_realloc(
         memory->data, (size_t)next_bytes);
     if (grown == NULL) {
-        *out_previous_pages = UINT32_MAX;
+        *out_previous_pages = UINT64_MAX;
         turbowasm_instance_memory_wrunlock(memory);
         return TURBOWASM_OK;
     }
@@ -2232,8 +2286,32 @@ turbowasm_status turbowasm_instance_memory_grow(
                (size_t)(next_bytes - previous_bytes));
 
     memory->data = grown;
-    memory->pages = (uint32_t)next_pages;
+    memory->pages = next_pages;
     turbowasm_instance_memory_wrunlock(memory);
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_memory_grow(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t delta_pages,
+    uint32_t *out_previous_pages) {
+    uint64_t previous;
+    turbowasm_status status;
+
+    if (out_previous_pages == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    status = turbowasm_instance_memory_grow64(
+        instance, memory_index, delta_pages, &previous);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (previous == UINT64_MAX) {
+        *out_previous_pages = UINT32_MAX;
+        return TURBOWASM_OK;
+    }
+    if (previous > UINT32_MAX)
+        return TURBOWASM_UNSUPPORTED;
+    *out_previous_pages = (uint32_t)previous;
     return TURBOWASM_OK;
 }
 
@@ -2421,18 +2499,18 @@ turbowasm_status turbowasm_instance_table_set_value(
 }
 
 static bool turbowasm_range_fits(
-    uint32_t offset,
-    uint32_t length,
+    uint64_t offset,
+    uint64_t length,
     uint64_t size) {
-    return (uint64_t)offset <= size &&
-           (uint64_t)length <= size - (uint64_t)offset;
+    return offset <= size &&
+           length <= size - offset;
 }
 
 turbowasm_status turbowasm_instance_memory_init(
     turbowasm_instance_impl *instance,
     uint32_t data_index,
     uint32_t memory_index,
-    uint32_t destination,
+    uint64_t destination,
     uint32_t source,
     uint32_t length) {
     const turbowasm_module_impl *module;
@@ -2479,9 +2557,9 @@ turbowasm_status turbowasm_instance_memory_copy(
     turbowasm_instance_impl *instance,
     uint32_t destination_memory,
     uint32_t source_memory,
-    uint32_t destination,
-    uint32_t source,
-    uint32_t length) {
+    uint64_t destination,
+    uint64_t source,
+    uint64_t length) {
     return turbowasm_instance_memory_copy_bytes(
         instance,
         destination_memory,
@@ -2494,9 +2572,9 @@ turbowasm_status turbowasm_instance_memory_copy(
 turbowasm_status turbowasm_instance_memory_fill(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t destination,
+    uint64_t destination,
     uint8_t value,
-    uint32_t length) {
+    uint64_t length) {
     return turbowasm_instance_memory_fill_bytes(
         instance,
         memory_index,

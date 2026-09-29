@@ -444,6 +444,20 @@ static bool turbowasm_link_limits_match(
     return true;
 }
 
+static bool turbowasm_link_memory_limits_match(
+    turbowasm_validation_memory_limits expected,
+    turbowasm_instance_limits actual) {
+    if (actual.minimum < expected.minimum)
+        return false;
+    if (expected.has_maximum) {
+        if (!actual.has_maximum)
+            return false;
+        if (actual.maximum > expected.maximum)
+            return false;
+    }
+    return true;
+}
+
 static bool turbowasm_link_host_type_matches(
     const turbowasm_validation_func_type *expected,
     const turbowasm_linker_host_function *host) {
@@ -729,25 +743,12 @@ turbowasm_status turbowasm_linker_bind_instance(
                     expected_memory->shared !=
                         actual_memory->shared ||
                     expected_memory->page_size !=
-                        actual_memory->page_size) {
+                        actual_memory->page_size ||
+                    !turbowasm_link_memory_limits_match(
+                        expected_memory->limits,
+                        actual_limits)) {
                     result = TURBOWASM_TYPE_MISMATCH;
                     goto fail;
-                }
-                if (expected_memory->memory64) {
-                    result = TURBOWASM_UNSUPPORTED;
-                    goto fail;
-                }
-                {
-                    turbowasm_validation_limits expected_limits = {
-                        (uint32_t)expected_memory->limits.minimum,
-                        (uint32_t)expected_memory->limits.maximum,
-                        expected_memory->limits.has_maximum
-                    };
-                    if (!turbowasm_link_limits_match(
-                            expected_limits, actual_limits)) {
-                        result = TURBOWASM_TYPE_MISMATCH;
-                        goto fail;
-                    }
                 }
             }
 
