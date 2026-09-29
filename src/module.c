@@ -171,12 +171,19 @@ bool turbowasm_module_memory_at(
         return false;
 
     memory = &impl->validation.memories[index];
-    out->minimum = memory->limits.minimum;
-    out->maximum = memory->limits.maximum;
+    out->minimum = memory->limits.minimum > UINT32_MAX
+        ? UINT32_MAX
+        : (uint32_t)memory->limits.minimum;
+    out->maximum = memory->limits.maximum > UINT32_MAX
+        ? UINT32_MAX
+        : (uint32_t)memory->limits.maximum;
     out->page_size = memory->page_size;
     out->has_maximum = memory->limits.has_maximum;
     out->shared = memory->shared;
     out->imported = memory->imported;
+    out->memory64 = memory->memory64;
+    out->minimum64 = memory->limits.minimum;
+    out->maximum64 = memory->limits.maximum;
     return true;
 }
 

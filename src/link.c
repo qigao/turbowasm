@@ -724,15 +724,30 @@ turbowasm_status turbowasm_linker_bind_instance(
                     goto fail;
                 }
 
-                if (expected_memory->shared !=
+                if (expected_memory->memory64 !=
+                        actual_memory->memory64 ||
+                    expected_memory->shared !=
                         actual_memory->shared ||
                     expected_memory->page_size !=
-                        actual_memory->page_size ||
-                    !turbowasm_link_limits_match(
-                        expected_memory->limits,
-                        actual_limits)) {
+                        actual_memory->page_size) {
                     result = TURBOWASM_TYPE_MISMATCH;
                     goto fail;
+                }
+                if (expected_memory->memory64) {
+                    result = TURBOWASM_UNSUPPORTED;
+                    goto fail;
+                }
+                {
+                    turbowasm_validation_limits expected_limits = {
+                        (uint32_t)expected_memory->limits.minimum,
+                        (uint32_t)expected_memory->limits.maximum,
+                        expected_memory->limits.has_maximum
+                    };
+                    if (!turbowasm_link_limits_match(
+                            expected_limits, actual_limits)) {
+                        result = TURBOWASM_TYPE_MISMATCH;
+                        goto fail;
+                    }
                 }
             }
 

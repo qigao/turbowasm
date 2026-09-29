@@ -69,12 +69,20 @@ typedef struct turbowasm_export_desc {
 } turbowasm_export_desc;
 
 typedef struct turbowasm_memory_desc {
+    /*
+     * Legacy memory32 mirrors. For memory64 these saturate at UINT32_MAX;
+     * use minimum64/maximum64 when memory64 is true.
+     */
     uint32_t minimum;
     uint32_t maximum;
     uint32_t page_size;
     bool has_maximum;
     bool shared;
     bool imported;
+
+    bool memory64;
+    uint64_t minimum64;
+    uint64_t maximum64;
 } turbowasm_memory_desc;
 
 typedef struct turbowasm_module_summary {

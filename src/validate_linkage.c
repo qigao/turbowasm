@@ -169,15 +169,16 @@ static turbowasm_status turbowasm_read_table_type(
 
 static turbowasm_status turbowasm_read_memory_type(
     turbowasm_reader *reader,
-    turbowasm_validation_limits *out_limits,
+    turbowasm_validation_memory_limits *out_limits,
     uint32_t *out_page_size,
-    bool *out_shared) {
+    bool *out_shared,
+    bool *out_memory64) {
     uint8_t flags;
-    uint32_t minimum;
-    uint32_t maximum = 0u;
+    uint64_t minimum;
+    uint64_t maximum = 0u;
     uint32_t page_exponent = 16u;
     uint32_t page_size;
-    uint32_t maximum_pages;
+    uint64_t maximum_pages;
     bool has_maximum;
     bool shared;
     bool memory64;
@@ -186,34 +187,38 @@ static turbowasm_status turbowasm_read_memory_type(
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_u8(reader, &flags))
         return TURBOWASM_MALFORMED_MODULE;
-
-    /*
-     * Memory limit flag bits:
-     *   0x01 maximum present
-     *   0x02 shared (threads)
-     *   0x04 memory64
-     *   0x08 custom page size
-     *
-     * T1 retains shared memory32 metadata only. memory64 remains explicitly
-     * unsupported, and executable shared memory remains fail-closed until T2
-     * establishes a host-language data-race-safe backing/access contract.
-     */
-    memory64 = (flags & 0x04u) != 0u;
-    if (memory64)
-        return TURBOWASM_UNSUPPORTED;
-    if ((flags & (uint8_t)~0x0bu) != 0u)
+    if ((flags & (uint8_t)~0x0fu) != 0u)
         return TURBOWASM_UNSUPPORTED;
 
     has_maximum = (flags & 0x01u) != 0u;
     shared = (flags & 0x02u) != 0u;
+    memory64 = (flags & 0x04u) != 0u;
+
+    if (shared && memory64)
+        return TURBOWASM_UNSUPPORTED;
     if (shared && !has_maximum)
         return TURBOWASM_MALFORMED_MODULE;
-    if (!turbowasm_reader_uleb32(reader, &minimum))
-        return TURBOWASM_MALFORMED_MODULE;
+
+    if (memory64) {
+        if (!turbowasm_reader_uleb64(reader, &minimum))
+            return TURBOWASM_MALFORMED_MODULE;
+    } else {
+        uint32_t minimum32;
+        if (!turbowasm_reader_uleb32(reader, &minimum32))
+            return TURBOWASM_MALFORMED_MODULE;
+        minimum = minimum32;
+    }
 
     if (has_maximum) {
-        if (!turbowasm_reader_uleb32(reader, &maximum))
-            return TURBOWASM_MALFORMED_MODULE;
+        if (memory64) {
+            if (!turbowasm_reader_uleb64(reader, &maximum))
+                return TURBOWASM_MALFORMED_MODULE;
+        } else {
+            uint32_t maximum32;
+            if (!turbowasm_reader_uleb32(reader, &maximum32))
+                return TURBOWASM_MALFORMED_MODULE;
+            maximum = maximum32;
+        }
         if (maximum < minimum)
             return TURBOWASM_MALFORMED_MODULE;
     }
@@ -221,12 +226,6 @@ static turbowasm_status turbowasm_read_memory_type(
     if ((flags & 0x08u) != 0u) {
         if (!turbowasm_reader_uleb32(reader, &page_exponent))
             return TURBOWASM_MALFORMED_MODULE;
-
-        /*
-         * The current proposal validates exactly 1-byte and 64-KiB pages.
-         * Keep other exponents malformed rather than silently generalizing
-         * beyond the proposal's current semantic surface.
-         */
         if (page_exponent != 0u && page_exponent != 16u)
             return TURBOWASM_MALFORMED_MODULE;
     }
@@ -234,9 +233,15 @@ static turbowasm_status turbowasm_read_memory_type(
     page_size = page_exponent == 0u
         ? UINT32_C(1)
         : UINT32_C(65536);
-    maximum_pages = page_size == UINT32_C(1)
-        ? UINT32_MAX
-        : UINT32_C(65536);
+    if (memory64) {
+        maximum_pages = page_size == UINT32_C(1)
+            ? UINT64_MAX
+            : (UINT64_C(1) << 48);
+    } else {
+        maximum_pages = page_size == UINT32_C(1)
+            ? UINT32_MAX
+            : UINT32_C(65536);
+    }
 
     if (minimum > maximum_pages ||
         (has_maximum && maximum > maximum_pages))
@@ -251,7 +256,8 @@ static turbowasm_status turbowasm_read_memory_type(
         *out_page_size = page_size;
     if (out_shared != NULL)
         *out_shared = shared;
-
+    if (out_memory64 != NULL)
+        *out_memory64 = memory64;
     return TURBOWASM_OK;
 }
 
@@ -346,16 +352,17 @@ turbowasm_status turbowasm_validate_import_section(
                 break;
             }
             case 0x02u: {
-                turbowasm_validation_limits limits = {0};
+                turbowasm_validation_memory_limits limits = {0};
                 uint32_t page_size = 0u;
                 bool shared = false;
+                bool memory64 = false;
                 import_desc.item_index =
                     summary->imported_memory_count;
                 status = turbowasm_read_memory_type(
-                    section, &limits, &page_size, &shared);
+                    section, &limits, &page_size, &shared, &memory64);
                 if (status != TURBOWASM_OK) return status;
                 if (!turbowasm_validation_context_append_memory(
-                        context, limits, page_size, shared, true))
+                        context, limits, page_size, shared, memory64, true))
                     return TURBOWASM_OUT_OF_MEMORY;
                 ++summary->imported_memory_count;
                 break;
@@ -502,14 +509,15 @@ turbowasm_status turbowasm_validate_memory_section(
         return TURBOWASM_MALFORMED_MODULE;
 
     for (index = 0u; index < count; ++index) {
-        turbowasm_validation_limits limits = {0};
+        turbowasm_validation_memory_limits limits = {0};
         uint32_t page_size = 0u;
         bool shared = false;
+        bool memory64 = false;
         turbowasm_status status = turbowasm_read_memory_type(
-            section, &limits, &page_size, &shared);
+            section, &limits, &page_size, &shared, &memory64);
         if (status != TURBOWASM_OK) return status;
         if (!turbowasm_validation_context_append_memory(
-                context, limits, page_size, shared, false))
+                context, limits, page_size, shared, memory64, false))
             return TURBOWASM_OUT_OF_MEMORY;
     }
 

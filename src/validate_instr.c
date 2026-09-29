@@ -945,41 +945,40 @@ static turbowasm_status turbowasm_validate_return_call_indirect(
 static turbowasm_status turbowasm_validate_indexed_memarg(
     turbowasm_reader *body,
     const turbowasm_validation_context *context,
-    uint32_t maximum_alignment) {
+    uint32_t maximum_alignment,
+    uint8_t *out_address_type) {
     uint32_t flags;
     uint32_t memory_index = 0u;
-    uint32_t offset;
     uint32_t alignment;
 
     if (body == NULL || context == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-
-    if (!turbowasm_reader_uleb32(body, &flags))
+    if (!turbowasm_reader_uleb32(body, &flags) ||
+        flags >= UINT32_C(0x80))
         return TURBOWASM_MALFORMED_MODULE;
-
-    /*
-     * Multi-memory reuses bit 6 of the memarg alignment field to signal an
-     * explicit memory index. Bits above 6 are not part of this memory32
-     * encoding.
-     */
-    if (flags >= UINT32_C(0x80))
-        return TURBOWASM_MALFORMED_MODULE;
-
     if ((flags & UINT32_C(0x40)) != 0u &&
         !turbowasm_reader_uleb32(body, &memory_index))
         return TURBOWASM_MALFORMED_MODULE;
-
-    if (!turbowasm_reader_uleb32(body, &offset))
-        return TURBOWASM_MALFORMED_MODULE;
-    (void)offset;
-
     if (memory_index >= context->memory_count)
         return TURBOWASM_MALFORMED_MODULE;
 
+    if (context->memories[memory_index].memory64) {
+        uint64_t offset;
+        if (!turbowasm_reader_uleb64(body, &offset))
+            return TURBOWASM_MALFORMED_MODULE;
+    } else {
+        uint32_t offset;
+        if (!turbowasm_reader_uleb32(body, &offset))
+            return TURBOWASM_MALFORMED_MODULE;
+    }
+
     alignment = flags & UINT32_C(0x3f);
-    return alignment <= maximum_alignment
-        ? TURBOWASM_OK
-        : TURBOWASM_MALFORMED_MODULE;
+    if (alignment > maximum_alignment)
+        return TURBOWASM_MALFORMED_MODULE;
+    if (out_address_type != NULL)
+        *out_address_type = context->memories[memory_index].memory64
+            ? TW_I64 : TW_I32;
+    return TURBOWASM_OK;
 }
 
 static turbowasm_status turbowasm_validate_load(
@@ -989,13 +988,14 @@ static turbowasm_status turbowasm_validate_load(
     uint8_t result_type,
     uint32_t maximum_alignment) {
     turbowasm_status status;
+    uint8_t address_type;
 
     status = turbowasm_validate_indexed_memarg(
-        body, context, maximum_alignment);
+        body, context, maximum_alignment, &address_type);
     if (status != TURBOWASM_OK)
         return status;
 
-    status = turbowasm_stack_pop(stack, TW_I32);
+    status = turbowasm_stack_pop(stack, address_type);
     if (status != TURBOWASM_OK)
         return status;
     return turbowasm_stack_push(stack, result_type);
@@ -1008,16 +1008,17 @@ static turbowasm_status turbowasm_validate_store(
     uint8_t value_type,
     uint32_t maximum_alignment) {
     turbowasm_status status;
+    uint8_t address_type;
 
     status = turbowasm_validate_indexed_memarg(
-        body, context, maximum_alignment);
+        body, context, maximum_alignment, &address_type);
     if (status != TURBOWASM_OK)
         return status;
 
     status = turbowasm_stack_pop(stack, value_type);
     if (status != TURBOWASM_OK)
         return status;
-    return turbowasm_stack_pop(stack, TW_I32);
+    return turbowasm_stack_pop(stack, address_type);
 }
 
 static turbowasm_status turbowasm_validate_memory_size_or_grow(
@@ -1026,6 +1027,7 @@ static turbowasm_status turbowasm_validate_memory_size_or_grow(
     const turbowasm_validation_context *context,
     bool grow) {
     uint32_t memory_index;
+    uint8_t address_type;
     turbowasm_status status;
 
     if (context == NULL ||
@@ -1034,12 +1036,14 @@ static turbowasm_status turbowasm_validate_memory_size_or_grow(
     if (memory_index >= context->memory_count)
         return TURBOWASM_MALFORMED_MODULE;
 
+    address_type = context->memories[memory_index].memory64
+        ? TW_I64 : TW_I32;
     if (grow) {
-        status = turbowasm_stack_pop(stack, TW_I32);
+        status = turbowasm_stack_pop(stack, address_type);
         if (status != TURBOWASM_OK)
             return status;
     }
-    return turbowasm_stack_push(stack, TW_I32);
+    return turbowasm_stack_push(stack, address_type);
 }
 
 static turbowasm_status turbowasm_validate_conversion(
@@ -1382,6 +1386,8 @@ static turbowasm_status turbowasm_validate_fc(
         case 8u: { /* memory.init */
             uint32_t data_index;
             uint32_t memory_index;
+            uint8_t address_type;
+            turbowasm_status status;
             if (!turbowasm_reader_uleb32(body, &data_index) ||
                 !turbowasm_reader_uleb32(body, &memory_index))
                 return TURBOWASM_MALFORMED_MODULE;
@@ -1389,7 +1395,15 @@ static turbowasm_status turbowasm_validate_fc(
                 !context->has_data_count ||
                 data_index >= context->data_count)
                 return TURBOWASM_MALFORMED_MODULE;
-            return turbowasm_stack_pop_i32_n(stack, 3u);
+            address_type = context->memories[memory_index].memory64
+                ? TW_I64 : TW_I32;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_pop(stack, address_type);
         }
 
         case 9u: { /* data.drop */
@@ -1405,6 +1419,10 @@ static turbowasm_status turbowasm_validate_fc(
         case 10u: { /* memory.copy */
             uint32_t destination_memory;
             uint32_t source_memory;
+            uint8_t destination_type;
+            uint8_t source_type;
+            uint8_t length_type;
+            turbowasm_status status;
             if (!turbowasm_reader_uleb32(
                     body, &destination_memory) ||
                 !turbowasm_reader_uleb32(
@@ -1413,16 +1431,41 @@ static turbowasm_status turbowasm_validate_fc(
             if (destination_memory >= context->memory_count ||
                 source_memory >= context->memory_count)
                 return TURBOWASM_MALFORMED_MODULE;
-            return turbowasm_stack_pop_i32_n(stack, 3u);
+            destination_type =
+                context->memories[destination_memory].memory64
+                    ? TW_I64 : TW_I32;
+            source_type =
+                context->memories[source_memory].memory64
+                    ? TW_I64 : TW_I32;
+            length_type =
+                destination_type == TW_I32 || source_type == TW_I32
+                    ? TW_I32 : TW_I64;
+            status = turbowasm_stack_pop(stack, length_type);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, source_type);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_pop(stack, destination_type);
         }
 
         case 11u: { /* memory.fill */
             uint32_t memory_index;
+            uint8_t address_type;
+            turbowasm_status status;
             if (!turbowasm_reader_uleb32(body, &memory_index))
                 return TURBOWASM_MALFORMED_MODULE;
             if (memory_index >= context->memory_count)
                 return TURBOWASM_MALFORMED_MODULE;
-            return turbowasm_stack_pop_i32_n(stack, 3u);
+            address_type = context->memories[memory_index].memory64
+                ? TW_I64 : TW_I32;
+            status = turbowasm_stack_pop(stack, address_type);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_pop(stack, address_type);
         }
 
         case 12u: { /* table.init */
@@ -1780,9 +1823,11 @@ static turbowasm_status turbowasm_validate_simd_descriptor(
 
         case TURBOWASM_SIMD_MEMORY_LOAD_LANE: {
             uint8_t lane;
+            uint8_t address_type;
 
             status = turbowasm_validate_indexed_memarg(
-                body, context, descriptor->memory_alignment);
+                body, context, descriptor->memory_alignment,
+                &address_type);
             if (status != TURBOWASM_OK)
                 return status;
             if (!turbowasm_reader_u8(body, &lane))
@@ -1793,7 +1838,7 @@ static turbowasm_status turbowasm_validate_simd_descriptor(
             status = turbowasm_stack_pop(stack, TW_V128);
             if (status != TURBOWASM_OK)
                 return status;
-            status = turbowasm_stack_pop(stack, TW_I32);
+            status = turbowasm_stack_pop(stack, address_type);
             if (status != TURBOWASM_OK)
                 return status;
             return turbowasm_stack_push(stack, TW_V128);
@@ -1801,9 +1846,11 @@ static turbowasm_status turbowasm_validate_simd_descriptor(
 
         case TURBOWASM_SIMD_MEMORY_STORE_LANE: {
             uint8_t lane;
+            uint8_t address_type;
 
             status = turbowasm_validate_indexed_memarg(
-                body, context, descriptor->memory_alignment);
+                body, context, descriptor->memory_alignment,
+                &address_type);
             if (status != TURBOWASM_OK)
                 return status;
             if (!turbowasm_reader_u8(body, &lane))
@@ -1814,7 +1861,7 @@ static turbowasm_status turbowasm_validate_simd_descriptor(
             status = turbowasm_stack_pop(stack, TW_V128);
             if (status != TURBOWASM_OK)
                 return status;
-            return turbowasm_stack_pop(stack, TW_I32);
+            return turbowasm_stack_pop(stack, address_type);
         }
 
         default:

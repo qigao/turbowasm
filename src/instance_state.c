@@ -628,8 +628,8 @@ static turbowasm_status turbowasm_allocate_memories(
         if (bytes > (uint64_t)SIZE_MAX)
             return TURBOWASM_OUT_OF_MEMORY;
 
-        memory->pages = source->limits.minimum;
-        memory->maximum_pages = source->limits.maximum;
+        memory->pages = (uint32_t)source->limits.minimum;
+        memory->maximum_pages = (uint32_t)source->limits.maximum;
         memory->page_size = source->page_size;
         memory->resource_max_bytes =
             module->config.limits.max_linear_memory_bytes;
@@ -1047,6 +1047,16 @@ turbowasm_status turbowasm_instance_state_init(
 
     if (instance == NULL || module == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+
+    {
+        uint32_t memory_index;
+        for (memory_index = 0u;
+             memory_index < module->validation.memory_count;
+             ++memory_index) {
+            if (module->validation.memories[memory_index].memory64)
+                return TURBOWASM_UNSUPPORTED;
+        }
+    }
 
     status = turbowasm_allocate_globals(
         instance, &module->validation);
