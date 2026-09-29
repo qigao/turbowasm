@@ -4,7 +4,7 @@
 #include <turbowasm/runtime.h>
 #include <turbowasm/status.h>
 
-#include "component_type_graph.h"
+#include "component_canonical.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -26,14 +26,21 @@ typedef struct turbowasm_component_core_module {
     uint32_t size;
 } turbowasm_component_core_module;
 
-typedef struct turbowasm_component_core_instance_def {
-    uint32_t module_index;
-} turbowasm_component_core_instance_def;
-
 typedef struct turbowasm_component_name {
     const uint8_t *bytes;
     uint32_t size;
 } turbowasm_component_name;
+
+typedef struct turbowasm_component_core_instantiate_arg {
+    turbowasm_component_name name;
+    uint32_t instance_index;
+} turbowasm_component_core_instantiate_arg;
+
+typedef struct turbowasm_component_core_instance_def {
+    uint32_t module_index;
+    turbowasm_component_core_instantiate_arg *arguments;
+    uint32_t argument_count;
+} turbowasm_component_core_instance_def;
 
 typedef struct turbowasm_component_core_function_alias {
     uint32_t core_function_index;
@@ -41,10 +48,24 @@ typedef struct turbowasm_component_core_function_alias {
     turbowasm_component_name name;
 } turbowasm_component_core_function_alias;
 
+typedef struct turbowasm_component_core_memory_alias {
+    uint32_t core_memory_index;
+    uint32_t instance_index;
+    turbowasm_component_name name;
+} turbowasm_component_core_memory_alias;
+
 typedef struct turbowasm_component_canon_lift {
     uint32_t component_function_index;
     uint32_t core_function_index;
     uint32_t type_index;
+
+    bool has_memory;
+    uint32_t memory_index;
+
+    bool has_realloc;
+    uint32_t realloc_function_index;
+
+    turbowasm_component_string_encoding string_encoding;
 } turbowasm_component_canon_lift;
 
 typedef enum turbowasm_component_external_kind {
@@ -89,6 +110,10 @@ typedef struct turbowasm_component_binary {
     turbowasm_component_core_function_alias *core_function_aliases;
     uint32_t core_function_alias_count;
     uint32_t core_function_alias_capacity;
+
+    turbowasm_component_core_memory_alias *core_memory_aliases;
+    uint32_t core_memory_alias_count;
+    uint32_t core_memory_alias_capacity;
 
     turbowasm_component_canon_lift *canon_lifts;
     uint32_t canon_lift_count;
@@ -138,6 +163,11 @@ turbowasm_component_binary_core_instance_at(
 
 const turbowasm_component_core_function_alias *
 turbowasm_component_binary_core_function_alias_at(
+    const turbowasm_component_binary *component,
+    uint32_t index);
+
+const turbowasm_component_core_memory_alias *
+turbowasm_component_binary_core_memory_alias_at(
     const turbowasm_component_binary *component,
     uint32_t index);
 
