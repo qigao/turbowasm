@@ -5,6 +5,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_MSC_VER)
+typedef __declspec(align(16)) union turbowasm_allocation_header {
+    unsigned char alignment[16];
+    struct {
+        turbowasm_allocator allocator;
+        size_t max_allocation_bytes;
+        size_t payload_size;
+    } metadata;
+} turbowasm_allocation_header;
+#else
 typedef union turbowasm_allocation_header {
     max_align_t alignment;
     struct {
@@ -13,6 +23,7 @@ typedef union turbowasm_allocation_header {
         size_t payload_size;
     } metadata;
 } turbowasm_allocation_header;
+#endif
 
 static void *default_allocate(void *c, size_t n) {(void)c; return malloc(n);}
 static void *default_reallocate(void *c, void *p, size_t n) {(void)c; return realloc(p,n);}
