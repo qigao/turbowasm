@@ -788,9 +788,9 @@ static turbowasm_status guest_allocate(
         *out_pointer = 0u;
         return TURBOWASM_OK;
     }
-    if (memory->realloc == NULL)
+    if (memory->guest_realloc == NULL)
         return TURBOWASM_UNSUPPORTED;
-    return memory->realloc(
+    return memory->guest_realloc(
         memory->realloc_context,
         0u, 0u, alignment, size, out_pointer);
 }
