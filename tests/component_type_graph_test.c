@@ -57,7 +57,9 @@ static void test_indexed_type_graph(void) {
     type = turbowasm_component_type_graph_get(&graph, 0u);
     assert(type != NULL);
     assert(type->kind == TURBOWASM_COMPONENT_TYPE_LIST);
-    assert(type->as.list.element_type == 1u);
+    assert(type->as.list.element_type.kind ==
+           TURBOWASM_COMPONENT_TYPE_REF_INDEXED);
+    assert(type->as.list.element_type.as.indexed == 1u);
 
     type = turbowasm_component_type_graph_get(&graph, 4u);
     assert(type != NULL);
@@ -68,6 +70,52 @@ static void test_indexed_type_graph(void) {
     turbowasm_component_type_graph_destroy(&graph);
     assert(graph.types == NULL);
     assert(graph.count == 0u);
+}
+
+static void test_inline_and_function_refs(void) {
+    turbowasm_component_type_graph graph = {0};
+    turbowasm_component_type_ref params[2];
+    turbowasm_component_type_ref result;
+    const turbowasm_component_type *type;
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 3u));
+    assert(turbowasm_component_type_graph_define_list_ref(
+        &graph, 0u,
+        turbowasm_component_type_ref_inline(
+            TURBOWASM_COMPONENT_TYPE_U8)));
+    assert(turbowasm_component_type_graph_define_scalar(
+        &graph, 1u, TURBOWASM_COMPONENT_TYPE_U32));
+
+    params[0] = turbowasm_component_type_ref_indexed(0u);
+    params[1] = turbowasm_component_type_ref_inline(
+        TURBOWASM_COMPONENT_TYPE_STRING);
+    result = turbowasm_component_type_ref_indexed(1u);
+    assert(turbowasm_component_type_graph_define_function(
+        &graph, 2u, params, 2u, true, result));
+    assert(turbowasm_component_type_graph_validate(&graph));
+
+    type = turbowasm_component_type_graph_get(&graph, 0u);
+    assert(type != NULL);
+    assert(type->as.list.element_type.kind ==
+           TURBOWASM_COMPONENT_TYPE_REF_INLINE);
+    assert(type->as.list.element_type.as.inline_type ==
+           TURBOWASM_COMPONENT_TYPE_U8);
+
+    type = turbowasm_component_type_graph_get(&graph, 2u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_FUNCTION);
+    assert(type->as.function.param_count == 2u);
+    assert(type->as.function.params[0].kind ==
+           TURBOWASM_COMPONENT_TYPE_REF_INDEXED);
+    assert(type->as.function.params[0].as.indexed == 0u);
+    assert(type->as.function.params[1].kind ==
+           TURBOWASM_COMPONENT_TYPE_REF_INLINE);
+    assert(type->as.function.params[1].as.inline_type ==
+           TURBOWASM_COMPONENT_TYPE_STRING);
+    assert(type->as.function.has_result);
+    assert(type->as.function.result.as.indexed == 1u);
+
+    turbowasm_component_type_graph_destroy(&graph);
 }
 
 static void test_invalid_resource_links_fail_closed(void) {
@@ -106,6 +154,7 @@ static void test_incomplete_graph_fails_closed(void) {
 int main(void) {
     test_scalar_projection();
     test_indexed_type_graph();
+    test_inline_and_function_refs();
     test_invalid_resource_links_fail_closed();
     test_incomplete_graph_fails_closed();
     return 0;
