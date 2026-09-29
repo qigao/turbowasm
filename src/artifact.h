@@ -12,13 +12,15 @@
 
 enum {
     TURBOWASM_ARTIFACT_SCHEMA_VERSION = 1,
-    TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA = 1u
+    TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA = 1u,
+    TURBOWASM_ARTIFACT_FLAG_INTEGRITY_SHA256 = 2u
 };
 
 enum {
     TURBOWASM_ARTIFACT_SECTION_SUMMARY = 1u,
     TURBOWASM_ARTIFACT_SECTION_CORE_METADATA = 2u,
-    TURBOWASM_ARTIFACT_SECTION_STATE_METADATA = 3u
+    TURBOWASM_ARTIFACT_SECTION_STATE_METADATA = 3u,
+    TURBOWASM_ARTIFACT_SECTION_INTEGRITY_SHA256 = 4u
 };
 
 typedef struct turbowasm_artifact_info {
@@ -44,6 +46,8 @@ typedef struct turbowasm_artifact_info {
     uint32_t metadata_data_segment_count;
     uint32_t metadata_element_segment_count;
     uint32_t metadata_declared_ref_count;
+
+    bool has_integrity_sha256;
 } turbowasm_artifact_info;
 
 uint64_t turbowasm_artifact_current_feature_fingerprint(void);
