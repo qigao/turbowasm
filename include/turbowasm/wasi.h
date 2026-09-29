@@ -134,12 +134,10 @@ typedef struct turbowasm_wasi_preview1_config {
 
     bool allow_fd_write;
     turbowasm_wasi_fd_write_fn fd_write;
-    turbowasm_wasi_fd_write_async_fn fd_write_async;
     void *fd_write_context;
 
     bool allow_fd_read;
     turbowasm_wasi_fd_read_fn fd_read;
-    turbowasm_wasi_fd_read_async_fn fd_read_async;
     void *fd_read_context;
 
     bool allow_proc_exit;
@@ -148,6 +146,14 @@ typedef struct turbowasm_wasi_preview1_config {
 
     bool allow_filesystem;
     struct turbowasm_wasi_fs *filesystem;
+
+    /*
+     * Appended extension fields preserve the established positional layout of
+     * earlier Preview1 config members. When allow_fd_* is true, configure
+     * exactly one of the synchronous or async callback for that direction.
+     */
+    turbowasm_wasi_fd_write_async_fn fd_write_async;
+    turbowasm_wasi_fd_read_async_fn fd_read_async;
 } turbowasm_wasi_preview1_config;
 
 /*
