@@ -642,7 +642,7 @@ static uint32_t host_path_stat(
     turbowasm_wasi_fs_stat *out_stat) {
     turbowasm_wasi_host_fs_impl *impl =
         (turbowasm_wasi_host_fs_impl *)context;
-    char *full_path;
+    char full_path[TURBOWASM_WASI_HOST_FS_PATH_MAX + 1u];
     salts_fs_stat_t stat_value;
     uint32_t error;
     int result;
@@ -656,19 +656,13 @@ static uint32_t host_path_stat(
          TURBOWASM_HOST_FS_LOOKUPFLAGS_SYMLINK_FOLLOW) != 0u)
         return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
 
-    full_path = (char *)malloc(impl->path_capacity + 1u);
-    if (full_path == NULL)
-        return TURBOWASM_WASI_ERRNO_NOMEM;
     error = host_build_path(
         impl, directory, path, path_length, full_path);
-    if (error != TURBOWASM_WASI_ERRNO_SUCCESS) {
-        free(full_path);
+    if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
         return error;
-    }
 
     result = salts_fs_root_lstat(
         impl->root, full_path, &stat_value);
-    free(full_path);
     if (result < 0)
         return host_errno(result);
     host_fill_stat(&stat_value, out_stat);
@@ -681,21 +675,16 @@ static uint32_t host_path_mutation(
     const uint8_t *path,
     size_t path_length,
     int operation) {
-    char *full_path;
+    char full_path[TURBOWASM_WASI_HOST_FS_PATH_MAX + 1u];
     uint32_t error;
     int result;
 
     if (impl == NULL)
         return TURBOWASM_WASI_ERRNO_INVAL;
-    full_path = (char *)malloc(impl->path_capacity + 1u);
-    if (full_path == NULL)
-        return TURBOWASM_WASI_ERRNO_NOMEM;
     error = host_build_path(
         impl, directory, path, path_length, full_path);
-    if (error != TURBOWASM_WASI_ERRNO_SUCCESS) {
-        free(full_path);
+    if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
         return error;
-    }
 
     if (operation == 0)
         result = salts_fs_root_mkdir(impl->root, full_path, 0755);
@@ -703,7 +692,6 @@ static uint32_t host_path_mutation(
         result = salts_fs_root_rmdir(impl->root, full_path);
     else
         result = salts_fs_root_unlink(impl->root, full_path);
-    free(full_path);
     return host_errno(result);
 }
 
@@ -814,7 +802,8 @@ turbowasm_status turbowasm_wasi_host_fs_init(
     if (adapter == NULL || config == NULL ||
         config->host_root == NULL ||
         config->file_capacity == 0u ||
-        config->path_capacity == 0u)
+        config->path_capacity == 0u ||
+        config->path_capacity > TURBOWASM_WASI_HOST_FS_PATH_MAX)
         return TURBOWASM_INVALID_ARGUMENT;
     if (adapter->impl != NULL)
         return TURBOWASM_INVALID_ARGUMENT;
