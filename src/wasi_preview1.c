@@ -838,11 +838,16 @@ static turbowasm_status turbowasm_wasi_fd_seek(
         arguments[3].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_memory_span(
-        call,
-        (uint32_t)arguments[3].as.i32,
-        8u,
-        &output);
+    if (arguments[2].as.i32 < TURBOWASM_WASI_WHENCE_SET ||
+        arguments[2].as.i32 > TURBOWASM_WASI_WHENCE_END) {
+        error = TURBOWASM_WASI_ERRNO_INVAL;
+    } else {
+        error = turbowasm_wasi_memory_span(
+            call,
+            (uint32_t)arguments[3].as.i32,
+            8u,
+            &output);
+    }
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
         error = turbowasm_wasi_fs_fd_seek(
             impl->filesystem,
