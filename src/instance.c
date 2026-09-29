@@ -4242,7 +4242,8 @@ static turbowasm_status turbowasm_exec_simd(
     switch (subopcode) {
         case 0x00u: { /* v128.load */
             uint32_t memory_index;
-            uint32_t offset;
+            uint64_t offset;
+            turbowasm_value_kind address_kind;
             turbowasm_value address;
             turbowasm_value out = {0};
             uint8_t shared_bytes[16] = {0};
@@ -4250,11 +4251,11 @@ static turbowasm_status turbowasm_exec_simd(
             bool shared = false;
 
             status = turbowasm_exec_read_indexed_memarg(
-                reader, &memory_index, &offset);
+                instance, reader, &memory_index, &offset, &address_kind);
             if (status != TURBOWASM_OK)
                 return status;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &address);
+                stack, address_kind, &address);
             if (status != TURBOWASM_OK)
                 return status;
 
@@ -4290,7 +4291,8 @@ static turbowasm_status turbowasm_exec_simd(
 
         case 0x0bu: { /* v128.store */
             uint32_t memory_index;
-            uint32_t offset;
+            uint64_t offset;
+            turbowasm_value_kind address_kind;
             turbowasm_value value;
             turbowasm_value address;
             uint8_t shared_bytes[16] = {0};
@@ -4298,7 +4300,7 @@ static turbowasm_status turbowasm_exec_simd(
             bool shared = false;
 
             status = turbowasm_exec_read_indexed_memarg(
-                reader, &memory_index, &offset);
+                instance, reader, &memory_index, &offset, &address_kind);
             if (status != TURBOWASM_OK)
                 return status;
             status = turbowasm_stack_pop_kind(
@@ -4306,7 +4308,7 @@ static turbowasm_status turbowasm_exec_simd(
             if (status != TURBOWASM_OK)
                 return status;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &address);
+                stack, address_kind, &address);
             if (status != TURBOWASM_OK)
                 return status;
 
