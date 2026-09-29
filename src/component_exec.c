@@ -206,6 +206,287 @@ static turbowasm_status component_guest_realloc(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status invoke_mapped_core_function(
+    turbowasm_component_exec *exec,
+    uint32_t core_function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    const turbowasm_component_exec_core_function *function;
+
+    if (exec == NULL || result_count == NULL || trap == NULL ||
+        core_function_index >= exec->core_function_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    function = &exec->core_functions[core_function_index];
+    if (function->kind !=
+            TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INSTANCE ||
+        function->instance_index >= exec->core_instance_count)
+        return TURBOWASM_UNSUPPORTED;
+
+    return turbowasm_instance_invoke(
+        &exec->core_instances[function->instance_index],
+        function->function_index,
+        arguments,
+        argument_count,
+        results,
+        result_capacity,
+        result_count,
+        trap);
+}
+
+static turbowasm_status component_resource_destructor_bridge(
+    void *context,
+    uint64_t resource_identity,
+    turbowasm_value rep) {
+    turbowasm_component_exec_resource_context *resource_context =
+        (turbowasm_component_exec_resource_context *)context;
+    const turbowasm_component_type *resource_type;
+    size_t result_count = 0u;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_status status;
+
+    if (resource_context == NULL ||
+        resource_context->exec == NULL ||
+        resource_context->exec->binary == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    resource_type = turbowasm_component_type_graph_get(
+        &resource_context->exec->binary->type_graph,
+        resource_context->resource_type);
+    if (resource_type == NULL ||
+        resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE ||
+        resource_type->as.resource.identity != resource_identity ||
+        !resource_type->as.resource.has_destructor)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = invoke_mapped_core_function(
+        resource_context->exec,
+        resource_type->as.resource.destructor_index,
+        &rep,
+        1u,
+        NULL,
+        0u,
+        &result_count,
+        &trap);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (trap != TURBOWASM_TRAP_NONE || result_count != 0u)
+        return TURBOWASM_TRAPPED;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status component_resource_builtin_host(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    turbowasm_component_exec_resource_builtin_context *builtin_context =
+        (turbowasm_component_exec_resource_builtin_context *)context;
+    turbowasm_component_resource_handle handle;
+    turbowasm_status status;
+
+    (void)call;
+
+    if (builtin_context == NULL ||
+        builtin_context->binding == NULL ||
+        !builtin_context->binding->initialized ||
+        result_count == NULL ||
+        trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *trap = TURBOWASM_TRAP_NONE;
+    *result_count = 0u;
+
+    switch (builtin_context->kind) {
+        case TURBOWASM_COMPONENT_RESOURCE_BUILTIN_NEW:
+            if (arguments == NULL ||
+                argument_count != 1u ||
+                arguments[0].kind !=
+                    builtin_context->binding->rep_kind ||
+                results == NULL ||
+                result_capacity < 1u)
+                return TURBOWASM_INVALID_ARGUMENT;
+
+            status = turbowasm_component_resource_binding_new(
+                builtin_context->binding,
+                arguments[0],
+                &handle);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            results[0].kind = TURBOWASM_VALUE_I32;
+            results[0].as.i32 = (int32_t)handle;
+            *result_count = 1u;
+            return TURBOWASM_OK;
+
+        case TURBOWASM_COMPONENT_RESOURCE_BUILTIN_REP:
+            if (arguments == NULL ||
+                argument_count != 1u ||
+                arguments[0].kind != TURBOWASM_VALUE_I32 ||
+                results == NULL ||
+                result_capacity < 1u)
+                return TURBOWASM_INVALID_ARGUMENT;
+
+            status = turbowasm_component_resource_binding_rep(
+                builtin_context->binding,
+                (uint32_t)arguments[0].as.i32,
+                &results[0]);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            *result_count = 1u;
+            return TURBOWASM_OK;
+
+        case TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP:
+            if (arguments == NULL ||
+                argument_count != 1u ||
+                arguments[0].kind != TURBOWASM_VALUE_I32)
+                return TURBOWASM_INVALID_ARGUMENT;
+
+            return turbowasm_component_resource_binding_drop(
+                builtin_context->binding,
+                (uint32_t)arguments[0].as.i32);
+
+        default:
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
+}
+
+static bool resource_builtin_host_type(
+    const turbowasm_component_exec_resource_builtin_context *context,
+    turbowasm_host_function_type *out) {
+    static const turbowasm_value_kind i32_param[] = {
+        TURBOWASM_VALUE_I32
+    };
+    static const turbowasm_value_kind i32_result[] = {
+        TURBOWASM_VALUE_I32
+    };
+
+    if (context == NULL || context->binding == NULL ||
+        !context->binding->initialized || out == NULL)
+        return false;
+
+    memset(out, 0, sizeof(*out));
+
+    switch (context->kind) {
+        case TURBOWASM_COMPONENT_RESOURCE_BUILTIN_NEW:
+            out->params = &context->binding->rep_kind;
+            out->param_count = 1u;
+            out->results = i32_result;
+            out->result_count = 1u;
+            return true;
+
+        case TURBOWASM_COMPONENT_RESOURCE_BUILTIN_REP:
+            out->params = i32_param;
+            out->param_count = 1u;
+            out->results = &context->binding->rep_kind;
+            out->result_count = 1u;
+            return true;
+
+        case TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP:
+            out->params = i32_param;
+            out->param_count = 1u;
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+static const turbowasm_component_core_inline_export *
+find_inline_core_export(
+    const turbowasm_component_core_instance_def *definition,
+    turbowasm_component_name name) {
+    uint32_t i;
+
+    if (definition == NULL ||
+        definition->kind !=
+            TURBOWASM_COMPONENT_CORE_INSTANCE_INLINE)
+        return NULL;
+
+    for (i = 0u; i < definition->export_count; ++i) {
+        const turbowasm_component_core_inline_export *export_desc =
+            &definition->exports[i];
+        if (component_name_equal(
+                export_desc->name,
+                name.bytes,
+                name.size))
+            return export_desc;
+    }
+    return NULL;
+}
+
+static turbowasm_status define_inline_provider(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary,
+    uint32_t provider_index,
+    turbowasm_name module_name,
+    turbowasm_linker *linker) {
+    const turbowasm_component_core_instance_def *definition;
+    uint32_t i;
+
+    if (exec == NULL || binary == NULL || linker == NULL ||
+        provider_index >= binary->core_instance_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    definition = &binary->core_instances[provider_index];
+    if (definition->kind !=
+        TURBOWASM_COMPONENT_CORE_INSTANCE_INLINE)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (i = 0u; i < definition->export_count; ++i) {
+        const turbowasm_component_core_inline_export *export_desc =
+            &definition->exports[i];
+        const turbowasm_component_exec_core_function *function;
+        const turbowasm_component_exec_resource_builtin_context *context;
+        turbowasm_host_function_type type;
+        turbowasm_name name;
+
+        if (export_desc->sort != 0x00u ||
+            export_desc->item_index >= exec->core_function_count)
+            return TURBOWASM_UNSUPPORTED;
+
+        function = &exec->core_functions[export_desc->item_index];
+        if (function->kind !=
+                TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_RESOURCE_BUILTIN ||
+            function->resource_builtin_index >=
+                binary->resource_builtin_count)
+            return TURBOWASM_UNSUPPORTED;
+
+        context =
+            &exec->resource_builtin_contexts[
+                function->resource_builtin_index];
+        if (!resource_builtin_host_type(context, &type))
+            return TURBOWASM_MALFORMED_MODULE;
+
+        name.bytes = export_desc->name.bytes;
+        name.size = export_desc->name.size;
+
+        {
+            turbowasm_status status =
+                turbowasm_linker_define_host_function(
+                    linker,
+                    module_name,
+                    name,
+                    &type,
+                    component_resource_builtin_host,
+                    (void *)context);
+            if (status != TURBOWASM_OK)
+                return status;
+        }
+    }
+
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status instantiate_core_instance(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
