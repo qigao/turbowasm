@@ -50,6 +50,26 @@ turbowasm_status turbowasm_component_resource_new_owned(
     turbowasm_value rep,
     turbowasm_component_resource_handle *out_handle);
 
+/*
+ * Create a transient non-owned handle. Dropping it never runs a resource
+ * destructor; the caller owns the surrounding borrow scope.
+ */
+turbowasm_status turbowasm_component_resource_new_borrowed(
+    turbowasm_component_resource_table *table,
+    uint64_t resource_identity,
+    turbowasm_value rep,
+    turbowasm_component_resource_handle *out_handle);
+
+/*
+ * Consume an owned handle without invoking its destructor, returning the
+ * representation to the lifting caller. This is the canonical lift-own path.
+ */
+turbowasm_status turbowasm_component_resource_take_owned(
+    turbowasm_component_resource_table *table,
+    turbowasm_component_resource_handle handle,
+    uint64_t expected_resource_identity,
+    turbowasm_value *out_rep);
+
 turbowasm_status turbowasm_component_resource_rep(
     const turbowasm_component_resource_table *table,
     turbowasm_component_resource_handle handle,
