@@ -502,7 +502,14 @@ static turbowasm_status instantiate_core_instance(
         return TURBOWASM_INVALID_ARGUMENT;
 
     definition = &binary->core_instances[index];
-    if (definition->module_index >= exec->core_module_count)
+
+    if (definition->kind ==
+        TURBOWASM_COMPONENT_CORE_INSTANCE_INLINE)
+        return TURBOWASM_OK;
+
+    if (definition->kind !=
+            TURBOWASM_COMPONENT_CORE_INSTANCE_INSTANTIATE ||
+        definition->module_index >= exec->core_module_count)
         return TURBOWASM_MALFORMED_MODULE;
 
     if (definition->argument_count == 0u)
@@ -519,6 +526,7 @@ static turbowasm_status instantiate_core_instance(
     for (i = 0u; i < definition->argument_count; ++i) {
         const turbowasm_component_core_instantiate_arg *argument =
             &definition->arguments[i];
+        const turbowasm_component_core_instance_def *provider;
         turbowasm_name name;
 
         if (argument->instance_index >= index) {
@@ -526,12 +534,36 @@ static turbowasm_status instantiate_core_instance(
             goto done;
         }
 
+        provider =
+            &binary->core_instances[argument->instance_index];
+
         name.bytes = argument->name.bytes;
         name.size = argument->name.size;
-        status = turbowasm_linker_define_instance(
-            &linker,
-            name,
-            &exec->core_instances[argument->instance_index]);
+
+        if (provider->kind ==
+            TURBOWASM_COMPONENT_CORE_INSTANCE_INLINE) {
+            status = define_inline_provider(
+                exec,
+                binary,
+                argument->instance_index,
+                name,
+                &linker);
+        } else if (provider->kind ==
+                   TURBOWASM_COMPONENT_CORE_INSTANCE_INSTANTIATE) {
+            if (exec->core_instances[
+                    argument->instance_index].impl == NULL) {
+                status = TURBOWASM_MALFORMED_MODULE;
+            } else {
+                status = turbowasm_linker_define_instance(
+                    &linker,
+                    name,
+                    &exec->core_instances[
+                        argument->instance_index]);
+            }
+        } else {
+            status = TURBOWASM_MALFORMED_MODULE;
+        }
+
         if (status != TURBOWASM_OK)
             goto done;
     }
