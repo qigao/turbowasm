@@ -121,6 +121,46 @@ interpreter.
 
 Nested compiled calls save/replace/restore the private SIMD slot frame.
 
+## Reusable compiled-artifact policy
+
+Validated-module artifacts and compiled-function artifacts are separate layers.
+
+```text
+exact Wasm source
+    -> validated artifact identity
+       (source SHA-256 + feature fingerprint)
+            |
+            + function index
+            + backend/compiler/target fingerprint
+            v
+        JIT cache key
+            |
+      +-----+------+
+      |            |
+     miss          hit
+      |            |
+ lazy compile   backend-private
+      |         restore/validation
+      |            |
+      +-----+------+
+            v
+      compiled function
+```
+
+TurboWasm owns only the backend-neutral cache key, lookup/store routing and
+maximum blob-size admission. It never interprets backend-native artifact bytes.
+A backend restore callback must validate its private artifact format and enforce
+its executable-memory/resource policy before returning a compiled handle.
+Corrupt, incompatible, oversized or failed cache restores fall back to the
+ordinary lazy compile path and never bypass Wasm module validation identity.
+
+Persistent machine code is optional. The pinned MIR v1 backend deliberately
+does not implement the persistence callbacks: its public API can write/read MIR
+IR and generate machine code, but it does not expose a stable public
+generated-machine-code plus relocation artifact import/export contract.
+TurboWasm does not use MIR's underscored private code publication/dump helpers
+as a persistence ABI.
+
 ## Executable-memory policy
 
 Executable mappings are explicitly bounded.
@@ -194,6 +234,8 @@ optional NativeIO host-wait bridge      implemented
 lazy per-function MIR JIT               implemented
 scalar/helper-backed SIMD MIR           implemented
 per-function fallback isolation         implemented
+backend-neutral JIT artifact cache       implemented for opt-in backends
+MIR native artifact persistence          intentionally unsupported
 executable MIR mapping budget           implemented
 
 WASI Preview 1 capability layer         implemented

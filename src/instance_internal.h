@@ -198,6 +198,14 @@ typedef struct turbowasm_instance_impl {
     turbowasm_jit_function_state *jit_functions;
     uint32_t jit_function_count;
     uint32_t jit_hot_threshold;
+
+    bool jit_artifact_cache_enabled;
+    turbowasm_jit_artifact_cache jit_artifact_cache;
+    uint8_t jit_artifact_source_sha256[
+        TURBOWASM_JIT_ARTIFACT_FINGERPRINT_SIZE];
+    uint64_t jit_artifact_validation_fingerprint;
+    uint8_t jit_artifact_backend_fingerprint[
+        TURBOWASM_JIT_ARTIFACT_FINGERPRINT_SIZE];
 } turbowasm_instance_impl;
 
 typedef struct turbowasm_jit_invocation_context {
@@ -229,6 +237,12 @@ turbowasm_status turbowasm_jit_instance_attach_backend(
     turbowasm_instance_impl *instance,
     turbowasm_jit_backend *backend,
     uint32_t hot_threshold);
+
+turbowasm_status turbowasm_jit_instance_attach_backend_with_cache(
+    turbowasm_instance_impl *instance,
+    turbowasm_jit_backend *backend,
+    uint32_t hot_threshold,
+    const turbowasm_jit_artifact_cache *cache);
 
 void turbowasm_jit_instance_detach_backend(
     turbowasm_instance_impl *instance);

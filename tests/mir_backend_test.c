@@ -16,6 +16,10 @@ int main(void) {
     assert(backend.context != NULL);
     assert(backend.is_function_eligible != NULL);
     assert(backend.compile_function != NULL);
+    assert(backend.artifact_fingerprint == NULL);
+    assert(backend.restore_function_artifact == NULL);
+    assert(backend.measure_function_artifact == NULL);
+    assert(backend.write_function_artifact == NULL);
     assert(backend.invoke != NULL);
     assert(backend.destroy_function != NULL);
     assert(backend.destroy_backend != NULL);
