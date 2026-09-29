@@ -5,6 +5,7 @@
 #include <salts/thread.h>
 
 #include <limits.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,9 +34,73 @@ struct turbowasm_wasi_threads_impl {
     uint32_t next_tid;
     const turbowasm_module *module;
     uint32_t start_function_index;
+    atomic_bool fatal;
+    turbowasm_status fatal_status;
+    turbowasm_trap fatal_trap;
     salts_mutex_t mutex;
     bool mutex_initialized;
 };
+
+static bool turbowasm_wasi_threads_should_interrupt(
+    void *context) {
+    turbowasm_wasi_threads_impl *impl =
+        (turbowasm_wasi_threads_impl *)context;
+
+    return impl == NULL ||
+           atomic_load_explicit(
+               &impl->fatal, memory_order_acquire);
+}
+
+static bool turbowasm_wasi_threads_policy_should_interrupt(
+    void *context) {
+    turbowasm_wasi_threads_execution_policy *policy =
+        (turbowasm_wasi_threads_execution_policy *)context;
+    turbowasm_wasi_threads_impl *impl;
+
+    if (policy == NULL || policy->threads == NULL ||
+        policy->threads->impl == NULL)
+        return true;
+
+    impl = (turbowasm_wasi_threads_impl *)policy->threads->impl;
+    if (atomic_load_explicit(
+            &impl->fatal, memory_order_acquire))
+        return true;
+
+    return policy->chained_interrupt != NULL &&
+           policy->chained_interrupt(policy->chained_context);
+}
+
+static void turbowasm_wasi_threads_publish_fatal(
+    turbowasm_wasi_threads_impl *impl,
+    turbowasm_instance *source,
+    turbowasm_status status,
+    turbowasm_trap trap) {
+    bool first = false;
+
+    if (impl == NULL)
+        return;
+
+    salts_mutex_lock(&impl->mutex);
+    if (!atomic_load_explicit(
+            &impl->fatal, memory_order_relaxed)) {
+        impl->fatal_status = status;
+        impl->fatal_trap = trap;
+        atomic_store_explicit(
+            &impl->fatal, true, memory_order_release);
+        first = true;
+    }
+    salts_mutex_unlock(&impl->mutex);
+
+    /*
+     * Shared imported memories resolve to the same provider waiter registry
+     * across the whole group. Signaling through one sibling therefore wakes
+     * root/child waiters without turning the wake into a Wasm notify result.
+     */
+    if (first && source != NULL && source->impl != NULL) {
+        turbowasm_instance_interrupt_waiters(
+            (turbowasm_instance_impl *)source->impl);
+    }
+}
 
 static turbowasm_name turbowasm_wasi_threads_name(
     const char *text) {
@@ -154,10 +219,12 @@ static void turbowasm_wasi_threads_run(void *user) {
     turbowasm_wasi_thread_slot *slot =
         (turbowasm_wasi_thread_slot *)user;
     turbowasm_value arguments[2] = {{0}};
+    turbowasm_execution_options options = {0};
     size_t result_count = 0u;
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_status status;
 
-    if (slot == NULL || !slot->active)
+    if (slot == NULL || slot->owner == NULL || !slot->active)
         return;
 
     arguments[0].kind = TURBOWASM_VALUE_I32;
@@ -165,12 +232,22 @@ static void turbowasm_wasi_threads_run(void *user) {
     arguments[1].kind = TURBOWASM_VALUE_I32;
     arguments[1].as.i32 = (int32_t)slot->start_arg;
 
-    (void)turbowasm_instance_invoke(
+    options.should_interrupt =
+        turbowasm_wasi_threads_should_interrupt;
+    options.interrupt_context = slot->owner;
+
+    status = turbowasm_instance_invoke_with_options(
         &slot->child,
         slot->start_function_index,
         arguments, 2u,
         NULL, 0u,
-        &result_count, &trap);
+        &result_count, &trap,
+        &options);
+
+    if (status == TURBOWASM_TRAPPED) {
+        turbowasm_wasi_threads_publish_fatal(
+            slot->owner, &slot->child, status, trap);
+    }
 }
 
 static void turbowasm_wasi_threads_cancel(void *user) {
@@ -192,6 +269,11 @@ static int32_t turbowasm_wasi_threads_reserve(
         return TURBOWASM_WASI_THREADS_SPAWN_BAD_MODULE;
 
     salts_mutex_lock(&impl->mutex);
+    if (atomic_load_explicit(
+            &impl->fatal, memory_order_acquire)) {
+        salts_mutex_unlock(&impl->mutex);
+        return TURBOWASM_WASI_THREADS_SPAWN_GROUP_TERMINATED;
+    }
     if (impl->active >= impl->capacity) {
         salts_mutex_unlock(&impl->mutex);
         return TURBOWASM_WASI_THREADS_SPAWN_CAPACITY;
@@ -323,6 +405,39 @@ done:
     return TURBOWASM_OK;
 }
 
+bool turbowasm_wasi_threads_execution_policy_init(
+    turbowasm_wasi_threads_execution_policy *policy,
+    turbowasm_wasi_threads *threads) {
+    if (policy == NULL || threads == NULL ||
+        threads->impl == NULL)
+        return false;
+
+    policy->threads = threads;
+    policy->chained_interrupt = NULL;
+    policy->chained_context = NULL;
+    return true;
+}
+
+bool turbowasm_wasi_threads_execution_policy_apply(
+    turbowasm_wasi_threads_execution_policy *policy,
+    turbowasm_execution_options *options) {
+    if (policy == NULL || policy->threads == NULL ||
+        policy->threads->impl == NULL || options == NULL)
+        return false;
+
+    if (options->should_interrupt !=
+            turbowasm_wasi_threads_policy_should_interrupt ||
+        options->interrupt_context != policy) {
+        policy->chained_interrupt = options->should_interrupt;
+        policy->chained_context = options->interrupt_context;
+    }
+
+    options->should_interrupt =
+        turbowasm_wasi_threads_policy_should_interrupt;
+    options->interrupt_context = policy;
+    return true;
+}
+
 turbowasm_status turbowasm_wasi_threads_init(
     turbowasm_wasi_threads *threads,
     const turbowasm_wasi_threads_config *config) {
@@ -359,6 +474,9 @@ turbowasm_status turbowasm_wasi_threads_init(
         return TURBOWASM_OUT_OF_MEMORY;
     }
     impl->mutex_initialized = true;
+    atomic_init(&impl->fatal, false);
+    impl->fatal_status = TURBOWASM_OK;
+    impl->fatal_trap = TURBOWASM_TRAP_NONE;
     impl->executor = config->executor;
     impl->capacity = config->capacity;
     impl->next_tid = 1u;
@@ -432,4 +550,27 @@ size_t turbowasm_wasi_threads_active(
     active = impl->active;
     salts_mutex_unlock(&impl->mutex);
     return active;
+}
+
+bool turbowasm_wasi_threads_group_fatal(
+    const turbowasm_wasi_threads *threads,
+    turbowasm_status *out_status,
+    turbowasm_trap *out_trap) {
+    turbowasm_wasi_threads_impl *impl;
+
+    if (threads == NULL || threads->impl == NULL)
+        return false;
+
+    impl = (turbowasm_wasi_threads_impl *)threads->impl;
+    if (!atomic_load_explicit(
+            &impl->fatal, memory_order_acquire))
+        return false;
+
+    salts_mutex_lock(&impl->mutex);
+    if (out_status != NULL)
+        *out_status = impl->fatal_status;
+    if (out_trap != NULL)
+        *out_trap = impl->fatal_trap;
+    salts_mutex_unlock(&impl->mutex);
+    return true;
 }
