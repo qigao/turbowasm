@@ -316,6 +316,21 @@ static void test_waiter_capacity_trap(void) {
     memory->waiter_count = 0u;
     salts_mutex_unlock(&memory->waiter_mutex);
 
+    /*
+     * Capacity exhaustion must not poison the registry. Once slots are
+     * released, a fresh equal-value zero-timeout wait is admitted normally.
+     */
+    result = UINT32_MAX;
+    trap = TURBOWASM_TRAP_NONE;
+    assert(turbowasm_instance_memory_wait(
+               instance_impl(&instance),
+               0u, 0u, 0u, 4u,
+               0u, 0,
+               &result, &trap) == TURBOWASM_OK);
+    assert(result == 2u);
+    assert(trap == TURBOWASM_TRAP_NONE);
+    assert(waiter_count_get(memory) == 0u);
+
     turbowasm_instance_destroy(&instance);
     turbowasm_module_destroy(&module);
 }
