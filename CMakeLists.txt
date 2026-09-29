@@ -15,6 +15,8 @@ option(TURBOWASM_BUILD_CONFORMANCE_RUNNER
   "Build the non-installed WebAssembly spec conformance runner" OFF)
 option(TURBOWASM_ENABLE_MIR_JIT "Enable optional MIR JIT backend" OFF)
 option(TURBOWASM_ENABLE_CFLOW_ADAPTER "Build optional CFlow execution adapter" ON)
+option(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER
+  "Build optional Salts NativeIO host-wait adapter" ON)
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
   message(FATAL_ERROR "SALTS_ROOT must point at an installed Salts SDK")
@@ -112,6 +114,36 @@ if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
   endif()
 endif()
 
+if(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)
+  if(NOT TARGET Salts::NativeIO)
+    message(FATAL_ERROR
+      "TurboWasm NativeIO adapter requires Salts 1.8.3 Salts::NativeIO")
+  endif()
+
+  add_library(turbowasm_native_io
+    src/native_io_adapter.c)
+  add_library(TurboWasm::NativeIO ALIAS turbowasm_native_io)
+  set_target_properties(turbowasm_native_io PROPERTIES
+    EXPORT_NAME NativeIO
+    VERSION ${PROJECT_VERSION}
+    SOVERSION 0)
+  target_compile_features(turbowasm_native_io PUBLIC c_std_11)
+  target_include_directories(turbowasm_native_io
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>)
+  target_link_libraries(turbowasm_native_io
+    PUBLIC
+      TurboWasm::Runtime
+      Salts::NativeIO)
+
+  if(MSVC)
+    target_compile_options(turbowasm_native_io PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_native_io PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
 if(TURBOWASM_ENABLE_MIR_JIT)
   find_package(MIR CONFIG REQUIRED)
 
@@ -171,6 +203,15 @@ install(
 if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
   install(
     TARGETS turbowasm_cflow
+    EXPORT TurboWasmTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+if(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)
+  install(
+    TARGETS turbowasm_native_io
     EXPORT TurboWasmTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
