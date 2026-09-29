@@ -14,8 +14,14 @@ typedef struct turbowasm_wasi_string_list {
 typedef struct turbowasm_wasi_preview1_impl {
     bool allow_args;
     bool allow_environ;
+    bool allow_clock;
+    bool allow_random;
     turbowasm_wasi_string_list args;
     turbowasm_wasi_string_list environment;
+    turbowasm_wasi_clock_time_fn clock_time;
+    void *clock_context;
+    turbowasm_wasi_random_fill_fn random_fill;
+    void *random_context;
 } turbowasm_wasi_preview1_impl;
 
 static const uint8_t turbowasm_wasi_namespace_bytes[] =
@@ -117,6 +123,16 @@ static void turbowasm_wasi_store_u32(
     destination[1] = (uint8_t)((value >> 8u) & UINT32_C(0xff));
     destination[2] = (uint8_t)((value >> 16u) & UINT32_C(0xff));
     destination[3] = (uint8_t)((value >> 24u) & UINT32_C(0xff));
+}
+
+static void turbowasm_wasi_store_u64(
+    uint8_t *destination,
+    uint64_t value) {
+    uint32_t index;
+
+    for (index = 0u; index < 8u; ++index)
+        destination[index] =
+            (uint8_t)((value >> (index * 8u)) & UINT64_C(0xff));
 }
 
 static turbowasm_status turbowasm_wasi_return_errno(
@@ -333,6 +349,85 @@ static turbowasm_status turbowasm_wasi_environ_get(
         results, result_capacity, result_count, trap);
 }
 
+static turbowasm_status turbowasm_wasi_clock_time_get(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    turbowasm_wasi_preview1_impl *impl =
+        (turbowasm_wasi_preview1_impl *)context;
+    turbowasm_host_memory_span output = {0};
+    uint64_t timestamp = 0u;
+    uint32_t error;
+
+    if (impl == NULL || !impl->allow_clock ||
+        impl->clock_time == NULL ||
+        call == NULL || arguments == NULL ||
+        argument_count != 3u ||
+        arguments[0].kind != TURBOWASM_VALUE_I32 ||
+        arguments[1].kind != TURBOWASM_VALUE_I64 ||
+        arguments[2].kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    error = turbowasm_wasi_memory_span(
+        call, (uint32_t)arguments[2].as.i32,
+        8u, &output);
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = impl->clock_time(
+            impl->clock_context,
+            (uint32_t)arguments[0].as.i32,
+            (uint64_t)arguments[1].as.i64,
+            &timestamp);
+        if (error == TURBOWASM_WASI_ERRNO_SUCCESS)
+            turbowasm_wasi_store_u64(output.data, timestamp);
+    }
+
+    return turbowasm_wasi_return_errno(
+        results, result_capacity, result_count, trap, error);
+}
+
+static turbowasm_status turbowasm_wasi_random_get(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    turbowasm_wasi_preview1_impl *impl =
+        (turbowasm_wasi_preview1_impl *)context;
+    turbowasm_host_memory_span buffer = {0};
+    uint32_t error;
+
+    if (impl == NULL || !impl->allow_random ||
+        impl->random_fill == NULL ||
+        call == NULL || arguments == NULL ||
+        argument_count != 2u ||
+        arguments[0].kind != TURBOWASM_VALUE_I32 ||
+        arguments[1].kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    error = turbowasm_wasi_memory_span(
+        call,
+        (uint32_t)arguments[0].as.i32,
+        (uint32_t)arguments[1].as.i32,
+        &buffer);
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = impl->random_fill(
+            impl->random_context,
+            buffer.data,
+            buffer.size);
+    }
+
+    return turbowasm_wasi_return_errno(
+        results, result_capacity, result_count, trap, error);
+}
+
 turbowasm_status turbowasm_wasi_preview1_init(
     turbowasm_wasi_preview1 *wasi,
     const turbowasm_wasi_preview1_config *config) {
@@ -347,8 +442,20 @@ turbowasm_status turbowasm_wasi_preview1_init(
     if (impl == NULL)
         return TURBOWASM_OUT_OF_MEMORY;
 
+    if ((config->allow_clock && config->clock_time == NULL) ||
+        (config->allow_random && config->random_fill == NULL)) {
+        free(impl);
+        return TURBOWASM_INVALID_ARGUMENT;
+    }
+
     impl->allow_args = config->allow_args;
     impl->allow_environ = config->allow_environ;
+    impl->allow_clock = config->allow_clock;
+    impl->allow_random = config->allow_random;
+    impl->clock_time = config->clock_time;
+    impl->clock_context = config->clock_context;
+    impl->random_fill = config->random_fill;
+    impl->random_context = config->random_context;
 
     status = turbowasm_wasi_string_list_copy(
         &impl->args, config->args, config->arg_count);
@@ -454,6 +561,40 @@ turbowasm_status turbowasm_wasi_preview1_define(
             linker,
             turbowasm_wasi_name("environ_get"),
             turbowasm_wasi_environ_get,
+            impl);
+        if (status != TURBOWASM_OK)
+            return status;
+    }
+
+    if (impl->allow_clock) {
+        static const turbowasm_value_kind clock_params[] = {
+            TURBOWASM_VALUE_I32,
+            TURBOWASM_VALUE_I64,
+            TURBOWASM_VALUE_I32
+        };
+        static const turbowasm_value_kind result_type[] = {
+            TURBOWASM_VALUE_I32
+        };
+        const turbowasm_host_function_type clock_type = {
+            clock_params, 3u, result_type, 1u
+        };
+
+        status = turbowasm_linker_define_host_function(
+            linker,
+            turbowasm_wasi_namespace(),
+            turbowasm_wasi_name("clock_time_get"),
+            &clock_type,
+            turbowasm_wasi_clock_time_get,
+            impl);
+        if (status != TURBOWASM_OK)
+            return status;
+    }
+
+    if (impl->allow_random) {
+        status = turbowasm_wasi_define_function(
+            linker,
+            turbowasm_wasi_name("random_get"),
+            turbowasm_wasi_random_get,
             impl);
         if (status != TURBOWASM_OK)
             return status;
