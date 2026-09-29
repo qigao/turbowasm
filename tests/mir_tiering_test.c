@@ -113,6 +113,60 @@ int main(void) {
     turbowasm_module_destroy(&module);
 
     /*
+     * Shared-memory modules are deliberately interpreter-only until MIR owns
+     * the same shared backing/locking contract.
+     */
+    {
+        static const uint8_t shared_bytes[] = {
+            WASM_HEADER,
+            0x01, 0x05,
+            0x01, 0x60, 0x00, 0x01, 0x7f,
+            0x03, 0x02,
+            0x01, 0x00,
+            0x05, 0x04,
+            0x01, 0x03, 0x01, 0x01,
+            0x0a, 0x06,
+            0x01,
+            0x04, 0x00, 0x41, 0x2a, 0x0b
+        };
+        turbowasm_module shared_module = {0};
+        turbowasm_instance shared_instance = {0};
+        turbowasm_instance_impl *shared_impl;
+        turbowasm_jit_backend shared_backend = {0};
+
+        assert(turbowasm_module_load_borrowed(
+                   &shared_module,
+                   shared_bytes,
+                   sizeof(shared_bytes)) == TURBOWASM_OK);
+        assert(turbowasm_instance_create(
+                   &shared_instance,
+                   &shared_module) == TURBOWASM_OK);
+        shared_impl =
+            (turbowasm_instance_impl *)shared_instance.impl;
+        assert(shared_impl != NULL);
+
+        assert(turbowasm_mir_backend_create(
+                   &shared_backend) == TURBOWASM_OK);
+        assert(turbowasm_jit_instance_attach_backend(
+                   shared_impl,
+                   &shared_backend,
+                   1u) == TURBOWASM_OK);
+
+        assert(invoke_i32(&shared_instance) == 42);
+        assert(shared_impl->jit_function_count == 1u);
+        assert(shared_impl->jit_functions[0].state ==
+               TURBOWASM_JIT_INTERPRET_ONLY);
+        assert(shared_impl->jit_functions[0].compiled.impl == NULL);
+
+        assert(invoke_i32(&shared_instance) == 42);
+        assert(shared_impl->jit_functions[0].state ==
+               TURBOWASM_JIT_INTERPRET_ONLY);
+
+        turbowasm_instance_destroy(&shared_instance);
+        turbowasm_module_destroy(&shared_module);
+    }
+
+    /*
      * A terminal straight-line direct tail call is MIR-eligible. Generated
      * code requests the transfer, returns, and the dispatcher trampolines to
      * the target at the same logical depth.
