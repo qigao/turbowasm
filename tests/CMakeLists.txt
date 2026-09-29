@@ -913,7 +913,7 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
   add_executable(turbowasm_wasi_threads_test
     wasi_threads_test.c)
   target_link_libraries(turbowasm_wasi_threads_test
-    PRIVATE TurboWasm::WASIThreads)
+    PRIVATE TurboWasm::WASIThreads Salts::Platform)
   set_target_properties(turbowasm_wasi_threads_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
