@@ -6,6 +6,19 @@ set_target_properties(turbowasm_module_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_module_test COMMAND turbowasm_module_test)
 
+add_executable(turbowasm_artifact_envelope_test
+  artifact_envelope_test.c)
+target_link_libraries(turbowasm_artifact_envelope_test
+  PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_artifact_envelope_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_artifact_envelope_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_artifact_envelope_test
+         COMMAND turbowasm_artifact_envelope_test)
+
 add_executable(turbowasm_runtime_config_test runtime_config_test.c)
 target_link_libraries(turbowasm_runtime_config_test PRIVATE TurboWasm::Runtime)
 set_target_properties(turbowasm_runtime_config_test PROPERTIES
