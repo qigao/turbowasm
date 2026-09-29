@@ -156,9 +156,7 @@ turbowasm_status turbowasm_component_resource_new_owned(
                 goto found;
         }
         if (!table_grow(table))
-            return table->capacity >= table->max_entries
-                ? TURBOWASM_OUT_OF_MEMORY
-                : TURBOWASM_OUT_OF_MEMORY;
+            return TURBOWASM_OUT_OF_MEMORY;
     }
 
 found:
