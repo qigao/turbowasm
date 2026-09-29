@@ -8,9 +8,6 @@ permissions:
   contents: read
   packages: read
 
-env:
-  SALTS_SDK_VERSION: 1.8.3
-
 jobs:
   linux:
     name: Linux x64
@@ -19,7 +16,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -76,7 +73,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -146,7 +143,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -224,7 +221,7 @@ jobs:
       - name: Checkout TurboWasm
         uses: actions/checkout@v4
 
-      - name: Restore Salts 1.8.3 SDK
+      - name: Restore latest Salts SDK
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
