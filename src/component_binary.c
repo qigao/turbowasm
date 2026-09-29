@@ -294,6 +294,26 @@ static bool append_canon_lift(
     return true;
 }
 
+static bool append_resource_builtin(
+    turbowasm_component_binary *component,
+    turbowasm_component_resource_builtin builtin) {
+    uint32_t required;
+
+    if (component == NULL ||
+        component->resource_builtin_count == UINT32_MAX)
+        return false;
+    required = component->resource_builtin_count + 1u;
+    if (!reserve_array(
+            (void **)&component->resource_builtins,
+            &component->resource_builtin_capacity,
+            required,
+            sizeof(*component->resource_builtins)))
+        return false;
+    component->resource_builtins[
+        component->resource_builtin_count++] = builtin;
+    return true;
+}
+
 static turbowasm_status validate_custom_section(
     turbowasm_reader section) {
     uint32_t name_size;
@@ -499,7 +519,8 @@ done:
 static turbowasm_status decode_core_instance_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
-    uint32_t current_core_modules) {
+    uint32_t current_core_modules,
+    uint32_t current_core_functions) {
     uint32_t count;
     uint32_t i;
 
@@ -511,57 +532,112 @@ static turbowasm_status decode_core_instance_section(
     for (i = 0u; i < count; ++i) {
         turbowasm_component_core_instance_def definition = {0};
         uint8_t opcode;
-        uint32_t argument_count;
-        uint32_t j;
         turbowasm_status status = TURBOWASM_OK;
 
-        if (!turbowasm_reader_u8(&section, &opcode) ||
-            opcode != 0x00u ||
-            !turbowasm_reader_uleb32(
-                &section, &definition.module_index) ||
-            definition.module_index >= current_core_modules ||
-            !turbowasm_reader_uleb32(
-                &section, &argument_count))
+        if (!turbowasm_reader_u8(&section, &opcode))
             return TURBOWASM_MALFORMED_MODULE;
 
-        if (argument_count != 0u) {
-            if ((size_t)argument_count >
-                SIZE_MAX / sizeof(*definition.arguments))
-                return TURBOWASM_OUT_OF_MEMORY;
-            definition.arguments =
-                (turbowasm_component_core_instantiate_arg *)
-                    turbowasm_rt_calloc(
-                        argument_count,
-                        sizeof(*definition.arguments));
-            if (definition.arguments == NULL)
-                return TURBOWASM_OUT_OF_MEMORY;
-        }
-        definition.argument_count = argument_count;
+        if (opcode == 0x00u) {
+            uint32_t argument_count;
+            uint32_t j;
 
-        for (j = 0u; j < argument_count; ++j) {
-            uint8_t sort;
-            status = read_component_name(
-                &section, &definition.arguments[j].name);
-            if (status != TURBOWASM_OK)
-                goto fail_definition;
-            if (!turbowasm_reader_u8(&section, &sort) ||
-                sort != 0x12u ||
+            definition.kind =
+                TURBOWASM_COMPONENT_CORE_INSTANCE_INSTANTIATE;
+
+            if (!turbowasm_reader_uleb32(
+                    &section, &definition.module_index) ||
+                definition.module_index >= current_core_modules ||
                 !turbowasm_reader_uleb32(
-                    &section,
-                    &definition.arguments[j].instance_index)) {
-                status = TURBOWASM_MALFORMED_MODULE;
-                goto fail_definition;
+                    &section, &argument_count))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            if (argument_count != 0u) {
+                if ((size_t)argument_count >
+                    SIZE_MAX / sizeof(*definition.arguments))
+                    return TURBOWASM_OUT_OF_MEMORY;
+                definition.arguments =
+                    (turbowasm_component_core_instantiate_arg *)
+                        turbowasm_rt_calloc(
+                            argument_count,
+                            sizeof(*definition.arguments));
+                if (definition.arguments == NULL)
+                    return TURBOWASM_OUT_OF_MEMORY;
             }
-            /*
-             * Core instantiate arguments can only reference an already
-             * retained Core instance. This also allows earlier definitions in
-             * the same section vector.
-             */
-            if (definition.arguments[j].instance_index >=
-                component->core_instance_count) {
-                status = TURBOWASM_MALFORMED_MODULE;
-                goto fail_definition;
+            definition.argument_count = argument_count;
+
+            for (j = 0u; j < argument_count; ++j) {
+                uint8_t sort;
+                status = read_component_name(
+                    &section, &definition.arguments[j].name);
+                if (status != TURBOWASM_OK)
+                    goto fail_definition;
+                if (!turbowasm_reader_u8(&section, &sort) ||
+                    sort != 0x12u ||
+                    !turbowasm_reader_uleb32(
+                        &section,
+                        &definition.arguments[j].instance_index)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail_definition;
+                }
+                /*
+                 * Core instantiate arguments can only reference an already
+                 * retained Core instance. This includes inline provider
+                 * instances introduced earlier in the stream.
+                 */
+                if (definition.arguments[j].instance_index >=
+                    component->core_instance_count) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail_definition;
+                }
             }
+        } else if (opcode == 0x01u) {
+            uint32_t export_count;
+            uint32_t j;
+
+            definition.kind =
+                TURBOWASM_COMPONENT_CORE_INSTANCE_INLINE;
+
+            if (!turbowasm_reader_uleb32(
+                    &section, &export_count))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            if (export_count != 0u) {
+                if ((size_t)export_count >
+                    SIZE_MAX / sizeof(*definition.exports))
+                    return TURBOWASM_OUT_OF_MEMORY;
+                definition.exports =
+                    (turbowasm_component_core_inline_export *)
+                        turbowasm_rt_calloc(
+                            export_count,
+                            sizeof(*definition.exports));
+                if (definition.exports == NULL)
+                    return TURBOWASM_OUT_OF_MEMORY;
+            }
+            definition.export_count = export_count;
+
+            for (j = 0u; j < export_count; ++j) {
+                uint8_t sort;
+                status = read_component_name(
+                    &section, &definition.exports[j].name);
+                if (status != TURBOWASM_OK)
+                    goto fail_definition;
+                if (!turbowasm_reader_u8(&section, &sort) ||
+                    sort != 0x00u ||
+                    !turbowasm_reader_uleb32(
+                        &section,
+                        &definition.exports[j].item_index)) {
+                    status = TURBOWASM_UNSUPPORTED;
+                    goto fail_definition;
+                }
+                definition.exports[j].sort = sort;
+                if (definition.exports[j].item_index >=
+                    current_core_functions) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail_definition;
+                }
+            }
+        } else {
+            return TURBOWASM_MALFORMED_MODULE;
         }
 
         if (!append_core_instance(component, definition)) {
@@ -572,6 +648,7 @@ static turbowasm_status decode_core_instance_section(
 
 fail_definition:
         turbowasm_rt_free(definition.arguments);
+        turbowasm_rt_free(definition.exports);
         return status;
     }
 
@@ -656,116 +733,157 @@ static turbowasm_status decode_core_alias_section(
         : TURBOWASM_MALFORMED_MODULE;
 }
 
-static turbowasm_status decode_canon_lift_section(
+static turbowasm_status decode_canon_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
     uint32_t current_types,
-    uint32_t current_core_functions,
+    uint32_t *next_core_function_index,
     uint32_t current_core_memories,
     uint32_t *next_component_function_index) {
     uint32_t count;
     uint32_t i;
 
     if (component == NULL ||
+        next_core_function_index == NULL ||
         next_component_function_index == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(&section, &count))
         return TURBOWASM_MALFORMED_MODULE;
 
     for (i = 0u; i < count; ++i) {
-        turbowasm_component_canon_lift lift = {0};
-        const turbowasm_component_type *type;
         uint8_t opcode;
-        uint8_t sort;
-        uint32_t option_count;
-        uint32_t option_index;
-        bool string_encoding_seen = false;
 
-        lift.string_encoding = TURBOWASM_COMPONENT_STRING_UTF8;
-
-        if (!turbowasm_reader_u8(&section, &opcode) ||
-            !turbowasm_reader_u8(&section, &sort))
+        if (!turbowasm_reader_u8(&section, &opcode))
             return TURBOWASM_MALFORMED_MODULE;
 
-        if (opcode != 0x00u || sort != 0x00u)
-            return TURBOWASM_UNSUPPORTED;
+        if (opcode == 0x00u) {
+            turbowasm_component_canon_lift lift = {0};
+            const turbowasm_component_type *type;
+            uint8_t sort;
+            uint32_t option_count;
+            uint32_t option_index;
+            bool string_encoding_seen = false;
 
-        if (!turbowasm_reader_uleb32(
-                &section, &lift.core_function_index) ||
-            lift.core_function_index >= current_core_functions ||
-            !turbowasm_reader_uleb32(
-                &section, &option_count))
-            return TURBOWASM_MALFORMED_MODULE;
+            lift.string_encoding =
+                TURBOWASM_COMPONENT_STRING_UTF8;
 
-        for (option_index = 0u;
-             option_index < option_count;
-             ++option_index) {
-            uint8_t option;
+            if (!turbowasm_reader_u8(&section, &sort) ||
+                sort != 0x00u)
+                return TURBOWASM_UNSUPPORTED;
 
-            if (!turbowasm_reader_u8(&section, &option))
+            if (!turbowasm_reader_uleb32(
+                    &section, &lift.core_function_index) ||
+                lift.core_function_index >=
+                    *next_core_function_index ||
+                !turbowasm_reader_uleb32(
+                    &section, &option_count))
                 return TURBOWASM_MALFORMED_MODULE;
 
-            switch (option) {
-                case 0x00u: /* string-encoding=utf8 */
-                    if (string_encoding_seen)
-                        return TURBOWASM_MALFORMED_MODULE;
-                    string_encoding_seen = true;
-                    lift.string_encoding =
-                        TURBOWASM_COMPONENT_STRING_UTF8;
-                    break;
+            for (option_index = 0u;
+                 option_index < option_count;
+                 ++option_index) {
+                uint8_t option;
 
-                case 0x01u: /* utf16 */
-                case 0x02u: /* latin1+utf16 */
-                    return TURBOWASM_UNSUPPORTED;
-
-                case 0x03u: /* memory */
-                    if (lift.has_memory ||
-                        !turbowasm_reader_uleb32(
-                            &section, &lift.memory_index) ||
-                        lift.memory_index >= current_core_memories)
-                        return TURBOWASM_MALFORMED_MODULE;
-                    lift.has_memory = true;
-                    break;
-
-                case 0x04u: /* realloc */
-                    if (lift.has_realloc ||
-                        !turbowasm_reader_uleb32(
-                            &section,
-                            &lift.realloc_function_index) ||
-                        lift.realloc_function_index >=
-                            current_core_functions)
-                        return TURBOWASM_MALFORMED_MODULE;
-                    lift.has_realloc = true;
-                    break;
-
-                case 0x05u: /* post-return */
-                case 0x06u: /* async */
-                case 0x07u: /* callback */
-                    return TURBOWASM_UNSUPPORTED;
-
-                default:
+                if (!turbowasm_reader_u8(&section, &option))
                     return TURBOWASM_MALFORMED_MODULE;
+
+                switch (option) {
+                    case 0x00u: /* string-encoding=utf8 */
+                        if (string_encoding_seen)
+                            return TURBOWASM_MALFORMED_MODULE;
+                        string_encoding_seen = true;
+                        lift.string_encoding =
+                            TURBOWASM_COMPONENT_STRING_UTF8;
+                        break;
+
+                    case 0x01u: /* utf16 */
+                    case 0x02u: /* latin1+utf16 */
+                        return TURBOWASM_UNSUPPORTED;
+
+                    case 0x03u: /* memory */
+                        if (lift.has_memory ||
+                            !turbowasm_reader_uleb32(
+                                &section, &lift.memory_index) ||
+                            lift.memory_index >=
+                                current_core_memories)
+                            return TURBOWASM_MALFORMED_MODULE;
+                        lift.has_memory = true;
+                        break;
+
+                    case 0x04u: /* realloc */
+                        if (lift.has_realloc ||
+                            !turbowasm_reader_uleb32(
+                                &section,
+                                &lift.realloc_function_index) ||
+                            lift.realloc_function_index >=
+                                *next_core_function_index)
+                            return TURBOWASM_MALFORMED_MODULE;
+                        lift.has_realloc = true;
+                        break;
+
+                    case 0x05u: /* post-return */
+                    case 0x06u: /* async */
+                    case 0x07u: /* callback */
+                        return TURBOWASM_UNSUPPORTED;
+
+                    default:
+                        return TURBOWASM_MALFORMED_MODULE;
+                }
             }
+
+            if (!turbowasm_reader_uleb32(
+                    &section, &lift.type_index) ||
+                lift.type_index >= current_types)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            type = turbowasm_component_type_graph_get(
+                &component->type_graph, lift.type_index);
+            if (type == NULL ||
+                type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            lift.component_function_index =
+                *next_component_function_index;
+            if (!append_canon_lift(component, lift))
+                return TURBOWASM_OUT_OF_MEMORY;
+            if (*next_component_function_index == UINT32_MAX)
+                return TURBOWASM_OUT_OF_MEMORY;
+            ++*next_component_function_index;
+        } else if (opcode == 0x02u ||
+                   opcode == 0x03u ||
+                   opcode == 0x04u) {
+            turbowasm_component_resource_builtin builtin = {0};
+            const turbowasm_component_type *resource_type;
+
+            if (!turbowasm_reader_uleb32(
+                    &section, &builtin.resource_type) ||
+                builtin.resource_type >= current_types)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            resource_type = turbowasm_component_type_graph_get(
+                &component->type_graph, builtin.resource_type);
+            if (resource_type == NULL ||
+                resource_type->kind !=
+                    TURBOWASM_COMPONENT_TYPE_RESOURCE)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            builtin.kind =
+                opcode == 0x02u
+                    ? TURBOWASM_COMPONENT_RESOURCE_BUILTIN_NEW
+                    : (opcode == 0x03u
+                        ? TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP
+                        : TURBOWASM_COMPONENT_RESOURCE_BUILTIN_REP);
+            builtin.core_function_index =
+                *next_core_function_index;
+
+            if (!append_resource_builtin(component, builtin))
+                return TURBOWASM_OUT_OF_MEMORY;
+            if (*next_core_function_index == UINT32_MAX)
+                return TURBOWASM_OUT_OF_MEMORY;
+            ++*next_core_function_index;
+        } else {
+            return TURBOWASM_UNSUPPORTED;
         }
-
-        if (!turbowasm_reader_uleb32(
-                &section, &lift.type_index) ||
-            lift.type_index >= current_types)
-            return TURBOWASM_MALFORMED_MODULE;
-
-        type = turbowasm_component_type_graph_get(
-            &component->type_graph, lift.type_index);
-        if (type == NULL ||
-            type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
-            return TURBOWASM_MALFORMED_MODULE;
-
-        lift.component_function_index =
-            *next_component_function_index;
-        if (!append_canon_lift(component, lift))
-            return TURBOWASM_OUT_OF_MEMORY;
-        if (*next_component_function_index == UINT32_MAX)
-            return TURBOWASM_OUT_OF_MEMORY;
-        ++*next_component_function_index;
     }
 
     return turbowasm_reader_remaining(&section) == 0u
@@ -1084,7 +1202,10 @@ static turbowasm_status decode_component_semantics(
             ++current_core_modules;
         } else if (section->id == 2u) {
             status = decode_core_instance_section(
-                reader, component, current_core_modules);
+                reader,
+                component,
+                current_core_modules,
+                next_core_function_index);
         } else if (section->id == 6u) {
             status = decode_core_alias_section(
                 reader,
@@ -1096,11 +1217,11 @@ static turbowasm_status decode_component_semantics(
             status = decode_component_type_section(
                 reader, component, &current_types);
         } else if (section->id == 8u) {
-            status = decode_canon_lift_section(
+            status = decode_canon_section(
                 reader,
                 component,
                 current_types,
-                next_core_function_index,
+                &next_core_function_index,
                 next_core_memory_index,
                 &next_component_function_index);
         } else if (section->id == 10u) {
@@ -1132,6 +1253,7 @@ static turbowasm_status decode_component_semantics(
             &component->type_graph))
         return TURBOWASM_MALFORMED_MODULE;
 
+    component->core_function_count = next_core_function_index;
     return TURBOWASM_OK;
 }
 
@@ -1161,6 +1283,7 @@ turbowasm_status turbowasm_component_binary_load_with_config(
         component->core_function_aliases != NULL ||
         component->core_memory_aliases != NULL ||
         component->canon_lifts != NULL ||
+        component->resource_builtins != NULL ||
         component->type_graph.types != NULL ||
         component->type_graph.count != 0u ||
         component->imports != NULL ||
@@ -1243,9 +1366,12 @@ fail:
         uint32_t index;
         for (index = 0u;
              index < component->core_instance_count;
-             ++index)
+             ++index) {
             turbowasm_rt_free(
                 component->core_instances[index].arguments);
+            turbowasm_rt_free(
+                component->core_instances[index].exports);
+        }
     }
     turbowasm_component_type_graph_destroy(
         &component->type_graph);
@@ -1257,6 +1383,7 @@ fail:
     turbowasm_rt_free(component->core_function_aliases);
     turbowasm_rt_free(component->core_memory_aliases);
     turbowasm_rt_free(component->canon_lifts);
+    turbowasm_rt_free(component->resource_builtins);
     memset(component, 0, sizeof(*component));
     turbowasm_runtime_scope_leave(scope);
     return status;
@@ -1274,9 +1401,12 @@ void turbowasm_component_binary_destroy(
         uint32_t index;
         for (index = 0u;
              index < component->core_instance_count;
-             ++index)
+             ++index) {
             turbowasm_rt_free(
                 component->core_instances[index].arguments);
+            turbowasm_rt_free(
+                component->core_instances[index].exports);
+        }
     }
     turbowasm_component_type_graph_destroy(
         &component->type_graph);
@@ -1288,6 +1418,7 @@ void turbowasm_component_binary_destroy(
     turbowasm_rt_free(component->core_function_aliases);
     turbowasm_rt_free(component->core_memory_aliases);
     turbowasm_rt_free(component->canon_lifts);
+    turbowasm_rt_free(component->resource_builtins);
     memset(component, 0, sizeof(*component));
     turbowasm_runtime_scope_leave(scope);
 }
@@ -1346,6 +1477,16 @@ turbowasm_component_binary_canon_lift_at(
     if (component == NULL || index >= component->canon_lift_count)
         return NULL;
     return &component->canon_lifts[index];
+}
+
+const turbowasm_component_resource_builtin *
+turbowasm_component_binary_resource_builtin_at(
+    const turbowasm_component_binary *component,
+    uint32_t index) {
+    if (component == NULL ||
+        index >= component->resource_builtin_count)
+        return NULL;
+    return &component->resource_builtins[index];
 }
 
 const turbowasm_component_import *

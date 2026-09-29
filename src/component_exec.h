@@ -3,6 +3,7 @@
 
 #include "component_binary.h"
 #include "component_core_call.h"
+#include "component_resource_binding.h"
 
 #include <turbowasm/instance.h>
 #include <turbowasm/module.h>
@@ -12,9 +13,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef enum turbowasm_component_exec_core_function_kind {
+    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INVALID = 0,
+    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INSTANCE,
+    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_RESOURCE_BUILTIN
+} turbowasm_component_exec_core_function_kind;
+
 typedef struct turbowasm_component_exec_core_function {
+    turbowasm_component_exec_core_function_kind kind;
     uint32_t instance_index;
     uint32_t function_index;
+    uint32_t resource_builtin_index;
 } turbowasm_component_exec_core_function;
 
 typedef struct turbowasm_component_exec_core_memory {
@@ -27,6 +36,16 @@ typedef struct turbowasm_component_exec_realloc_context {
     uint32_t function_index;
     turbowasm_component_pointer_type pointer_type;
 } turbowasm_component_exec_realloc_context;
+
+typedef struct turbowasm_component_exec_resource_context {
+    struct turbowasm_component_exec *exec;
+    uint32_t resource_type;
+} turbowasm_component_exec_resource_context;
+
+typedef struct turbowasm_component_exec_resource_builtin_context {
+    turbowasm_component_resource_binding *binding;
+    turbowasm_component_resource_builtin_kind kind;
+} turbowasm_component_exec_resource_builtin_context;
 
 typedef struct turbowasm_component_exec {
     const turbowasm_component_binary *binary;
@@ -44,6 +63,14 @@ typedef struct turbowasm_component_exec {
     uint32_t core_memory_count;
 
     turbowasm_component_exec_realloc_context *realloc_contexts;
+
+    turbowasm_component_resource_table resource_table;
+    turbowasm_component_resource_binding *resource_bindings;
+    turbowasm_component_exec_resource_context *resource_contexts;
+    uint32_t resource_binding_count;
+
+    turbowasm_component_exec_resource_builtin_context
+        *resource_builtin_contexts;
 
     turbowasm_component_core_call_adapter *functions;
     uint32_t function_count;
