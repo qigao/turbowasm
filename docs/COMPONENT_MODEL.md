@@ -281,6 +281,34 @@ memory64 bindings are distinguished by the selected Core memory type.
 Resource `own`/`borrow` transfer is intentionally rejected in C5a; it is
 composed with the C4 generation-safe resource table in C5b.
 
+## C5b1 resource call composition
+
+Top-level Component resource values are represented abstractly by their Core
+resource representation (`i32` or `i64`), never by a canonical handle index.
+Canonical handles exist only inside a Component resource table.
+
+The synchronous Core-call adapter can optionally bind a C4 resource table:
+
+- lowering `own<R>` creates an owned canonical handle and transfers ownership
+  to the callee table;
+- lifting an `own<R>` result consumes an owned handle without running the
+  destructor and returns the abstract representation;
+- lowering `borrow<R>` creates a transient non-owned handle;
+- the Core call must explicitly drop every transient borrow before returning;
+  otherwise the adapter cleans the leaked transient handle and returns a
+  canonical trap status;
+- Component function results transitively containing `borrow` are rejected,
+  matching the pinned MVP validation rule.
+
+A private resource-type binding couples one nominal resource type to a C4 table,
+its exact i32/i64 representation carrier, and an optional destructor callback.
+This is the reusable boundary C5c can expose as `canon resource.new/rep/drop`
+Core host functions.
+
+C5b1 intentionally supports top-level own/borrow values only. Resource handles
+nested inside lists or future composite types remain C5b2 because their
+in-memory canonical representation needs an explicit synchronous borrow scope.
+
 ## Deferred work
 
 C1 intentionally does not implement:
