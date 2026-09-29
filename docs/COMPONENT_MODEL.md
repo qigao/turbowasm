@@ -95,6 +95,43 @@ Custom sections validate their length-prefixed UTF-8 name but otherwise remain
 semantically ignorable. Nested component sections validate the Component
 preamble boundary in C2a; recursive semantic decoding is deferred.
 
+## C2 semantic bootstrap
+
+C2b adds retained semantic records for the synchronous MVP subset needed by
+later canonical ABI work.
+
+Supported type definitions:
+
+- primitive scalar and string definitions;
+- `list<T>`, where `T` is either an inline primitive/string or an earlier
+  Component type index;
+- nominal `resource` definitions with retained Core representation type and
+  optional destructor index;
+- `own<R>` / `borrow<R>` for an earlier resource type;
+- synchronous `func` types with named parameters and zero or one result.
+
+Component `valtype` is modeled explicitly as either an indexed type or an
+inline primitive. TurboWasm does not synthesize fake primitive nodes in the
+Component type index space.
+
+The initial import/export record layer retains synchronous function imports
+and function exports with optional function-type ascription. It validates type
+indices against the incrementally-built type index space but does not yet
+instantiate or link Component functions.
+
+The following forms fail closed as `TURBOWASM_UNSUPPORTED` in this slice:
+
+- aliases, because they can add type aliases to the incremental type index
+  space;
+- type imports/exports, which also extend that index space;
+- async functions;
+- record/variant/tuple/flags/enum/option/result and gated newer value types;
+- component/instance type definitions and their imports/exports;
+- name-attribute vectors beyond the legacy 0x00/0x01 forms.
+
+These forms are not silently skipped: doing so would change subsequent index
+meaning.
+
 ## Deferred work
 
 C1 intentionally does not implement:

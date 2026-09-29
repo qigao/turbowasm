@@ -28,19 +28,42 @@ typedef enum turbowasm_component_type_kind {
     TURBOWASM_COMPONENT_TYPE_CHAR,
     TURBOWASM_COMPONENT_TYPE_STRING,
     TURBOWASM_COMPONENT_TYPE_LIST,
+    TURBOWASM_COMPONENT_TYPE_FUNCTION,
     TURBOWASM_COMPONENT_TYPE_RESOURCE,
     TURBOWASM_COMPONENT_TYPE_OWN,
     TURBOWASM_COMPONENT_TYPE_BORROW
 } turbowasm_component_type_kind;
 
+typedef enum turbowasm_component_type_ref_kind {
+    TURBOWASM_COMPONENT_TYPE_REF_INDEXED = 0,
+    TURBOWASM_COMPONENT_TYPE_REF_INLINE
+} turbowasm_component_type_ref_kind;
+
+typedef struct turbowasm_component_type_ref {
+    turbowasm_component_type_ref_kind kind;
+    union {
+        turbowasm_component_type_id indexed;
+        turbowasm_component_type_kind inline_type;
+    } as;
+} turbowasm_component_type_ref;
+
 typedef struct turbowasm_component_type {
     turbowasm_component_type_kind kind;
     union {
         struct {
-            turbowasm_component_type_id element_type;
+            turbowasm_component_type_ref element_type;
         } list;
         struct {
+            turbowasm_component_type_ref *params;
+            uint32_t param_count;
+            bool has_result;
+            turbowasm_component_type_ref result;
+        } function;
+        struct {
             uint64_t identity;
+            uint8_t rep_type;
+            bool has_destructor;
+            uint32_t destructor_index;
         } resource;
         struct {
             turbowasm_component_type_id resource_type;
@@ -79,10 +102,41 @@ bool turbowasm_component_type_graph_define_list(
     turbowasm_component_type_id id,
     turbowasm_component_type_id element_type);
 
+bool turbowasm_component_type_graph_define_list_ref(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_type_ref element_type);
+
+bool turbowasm_component_type_graph_define_function(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_type_ref *params,
+    uint32_t param_count,
+    bool has_result,
+    turbowasm_component_type_ref result);
+
 bool turbowasm_component_type_graph_define_resource(
     turbowasm_component_type_graph *graph,
     turbowasm_component_type_id id,
     uint64_t nominal_identity);
+
+bool turbowasm_component_type_graph_define_resource_full(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    uint64_t nominal_identity,
+    uint8_t rep_type,
+    bool has_destructor,
+    uint32_t destructor_index);
+
+turbowasm_component_type_ref turbowasm_component_type_ref_indexed(
+    turbowasm_component_type_id id);
+
+turbowasm_component_type_ref turbowasm_component_type_ref_inline(
+    turbowasm_component_type_kind kind);
+
+bool turbowasm_component_type_ref_validate(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref);
 
 bool turbowasm_component_type_graph_define_handle(
     turbowasm_component_type_graph *graph,

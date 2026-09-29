@@ -4,6 +4,9 @@
 #include <turbowasm/runtime.h>
 #include <turbowasm/status.h>
 
+#include "component_type_graph.h"
+
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -23,6 +26,34 @@ typedef struct turbowasm_component_core_module {
     uint32_t size;
 } turbowasm_component_core_module;
 
+typedef struct turbowasm_component_name {
+    const uint8_t *bytes;
+    uint32_t size;
+} turbowasm_component_name;
+
+typedef enum turbowasm_component_external_kind {
+    TURBOWASM_COMPONENT_EXTERN_CORE_MODULE = 0,
+    TURBOWASM_COMPONENT_EXTERN_FUNCTION = 1,
+    TURBOWASM_COMPONENT_EXTERN_VALUE = 2,
+    TURBOWASM_COMPONENT_EXTERN_TYPE = 3,
+    TURBOWASM_COMPONENT_EXTERN_COMPONENT = 4,
+    TURBOWASM_COMPONENT_EXTERN_INSTANCE = 5
+} turbowasm_component_external_kind;
+
+typedef struct turbowasm_component_import {
+    turbowasm_component_name name;
+    turbowasm_component_external_kind kind;
+    uint32_t type_index;
+} turbowasm_component_import;
+
+typedef struct turbowasm_component_export {
+    turbowasm_component_name name;
+    turbowasm_component_external_kind kind;
+    uint32_t item_index;
+    bool has_ascribed_type;
+    uint32_t type_index;
+} turbowasm_component_export;
+
 typedef struct turbowasm_component_binary {
     const uint8_t *bytes;
     size_t size;
@@ -34,6 +65,16 @@ typedef struct turbowasm_component_binary {
     turbowasm_component_core_module *core_modules;
     uint32_t core_module_count;
     uint32_t core_module_capacity;
+
+    turbowasm_component_type_graph type_graph;
+
+    turbowasm_component_import *imports;
+    uint32_t import_count;
+    uint32_t import_capacity;
+
+    turbowasm_component_export *exports;
+    uint32_t export_count;
+    uint32_t export_capacity;
 
     turbowasm_runtime_config config;
 } turbowasm_component_binary;
@@ -59,6 +100,16 @@ turbowasm_component_binary_section_at(
 
 const turbowasm_component_core_module *
 turbowasm_component_binary_core_module_at(
+    const turbowasm_component_binary *component,
+    uint32_t index);
+
+const turbowasm_component_import *
+turbowasm_component_binary_import_at(
+    const turbowasm_component_binary *component,
+    uint32_t index);
+
+const turbowasm_component_export *
+turbowasm_component_binary_export_at(
     const turbowasm_component_binary *component,
     uint32_t index);
 
