@@ -148,7 +148,8 @@ endif()
 
 if(TURBOWASM_ENABLE_WASI_ADAPTER)
   add_library(turbowasm_wasi
-    src/wasi_preview1.c)
+    src/wasi_preview1.c
+    src/wasi_fs.c)
   add_library(TurboWasm::WASI ALIAS turbowasm_wasi)
   set_target_properties(turbowasm_wasi PROPERTIES
     EXPORT_NAME WASI
