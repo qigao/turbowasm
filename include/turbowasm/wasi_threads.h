@@ -99,6 +99,23 @@ bool turbowasm_wasi_threads_group_fatal(
     turbowasm_trap *out_trap);
 
 /*
+ * Preview1 proc_exit callback compatible with turbowasm_wasi_proc_exit_fn.
+ * Use the public turbowasm_wasi_threads object as callback context.
+ *
+ * The first proc_exit publishes the group terminal, records its exit code,
+ * and wakes blocked shared-memory waiters without shutting down the borrowed
+ * executor.
+ */
+void turbowasm_wasi_threads_proc_exit(
+    void *context,
+    turbowasm_instance *caller,
+    uint32_t exit_code);
+
+bool turbowasm_wasi_threads_group_exit_code(
+    const turbowasm_wasi_threads *threads,
+    uint32_t *out_exit_code);
+
+/*
  * Callback-compatible proc_exit bridge for turbowasm_wasi_preview1_config.
  * Configure Preview1 with:
  *   allow_proc_exit = true
