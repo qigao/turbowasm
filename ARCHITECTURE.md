@@ -24,8 +24,15 @@ Salts::SIMD
   -> portable SIMD C ABI
   -> private SIMDe/native implementation
 
+Salts::Coroutine
+  -> private retained interpreter frames for backend-neutral resumable execution
+
 CFlow / Executor
-  -> reusable execution orchestration where the generic model fits
+  -> optional bounded scheduling and virtual/system clocks
+
+Salts::NativeIO
+  -> optional bounded OS async-I/O progress; NativeIO request slots remain the
+     operation/completion source of truth
 ```
 
 TurboWasm does **not** expose SIMDe types and does not vendor a second vector
@@ -165,19 +172,27 @@ remain implementation details behind the public handle.
 
 ```text
 binary/module bootstrap                 complete
-section + instruction validation        complete for current MVP surface
-baseline interpreter                    complete for current MVP surface
+retained typed validation metadata      implemented
+core interpreter semantics              implemented for qualified surface
 memory/table/reference/bulk semantics   implemented
-fuel + interruption contract            implemented
+multi-memory/custom-pages/ext-const     implemented + upstream qualified
+tail calls                              implemented + upstream qualified
+typed exception handling                implemented + upstream qualified
+relaxed SIMD                            implemented + upstream qualified
+fuel + interruption                     implemented
+restartable interpreter execution       implemented
+typed module/host linking               implemented
+optional CFlow deadline adapter         implemented
+optional NativeIO host-wait bridge      implemented
 lazy per-function MIR JIT               implemented
-scalar MIR lowering                     implemented
-helper-backed SIMD MIR                  implemented
-structured SIMD MIR                     implemented
+scalar/helper-backed SIMD MIR           implemented
+per-function fallback isolation         implemented
 executable MIR mapping budget           implemented
 
-WASI / generated host adapters          future work
-threads                                 future work
-exception handling                      future work
-relaxed SIMD                            future work
+WASI Preview 1 capability layer         in progress
+threads/shared memory/atomics           future work
+memory64                                unsupported
+WebAssembly GC                          future work
+Component Model                         future work
 native vector JIT backend               backend-dependent future work
 ```

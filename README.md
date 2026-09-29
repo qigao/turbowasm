@@ -10,10 +10,16 @@ The repository currently provides:
 - bounded WebAssembly binary reading and module admission;
 - retained validation metadata for sections, control signatures, functions,
   data/element segments, tables, memory, references, bulk operations and SIMD;
-- a baseline interpreter with structured control, direct/indirect calls,
-  memory/table semantics, reference values, bulk operations and SIMD;
+- a semantic-reference interpreter with structured control, direct/indirect
+  calls, memory/table/reference/bulk operations, SIMD, tail calls and typed
+  exception handling;
+- proposal-aware multi-memory, custom page sizes, extended const and relaxed
+  SIMD semantics with pinned upstream qualification;
+- typed tag/exception identity and cross-frame unwind across direct, indirect,
+  imported and tail-call boundaries;
 - shared fuel and interruption semantics across interpreted and compiled
-  execution;
+  execution, plus restartable interpreter execution with fuel/interruption/
+  host-wait yields;
 - scalar value kinds plus typed `v128` lane refinement;
 - CMeta-backed vector/mask semantic descriptors;
 - portable SIMD execution through `Salts::SIMD`;
@@ -21,12 +27,17 @@ The repository currently provides:
 - helper-backed SIMD MIR lowering with invocation-local private `v128` slots,
   including structured control flow;
 - an explicit MIR executable-mapping budget;
+- typed cross-instance linking for functions, globals, memories, tables and
+  tags, plus typed synchronous host-function providers;
+- optional `TurboWasm::CFlow` deadline/scheduling projection;
+- optional `TurboWasm::NativeIO` bounded async host-wait bridge;
 - C/C++ public ABI tests;
 - an installed CMake package and a small module-validation CLI.
 
-The current implementation is intentionally scoped. Threads, exception handling,
-relaxed SIMD, WASI/host binding adapters, and other post-MVP WebAssembly
-features are not implied by the completed baseline/JIT work.
+The current implementation is intentionally scoped. WASI Preview 1 capability
+adapters are being layered on the typed host boundary. Shared-memory threads/
+atomics, memory64, WebAssembly GC and the Component Model remain outside the
+completed Runtime surface.
 
 ## Dependency boundary
 
@@ -38,16 +49,22 @@ qigao/vcpkg-cache
 Salts 1.8.3
     -> CMeta
     -> Salts::SIMD (SIMDe is private)
+    -> Salts::Coroutine (private resumable Runtime implementation)
+    -> optional Salts::CFlow / Salts::NativeIO adapters
 
 SaltsUtils 4.1.3
     -> ecosystem companion baseline only
     -> not linked by TurboWasm
 
-TurboWasm
+TurboWasm::Runtime
     -> Wasm decoding / validation / sandbox semantics
     -> retained typed validation metadata
-    -> interpreter
+    -> interpreter + restartable execution
     -> optional lazy MIR JIT
+
+TurboWasm::CFlow / TurboWasm::NativeIO
+    -> optional host scheduling / async-I/O projections
+    -> do not enter the Runtime public link interface
 ```
 
 TurboWasm never includes SIMDe directly and does not expose MIR types through
