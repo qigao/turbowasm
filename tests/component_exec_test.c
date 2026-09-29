@@ -123,10 +123,11 @@ static void test_non_c5c1_forms_fail_closed(void) {
     turbowasm_component_binary component = {0};
 
     memcpy(bytes, executable_component, sizeof(bytes));
-    /* section2 argument-count byte */
+    /* section2 argument-count byte without the required arg payload */
     bytes[54] = 1u;
     assert(turbowasm_component_binary_load(
-               &component, bytes, sizeof(bytes)) == TURBOWASM_UNSUPPORTED);
+               &component, bytes, sizeof(bytes)) ==
+           TURBOWASM_MALFORMED_MODULE);
 
     memcpy(bytes, executable_component, sizeof(bytes));
     /* section8 canon opts vector count */
