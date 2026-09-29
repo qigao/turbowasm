@@ -125,6 +125,37 @@ const turbowasm_export_desc *turbowasm_module_export_at(
     return &impl->validation.exports[index];
 }
 
+size_t turbowasm_module_memory_count(
+    const turbowasm_module *module) {
+    const turbowasm_module_impl *impl =
+        turbowasm_module_impl_get(module);
+    return impl == NULL
+        ? 0u
+        : (size_t)impl->validation.memory_count;
+}
+
+bool turbowasm_module_memory_at(
+    const turbowasm_module *module,
+    size_t index,
+    turbowasm_memory_desc *out) {
+    const turbowasm_module_impl *impl =
+        turbowasm_module_impl_get(module);
+    const turbowasm_validation_memory *memory;
+
+    if (impl == NULL || out == NULL ||
+        index >= (size_t)impl->validation.memory_count)
+        return false;
+
+    memory = &impl->validation.memories[index];
+    out->minimum = memory->limits.minimum;
+    out->maximum = memory->limits.maximum;
+    out->page_size = memory->page_size;
+    out->has_maximum = memory->limits.has_maximum;
+    out->shared = memory->shared;
+    out->imported = memory->imported;
+    return true;
+}
+
 
 static const turbowasm_validation_func_type *
 turbowasm_module_reflected_function_type(

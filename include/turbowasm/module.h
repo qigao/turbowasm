@@ -67,6 +67,15 @@ typedef struct turbowasm_export_desc {
     uint32_t item_index;
 } turbowasm_export_desc;
 
+typedef struct turbowasm_memory_desc {
+    uint32_t minimum;
+    uint32_t maximum;
+    uint32_t page_size;
+    bool has_maximum;
+    bool shared;
+    bool imported;
+} turbowasm_memory_desc;
+
 typedef struct turbowasm_module_summary {
     uint32_t standard_section_mask;
     size_t custom_section_count;
@@ -129,6 +138,14 @@ size_t turbowasm_module_export_count(const turbowasm_module *module);
 const turbowasm_export_desc *turbowasm_module_export_at(
     const turbowasm_module *module,
     size_t index);
+
+size_t turbowasm_module_memory_count(
+    const turbowasm_module *module);
+
+bool turbowasm_module_memory_at(
+    const turbowasm_module *module,
+    size_t index,
+    turbowasm_memory_desc *out);
 
 #ifdef __cplusplus
 }
