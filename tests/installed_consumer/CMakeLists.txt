@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(TurboWasmInstalledConsumer LANGUAGES C)
+project(TurboWasmInstalledConsumer LANGUAGES C CXX)
 
 include(CTest)
 
@@ -14,6 +14,18 @@ set_target_properties(turbowasm_installed_consumer PROPERTIES
 
 add_test(NAME turbowasm_installed_consumer
          COMMAND turbowasm_installed_consumer)
+
+add_executable(turbowasm_installed_artifact_cpp_consumer
+  artifact_cpp_main.cpp)
+target_link_libraries(turbowasm_installed_artifact_cpp_consumer
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(
+  turbowasm_installed_artifact_cpp_consumer PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF)
+add_test(NAME turbowasm_installed_artifact_cpp_consumer
+         COMMAND turbowasm_installed_artifact_cpp_consumer)
 
 
 add_executable(turbowasm_installed_linker_consumer link_main.c)
