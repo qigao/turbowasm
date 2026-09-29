@@ -437,7 +437,8 @@ jobs:
             --work-dir "$RUNNER_TEMP/turbowasm-proposal-threads" \
             2>&1 | tee "$log"
 
-          grep -Eq 'PROPOSAL_SELECTOR name=threads commit=cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0 files=13' "$log"\n          grep -Eq 'CORE_CONFORMANCE pass=551 fail=0 unsupported=0 total=551 files=13' "$log"
+          grep -Eq 'PROPOSAL_SELECTOR name=threads commit=cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0 files=13' "$log"
+          grep -Eq 'CORE_CONFORMANCE pass=551 fail=0 unsupported=0 total=551 files=13' "$log"
           ! grep -q 'SPEC_RUNTIME_UNSUPPORTED_DETAIL' "$log"
 
 
