@@ -661,6 +661,7 @@ static turbowasm_status decode_canon_lift_section(
     turbowasm_component_binary *component,
     uint32_t current_types,
     uint32_t current_core_functions,
+    uint32_t current_core_memories,
     uint32_t *next_component_function_index) {
     uint32_t count;
     uint32_t i;
@@ -677,6 +678,10 @@ static turbowasm_status decode_canon_lift_section(
         uint8_t opcode;
         uint8_t sort;
         uint32_t option_count;
+        uint32_t option_index;
+        bool string_encoding_seen = false;
+
+        lift.string_encoding = TURBOWASM_COMPONENT_STRING_UTF8;
 
         if (!turbowasm_reader_u8(&section, &opcode) ||
             !turbowasm_reader_u8(&section, &sort))
@@ -692,8 +697,56 @@ static turbowasm_status decode_canon_lift_section(
                 &section, &option_count))
             return TURBOWASM_MALFORMED_MODULE;
 
-        if (option_count != 0u)
-            return TURBOWASM_UNSUPPORTED;
+        for (option_index = 0u;
+             option_index < option_count;
+             ++option_index) {
+            uint8_t option;
+
+            if (!turbowasm_reader_u8(&section, &option))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            switch (option) {
+                case 0x00u: /* string-encoding=utf8 */
+                    if (string_encoding_seen)
+                        return TURBOWASM_MALFORMED_MODULE;
+                    string_encoding_seen = true;
+                    lift.string_encoding =
+                        TURBOWASM_COMPONENT_STRING_UTF8;
+                    break;
+
+                case 0x01u: /* utf16 */
+                case 0x02u: /* latin1+utf16 */
+                    return TURBOWASM_UNSUPPORTED;
+
+                case 0x03u: /* memory */
+                    if (lift.has_memory ||
+                        !turbowasm_reader_uleb32(
+                            &section, &lift.memory_index) ||
+                        lift.memory_index >= current_core_memories)
+                        return TURBOWASM_MALFORMED_MODULE;
+                    lift.has_memory = true;
+                    break;
+
+                case 0x04u: /* realloc */
+                    if (lift.has_realloc ||
+                        !turbowasm_reader_uleb32(
+                            &section,
+                            &lift.realloc_function_index) ||
+                        lift.realloc_function_index >=
+                            current_core_functions)
+                        return TURBOWASM_MALFORMED_MODULE;
+                    lift.has_realloc = true;
+                    break;
+
+                case 0x05u: /* post-return */
+                case 0x06u: /* async */
+                case 0x07u: /* callback */
+                    return TURBOWASM_UNSUPPORTED;
+
+                default:
+                    return TURBOWASM_MALFORMED_MODULE;
+            }
+        }
 
         if (!turbowasm_reader_uleb32(
                 &section, &lift.type_index) ||
