@@ -16,7 +16,9 @@ enum {
     TURBOWASM_WASI_ERRNO_BADF = 8,
     TURBOWASM_WASI_ERRNO_FAULT = 21,
     TURBOWASM_WASI_ERRNO_INVAL = 28,
-    TURBOWASM_WASI_ERRNO_IO = 29
+    TURBOWASM_WASI_ERRNO_IO = 29,
+    TURBOWASM_WASI_ERRNO_NAMETOOLONG = 37,
+    TURBOWASM_WASI_ERRNO_NOTCAPABLE = 76
 };
 
 enum {
@@ -63,6 +65,8 @@ typedef uint32_t (*turbowasm_wasi_fd_read_fn)(
     size_t buffer_count,
     uint32_t *out_read);
 
+struct turbowasm_wasi_fs;
+
 typedef struct turbowasm_wasi_preview1 {
     void *impl;
 } turbowasm_wasi_preview1;
@@ -91,6 +95,9 @@ typedef struct turbowasm_wasi_preview1_config {
     bool allow_fd_read;
     turbowasm_wasi_fd_read_fn fd_read;
     void *fd_read_context;
+
+    bool allow_filesystem;
+    struct turbowasm_wasi_fs *filesystem;
 } turbowasm_wasi_preview1_config;
 
 /*

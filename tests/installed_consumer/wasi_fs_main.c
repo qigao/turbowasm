@@ -60,6 +60,27 @@ int main(void) {
         return 2;
     if (descriptor.generation == 0u)
         return 3;
+
+    {
+        turbowasm_wasi_preview1 wasi = {0};
+        turbowasm_wasi_preview1_config wasi_config = {
+            .allow_filesystem = true,
+            .filesystem = &filesystem
+        };
+        turbowasm_linker linker = {0};
+
+        if (turbowasm_wasi_preview1_init(
+                &wasi, &wasi_config) != TURBOWASM_OK)
+            return 6;
+        if (turbowasm_linker_init(&linker) != TURBOWASM_OK)
+            return 7;
+        if (turbowasm_wasi_preview1_define(
+                &wasi, &linker) != TURBOWASM_OK)
+            return 8;
+
+        turbowasm_linker_destroy(&linker);
+        turbowasm_wasi_preview1_destroy(&wasi);
+    }
     if (turbowasm_wasi_fs_close_descriptor(
             &filesystem, descriptor) !=
         TURBOWASM_WASI_ERRNO_SUCCESS)
