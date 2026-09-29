@@ -809,6 +809,8 @@ static turbowasm_status lift_string(
     status = read_pointer(instance, memory, address, &pointer);
     if (status != TURBOWASM_OK)
         return status;
+    if (address > UINT64_MAX - ptr_width)
+        return TURBOWASM_TRAPPED;
     status = read_pointer(
         instance, memory, address + ptr_width, &length);
     if (status != TURBOWASM_OK)
@@ -885,6 +887,8 @@ static turbowasm_status lower_string(
     status = write_pointer(instance, memory, address, pointer);
     if (status != TURBOWASM_OK)
         return status;
+    if (address > UINT64_MAX - ptr_width)
+        return TURBOWASM_TRAPPED;
     return write_pointer(
         instance, memory, address + ptr_width,
         (uint64_t)value->as.string.size);
@@ -920,6 +924,8 @@ static turbowasm_status lift_list(
     status = read_pointer(instance, memory, address, &pointer);
     if (status != TURBOWASM_OK)
         return status;
+    if (address > UINT64_MAX - ptr_width)
+        return TURBOWASM_TRAPPED;
     status = read_pointer(
         instance, memory, address + ptr_width, &count);
     if (status != TURBOWASM_OK)
@@ -1032,6 +1038,8 @@ static turbowasm_status lower_list(
     status = write_pointer(instance, memory, address, pointer);
     if (status != TURBOWASM_OK)
         return status;
+    if (address > UINT64_MAX - ptr_width)
+        return TURBOWASM_TRAPPED;
     return write_pointer(
         instance, memory, address + ptr_width, count);
 }
