@@ -637,6 +637,51 @@ uint32_t turbowasm_wasi_fs_path_unlink_file(
         impl == NULL ? NULL : impl->provider.path_unlink_file);
 }
 
+uint32_t turbowasm_wasi_fs_fd_readdir(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t fd,
+    uint64_t cookie,
+    turbowasm_wasi_fs_dirent *out_entry,
+    bool *out_has_entry) {
+    turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_mut(filesystem);
+    turbowasm_wasi_fs_slot *slot =
+        turbowasm_wasi_fs_find_fd(impl, fd);
+    uint32_t error;
+
+    if (out_entry == NULL || out_has_entry == NULL)
+        return TURBOWASM_WASI_ERRNO_INVAL;
+    *out_entry = (turbowasm_wasi_fs_dirent){0};
+    *out_has_entry = false;
+    if (slot == NULL)
+        return TURBOWASM_WASI_ERRNO_BADF;
+    if ((slot->rights_base &
+         TURBOWASM_WASI_RIGHT_FD_READDIR) == 0u)
+        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+    if (impl->provider.readdir == NULL)
+        return TURBOWASM_WASI_ERRNO_NOSYS;
+
+    error = impl->provider.readdir(
+        impl->provider.context,
+        slot->file,
+        cookie,
+        out_entry,
+        out_has_entry);
+    if (error != TURBOWASM_WASI_ERRNO_SUCCESS ||
+        !*out_has_entry)
+        return error;
+    if (out_entry->name_length >
+        TURBOWASM_WASI_FS_DIRENT_NAME_MAX)
+        return TURBOWASM_WASI_ERRNO_NAMETOOLONG;
+    if (out_entry->file_type >
+        TURBOWASM_WASI_FILETYPE_SYMBOLIC_LINK)
+        return TURBOWASM_WASI_ERRNO_INVAL;
+    if (out_entry->next_cookie == cookie)
+        return TURBOWASM_WASI_ERRNO_INVAL;
+
+    return TURBOWASM_WASI_ERRNO_SUCCESS;
+}
+
 uint32_t turbowasm_wasi_fs_fd_write(
     void *context,
     uint32_t fd,

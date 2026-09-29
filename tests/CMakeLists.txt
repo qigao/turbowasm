@@ -897,6 +897,19 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
            COMMAND turbowasm_wasi_fs_path_mutation_test)
 endif()
 
+if(TURBOWASM_ENABLE_WASI_ADAPTER)
+  add_executable(turbowasm_wasi_fs_readdir_test
+    wasi_fs_readdir_test.c)
+  target_link_libraries(turbowasm_wasi_fs_readdir_test
+    PRIVATE TurboWasm::WASI)
+  set_target_properties(turbowasm_wasi_fs_readdir_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi_fs_readdir_test
+           COMMAND turbowasm_wasi_fs_readdir_test)
+endif()
+
 add_executable(turbowasm_shared_memory_path_test
   shared_memory_path_test.c)
 target_link_libraries(turbowasm_shared_memory_path_test

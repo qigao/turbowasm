@@ -808,6 +808,93 @@ static turbowasm_status turbowasm_wasi_fd_filestat_get(
         results, result_capacity, result_count, trap, error);
 }
 
+static turbowasm_status turbowasm_wasi_fd_readdir(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    turbowasm_wasi_preview1_impl *impl =
+        (turbowasm_wasi_preview1_impl *)context;
+    turbowasm_host_memory_span buffer = {0};
+    turbowasm_host_memory_span bufused = {0};
+    uint64_t cookie;
+    size_t used = 0u;
+    uint32_t error;
+
+    if (impl == NULL || !impl->allow_filesystem ||
+        impl->filesystem == NULL || call == NULL ||
+        arguments == NULL || argument_count != 5u ||
+        arguments[0].kind != TURBOWASM_VALUE_I32 ||
+        arguments[1].kind != TURBOWASM_VALUE_I32 ||
+        arguments[2].kind != TURBOWASM_VALUE_I32 ||
+        arguments[3].kind != TURBOWASM_VALUE_I64 ||
+        arguments[4].kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    error = turbowasm_wasi_memory_span(
+        call,
+        (uint32_t)arguments[1].as.i32,
+        (uint32_t)arguments[2].as.i32,
+        &buffer);
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = turbowasm_wasi_memory_span(
+            call,
+            (uint32_t)arguments[4].as.i32,
+            4u,
+            &bufused);
+    }
+
+    cookie = (uint64_t)arguments[3].as.i64;
+    while (error == TURBOWASM_WASI_ERRNO_SUCCESS &&
+           used < buffer.size) {
+        turbowasm_wasi_fs_dirent entry = {0};
+        bool has_entry = false;
+        uint8_t record[24u + TURBOWASM_WASI_FS_DIRENT_NAME_MAX];
+        size_t record_size;
+        size_t remaining;
+        size_t copy_size;
+
+        error = turbowasm_wasi_fs_fd_readdir(
+            impl->filesystem,
+            (uint32_t)arguments[0].as.i32,
+            cookie,
+            &entry,
+            &has_entry);
+        if (error != TURBOWASM_WASI_ERRNO_SUCCESS ||
+            !has_entry)
+            break;
+
+        memset(record, 0, 24u);
+        turbowasm_wasi_store_u64(record + 0u, entry.next_cookie);
+        turbowasm_wasi_store_u64(record + 8u, entry.inode);
+        turbowasm_wasi_store_u32(record + 16u, entry.name_length);
+        record[20u] = entry.file_type;
+        if (entry.name_length != 0u) {
+            memcpy(record + 24u, entry.name, entry.name_length);
+        }
+
+        record_size = 24u + (size_t)entry.name_length;
+        remaining = buffer.size - used;
+        copy_size = record_size < remaining ? record_size : remaining;
+        memcpy(buffer.data + used, record, copy_size);
+        used += copy_size;
+        if (copy_size != record_size)
+            break;
+        cookie = entry.next_cookie;
+    }
+
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        turbowasm_wasi_store_u32(bufused.data, (uint32_t)used);
+    }
+
+    return turbowasm_wasi_return_errno(
+        results, result_capacity, result_count, trap, error);
+}
+
 static turbowasm_status turbowasm_wasi_fd_close(
     void *context,
     turbowasm_host_call *call,
@@ -1500,6 +1587,16 @@ turbowasm_status turbowasm_wasi_preview1_define(
         const turbowasm_host_function_type seek_type = {
             seek_params, 4u, result_type, 1u
         };
+        static const turbowasm_value_kind readdir_params[] = {
+            TURBOWASM_VALUE_I32,
+            TURBOWASM_VALUE_I32,
+            TURBOWASM_VALUE_I32,
+            TURBOWASM_VALUE_I64,
+            TURBOWASM_VALUE_I32
+        };
+        const turbowasm_host_function_type readdir_type = {
+            readdir_params, 5u, result_type, 1u
+        };
 
         status = turbowasm_linker_define_host_function(
             linker,
@@ -1567,6 +1664,16 @@ turbowasm_status turbowasm_wasi_preview1_define(
             turbowasm_wasi_name("fd_seek"),
             &seek_type,
             turbowasm_wasi_fd_seek,
+            impl);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        status = turbowasm_linker_define_host_function(
+            linker,
+            turbowasm_wasi_namespace(),
+            turbowasm_wasi_name("fd_readdir"),
+            &readdir_type,
+            turbowasm_wasi_fd_readdir,
             impl);
         if (status != TURBOWASM_OK)
             return status;
