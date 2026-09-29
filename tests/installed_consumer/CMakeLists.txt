@@ -68,6 +68,30 @@ if(TARGET TurboWasm::NativeIO)
 endif()
 
 if(TARGET TurboWasm::WASI)
+  get_target_property(_turbowasm_wasi_links
+    TurboWasm::WASI INTERFACE_LINK_LIBRARIES)
+  if("Salts::NativeIO" IN_LIST _turbowasm_wasi_links OR
+     "TurboWasm::NativeIO" IN_LIST _turbowasm_wasi_links)
+    message(FATAL_ERROR
+      "TurboWasm::WASI must remain NativeIO-free")
+  endif()
+endif()
+
+if(TARGET TurboWasm::WASINativeIO)
+  add_executable(turbowasm_installed_wasi_native_io_consumer
+    wasi_native_io_main.c)
+  target_link_libraries(turbowasm_installed_wasi_native_io_consumer
+    PRIVATE TurboWasm::WASINativeIO)
+  set_target_properties(
+    turbowasm_installed_wasi_native_io_consumer PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi_native_io_consumer
+           COMMAND turbowasm_installed_wasi_native_io_consumer)
+endif()
+
+if(TARGET TurboWasm::WASI)
   add_executable(turbowasm_installed_wasi_consumer wasi_main.c)
   target_link_libraries(turbowasm_installed_wasi_consumer
     PRIVATE TurboWasm::WASI)
