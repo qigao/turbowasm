@@ -1,0 +1,113 @@
+#ifndef TURBOWASM_COMPONENT_TYPE_GRAPH_H
+#define TURBOWASM_COMPONENT_TYPE_GRAPH_H
+
+#include <cmeta/cmeta.h>
+
+#include <stdbool.h>
+#include <stdint.h>
+
+typedef uint32_t turbowasm_component_type_id;
+
+enum {
+    TURBOWASM_COMPONENT_TYPE_INVALID = UINT32_MAX
+};
+
+typedef enum turbowasm_component_type_kind {
+    TURBOWASM_COMPONENT_TYPE_UNDEFINED = 0,
+    TURBOWASM_COMPONENT_TYPE_BOOL,
+    TURBOWASM_COMPONENT_TYPE_S8,
+    TURBOWASM_COMPONENT_TYPE_U8,
+    TURBOWASM_COMPONENT_TYPE_S16,
+    TURBOWASM_COMPONENT_TYPE_U16,
+    TURBOWASM_COMPONENT_TYPE_S32,
+    TURBOWASM_COMPONENT_TYPE_U32,
+    TURBOWASM_COMPONENT_TYPE_S64,
+    TURBOWASM_COMPONENT_TYPE_U64,
+    TURBOWASM_COMPONENT_TYPE_F32,
+    TURBOWASM_COMPONENT_TYPE_F64,
+    TURBOWASM_COMPONENT_TYPE_CHAR,
+    TURBOWASM_COMPONENT_TYPE_STRING,
+    TURBOWASM_COMPONENT_TYPE_LIST,
+    TURBOWASM_COMPONENT_TYPE_RESOURCE,
+    TURBOWASM_COMPONENT_TYPE_OWN,
+    TURBOWASM_COMPONENT_TYPE_BORROW
+} turbowasm_component_type_kind;
+
+typedef struct turbowasm_component_type {
+    turbowasm_component_type_kind kind;
+    union {
+        struct {
+            turbowasm_component_type_id element_type;
+        } list;
+        struct {
+            uint64_t identity;
+        } resource;
+        struct {
+            turbowasm_component_type_id resource_type;
+        } handle;
+    } as;
+} turbowasm_component_type;
+
+typedef struct turbowasm_component_type_graph {
+    turbowasm_component_type *types;
+    uint32_t count;
+} turbowasm_component_type_graph;
+
+/*
+ * Allocate an exact number of stable type-id slots. The graph owns all nodes
+ * but never owns Core Wasm validation metadata. Allocation uses the current
+ * TurboWasm runtime allocation scope.
+ */
+bool turbowasm_component_type_graph_allocate(
+    turbowasm_component_type_graph *graph,
+    uint32_t count);
+
+void turbowasm_component_type_graph_destroy(
+    turbowasm_component_type_graph *graph);
+
+bool turbowasm_component_type_graph_define_scalar(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_type_kind kind);
+
+bool turbowasm_component_type_graph_define_string(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id);
+
+bool turbowasm_component_type_graph_define_list(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_type_id element_type);
+
+bool turbowasm_component_type_graph_define_resource(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    uint64_t nominal_identity);
+
+bool turbowasm_component_type_graph_define_handle(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_type_kind kind,
+    turbowasm_component_type_id resource_type);
+
+const turbowasm_component_type *
+turbowasm_component_type_graph_get(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id);
+
+/*
+ * Validate all indexed references and resource nominal identities. This is
+ * intentionally independent of Core validation_context.
+ */
+bool turbowasm_component_type_graph_validate(
+    const turbowasm_component_type_graph *graph);
+
+/*
+ * Read-only CMeta projection for Component scalar carriers. String/list/
+ * resource/own/borrow deliberately return NULL: their Component semantics are
+ * not equivalent to a single C ABI type.
+ */
+const cmeta_type_desc *turbowasm_component_scalar_cmeta_type(
+    turbowasm_component_type_kind kind);
+
+#endif /* TURBOWASM_COMPONENT_TYPE_GRAPH_H */
