@@ -60,6 +60,18 @@ typedef struct turbowasm_wasi_fs_dirent {
     uint8_t name[TURBOWASM_WASI_FS_DIRENT_NAME_MAX];
 } turbowasm_wasi_fs_dirent;
 
+/*
+ * Close ownership contract:
+ *
+ * - returning an errno means the provider identity is still valid and the
+ *   caller may retry close;
+ * - a backend whose native close consumes its identity even when the native
+ *   close reports an error must translate that ownership-consuming close to
+ *   TURBOWASM_WASI_ERRNO_SUCCESS.
+ *
+ * This prevents the descriptor table from retaining a provider identity that
+ * no longer exists.
+ */
 typedef uint32_t (*turbowasm_wasi_fs_close_fn)(
     void *context,
     turbowasm_wasi_fs_file file);
@@ -165,7 +177,8 @@ turbowasm_status turbowasm_wasi_fs_init(
 
 /*
  * Destroy requires all descriptors to have been closed explicitly.
- * This keeps provider close errors observable and exactly-once.
+ * Retriable provider close errors remain observable and exactly-once; an
+ * ownership-consuming provider reports success once its identity is consumed.
  */
 turbowasm_status turbowasm_wasi_fs_destroy(
     turbowasm_wasi_fs *filesystem);
