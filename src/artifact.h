@@ -4,6 +4,7 @@
 #include <turbowasm/module.h>
 
 #include "sha256.h"
+#include "validation_context.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -63,5 +64,13 @@ turbowasm_status turbowasm_artifact_inspect(
     const uint8_t *source,
     size_t source_size,
     turbowasm_artifact_info *out);
+
+turbowasm_status turbowasm_artifact_restore(
+    const uint8_t *artifact,
+    size_t artifact_size,
+    const uint8_t *source,
+    size_t source_size,
+    turbowasm_module_summary *out_summary,
+    turbowasm_validation_context *out_validation);
 
 #endif
