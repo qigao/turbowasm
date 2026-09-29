@@ -3867,6 +3867,48 @@ bool turbowasm_host_call_can_wait(
            impl->execution->host_wait != NULL;
 }
 
+turbowasm_status turbowasm_host_call_memory_span(
+    turbowasm_host_call *call,
+    uint32_t memory_index,
+    uint32_t address,
+    size_t length,
+    turbowasm_host_memory_span *out_span,
+    turbowasm_trap *trap) {
+    turbowasm_host_call_impl *impl;
+    uint8_t *bytes = NULL;
+    turbowasm_status status;
+
+    if (call == NULL || call->impl == NULL ||
+        out_span == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    out_span->data = NULL;
+    out_span->size = 0u;
+    *trap = TURBOWASM_TRAP_NONE;
+
+    impl = (turbowasm_host_call_impl *)call->impl;
+    if (impl->caller.impl == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = turbowasm_instance_memory_bounds(
+        (const turbowasm_instance_impl *)impl->caller.impl,
+        memory_index,
+        address,
+        0u,
+        length,
+        &bytes);
+    if (status == TURBOWASM_TRAPPED) {
+        *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        return status;
+    }
+    if (status != TURBOWASM_OK)
+        return status;
+
+    out_span->data = bytes;
+    out_span->size = length;
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_host_call_wait(
     turbowasm_host_call *call,
     uintptr_t operation_token,

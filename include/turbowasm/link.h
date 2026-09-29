@@ -56,6 +56,28 @@ turbowasm_instance *turbowasm_host_call_instance(
 bool turbowasm_host_call_can_wait(
     const turbowasm_host_call *call);
 
+typedef struct turbowasm_host_memory_span {
+    uint8_t *data;
+    size_t size;
+} turbowasm_host_memory_span;
+
+/*
+ * Project one memory32 guest range through canonical Runtime memory
+ * resolution/bounds checks. On OOB, returns TURBOWASM_TRAPPED and sets trap to
+ * TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS.
+ *
+ * The span is borrowed from the live guest memory and remains valid while the
+ * same host call is active (including resumable host wait), provided the
+ * instance is not concurrently executed/grown from another owner.
+ */
+turbowasm_status turbowasm_host_call_memory_span(
+    turbowasm_host_call *call,
+    uint32_t memory_index,
+    uint32_t address,
+    size_t length,
+    turbowasm_host_memory_span *out_span,
+    turbowasm_trap *trap);
+
 /*
  * Suspend the current async-capable host callback after an external operation
  * has been accepted. This only succeeds inside a resumable execution. The same
