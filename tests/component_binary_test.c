@@ -342,7 +342,11 @@ static void test_repeated_type_sections_preserve_index_space(void) {
 static void test_semantic_unsupported_and_invalid_forms(void) {
     static const uint8_t alias[] = {
         COMPONENT_HEADER,
-        0x06,0x01,0x00
+        /* one unsupported outer alias of a core func */
+        0x06,0x06,0x01,
+        0x00,0x00, /* core func sort */
+        0x02,      /* outer alias */
+        0x00,0x00
     };
     static const uint8_t async_func[] = {
         COMPONENT_HEADER,
