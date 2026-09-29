@@ -818,6 +818,15 @@ static turbowasm_status lift_string(
         length > (uint64_t)SIZE_MAX)
         return TURBOWASM_TRAPPED;
 
+    {
+        uint8_t *range = NULL;
+        status = turbowasm_instance_memory_bounds(
+            instance, memory->memory_index,
+            pointer, 0u, (size_t)length, &range);
+        if (status != TURBOWASM_OK)
+            return status;
+    }
+
     if (length != 0u) {
         copy = (uint8_t *)turbowasm_rt_malloc((size_t)length);
         if (copy == NULL)
@@ -926,21 +935,18 @@ static turbowasm_status lift_list(
         pointer % layout.alignment != 0u)
         return TURBOWASM_TRAPPED;
 
-    if (count != 0u) {
-        uint8_t probe;
-        status = read_memory(
+    {
+        uint8_t *range = NULL;
+        if (bytes > (uint64_t)SIZE_MAX)
+            return TURBOWASM_TRAPPED;
+        status = turbowasm_instance_memory_bounds(
             instance, memory->memory_index,
-            pointer, &probe, 1u);
+            pointer, 0u, (size_t)bytes, &range);
         if (status != TURBOWASM_OK)
             return status;
-        if (bytes != 0u) {
-            status = read_memory(
-                instance, memory->memory_index,
-                pointer + bytes - 1u, &probe, 1u);
-            if (status != TURBOWASM_OK)
-                return status;
-        }
+    }
 
+    if (count != 0u) {
         items = (turbowasm_component_value *)turbowasm_rt_calloc(
             (size_t)count, sizeof(*items));
         if (items == NULL)
@@ -1040,6 +1046,7 @@ static turbowasm_status lift_value_inner(
     turbowasm_component_value *out) {
     turbowasm_component_type_kind kind;
     const turbowasm_component_type *type;
+    size_t width;
     turbowasm_status status;
 
     if (out == NULL)
@@ -1051,7 +1058,7 @@ static turbowasm_status lift_value_inner(
     if (status != TURBOWASM_OK)
         return status;
 
-    if (scalar_width(kind, &(size_t){0}) == TURBOWASM_OK)
+    if (scalar_width(kind, &width) == TURBOWASM_OK)
         return lift_scalar(
             kind, instance, memory->memory_index, address, out);
 
