@@ -2,6 +2,8 @@
 
 #include "instance_internal.h"
 
+#include <salts/thread.h>
+
 #ifdef TURBOWASM_SPEC_ENABLE_MIR
 #include "jit/mir_backend.h"
 #endif
@@ -23,11 +25,28 @@ typedef struct spec_slot {
     bool loaded;
     bool ready;
     bool unsupported;
+    bool borrowed;
 } spec_slot;
 
-typedef struct spec_state {
+typedef struct spec_state spec_state;
+
+typedef struct spec_thread {
+    char *name_hex;
+    char *manifest_path;
+    salts_thread_t handle;
+    spec_state *child;
+    int rc;
+    bool joined;
+    bool aggregated;
+} spec_thread;
+
+struct spec_state {
     spec_slot **slots;
     size_t slot_count;
+
+    spec_thread **threads;
+    size_t thread_count;
+    size_t thread_capacity;
 
     /*
      * WebAssembly store allocations created by assertions that trap during
@@ -50,7 +69,7 @@ typedef struct spec_state {
     bool printed_first_failure;
     bool printed_first_unsupported;
     bool printed_first_runtime_unsupported;
-} spec_state;
+};
 
 typedef enum spec_expected_pattern {
     SPEC_EXPECT_EXACT = 0,
