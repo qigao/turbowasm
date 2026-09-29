@@ -1122,6 +1122,17 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
   set_tests_properties(turbowasm_wasi_threads_group_test PROPERTIES
     TIMEOUT 20)
 
+  add_executable(turbowasm_wasi_threads_header_cpp_test
+    wasi_threads_header_cpp_test.cpp)
+  target_link_libraries(turbowasm_wasi_threads_header_cpp_test
+    PRIVATE TurboWasm::WASIThreads)
+  set_target_properties(turbowasm_wasi_threads_header_cpp_test PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi_threads_header_cpp_test
+           COMMAND turbowasm_wasi_threads_header_cpp_test)
+
   if(TURBOWASM_ENABLE_WASI_ADAPTER)
     add_executable(turbowasm_wasi_threads_proc_exit_test
       wasi_threads_proc_exit_test.c)

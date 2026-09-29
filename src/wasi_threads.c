@@ -648,3 +648,10 @@ bool turbowasm_wasi_threads_group_exit_code(
     salts_mutex_unlock(&impl->mutex);
     return true;
 }
+
+bool turbowasm_wasi_threads_group_exit(
+    const turbowasm_wasi_threads *threads,
+    uint32_t *out_exit_code) {
+    return turbowasm_wasi_threads_group_exit_code(
+        threads, out_exit_code);
+}
