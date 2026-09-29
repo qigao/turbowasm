@@ -88,6 +88,10 @@ if(TARGET TurboWasm::WASI)
     message(FATAL_ERROR
       "TurboWasm::WASI must remain littlefs-adapter-free")
   endif()
+  if("TurboWasm::WASIHostFS" IN_LIST _turbowasm_wasi_links)
+    message(FATAL_ERROR
+      "TurboWasm::WASI must remain host-filesystem-adapter-free")
+  endif()
   foreach(_turbowasm_forbidden_tooling_target IN ITEMS
       Salts::DataBindProducer
       Salts::DataBind
@@ -148,6 +152,27 @@ if(TARGET TurboWasm::WASI)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_installed_wasi_fs_consumer
            COMMAND turbowasm_installed_wasi_fs_consumer)
+endif()
+
+if(TARGET TurboWasm::WASIHostFS)
+  get_target_property(_turbowasm_wasi_host_fs_links
+    TurboWasm::WASIHostFS INTERFACE_LINK_LIBRARIES)
+  if(NOT "TurboWasm::WASI" IN_LIST _turbowasm_wasi_host_fs_links)
+    message(FATAL_ERROR
+      "TurboWasm::WASIHostFS must depend on TurboWasm::WASI")
+  endif()
+
+  add_executable(turbowasm_installed_wasi_host_fs_consumer
+    wasi_host_fs_main.c)
+  target_link_libraries(turbowasm_installed_wasi_host_fs_consumer
+    PRIVATE TurboWasm::WASIHostFS)
+  set_target_properties(
+    turbowasm_installed_wasi_host_fs_consumer PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi_host_fs_consumer
+           COMMAND turbowasm_installed_wasi_host_fs_consumer)
 endif()
 
 if(TARGET TurboWasm::WASILittleFS)

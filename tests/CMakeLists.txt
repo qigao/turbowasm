@@ -965,6 +965,33 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
            COMMAND turbowasm_wasi_fs_contract_fake_test)
 endif()
 
+if(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER)
+  add_executable(turbowasm_wasi_fs_contract_host_test
+    wasi_fs_contract.c
+    wasi_fs_contract_host_test.c)
+  target_link_libraries(turbowasm_wasi_fs_contract_host_test
+    PRIVATE TurboWasm::WASIHostFS)
+  set_target_properties(
+    turbowasm_wasi_fs_contract_host_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi_fs_contract_host_test
+           COMMAND turbowasm_wasi_fs_contract_host_test)
+
+  add_executable(turbowasm_wasi_fs_host_security_test
+    wasi_fs_host_security_test.c)
+  target_link_libraries(turbowasm_wasi_fs_host_security_test
+    PRIVATE TurboWasm::WASIHostFS)
+  set_target_properties(
+    turbowasm_wasi_fs_host_security_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi_fs_host_security_test
+           COMMAND turbowasm_wasi_fs_host_security_test)
+endif()
+
 if(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER)
   add_executable(turbowasm_wasi_fs_contract_littlefs_test
     wasi_fs_contract.c
