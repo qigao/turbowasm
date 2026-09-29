@@ -668,7 +668,7 @@ turbowasm_status turbowasm_component_core_call_adapter_init_with_resources(
         adapter->uses_memory = true;
 
     if (uses_resources && resources == NULL) {
-        status = TURBOWASM_INVALID_ARGUMENT;
+        status = TURBOWASM_UNSUPPORTED;
         goto fail;
     }
 
