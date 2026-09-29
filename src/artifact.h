@@ -5,6 +5,7 @@
 
 #include "sha256.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -14,7 +15,8 @@ enum {
 };
 
 enum {
-    TURBOWASM_ARTIFACT_SECTION_SUMMARY = 1u
+    TURBOWASM_ARTIFACT_SECTION_SUMMARY = 1u,
+    TURBOWASM_ARTIFACT_SECTION_CORE_METADATA = 2u
 };
 
 typedef struct turbowasm_artifact_info {
@@ -25,6 +27,13 @@ typedef struct turbowasm_artifact_info {
     uint8_t source_sha256[TURBOWASM_SHA256_DIGEST_SIZE];
     uint32_t section_count;
     turbowasm_module_summary summary;
+
+    bool has_core_metadata;
+    uint32_t metadata_type_count;
+    uint32_t metadata_function_count;
+    uint32_t metadata_import_count;
+    uint32_t metadata_export_count;
+    uint32_t metadata_memory_count;
 } turbowasm_artifact_info;
 
 uint64_t turbowasm_artifact_current_feature_fingerprint(void);
