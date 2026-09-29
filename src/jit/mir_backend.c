@@ -1765,7 +1765,24 @@ static bool turbowasm_mir_is_function_eligible(
     const struct turbowasm_validation_context *validation,
     uint32_t function_index,
     const struct turbowasm_validation_function *function) {
+    uint32_t memory_index;
+
     (void)context;
+    if (validation == NULL)
+        return false;
+
+    /*
+     * Shared-memory execution currently relies on interpreter guarded access.
+     * Until MIR has an equivalent backing/locking contract, keep the whole
+     * module on the semantic reference backend.
+     */
+    for (memory_index = 0u;
+         memory_index < validation->memory_count;
+         ++memory_index) {
+        if (validation->memories[memory_index].shared)
+            return false;
+    }
+
     return turbowasm_mir_scan_scalar_locals(
                validation, function_index, function, NULL, NULL) ||
            turbowasm_mir_scan_structured_scalar(

@@ -140,7 +140,8 @@ static void test_shared_storage_lifecycle_and_access(void) {
                &raw) == TURBOWASM_UNSUPPORTED);
     assert(turbowasm_instance_memory_grow(
                &fixture.instance,
-               0u, 0u, &previous) == TURBOWASM_UNSUPPORTED);
+               0u, 0u, &previous) == TURBOWASM_OK);
+    assert(previous == 1u);
 
     fixture_destroy(&fixture, 1u);
     assert(fixture.memories[0].data == NULL);

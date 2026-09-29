@@ -516,14 +516,6 @@ static turbowasm_status turbowasm_allocate_memories(
             (uint64_t)source->limits.minimum *
             source->page_size;
 
-        /*
-         * T2a provides the guarded storage substrate but deliberately leaves
-         * T1's execution gate in place until every Wasm access path is
-         * migrated in T2b.
-         */
-        if (source->shared)
-            return TURBOWASM_UNSUPPORTED;
-
         if (source->imported) {
             if (index >= instance->linked_memory_count ||
                 instance->linked_memories[index].provider == NULL)
@@ -541,7 +533,7 @@ static turbowasm_status turbowasm_allocate_memories(
         {
             turbowasm_status status =
                 turbowasm_instance_memory_storage_init(
-                    memory, false, (size_t)bytes);
+                    memory, source->shared, (size_t)bytes);
             if (status != TURBOWASM_OK)
                 return status;
         }
@@ -1486,7 +1478,11 @@ turbowasm_status turbowasm_instance_memory_size(
     if (memory == NULL)
         return TURBOWASM_UNSUPPORTED;
 
+    turbowasm_instance_memory_rdlock(
+        (turbowasm_instance_memory *)memory);
     *out_pages = memory->pages;
+    turbowasm_instance_memory_rdunlock(
+        (turbowasm_instance_memory *)memory);
     return TURBOWASM_OK;
 }
 
@@ -1505,9 +1501,13 @@ turbowasm_status turbowasm_instance_memory_limits(
     if (memory == NULL)
         return TURBOWASM_UNSUPPORTED;
 
+    turbowasm_instance_memory_rdlock(
+        (turbowasm_instance_memory *)memory);
     out_limits->minimum = memory->pages;
     out_limits->maximum = memory->maximum_pages;
     out_limits->has_maximum = memory->has_maximum;
+    turbowasm_instance_memory_rdunlock(
+        (turbowasm_instance_memory *)memory);
     return TURBOWASM_OK;
 }
 
@@ -1531,8 +1531,8 @@ turbowasm_status turbowasm_instance_memory_grow(
         instance, memory_index);
     if (memory == NULL)
         return TURBOWASM_UNSUPPORTED;
-    if (memory->shared)
-        return TURBOWASM_UNSUPPORTED;
+
+    turbowasm_instance_memory_wrlock(memory);
 
     *out_previous_pages = memory->pages;
 
@@ -1545,6 +1545,7 @@ turbowasm_status turbowasm_instance_memory_grow(
         (memory->has_maximum &&
          next_pages > memory->maximum_pages)) {
         *out_previous_pages = UINT32_MAX;
+        turbowasm_instance_memory_wrunlock(memory);
         return TURBOWASM_OK;
     }
 
@@ -1553,11 +1554,13 @@ turbowasm_status turbowasm_instance_memory_grow(
         (uint64_t)memory->pages * memory->page_size;
     if (next_bytes > (uint64_t)SIZE_MAX) {
         *out_previous_pages = UINT32_MAX;
+        turbowasm_instance_memory_wrunlock(memory);
         return TURBOWASM_OK;
     }
 
     if (next_bytes == 0u) {
         memory->pages = (uint32_t)next_pages;
+        turbowasm_instance_memory_wrunlock(memory);
         return TURBOWASM_OK;
     }
 
@@ -1565,6 +1568,7 @@ turbowasm_status turbowasm_instance_memory_grow(
         memory->data, (size_t)next_bytes);
     if (grown == NULL) {
         *out_previous_pages = UINT32_MAX;
+        turbowasm_instance_memory_wrunlock(memory);
         return TURBOWASM_OK;
     }
 
@@ -1575,6 +1579,7 @@ turbowasm_status turbowasm_instance_memory_grow(
 
     memory->data = grown;
     memory->pages = (uint32_t)next_pages;
+    turbowasm_instance_memory_wrunlock(memory);
     return TURBOWASM_OK;
 }
 

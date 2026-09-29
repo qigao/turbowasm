@@ -91,10 +91,11 @@ static void test_shared_scalar_load_store(void) {
     assert(turbowasm_module_load_borrowed(
                &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
 
-    /* T2b still does not remove the public T1 gate. */
+    /* T2c enables the same shared module through the public path. */
     assert(turbowasm_instance_create(
-               &public_instance, &module) == TURBOWASM_UNSUPPORTED);
-    assert(public_instance.impl == NULL);
+               &public_instance, &module) == TURBOWASM_OK);
+    assert(public_instance.impl != NULL);
+    turbowasm_instance_destroy(&public_instance);
 
     synthetic_shared_instance_init(
         &instance, &memory, &module);
