@@ -657,6 +657,123 @@ done:
     return status;
 }
 
+static turbowasm_status initialize_resource_state(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary) {
+    uint32_t i;
+
+    if (exec == NULL || binary == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!turbowasm_component_resource_table_init(
+            &exec->resource_table, 0u))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    exec->resource_binding_count = binary->type_graph.count;
+    if (exec->resource_binding_count != 0u) {
+        if ((size_t)exec->resource_binding_count >
+                SIZE_MAX / sizeof(*exec->resource_bindings) ||
+            (size_t)exec->resource_binding_count >
+                SIZE_MAX / sizeof(*exec->resource_contexts))
+            return TURBOWASM_OUT_OF_MEMORY;
+
+        exec->resource_bindings =
+            (turbowasm_component_resource_binding *)
+                turbowasm_rt_calloc(
+                    exec->resource_binding_count,
+                    sizeof(*exec->resource_bindings));
+        exec->resource_contexts =
+            (turbowasm_component_exec_resource_context *)
+                turbowasm_rt_calloc(
+                    exec->resource_binding_count,
+                    sizeof(*exec->resource_contexts));
+        if (exec->resource_bindings == NULL ||
+            exec->resource_contexts == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    if (binary->resource_builtin_count != 0u) {
+        if ((size_t)binary->resource_builtin_count >
+            SIZE_MAX / sizeof(*exec->resource_builtin_contexts))
+            return TURBOWASM_OUT_OF_MEMORY;
+
+        exec->resource_builtin_contexts =
+            (turbowasm_component_exec_resource_builtin_context *)
+                turbowasm_rt_calloc(
+                    binary->resource_builtin_count,
+                    sizeof(*exec->resource_builtin_contexts));
+        if (exec->resource_builtin_contexts == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    for (i = 0u; i < binary->resource_builtin_count; ++i) {
+        const turbowasm_component_resource_builtin *builtin =
+            &binary->resource_builtins[i];
+        const turbowasm_component_type *resource_type;
+        turbowasm_component_resource_binding *binding;
+        turbowasm_component_exec_resource_context *resource_context;
+        turbowasm_component_exec_core_function *core_function;
+        turbowasm_status status;
+
+        if (builtin->resource_type >=
+                exec->resource_binding_count ||
+            builtin->core_function_index >=
+                exec->core_function_count)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        resource_type = turbowasm_component_type_graph_get(
+            &binary->type_graph, builtin->resource_type);
+        if (resource_type == NULL ||
+            resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        if (resource_type->as.resource.has_destructor &&
+            resource_type->as.resource.destructor_index >=
+                exec->core_function_count)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        binding =
+            &exec->resource_bindings[builtin->resource_type];
+        resource_context =
+            &exec->resource_contexts[builtin->resource_type];
+
+        if (!binding->initialized) {
+            resource_context->exec = exec;
+            resource_context->resource_type =
+                builtin->resource_type;
+
+            status = turbowasm_component_resource_binding_init(
+                binding,
+                &binary->type_graph,
+                builtin->resource_type,
+                &exec->resource_table,
+                resource_type->as.resource.has_destructor
+                    ? component_resource_destructor_bridge
+                    : NULL,
+                resource_type->as.resource.has_destructor
+                    ? resource_context
+                    : NULL);
+            if (status != TURBOWASM_OK)
+                return status;
+        }
+
+        exec->resource_builtin_contexts[i].binding = binding;
+        exec->resource_builtin_contexts[i].kind = builtin->kind;
+
+        core_function =
+            &exec->core_functions[builtin->core_function_index];
+        if (core_function->kind !=
+            TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INVALID)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        core_function->kind =
+            TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_RESOURCE_BUILTIN;
+        core_function->resource_builtin_index = i;
+    }
+
+    return TURBOWASM_OK;
+}
+
 static void destroy_partial(
     turbowasm_component_exec *exec) {
     uint32_t i;
