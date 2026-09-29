@@ -246,6 +246,41 @@ allocation helpers, so #300 per-allocation limits apply. Async borrow scopes are
 not introduced here; C4 exposes lend acquire/release state only, while
 task/subtask borrow-scope lifecycle remains deferred to the concurrency layer.
 
+## C5a Core call composition
+
+The first composition adapter implements the synchronous `canon lift`
+direction for the retained scalar/string/list subset.
+
+A binding borrows:
+
+- one retained Component function type;
+- one ordinary `turbowasm_instance` and Core function index;
+- canonical memory/realloc options when the flattened ABI requires memory.
+
+Initialization computes the pinned flat signature and requires the target Core
+function's reflected parameter/result carriers to match exactly. Invocation
+then performs:
+
+```text
+Component values
+    -> canonical lower_flat / indirect parameter tuple
+    -> turbowasm_instance_invoke()
+    -> canonical lift_flat / indirect result memory
+    -> Component value
+```
+
+The adapter never calls interpreter/JIT internals directly and never creates a
+second Core execution path. Core traps/status values propagate through the
+ordinary public invocation contract.
+
+Dynamic string/list arguments allocate through the explicit guest realloc
+option. More than 16 flat parameters use the canonical indirect tuple layout.
+A string/list result uses the single canonical result pointer. memory32 and
+memory64 bindings are distinguished by the selected Core memory type.
+
+Resource `own`/`borrow` transfer is intentionally rejected in C5a; it is
+composed with the C4 generation-safe resource table in C5b.
+
 ## Deferred work
 
 C1 intentionally does not implement:
