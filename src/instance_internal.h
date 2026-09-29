@@ -35,12 +35,13 @@ typedef struct turbowasm_instance_memory {
     turbowasm_memory_waiter *waiters;
     uint32_t waiter_count;
     uint32_t waiter_capacity;
-    uint32_t pages;
-    uint32_t maximum_pages;
+    uint64_t pages;
+    uint64_t maximum_pages;
     uint32_t page_size;
     size_t resource_max_bytes;
     bool has_maximum;
     bool shared;
+    bool memory64;
     bool access_lock_initialized;
     bool waiter_mutex_initialized;
     bool storage_initialized;
@@ -322,33 +323,33 @@ turbowasm_status turbowasm_instance_memory_shared(
 turbowasm_status turbowasm_instance_memory_read_bytes(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     void *out,
     size_t width);
 
 turbowasm_status turbowasm_instance_memory_write_bytes(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     const void *source,
     size_t width);
 
 turbowasm_status turbowasm_instance_memory_fill_bytes(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t destination,
+    uint64_t destination,
     uint8_t value,
-    size_t length);
+    uint64_t length);
 
 turbowasm_status turbowasm_instance_memory_copy_bytes(
     turbowasm_instance_impl *instance,
     uint32_t destination_memory,
     uint32_t source_memory,
-    uint32_t destination,
-    uint32_t source,
-    size_t length);
+    uint64_t destination,
+    uint64_t source,
+    uint64_t length);
 
 turbowasm_status turbowasm_instance_memory_atomic(
     turbowasm_instance_impl *instance,
@@ -409,10 +410,15 @@ turbowasm_status turbowasm_threads_sc_fence(void);
 turbowasm_status turbowasm_instance_memory_bounds(
     const turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     size_t width,
     uint8_t **out);
+
+turbowasm_status turbowasm_instance_memory_size64(
+    const turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint64_t *out_pages);
 
 turbowasm_status turbowasm_instance_memory_size(
     const turbowasm_instance_impl *instance,
@@ -423,6 +429,12 @@ turbowasm_status turbowasm_instance_memory_limits(
     const turbowasm_instance_impl *instance,
     uint32_t memory_index,
     turbowasm_instance_limits *out_limits);
+
+turbowasm_status turbowasm_instance_memory_grow64(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint64_t delta_pages,
+    uint64_t *out_previous_pages);
 
 turbowasm_status turbowasm_instance_memory_grow(
     turbowasm_instance_impl *instance,
@@ -452,7 +464,7 @@ turbowasm_status turbowasm_instance_memory_init(
     turbowasm_instance_impl *instance,
     uint32_t data_index,
     uint32_t memory_index,
-    uint32_t destination,
+    uint64_t destination,
     uint32_t source,
     uint32_t length);
 
@@ -464,16 +476,16 @@ turbowasm_status turbowasm_instance_memory_copy(
     turbowasm_instance_impl *instance,
     uint32_t destination_memory,
     uint32_t source_memory,
-    uint32_t destination,
-    uint32_t source,
-    uint32_t length);
+    uint64_t destination,
+    uint64_t source,
+    uint64_t length);
 
 turbowasm_status turbowasm_instance_memory_fill(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t destination,
+    uint64_t destination,
     uint8_t value,
-    uint32_t length);
+    uint64_t length);
 
 turbowasm_status turbowasm_instance_table_init(
     turbowasm_instance_impl *instance,
