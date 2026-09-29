@@ -443,6 +443,55 @@ static turbowasm_status turbowasm_allocate_globals(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_instance_memory_storage_init(
+    turbowasm_instance_memory *memory,
+    bool shared,
+    size_t bytes) {
+    uint8_t *data = NULL;
+    bool lock_initialized = false;
+
+    if (memory == NULL || memory->storage_initialized)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (shared) {
+        if (salts_rwlock_init(&memory->access_lock) != 0)
+            return TURBOWASM_OUT_OF_MEMORY;
+        lock_initialized = true;
+    }
+
+    if (bytes != 0u) {
+        data = (uint8_t *)calloc(bytes, 1u);
+        if (data == NULL) {
+            if (lock_initialized)
+                salts_rwlock_destroy(&memory->access_lock);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
+    }
+
+    memory->data = data;
+    memory->shared = shared;
+    memory->access_lock_initialized = lock_initialized;
+    memory->storage_initialized = true;
+    return TURBOWASM_OK;
+}
+
+void turbowasm_instance_memory_storage_destroy(
+    turbowasm_instance_memory *memory) {
+    if (memory == NULL || !memory->storage_initialized)
+        return;
+
+    free(memory->data);
+    memory->data = NULL;
+
+    if (memory->access_lock_initialized)
+        salts_rwlock_destroy(&memory->access_lock);
+
+    memory->access_lock = NULL;
+    memory->access_lock_initialized = false;
+    memory->shared = false;
+    memory->storage_initialized = false;
+}
+
 static turbowasm_status turbowasm_allocate_memories(
     turbowasm_instance_impl *instance,
     const turbowasm_validation_context *context) {
@@ -468,8 +517,9 @@ static turbowasm_status turbowasm_allocate_memories(
             source->page_size;
 
         /*
-         * Shared memory is intentionally validation/link metadata only in T1.
-         * The current byte backing is not safe for concurrent plain-C access.
+         * T2a provides the guarded storage substrate but deliberately leaves
+         * T1's execution gate in place until every Wasm access path is
+         * migrated in T2b.
          */
         if (source->shared)
             return TURBOWASM_UNSUPPORTED;
@@ -488,11 +538,12 @@ static turbowasm_status turbowasm_allocate_memories(
         memory->page_size = source->page_size;
         memory->has_maximum = source->limits.has_maximum;
 
-        if (bytes != 0u) {
-            memory->data = (uint8_t *)calloc(
-                (size_t)bytes, 1u);
-            if (memory->data == NULL)
-                return TURBOWASM_OUT_OF_MEMORY;
+        {
+            turbowasm_status status =
+                turbowasm_instance_memory_storage_init(
+                    memory, false, (size_t)bytes);
+            if (status != TURBOWASM_OK)
+                return status;
         }
     }
 
@@ -954,7 +1005,8 @@ void turbowasm_instance_state_destroy(
                 index < module->validation.memory_count &&
                 module->validation.memories[index].imported)
                 continue;
-            free(instance->memories[index].data);
+            turbowasm_instance_memory_storage_destroy(
+                &instance->memories[index]);
         }
     }
     free(instance->memories);
@@ -1124,6 +1176,243 @@ turbowasm_instance_memory_resolve(
         binding->memory_index);
 }
 
+static turbowasm_status turbowasm_instance_memory_storage_range(
+    const turbowasm_instance_memory *memory,
+    uint32_t address,
+    uint32_t offset,
+    size_t width,
+    size_t *out_effective) {
+    uint64_t effective;
+    uint64_t size;
+
+    if (memory == NULL || out_effective == NULL ||
+        !memory->storage_initialized)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    effective = (uint64_t)address + (uint64_t)offset;
+    size = (uint64_t)memory->pages *
+           (uint64_t)memory->page_size;
+
+    if (effective > size ||
+        (uint64_t)width > size - effective)
+        return TURBOWASM_TRAPPED;
+    if (effective > (uint64_t)SIZE_MAX)
+        return TURBOWASM_TRAPPED;
+
+    *out_effective = (size_t)effective;
+    return TURBOWASM_OK;
+}
+
+static void turbowasm_instance_memory_rdlock(
+    turbowasm_instance_memory *memory) {
+    if (memory != NULL && memory->shared &&
+        memory->access_lock_initialized)
+        salts_rwlock_rdlock(&memory->access_lock);
+}
+
+static void turbowasm_instance_memory_rdunlock(
+    turbowasm_instance_memory *memory) {
+    if (memory != NULL && memory->shared &&
+        memory->access_lock_initialized)
+        salts_rwlock_rdunlock(&memory->access_lock);
+}
+
+static void turbowasm_instance_memory_wrlock(
+    turbowasm_instance_memory *memory) {
+    if (memory != NULL && memory->shared &&
+        memory->access_lock_initialized)
+        salts_rwlock_wrlock(&memory->access_lock);
+}
+
+static void turbowasm_instance_memory_wrunlock(
+    turbowasm_instance_memory *memory) {
+    if (memory != NULL && memory->shared &&
+        memory->access_lock_initialized)
+        salts_rwlock_wrunlock(&memory->access_lock);
+}
+
+turbowasm_status turbowasm_instance_memory_read_bytes(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    void *out,
+    size_t width) {
+    turbowasm_instance_memory *memory;
+    size_t effective = 0u;
+    turbowasm_status status;
+
+    if (instance == NULL || (width != 0u && out == NULL) ||
+        memory_index >= instance->memory_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memory = turbowasm_instance_memory_resolve(
+        instance, memory_index);
+    if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    turbowasm_instance_memory_rdlock(memory);
+    status = turbowasm_instance_memory_storage_range(
+        memory, address, offset, width, &effective);
+    if (status == TURBOWASM_OK && width != 0u)
+        memmove(out, memory->data + effective, width);
+    turbowasm_instance_memory_rdunlock(memory);
+    return status;
+}
+
+turbowasm_status turbowasm_instance_memory_write_bytes(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    const void *source,
+    size_t width) {
+    turbowasm_instance_memory *memory;
+    size_t effective = 0u;
+    turbowasm_status status;
+
+    if (instance == NULL || (width != 0u && source == NULL) ||
+        memory_index >= instance->memory_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memory = turbowasm_instance_memory_resolve(
+        instance, memory_index);
+    if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    turbowasm_instance_memory_wrlock(memory);
+    status = turbowasm_instance_memory_storage_range(
+        memory, address, offset, width, &effective);
+    if (status == TURBOWASM_OK && width != 0u)
+        memmove(memory->data + effective, source, width);
+    turbowasm_instance_memory_wrunlock(memory);
+    return status;
+}
+
+turbowasm_status turbowasm_instance_memory_fill_bytes(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t destination,
+    uint8_t value,
+    size_t length) {
+    turbowasm_instance_memory *memory;
+    size_t effective = 0u;
+    turbowasm_status status;
+
+    if (instance == NULL || memory_index >= instance->memory_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memory = turbowasm_instance_memory_resolve(
+        instance, memory_index);
+    if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    turbowasm_instance_memory_wrlock(memory);
+    status = turbowasm_instance_memory_storage_range(
+        memory, destination, 0u, length, &effective);
+    if (status == TURBOWASM_OK && length != 0u)
+        memset(memory->data + effective, value, length);
+    turbowasm_instance_memory_wrunlock(memory);
+    return status;
+}
+
+turbowasm_status turbowasm_instance_memory_copy_bytes(
+    turbowasm_instance_impl *instance,
+    uint32_t destination_memory,
+    uint32_t source_memory,
+    uint32_t destination,
+    uint32_t source,
+    size_t length) {
+    turbowasm_instance_memory *dst;
+    turbowasm_instance_memory *src;
+    turbowasm_instance_memory *first;
+    turbowasm_instance_memory *second;
+    bool first_write;
+    bool second_write;
+    size_t destination_effective = 0u;
+    size_t source_effective = 0u;
+    turbowasm_status status;
+
+    if (instance == NULL ||
+        destination_memory >= instance->memory_count ||
+        source_memory >= instance->memory_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    dst = turbowasm_instance_memory_resolve(
+        instance, destination_memory);
+    src = turbowasm_instance_memory_resolve(
+        instance, source_memory);
+    if (dst == NULL || src == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    if (dst == src) {
+        turbowasm_instance_memory_wrlock(dst);
+        status = turbowasm_instance_memory_storage_range(
+            dst, destination, 0u, length,
+            &destination_effective);
+        if (status == TURBOWASM_OK) {
+            status = turbowasm_instance_memory_storage_range(
+                src, source, 0u, length,
+                &source_effective);
+        }
+        if (status == TURBOWASM_OK && length != 0u) {
+            memmove(
+                dst->data + destination_effective,
+                src->data + source_effective,
+                length);
+        }
+        turbowasm_instance_memory_wrunlock(dst);
+        return status;
+    }
+
+    if ((uintptr_t)dst < (uintptr_t)src) {
+        first = dst;
+        second = src;
+        first_write = true;
+        second_write = false;
+    } else {
+        first = src;
+        second = dst;
+        first_write = false;
+        second_write = true;
+    }
+
+    if (first_write)
+        turbowasm_instance_memory_wrlock(first);
+    else
+        turbowasm_instance_memory_rdlock(first);
+    if (second_write)
+        turbowasm_instance_memory_wrlock(second);
+    else
+        turbowasm_instance_memory_rdlock(second);
+
+    status = turbowasm_instance_memory_storage_range(
+        dst, destination, 0u, length,
+        &destination_effective);
+    if (status == TURBOWASM_OK) {
+        status = turbowasm_instance_memory_storage_range(
+            src, source, 0u, length,
+            &source_effective);
+    }
+    if (status == TURBOWASM_OK && length != 0u) {
+        memmove(
+            dst->data + destination_effective,
+            src->data + source_effective,
+            length);
+    }
+
+    if (second_write)
+        turbowasm_instance_memory_wrunlock(second);
+    else
+        turbowasm_instance_memory_rdunlock(second);
+    if (first_write)
+        turbowasm_instance_memory_wrunlock(first);
+    else
+        turbowasm_instance_memory_rdunlock(first);
+
+    return status;
+}
+
 turbowasm_status turbowasm_instance_memory_bounds(
     const turbowasm_instance_impl *instance,
     uint32_t memory_index,
@@ -1142,6 +1431,14 @@ turbowasm_status turbowasm_instance_memory_bounds(
     memory = turbowasm_instance_memory_resolve_const(
         instance, memory_index);
     if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    /*
+     * Raw borrowed pointers are unshared-only. Shared callers must use the
+     * guarded read/write/fill/copy substrate so the lock lifetime covers the
+     * whole logical memory operation.
+     */
+    if (memory->shared)
         return TURBOWASM_UNSUPPORTED;
 
     effective = (uint64_t)address + offset;
@@ -1217,6 +1514,8 @@ turbowasm_status turbowasm_instance_memory_grow(
     memory = turbowasm_instance_memory_resolve(
         instance, memory_index);
     if (memory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+    if (memory->shared)
         return TURBOWASM_UNSUPPORTED;
 
     *out_previous_pages = memory->pages;

@@ -4,6 +4,8 @@
 #include <turbowasm/instance.h>
 #include <turbowasm/link.h>
 
+#include <salts/thread.h>
+
 #include "module_internal.h"
 #include "jit_backend.h"
 
@@ -18,10 +20,14 @@ enum {
 
 typedef struct turbowasm_instance_memory {
     uint8_t *data;
+    salts_rwlock_t access_lock;
     uint32_t pages;
     uint32_t maximum_pages;
     uint32_t page_size;
     bool has_maximum;
+    bool shared;
+    bool access_lock_initialized;
+    bool storage_initialized;
 } turbowasm_instance_memory;
 
 typedef struct turbowasm_instance_limits {
@@ -271,6 +277,45 @@ turbowasm_status turbowasm_instance_global_set(
     turbowasm_instance_impl *instance,
     uint32_t index,
     turbowasm_value value);
+
+turbowasm_status turbowasm_instance_memory_storage_init(
+    turbowasm_instance_memory *memory,
+    bool shared,
+    size_t bytes);
+
+void turbowasm_instance_memory_storage_destroy(
+    turbowasm_instance_memory *memory);
+
+turbowasm_status turbowasm_instance_memory_read_bytes(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    void *out,
+    size_t width);
+
+turbowasm_status turbowasm_instance_memory_write_bytes(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    const void *source,
+    size_t width);
+
+turbowasm_status turbowasm_instance_memory_fill_bytes(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t destination,
+    uint8_t value,
+    size_t length);
+
+turbowasm_status turbowasm_instance_memory_copy_bytes(
+    turbowasm_instance_impl *instance,
+    uint32_t destination_memory,
+    uint32_t source_memory,
+    uint32_t destination,
+    uint32_t source,
+    size_t length);
 
 turbowasm_status turbowasm_instance_memory_bounds(
     const turbowasm_instance_impl *instance,

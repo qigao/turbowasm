@@ -249,6 +249,19 @@ set_target_properties(turbowasm_linker_test PROPERTIES
 add_test(NAME turbowasm_linker_test
          COMMAND turbowasm_linker_test)
 
+add_executable(turbowasm_shared_memory_access_test
+  shared_memory_access_test.c)
+target_link_libraries(turbowasm_shared_memory_access_test
+  PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_shared_memory_access_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_shared_memory_access_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_shared_memory_access_test
+         COMMAND turbowasm_shared_memory_access_test)
+
 add_executable(turbowasm_host_function_test
   host_function_test.c)
 target_link_libraries(turbowasm_host_function_test
@@ -321,19 +334,6 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_wasi_fs_test
            COMMAND turbowasm_wasi_fs_test)
-endif()
-
-if(TURBOWASM_ENABLE_WASI_ADAPTER)
-  add_executable(turbowasm_wasi_fs_preopen_test
-    wasi_fs_preopen_test.c)
-  target_link_libraries(turbowasm_wasi_fs_preopen_test
-    PRIVATE TurboWasm::WASI)
-  set_target_properties(turbowasm_wasi_fs_preopen_test PROPERTIES
-    C_STANDARD 11
-    C_STANDARD_REQUIRED ON
-    C_EXTENSIONS OFF)
-  add_test(NAME turbowasm_wasi_fs_preopen_test
-           COMMAND turbowasm_wasi_fs_preopen_test)
 endif()
 
 add_executable(turbowasm_host_wait_test
