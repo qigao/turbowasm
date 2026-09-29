@@ -492,6 +492,8 @@ turbowasm_status turbowasm_component_exec_init(
         const turbowasm_component_canon_lift *lift =
             &binary->canon_lifts[i];
         const turbowasm_component_exec_core_function *core_function;
+        turbowasm_component_canonical_memory memory = {0};
+        const turbowasm_component_canonical_memory *memory_option = NULL;
 
         if (lift->component_function_index >= exec->function_count ||
             lift->core_function_index >= exec->core_function_count ||
@@ -507,13 +509,95 @@ turbowasm_status turbowasm_component_exec_init(
             goto fail;
         }
 
+        if (lift->has_realloc && !lift->has_memory) {
+            status = TURBOWASM_MALFORMED_MODULE;
+            goto fail;
+        }
+
+        if (lift->has_memory) {
+            const turbowasm_component_exec_core_memory *core_memory;
+            const turbowasm_module *memory_module;
+            turbowasm_memory_desc memory_desc;
+
+            if (lift->memory_index >= exec->core_memory_count) {
+                status = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+
+            core_memory = &exec->core_memories[lift->memory_index];
+            if (core_memory->instance_index >= exec->core_instance_count) {
+                status = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+
+            memory.instance =
+                &exec->core_instances[core_memory->instance_index];
+            memory.memory_index = core_memory->memory_index;
+            memory.string_encoding = lift->string_encoding;
+
+            memory_module = turbowasm_instance_module(memory.instance);
+            if (memory_module == NULL ||
+                !turbowasm_module_memory_at(
+                    memory_module,
+                    memory.memory_index,
+                    &memory_desc)) {
+                status = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+            memory.pointer_type = memory_desc.memory64
+                ? TURBOWASM_COMPONENT_POINTER_I64
+                : TURBOWASM_COMPONENT_POINTER_I32;
+
+            if (lift->has_realloc) {
+                const turbowasm_component_exec_core_function *realloc_function;
+                turbowasm_component_exec_realloc_context *context;
+
+                if (lift->realloc_function_index >=
+                    exec->core_function_count) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail;
+                }
+                realloc_function =
+                    &exec->core_functions[
+                        lift->realloc_function_index];
+                if (realloc_function->instance_index >=
+                    exec->core_instance_count) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail;
+                }
+
+                context =
+                    &exec->realloc_contexts[
+                        lift->component_function_index];
+                context->instance =
+                    &exec->core_instances[
+                        realloc_function->instance_index];
+                context->function_index =
+                    realloc_function->function_index;
+                context->pointer_type = memory.pointer_type;
+
+                if (!core_function_has_pointer_signature(
+                        context->instance,
+                        context->function_index,
+                        context->pointer_type)) {
+                    status = TURBOWASM_TYPE_MISMATCH;
+                    goto fail;
+                }
+
+                memory.guest_realloc = component_guest_realloc;
+                memory.realloc_context = context;
+            }
+
+            memory_option = &memory;
+        }
+
         status = turbowasm_component_core_call_adapter_init(
             &exec->functions[lift->component_function_index],
             &binary->type_graph,
             lift->type_index,
             &exec->core_instances[core_function->instance_index],
             core_function->function_index,
-            NULL);
+            memory_option);
         if (status != TURBOWASM_OK)
             goto fail;
     }
