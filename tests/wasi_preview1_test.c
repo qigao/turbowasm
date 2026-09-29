@@ -94,10 +94,10 @@ static void test_args_and_environ(void) {
     char arg1[] = "x";
     char env0[] = "A=B";
     const char *args[] = {arg0, arg1};
-    const char *environ[] = {env0};
+    const char *environment[] = {env0};
     turbowasm_wasi_preview1_config config = {
         true, args, 2u,
-        true, environ, 1u
+        true, environment, 1u
     };
     turbowasm_wasi_preview1 wasi = {0};
     turbowasm_module module = {0};
@@ -234,7 +234,7 @@ static void test_zero_lists_and_capability_gating(void) {
     assert(turbowasm_wasi_preview1_define(
                &args_only, &linker) == TURBOWASM_OK);
 
-    /* environ functions are absent, not silently granted. */
+    /* environment functions are absent, not silently granted. */
     assert(turbowasm_instance_create_linked(
                &instance, &env_module, &linker) ==
            TURBOWASM_LINK_ERROR);
