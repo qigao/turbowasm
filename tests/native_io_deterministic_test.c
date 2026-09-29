@@ -63,6 +63,18 @@ int turbowasm_test_native_io_backend_cancel(
     return mock->cancel_status;
 }
 
+
+/*
+ * Compile the exact production adapter in this test TU while replacing only
+ * its NativeIO submit/cancel boundary. Public Salts declarations were already
+ * included above, so Windows dllimport annotations are not rewritten.
+ */
+#define native_io_backend_submit turbowasm_test_native_io_backend_submit
+#define native_io_backend_cancel turbowasm_test_native_io_backend_cancel
+#include "../src/native_io_adapter.c"
+#undef native_io_backend_cancel
+#undef native_io_backend_submit
+
 typedef struct mock_host_context {
     turbowasm_native_io_bridge *bridge;
     native_io_endpoint endpoint;
