@@ -15,7 +15,7 @@ typedef struct turbowasm_wasi_preview1_impl {
     bool allow_args;
     bool allow_environ;
     turbowasm_wasi_string_list args;
-    turbowasm_wasi_string_list environ;
+    turbowasm_wasi_string_list environment;
 } turbowasm_wasi_preview1_impl;
 
 static const uint8_t turbowasm_wasi_namespace_bytes[] =
@@ -310,7 +310,7 @@ static turbowasm_status turbowasm_wasi_environ_sizes_get(
     if (impl == NULL || !impl->allow_environ)
         return TURBOWASM_UNSUPPORTED;
     return turbowasm_wasi_sizes_get(
-        &impl->environ, call, arguments, argument_count,
+        &impl->environment, call, arguments, argument_count,
         results, result_capacity, result_count, trap);
 }
 
@@ -329,7 +329,7 @@ static turbowasm_status turbowasm_wasi_environ_get(
     if (impl == NULL || !impl->allow_environ)
         return TURBOWASM_UNSUPPORTED;
     return turbowasm_wasi_list_get(
-        &impl->environ, call, arguments, argument_count,
+        &impl->environment, call, arguments, argument_count,
         results, result_capacity, result_count, trap);
 }
 
@@ -356,9 +356,9 @@ turbowasm_status turbowasm_wasi_preview1_init(
         goto fail;
 
     status = turbowasm_wasi_string_list_copy(
-        &impl->environ,
-        config->environ,
-        config->environ_count);
+        &impl->environment,
+        config->environment,
+        config->environment_count);
     if (status != TURBOWASM_OK)
         goto fail;
 
@@ -366,7 +366,7 @@ turbowasm_status turbowasm_wasi_preview1_init(
     return TURBOWASM_OK;
 
 fail:
-    turbowasm_wasi_string_list_destroy(&impl->environ);
+    turbowasm_wasi_string_list_destroy(&impl->environment);
     turbowasm_wasi_string_list_destroy(&impl->args);
     free(impl);
     return status;
@@ -380,7 +380,7 @@ void turbowasm_wasi_preview1_destroy(
         return;
 
     impl = (turbowasm_wasi_preview1_impl *)wasi->impl;
-    turbowasm_wasi_string_list_destroy(&impl->environ);
+    turbowasm_wasi_string_list_destroy(&impl->environment);
     turbowasm_wasi_string_list_destroy(&impl->args);
     free(impl);
     wasi->impl = NULL;
