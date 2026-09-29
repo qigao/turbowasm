@@ -294,6 +294,26 @@ static bool append_canon_lift(
     return true;
 }
 
+static bool append_resource_builtin(
+    turbowasm_component_binary *component,
+    turbowasm_component_resource_builtin builtin) {
+    uint32_t required;
+
+    if (component == NULL ||
+        component->resource_builtin_count == UINT32_MAX)
+        return false;
+    required = component->resource_builtin_count + 1u;
+    if (!reserve_array(
+            (void **)&component->resource_builtins,
+            &component->resource_builtin_capacity,
+            required,
+            sizeof(*component->resource_builtins)))
+        return false;
+    component->resource_builtins[
+        component->resource_builtin_count++] = builtin;
+    return true;
+}
+
 static turbowasm_status validate_custom_section(
     turbowasm_reader section) {
     uint32_t name_size;
