@@ -880,7 +880,6 @@ turbowasm_status turbowasm_wasi_host_fs_destroy(
     turbowasm_wasi_host_fs *adapter) {
     turbowasm_wasi_host_fs_impl *impl;
     size_t index;
-    int result;
 
     if (adapter == NULL || adapter->impl == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -896,9 +895,15 @@ turbowasm_status turbowasm_wasi_host_fs_destroy(
         (void)salts_fs_root_closedir(impl->root_dir);
         impl->root_dir = NULL;
     }
-    result = salts_fs_root_close(impl->root);
-    if (result < 0)
-        return TURBOWASM_INVALID_ARGUMENT;
+
+    /*
+     * salts_fs_root_close() consumes the root identity even when the native
+     * close reports an error. Once all public provider identities are already
+     * closed, destroy must mirror that ownership transfer and clear adapter
+     * state rather than retaining a dangling root pointer.
+     */
+    (void)salts_fs_root_close(impl->root);
+    impl->root = NULL;
 
     free(impl->path_storage);
     free(impl->slots);
