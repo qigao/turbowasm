@@ -21,6 +21,8 @@ option(TURBOWASM_ENABLE_WASI_ADAPTER
   "Build optional WASI Preview1 capability adapter" ON)
 option(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER
   "Build optional legacy WASI Preview1 threads adapter" ON)
+option(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER
+  "Build optional WASI Preview1 NativeIO fd adapter" ON)
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
   message(FATAL_ERROR "SALTS_ROOT must point at an installed Salts SDK")
@@ -177,6 +179,38 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
   endif()
 endif()
 
+if(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER)
+  if(NOT TURBOWASM_ENABLE_WASI_ADAPTER OR
+     NOT TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)
+    message(FATAL_ERROR
+      "TurboWasm WASINativeIO requires both WASI and NativeIO adapters")
+  endif()
+
+  add_library(turbowasm_wasi_native_io
+    src/wasi_native_io.c)
+  add_library(TurboWasm::WASINativeIO ALIAS turbowasm_wasi_native_io)
+  set_target_properties(turbowasm_wasi_native_io PROPERTIES
+    EXPORT_NAME WASINativeIO
+    VERSION ${PROJECT_VERSION}
+    SOVERSION 0)
+  target_compile_features(turbowasm_wasi_native_io PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi_native_io
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>)
+  target_link_libraries(turbowasm_wasi_native_io
+    PUBLIC
+      TurboWasm::WASI
+      TurboWasm::NativeIO)
+
+  if(MSVC)
+    target_compile_options(turbowasm_wasi_native_io PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_wasi_native_io PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
 if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
   if(NOT TARGET Salts::CFlow)
     message(FATAL_ERROR
@@ -290,6 +324,15 @@ endif()
 if(TURBOWASM_ENABLE_WASI_ADAPTER)
   install(
     TARGETS turbowasm_wasi
+    EXPORT TurboWasmTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+if(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER)
+  install(
+    TARGETS turbowasm_wasi_native_io
     EXPORT TurboWasmTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

@@ -791,6 +791,21 @@ add_test(NAME turbowasm_jit_simd_helper_test
          COMMAND turbowasm_jit_simd_helper_test)
 
 
+if(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER)
+  add_executable(turbowasm_wasi_native_io_test
+    wasi_native_io_test.c)
+  target_link_libraries(turbowasm_wasi_native_io_test
+    PRIVATE
+      TurboWasm::WASI
+      Salts::NativeIO)
+  set_target_properties(turbowasm_wasi_native_io_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi_native_io_test
+           COMMAND turbowasm_wasi_native_io_test)
+endif()
+
 if(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)
   add_executable(turbowasm_native_io_adapter_test
     native_io_adapter_test.c)
