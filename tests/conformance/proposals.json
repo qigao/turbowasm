@@ -58,5 +58,13 @@
     "suite": "proposal-extended-const.txt",
     "wast2json_flags": [],
     "minimum_passes": 1
+  },
+  "memory64": {
+    "repository": "https://github.com/WebAssembly/memory64.git",
+    "commit": "9003cd5e24e53b84cd9027ea3dd7ae57159a6db1",
+    "core_dir": "test/core",
+    "suite": "proposal-memory64.txt",
+    "wast2json_flags": [],
+    "minimum_passes": 1
   }
 }

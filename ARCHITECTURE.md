@@ -181,6 +181,8 @@ retained typed validation metadata      implemented
 core interpreter semantics              implemented for qualified surface
 memory/table/reference/bulk semantics   implemented
 multi-memory/custom-pages/ext-const     implemented + upstream qualified
+memory64                                interpreter implemented + upstream qualified
+                                        MIR falls back; shared+memory64 unsupported
 tail calls                              implemented + upstream qualified
 typed exception handling                implemented + upstream qualified
 relaxed SIMD                            implemented + upstream qualified
@@ -201,7 +203,6 @@ WASI NativeIO async fd projection       implemented
 threads/shared memory/atomics           implemented + upstream qualified
 legacy WASI threads adapter             implemented
 caller allocator/resource policy        implemented
-memory64                                unsupported; tracked by #304
 WebAssembly GC                          future work
 Component Model                         tracked by #307
 WASI 0.2 typed interfaces               tracked by #308

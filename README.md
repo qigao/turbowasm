@@ -13,8 +13,8 @@ The repository currently provides:
 - a semantic-reference interpreter with structured control, direct/indirect
   calls, memory/table/reference/bulk operations, SIMD, tail calls and typed
   exception handling;
-- proposal-aware multi-memory, custom page sizes, extended const and relaxed
-  SIMD semantics with pinned upstream qualification;
+- proposal-aware multi-memory, custom page sizes, extended const, relaxed
+  SIMD and memory64 semantics with pinned upstream qualification;
 - typed tag/exception identity and cross-frame unwind across direct, indirect,
   imported and tail-call boundaries;
 - shared fuel and interruption semantics across interpreted and compiled
@@ -45,10 +45,11 @@ The repository currently provides:
 - an installed CMake package and a small module-validation CLI.
 
 The current implementation is intentionally scoped. Core shared-memory atomics,
-legacy WASI threads and the qualified Preview1 capability layer are part of the
-completed surface. memory64, WebAssembly GC, the Component Model and WASI 0.2
-remain outside the completed Runtime surface and are tracked by Runtime v2
-(#301).
+legacy WASI threads, the qualified Preview1 capability layer, and interpreter
+memory64 are part of the completed surface. memory64 modules remain
+interpreter-only for the current MIR backend, and shared+memory64 remains
+unsupported. WebAssembly GC, the Component Model and WASI 0.2 remain outside
+the completed Runtime surface and are tracked by Runtime v2 (#301).
 
 ## Dependency boundary
 
