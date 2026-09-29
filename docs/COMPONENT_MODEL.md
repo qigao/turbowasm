@@ -132,6 +132,42 @@ The following forms fail closed as `TURBOWASM_UNSUPPORTED` in this slice:
 These forms are not silently skipped: doing so would change subsequent index
 meaning.
 
+## C3 canonical ABI metadata
+
+The first canonical ABI slice implements the deterministic, allocation-free
+metadata calculations used before any guest-memory lifting/lowering occurs.
+
+For the currently retained synchronous value subset, TurboWasm follows the
+pinned MVP rules exactly:
+
+- bool and 8-bit values: alignment/size 1, flat i32;
+- 16-bit values: alignment/size 2, flat i32;
+- 32-bit integers and char: alignment/size 4, flat i32;
+- float32: alignment/size 4, flat f32;
+- 64-bit integers: alignment/size 8, flat i64;
+- float64: alignment/size 8, flat f64;
+- string and dynamic list: two pointer-width fields, aligned to pointer width;
+- own/borrow: alignment/size 4, flat i32.
+
+Both i32 and i64 canonical memory pointer widths are modeled.
+
+For synchronous function flattening, the pinned limits are:
+
+```text
+MAX_FLAT_PARAMS  = 16
+MAX_FLAT_RESULTS = 1
+```
+
+If flattened parameters exceed 16, they collapse to a single pointer parameter.
+If a result flattens to more than one Core value, lift returns one result
+pointer while lower appends a result pointer parameter and returns no Core
+result. Thus synchronous lowering can contain 17 final parameters in the
+boundary case of 16 direct parameters plus one result pointer.
+
+C3 in this slice is metadata-only: it does not read/write linear memory, invoke
+`realloc`, validate UTF encodings, or create resource handles. Those execution
+operations remain later C3/C4 work.
+
 ## Deferred work
 
 C1 intentionally does not implement:
