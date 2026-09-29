@@ -95,6 +95,20 @@ typedef uint32_t (*turbowasm_wasi_fs_path_open_fn)(
     uint32_t fdflags,
     turbowasm_wasi_fs_file *out_file);
 
+typedef uint32_t (*turbowasm_wasi_fs_path_stat_fn)(
+    void *context,
+    turbowasm_wasi_fs_file directory,
+    uint32_t lookup_flags,
+    const uint8_t *path,
+    size_t path_length,
+    turbowasm_wasi_fs_stat *out_stat);
+
+typedef uint32_t (*turbowasm_wasi_fs_path_mutation_fn)(
+    void *context,
+    turbowasm_wasi_fs_file directory,
+    const uint8_t *path,
+    size_t path_length);
+
 typedef struct turbowasm_wasi_fs_provider {
     void *context;
     turbowasm_wasi_fs_close_fn close;
@@ -104,6 +118,12 @@ typedef struct turbowasm_wasi_fs_provider {
     turbowasm_wasi_fs_tell_fn tell;
     turbowasm_wasi_fs_stat_fn stat;
     turbowasm_wasi_fs_path_open_fn path_open;
+
+    /* Appended path operations preserve the established provider layout. */
+    turbowasm_wasi_fs_path_stat_fn path_stat;
+    turbowasm_wasi_fs_path_mutation_fn path_create_directory;
+    turbowasm_wasi_fs_path_mutation_fn path_remove_directory;
+    turbowasm_wasi_fs_path_mutation_fn path_unlink_file;
 } turbowasm_wasi_fs_provider;
 
 typedef struct turbowasm_wasi_fs_config {
@@ -173,6 +193,32 @@ uint32_t turbowasm_wasi_fs_path_open(
     uint64_t rights_inheriting,
     uint32_t fdflags,
     uint32_t *out_guest_fd);
+
+uint32_t turbowasm_wasi_fs_path_stat(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    uint32_t lookup_flags,
+    const uint8_t *path,
+    size_t path_length,
+    turbowasm_wasi_fs_stat *out_stat);
+
+uint32_t turbowasm_wasi_fs_path_create_directory(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    const uint8_t *path,
+    size_t path_length);
+
+uint32_t turbowasm_wasi_fs_path_remove_directory(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    const uint8_t *path,
+    size_t path_length);
+
+uint32_t turbowasm_wasi_fs_path_unlink_file(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    const uint8_t *path,
+    size_t path_length);
 
 bool turbowasm_wasi_fs_descriptor_info_get(
     const turbowasm_wasi_fs *filesystem,
