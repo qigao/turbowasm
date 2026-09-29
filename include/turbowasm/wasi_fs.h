@@ -95,6 +95,14 @@ typedef uint32_t (*turbowasm_wasi_fs_path_open_fn)(
     uint32_t fdflags,
     turbowasm_wasi_fs_file *out_file);
 
+typedef uint32_t (*turbowasm_wasi_fs_path_stat_fn)(
+    void *context,
+    turbowasm_wasi_fs_file directory,
+    uint32_t lookup_flags,
+    const uint8_t *path,
+    size_t path_length,
+    turbowasm_wasi_fs_stat *out_stat);
+
 typedef struct turbowasm_wasi_fs_provider {
     void *context;
     turbowasm_wasi_fs_close_fn close;
@@ -104,6 +112,7 @@ typedef struct turbowasm_wasi_fs_provider {
     turbowasm_wasi_fs_tell_fn tell;
     turbowasm_wasi_fs_stat_fn stat;
     turbowasm_wasi_fs_path_open_fn path_open;
+    turbowasm_wasi_fs_path_stat_fn path_stat;
 } turbowasm_wasi_fs_provider;
 
 typedef struct turbowasm_wasi_fs_config {
@@ -222,6 +231,14 @@ uint32_t turbowasm_wasi_fs_fd_tell(
 uint32_t turbowasm_wasi_fs_fd_stat(
     turbowasm_wasi_fs *filesystem,
     uint32_t fd,
+    turbowasm_wasi_fs_stat *out_stat);
+
+uint32_t turbowasm_wasi_fs_path_stat(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    uint32_t lookup_flags,
+    const uint8_t *path,
+    size_t path_length,
     turbowasm_wasi_fs_stat *out_stat);
 
 #ifdef __cplusplus
