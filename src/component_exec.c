@@ -487,6 +487,84 @@ static turbowasm_status define_inline_provider(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status resolve_core_aliases_for_provider(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary,
+    uint32_t provider_index) {
+    const turbowasm_component_core_instance_def *provider;
+    uint32_t i;
+
+    if (exec == NULL || binary == NULL ||
+        provider_index >= binary->core_instance_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    provider = &binary->core_instances[provider_index];
+
+    for (i = 0u; i < binary->core_function_alias_count; ++i) {
+        const turbowasm_component_core_function_alias *alias =
+            &binary->core_function_aliases[i];
+        turbowasm_component_exec_core_function *target;
+
+        if (alias->instance_index != provider_index)
+            continue;
+        if (alias->core_function_index >=
+            exec->core_function_count)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        target =
+            &exec->core_functions[alias->core_function_index];
+        if (target->kind !=
+            TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INVALID)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        if (provider->kind ==
+            TURBOWASM_COMPONENT_CORE_INSTANCE_INSTANTIATE) {
+            const turbowasm_module *module;
+            const turbowasm_export_desc *export_desc;
+
+            if (provider_index >= exec->core_instance_count ||
+                exec->core_instances[provider_index].impl == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            module = turbowasm_instance_module(
+                &exec->core_instances[provider_index]);
+            export_desc = find_core_function_export(
+                module, alias->name);
+            if (export_desc == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            target->kind =
+                TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INSTANCE;
+            target->instance_index = provider_index;
+            target->function_index = export_desc->item_index;
+        } else if (provider->kind ==
+                   TURBOWASM_COMPONENT_CORE_INSTANCE_INLINE) {
+            const turbowasm_component_core_inline_export *export_desc;
+            const turbowasm_component_exec_core_function *source;
+
+            export_desc = find_inline_core_export(
+                provider, alias->name);
+            if (export_desc == NULL ||
+                export_desc->sort != 0x00u ||
+                export_desc->item_index >=
+                    exec->core_function_count)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            source =
+                &exec->core_functions[export_desc->item_index];
+            if (source->kind ==
+                TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INVALID)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            *target = *source;
+        } else {
+            return TURBOWASM_MALFORMED_MODULE;
+        }
+    }
+
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status instantiate_core_instance(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
