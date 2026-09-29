@@ -215,6 +215,65 @@ static bool append_core_module(
     return true;
 }
 
+static bool append_core_instance(
+    turbowasm_component_binary *component,
+    turbowasm_component_core_instance_def definition) {
+    uint32_t required;
+
+    if (component == NULL ||
+        component->core_instance_count == UINT32_MAX)
+        return false;
+    required = component->core_instance_count + 1u;
+    if (!reserve_array(
+            (void **)&component->core_instances,
+            &component->core_instance_capacity,
+            required,
+            sizeof(*component->core_instances)))
+        return false;
+    component->core_instances[component->core_instance_count++] =
+        definition;
+    return true;
+}
+
+static bool append_core_function_alias(
+    turbowasm_component_binary *component,
+    turbowasm_component_core_function_alias alias) {
+    uint32_t required;
+
+    if (component == NULL ||
+        component->core_function_alias_count == UINT32_MAX)
+        return false;
+    required = component->core_function_alias_count + 1u;
+    if (!reserve_array(
+            (void **)&component->core_function_aliases,
+            &component->core_function_alias_capacity,
+            required,
+            sizeof(*component->core_function_aliases)))
+        return false;
+    component->core_function_aliases[
+        component->core_function_alias_count++] = alias;
+    return true;
+}
+
+static bool append_canon_lift(
+    turbowasm_component_binary *component,
+    turbowasm_component_canon_lift lift) {
+    uint32_t required;
+
+    if (component == NULL ||
+        component->canon_lift_count == UINT32_MAX)
+        return false;
+    required = component->canon_lift_count + 1u;
+    if (!reserve_array(
+            (void **)&component->canon_lifts,
+            &component->canon_lift_capacity,
+            required,
+            sizeof(*component->canon_lifts)))
+        return false;
+    component->canon_lifts[component->canon_lift_count++] = lift;
+    return true;
+}
+
 static turbowasm_status validate_custom_section(
     turbowasm_reader section) {
     uint32_t name_size;
