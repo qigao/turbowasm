@@ -28,8 +28,10 @@ typedef struct turbowasm_wasi_preview1_impl {
     turbowasm_wasi_random_fill_fn random_fill;
     void *random_context;
     turbowasm_wasi_fd_write_fn fd_write;
+    turbowasm_wasi_fd_write_async_fn fd_write_async;
     void *fd_write_context;
     turbowasm_wasi_fd_read_fn fd_read;
+    turbowasm_wasi_fd_read_async_fn fd_read_async;
     void *fd_read_context;
     turbowasm_wasi_proc_exit_fn proc_exit;
     void *proc_exit_context;
@@ -520,7 +522,8 @@ static turbowasm_status turbowasm_wasi_fd_write(
     uint32_t error;
 
     if (impl == NULL || !impl->allow_fd_write ||
-        impl->fd_write == NULL ||
+        (impl->fd_write == NULL &&
+         impl->fd_write_async == NULL) ||
         call == NULL || arguments == NULL ||
         argument_count != 4u ||
         arguments[0].kind != TURBOWASM_VALUE_I32 ||
@@ -544,12 +547,22 @@ static turbowasm_status turbowasm_wasi_fd_write(
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        error = impl->fd_write(
-            impl->fd_write_context,
-            (uint32_t)arguments[0].as.i32,
-            buffers,
-            (uint32_t)arguments[2].as.i32,
-            &written);
+        if (impl->fd_write_async != NULL) {
+            error = impl->fd_write_async(
+                impl->fd_write_context,
+                call,
+                (uint32_t)arguments[0].as.i32,
+                buffers,
+                (uint32_t)arguments[2].as.i32,
+                &written);
+        } else {
+            error = impl->fd_write(
+                impl->fd_write_context,
+                (uint32_t)arguments[0].as.i32,
+                buffers,
+                (uint32_t)arguments[2].as.i32,
+                &written);
+        }
         if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
             if ((uint64_t)written > capacity)
                 error = TURBOWASM_WASI_ERRNO_IO;
@@ -581,7 +594,8 @@ static turbowasm_status turbowasm_wasi_fd_read(
     uint32_t error;
 
     if (impl == NULL || !impl->allow_fd_read ||
-        impl->fd_read == NULL ||
+        (impl->fd_read == NULL &&
+         impl->fd_read_async == NULL) ||
         call == NULL || arguments == NULL ||
         argument_count != 4u ||
         arguments[0].kind != TURBOWASM_VALUE_I32 ||
@@ -605,12 +619,22 @@ static turbowasm_status turbowasm_wasi_fd_read(
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        error = impl->fd_read(
-            impl->fd_read_context,
-            (uint32_t)arguments[0].as.i32,
-            buffers,
-            (uint32_t)arguments[2].as.i32,
-            &read_count);
+        if (impl->fd_read_async != NULL) {
+            error = impl->fd_read_async(
+                impl->fd_read_context,
+                call,
+                (uint32_t)arguments[0].as.i32,
+                buffers,
+                (uint32_t)arguments[2].as.i32,
+                &read_count);
+        } else {
+            error = impl->fd_read(
+                impl->fd_read_context,
+                (uint32_t)arguments[0].as.i32,
+                buffers,
+                (uint32_t)arguments[2].as.i32,
+                &read_count);
+        }
         if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
             if ((uint64_t)read_count > capacity)
                 error = TURBOWASM_WASI_ERRNO_IO;
@@ -895,8 +919,12 @@ turbowasm_status turbowasm_wasi_preview1_init(
 
     if ((config->allow_clock && config->clock_time == NULL) ||
         (config->allow_random && config->random_fill == NULL) ||
-        (config->allow_fd_write && config->fd_write == NULL) ||
-        (config->allow_fd_read && config->fd_read == NULL) ||
+        (config->allow_fd_write &&
+         ((config->fd_write == NULL) ==
+          (config->fd_write_async == NULL))) ||
+        (config->allow_fd_read &&
+         ((config->fd_read == NULL) ==
+          (config->fd_read_async == NULL))) ||
         (config->allow_proc_exit && config->proc_exit == NULL) ||
         (config->allow_filesystem && config->filesystem == NULL)) {
         free(impl);
@@ -916,8 +944,10 @@ turbowasm_status turbowasm_wasi_preview1_init(
     impl->random_fill = config->random_fill;
     impl->random_context = config->random_context;
     impl->fd_write = config->fd_write;
+    impl->fd_write_async = config->fd_write_async;
     impl->fd_write_context = config->fd_write_context;
     impl->fd_read = config->fd_read;
+    impl->fd_read_async = config->fd_read_async;
     impl->fd_read_context = config->fd_read_context;
     impl->proc_exit = config->proc_exit;
     impl->proc_exit_context = config->proc_exit_context;
