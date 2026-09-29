@@ -15,7 +15,7 @@
     "wast2json_flags": [
       "--enable-threads"
     ],
-    "minimum_passes": 0
+    "minimum_passes": 1
   },
   "tail-call": {
     "repository": "https://github.com/WebAssembly/tail-call.git",
