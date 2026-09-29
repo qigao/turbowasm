@@ -5,10 +5,10 @@ import sys
 
 if len(sys.argv) != 3:
     raise SystemExit(
-        "usage: materialize-vcpkg-profiles.py <profiles-root> <shared-cache-root>"
+        "usage: materialize-vcpkg-profiles.py <profile-root> <shared-cache-root>"
     )
 
-profiles_root = pathlib.Path(sys.argv[1])
+profile_root = pathlib.Path(sys.argv[1])
 shared_cache_root = pathlib.Path(sys.argv[2])
 shared_manifest_path = shared_cache_root / "vcpkg.json"
 
@@ -21,18 +21,17 @@ if not isinstance(baseline, str) or not baseline:
         f"shared cache manifest has no builtin-baseline: {shared_manifest_path}"
     )
 
-profiles = sorted(profiles_root.glob("*/vcpkg.json"))
-if not profiles:
-    raise SystemExit(f"no vcpkg profiles found under {profiles_root}")
+manifest_path = profile_root / "vcpkg.json"
+if not manifest_path.is_file():
+    raise SystemExit(f"vcpkg profile manifest not found: {manifest_path}")
 
-for manifest_path in profiles:
-    with manifest_path.open("r", encoding="utf-8") as f:
-        manifest = json.load(f)
+with manifest_path.open("r", encoding="utf-8") as f:
+    manifest = json.load(f)
 
-    manifest["builtin-baseline"] = baseline
+manifest["builtin-baseline"] = baseline
 
-    with manifest_path.open("w", encoding="utf-8", newline="\n") as f:
-        json.dump(manifest, f, indent=2)
-        f.write("\n")
+with manifest_path.open("w", encoding="utf-8", newline="\n") as f:
+    json.dump(manifest, f, indent=2)
+    f.write("\n")
 
-    print(f"Bound {manifest_path} to shared cache baseline")
+print(f"Bound {manifest_path} to shared cache baseline")
