@@ -940,6 +940,100 @@ static turbowasm_status turbowasm_wasi_fd_prestat_dir_name(
         results, result_capacity, result_count, trap, error);
 }
 
+typedef uint32_t (*turbowasm_wasi_path_mutation_call_fn)(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    const uint8_t *path,
+    size_t path_length);
+
+static turbowasm_status turbowasm_wasi_path_mutation(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap,
+    turbowasm_wasi_path_mutation_call_fn mutation) {
+    turbowasm_wasi_preview1_impl *impl =
+        (turbowasm_wasi_preview1_impl *)context;
+    turbowasm_host_memory_span path = {0};
+    uint32_t path_length;
+    uint32_t error;
+
+    if (impl == NULL || !impl->allow_filesystem ||
+        impl->filesystem == NULL || call == NULL ||
+        arguments == NULL || argument_count != 3u ||
+        arguments[0].kind != TURBOWASM_VALUE_I32 ||
+        arguments[1].kind != TURBOWASM_VALUE_I32 ||
+        arguments[2].kind != TURBOWASM_VALUE_I32 ||
+        mutation == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    path_length = (uint32_t)arguments[2].as.i32;
+    error = turbowasm_wasi_memory_span(
+        call,
+        (uint32_t)arguments[1].as.i32,
+        path_length,
+        &path);
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = mutation(
+            impl->filesystem,
+            (uint32_t)arguments[0].as.i32,
+            path.data,
+            path.size);
+    }
+
+    return turbowasm_wasi_return_errno(
+        results, result_capacity, result_count, trap, error);
+}
+
+static turbowasm_status turbowasm_wasi_path_create_directory(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    return turbowasm_wasi_path_mutation(
+        context, call, arguments, argument_count,
+        results, result_capacity, result_count, trap,
+        turbowasm_wasi_fs_path_create_directory);
+}
+
+static turbowasm_status turbowasm_wasi_path_remove_directory(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    return turbowasm_wasi_path_mutation(
+        context, call, arguments, argument_count,
+        results, result_capacity, result_count, trap,
+        turbowasm_wasi_fs_path_remove_directory);
+}
+
+static turbowasm_status turbowasm_wasi_path_unlink_file(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    return turbowasm_wasi_path_mutation(
+        context, call, arguments, argument_count,
+        results, result_capacity, result_count, trap,
+        turbowasm_wasi_fs_path_unlink_file);
+}
+
 static turbowasm_status turbowasm_wasi_path_filestat_get(
     void *context,
     turbowasm_host_call *call,
@@ -1433,6 +1527,36 @@ turbowasm_status turbowasm_wasi_preview1_define(
             turbowasm_wasi_name("fd_prestat_dir_name"),
             &dirname_type,
             turbowasm_wasi_fd_prestat_dir_name,
+            impl);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        status = turbowasm_linker_define_host_function(
+            linker,
+            turbowasm_wasi_namespace(),
+            turbowasm_wasi_name("path_create_directory"),
+            &dirname_type,
+            turbowasm_wasi_path_create_directory,
+            impl);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        status = turbowasm_linker_define_host_function(
+            linker,
+            turbowasm_wasi_namespace(),
+            turbowasm_wasi_name("path_remove_directory"),
+            &dirname_type,
+            turbowasm_wasi_path_remove_directory,
+            impl);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        status = turbowasm_linker_define_host_function(
+            linker,
+            turbowasm_wasi_namespace(),
+            turbowasm_wasi_name("path_unlink_file"),
+            &dirname_type,
+            turbowasm_wasi_path_unlink_file,
             impl);
         if (status != TURBOWASM_OK)
             return status;

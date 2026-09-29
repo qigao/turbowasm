@@ -560,6 +560,83 @@ uint32_t turbowasm_wasi_fs_path_stat(
         out_stat);
 }
 
+static uint32_t turbowasm_wasi_fs_path_mutate(
+    turbowasm_wasi_fs_impl *impl,
+    uint32_t directory_fd,
+    const uint8_t *path,
+    size_t path_length,
+    uint64_t required_right,
+    turbowasm_wasi_fs_path_mutation_fn mutation) {
+    turbowasm_wasi_fs_slot *directory =
+        turbowasm_wasi_fs_find_fd(impl, directory_fd);
+
+    if (path_length != 0u && path == NULL)
+        return TURBOWASM_WASI_ERRNO_INVAL;
+    if (directory == NULL)
+        return TURBOWASM_WASI_ERRNO_BADF;
+    if ((directory->rights_base & required_right) == 0u)
+        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+    if (mutation == NULL)
+        return TURBOWASM_WASI_ERRNO_NOSYS;
+
+    return mutation(
+        impl->provider.context,
+        directory->file,
+        path,
+        path_length);
+}
+
+uint32_t turbowasm_wasi_fs_path_create_directory(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    const uint8_t *path,
+    size_t path_length) {
+    turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_mut(filesystem);
+
+    return turbowasm_wasi_fs_path_mutate(
+        impl,
+        directory_fd,
+        path,
+        path_length,
+        TURBOWASM_WASI_RIGHT_PATH_CREATE_DIRECTORY,
+        impl == NULL ? NULL : impl->provider.path_create_directory);
+}
+
+uint32_t turbowasm_wasi_fs_path_remove_directory(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    const uint8_t *path,
+    size_t path_length) {
+    turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_mut(filesystem);
+
+    return turbowasm_wasi_fs_path_mutate(
+        impl,
+        directory_fd,
+        path,
+        path_length,
+        TURBOWASM_WASI_RIGHT_PATH_REMOVE_DIRECTORY,
+        impl == NULL ? NULL : impl->provider.path_remove_directory);
+}
+
+uint32_t turbowasm_wasi_fs_path_unlink_file(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    const uint8_t *path,
+    size_t path_length) {
+    turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_mut(filesystem);
+
+    return turbowasm_wasi_fs_path_mutate(
+        impl,
+        directory_fd,
+        path,
+        path_length,
+        TURBOWASM_WASI_RIGHT_PATH_UNLINK_FILE,
+        impl == NULL ? NULL : impl->provider.path_unlink_file);
+}
+
 uint32_t turbowasm_wasi_fs_fd_write(
     void *context,
     uint32_t fd,
