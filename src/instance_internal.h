@@ -48,8 +48,8 @@ typedef struct turbowasm_instance_memory {
 } turbowasm_instance_memory;
 
 typedef struct turbowasm_instance_limits {
-    uint32_t minimum;
-    uint32_t maximum;
+    uint64_t minimum;
+    uint64_t maximum;
     bool has_maximum;
 } turbowasm_instance_limits;
 
