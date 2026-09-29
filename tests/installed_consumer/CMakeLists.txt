@@ -79,6 +79,19 @@ if(TARGET TurboWasm::WASI)
            COMMAND turbowasm_installed_wasi_consumer)
 endif()
 
+if(TARGET TurboWasm::WASIThreads)
+  add_executable(turbowasm_installed_wasi_threads_consumer
+    wasi_threads_main.c)
+  target_link_libraries(turbowasm_installed_wasi_threads_consumer
+    PRIVATE TurboWasm::WASIThreads)
+  set_target_properties(turbowasm_installed_wasi_threads_consumer PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi_threads_consumer
+           COMMAND turbowasm_installed_wasi_threads_consumer)
+endif()
+
 if(TARGET TurboWasm::WASI)
   add_executable(turbowasm_installed_wasi_fs_consumer wasi_fs_main.c)
   target_link_libraries(turbowasm_installed_wasi_fs_consumer
