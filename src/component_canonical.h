@@ -104,7 +104,7 @@ typedef struct turbowasm_component_canonical_memory {
     uint32_t memory_index;
     turbowasm_component_pointer_type pointer_type;
     turbowasm_component_string_encoding string_encoding;
-    turbowasm_component_realloc_fn realloc;
+    turbowasm_component_realloc_fn guest_realloc;
     void *realloc_context;
 } turbowasm_component_canonical_memory;
 
