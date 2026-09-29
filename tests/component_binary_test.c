@@ -169,6 +169,24 @@ static void test_nested_component_boundary(void) {
                sizeof(bad_version)) == TURBOWASM_MALFORMED_MODULE);
 }
 
+static void test_component_module_size_limit(void) {
+    static const uint8_t bytes[] = {
+        COMPONENT_HEADER
+    };
+    turbowasm_component_binary component = {0};
+    turbowasm_runtime_config config;
+
+    turbowasm_runtime_config_init(&config);
+    config.limits.max_module_bytes = sizeof(bytes) - 1u;
+
+    assert(turbowasm_component_binary_load_with_config(
+               &component,
+               bytes,
+               sizeof(bytes),
+               &config) == TURBOWASM_OUT_OF_MEMORY);
+    assert(component.bytes == NULL);
+}
+
 static void test_runtime_allocation_limit(void) {
     static const uint8_t bytes[] = {
         COMPONENT_HEADER,
@@ -377,6 +395,7 @@ int main(void) {
     test_embedded_core_module_record();
     test_nested_component_boundary();
     test_runtime_allocation_limit();
+    test_component_module_size_limit();
     test_type_import_export_semantics();
     test_repeated_type_sections_preserve_index_space();
     test_semantic_unsupported_and_invalid_forms();
