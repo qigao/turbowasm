@@ -12,6 +12,7 @@ typedef struct turbowasm_module_impl {
     const uint8_t *bytes;
     size_t size;
     turbowasm_module_summary summary;
+    turbowasm_runtime_config config;
     turbowasm_validation_context validation;
 } turbowasm_module_impl;
 

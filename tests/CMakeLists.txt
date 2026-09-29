@@ -6,6 +6,14 @@ set_target_properties(turbowasm_module_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_module_test COMMAND turbowasm_module_test)
 
+add_executable(turbowasm_runtime_config_test runtime_config_test.c)
+target_link_libraries(turbowasm_runtime_config_test PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_runtime_config_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_runtime_config_test COMMAND turbowasm_runtime_config_test)
+
 add_executable(turbowasm_simd_test simd_test.c)
 target_link_libraries(turbowasm_simd_test PRIVATE TurboWasm::Runtime)
 set_target_properties(turbowasm_simd_test PROPERTIES

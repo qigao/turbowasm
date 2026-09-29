@@ -4,6 +4,7 @@
 #include "validate_instr.h"
 #include "validate_linkage.h"
 #include "validate_type.h"
+#include "runtime_alloc.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -108,13 +109,13 @@ static turbowasm_status turbowasm_validate_type_section(
         if (!turbowasm_reader_uleb32(section, &param_count))
             return TURBOWASM_MALFORMED_MODULE;
         if (param_count != 0u) {
-            params = (uint8_t *)malloc((size_t)param_count);
+            params = (uint8_t *)turbowasm_rt_malloc((size_t)param_count);
             param_semantics =
-                (turbowasm_validation_value_type *)calloc(
+                (turbowasm_validation_value_type *)turbowasm_rt_calloc(
                     (size_t)param_count, sizeof(*param_semantics));
             if (params == NULL || param_semantics == NULL) {
-                free(params);
-                free(param_semantics);
+                turbowasm_rt_free(params);
+                turbowasm_rt_free(param_semantics);
                 return TURBOWASM_OUT_OF_MEMORY;
             }
         }
@@ -122,28 +123,28 @@ static turbowasm_status turbowasm_validate_type_section(
         status = turbowasm_read_valtypes_semantic(
             section, context, params, param_semantics, param_count);
         if (status != TURBOWASM_OK) {
-            free(params);
-            free(param_semantics);
+            turbowasm_rt_free(params);
+            turbowasm_rt_free(param_semantics);
             return status;
         }
 
         if (!turbowasm_reader_uleb32(section, &result_count)) {
-            free(params);
-            free(param_semantics);
+            turbowasm_rt_free(params);
+            turbowasm_rt_free(param_semantics);
             return TURBOWASM_MALFORMED_MODULE;
         }
 
         if (!turbowasm_validation_context_define_type(
                 context, index, param_count, result_count)) {
-            free(params);
-            free(param_semantics);
+            turbowasm_rt_free(params);
+            turbowasm_rt_free(param_semantics);
             return TURBOWASM_OUT_OF_MEMORY;
         }
 
         type = turbowasm_validation_context_type_mut(context, index);
         if (type == NULL) {
-            free(params);
-            free(param_semantics);
+            turbowasm_rt_free(params);
+            turbowasm_rt_free(param_semantics);
             return TURBOWASM_MALFORMED_MODULE;
         }
 
@@ -152,8 +153,8 @@ static turbowasm_status turbowasm_validate_type_section(
             memcpy(type->param_semantics, param_semantics,
                    (size_t)param_count * sizeof(*param_semantics));
         }
-        free(params);
-        free(param_semantics);
+        turbowasm_rt_free(params);
+        turbowasm_rt_free(param_semantics);
 
         status = turbowasm_read_valtypes_semantic(
             section, context, type->results, type->result_semantics,

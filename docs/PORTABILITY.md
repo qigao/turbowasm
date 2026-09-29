@@ -21,10 +21,13 @@ The Runtime source does not directly include Win32, pthread, POSIX file, socket,
 `mmap`, or `VirtualAlloc` APIs. Platform-heavy services are carried by Salts
 or by optional TurboWasm adapter targets.
 
-The current remaining hosted-libc assumption is allocation: Runtime validation,
-linking, instance state, and restartable execution still allocate through the
-standard C heap. Caller-supplied allocation/resource control is tracked
-separately by #123.
+Runtime heap allocation is centralized behind `turbowasm_runtime_config`.
+The default allocator delegates to the hosted C heap, while embedded callers
+may provide allocate/reallocate/deallocate callbacks. Policies can cap borrowed
+module size, any single Runtime allocation, each owned linear memory, and each
+owned table. Aggregate budgets can be implemented by state held in the caller
+allocator context. Module-derived instances and restartable executions inherit
+the module policy; imported memories/tables retain their provider policy.
 
 ## Optional target boundary
 

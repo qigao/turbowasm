@@ -2,6 +2,7 @@
 
 #include "reader.h"
 #include "validate_type.h"
+#include "runtime_alloc.h"
 
 #include <salts/clock.h>
 
@@ -79,7 +80,7 @@ static bool turbowasm_const_value_stack_reserve(
 
     if ((uint64_t)next * sizeof(*grown) > (uint64_t)SIZE_MAX)
         return false;
-    grown = (turbowasm_value *)realloc(
+    grown = (turbowasm_value *)turbowasm_rt_realloc(
         stack->values, (size_t)next * sizeof(*grown));
     if (grown == NULL)
         return false;
@@ -376,7 +377,7 @@ static turbowasm_status turbowasm_eval_value_expr(
         }
     }
 
-    free(stack.values);
+    turbowasm_rt_free(stack.values);
     return status;
 }
 
@@ -436,7 +437,7 @@ static turbowasm_status turbowasm_allocate_globals(
         (uint64_t)SIZE_MAX)
         return TURBOWASM_OUT_OF_MEMORY;
 
-    instance->globals = (turbowasm_value *)calloc(
+    instance->globals = (turbowasm_value *)turbowasm_rt_calloc(
         (size_t)context->global_count,
         sizeof(*instance->globals));
     if (instance->globals == NULL)
@@ -487,7 +488,7 @@ turbowasm_status turbowasm_instance_memory_storage_init(
         return TURBOWASM_INVALID_ARGUMENT;
 
     if (bytes != 0u) {
-        data = (uint8_t *)calloc(bytes, 1u);
+        data = (uint8_t *)turbowasm_rt_calloc(bytes, 1u);
         if (data == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
     }
@@ -502,7 +503,7 @@ turbowasm_status turbowasm_instance_memory_storage_init(
             goto out_of_memory;
         waiter_mutex_initialized = true;
 
-        waiters = (turbowasm_memory_waiter *)calloc(
+        waiters = (turbowasm_memory_waiter *)turbowasm_rt_calloc(
             TURBOWASM_MEMORY_WAITER_CAPACITY,
             sizeof(*waiters));
         if (waiters == NULL)
@@ -537,12 +538,12 @@ out_of_memory:
         salts_cond_destroy(
             &waiters[initialized_waiters].condition);
     }
-    free(waiters);
+    turbowasm_rt_free(waiters);
     if (waiter_mutex_initialized)
         salts_mutex_destroy(&memory->waiter_mutex);
     if (lock_initialized)
         salts_rwlock_destroy(&memory->access_lock);
-    free(data);
+    turbowasm_rt_free(data);
     memory->access_lock = NULL;
     memory->waiter_mutex = NULL;
     return TURBOWASM_OUT_OF_MEMORY;
@@ -568,7 +569,7 @@ void turbowasm_instance_memory_storage_destroy(
                 &memory->waiters[index].condition);
         }
     }
-    free(memory->waiters);
+    turbowasm_rt_free(memory->waiters);
     memory->waiters = NULL;
     memory->waiter_capacity = 0u;
 
@@ -577,7 +578,7 @@ void turbowasm_instance_memory_storage_destroy(
     memory->waiter_mutex = NULL;
     memory->waiter_mutex_initialized = false;
 
-    free(memory->data);
+    turbowasm_rt_free(memory->data);
     memory->data = NULL;
 
     if (memory->access_lock_initialized)
@@ -592,12 +593,17 @@ void turbowasm_instance_memory_storage_destroy(
 static turbowasm_status turbowasm_allocate_memories(
     turbowasm_instance_impl *instance,
     const turbowasm_validation_context *context) {
+    const turbowasm_module_impl *module;
     uint32_t index;
 
     if (context->memory_count == 0u)
         return TURBOWASM_OK;
 
-    instance->memories = (turbowasm_instance_memory *)calloc(
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    instance->memories = (turbowasm_instance_memory *)turbowasm_rt_calloc(
         (size_t)context->memory_count,
         sizeof(*instance->memories));
     if (instance->memories == NULL)
@@ -625,7 +631,13 @@ static turbowasm_status turbowasm_allocate_memories(
         memory->pages = source->limits.minimum;
         memory->maximum_pages = source->limits.maximum;
         memory->page_size = source->page_size;
+        memory->resource_max_bytes =
+            module->config.limits.max_linear_memory_bytes;
         memory->has_maximum = source->limits.has_maximum;
+
+        if (memory->resource_max_bytes != 0u &&
+            bytes > (uint64_t)memory->resource_max_bytes)
+            return TURBOWASM_OUT_OF_MEMORY;
 
         {
             turbowasm_status status =
@@ -689,12 +701,17 @@ static turbowasm_status turbowasm_table_initial_value(
 static turbowasm_status turbowasm_allocate_tables(
     turbowasm_instance_impl *instance,
     const turbowasm_validation_context *context) {
+    const turbowasm_module_impl *module;
     uint32_t index;
 
     if (context->table_count == 0u)
         return TURBOWASM_OK;
 
-    instance->tables = (turbowasm_instance_table *)calloc(
+    module = turbowasm_module_impl_get(instance->module);
+    if (module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    instance->tables = (turbowasm_instance_table *)turbowasm_rt_calloc(
         (size_t)context->table_count,
         sizeof(*instance->tables));
     if (instance->tables == NULL)
@@ -722,8 +739,14 @@ static turbowasm_status turbowasm_allocate_tables(
 
         table->size = source->limits.minimum;
         table->maximum = source->limits.maximum;
+        table->resource_max_elements =
+            module->config.limits.max_table_elements;
         table->has_maximum = source->limits.has_maximum;
         table->reference_type = source->reference_type;
+
+        if (table->resource_max_elements != 0u &&
+            table->size > table->resource_max_elements)
+            return TURBOWASM_OUT_OF_MEMORY;
 
         if (table->size != 0u) {
             if ((uint64_t)table->size *
@@ -731,7 +754,7 @@ static turbowasm_status turbowasm_allocate_tables(
                 (uint64_t)SIZE_MAX)
                 return TURBOWASM_OUT_OF_MEMORY;
             table->entries =
-                (turbowasm_instance_table_entry *)calloc(
+                (turbowasm_instance_table_entry *)turbowasm_rt_calloc(
                     (size_t)table->size,
                     sizeof(*table->entries));
             if (table->entries == NULL)
@@ -819,7 +842,7 @@ static turbowasm_status turbowasm_allocate_segment_lifecycle(
 
     instance->data_segment_count = context->data_segment_count;
     if (context->data_segment_count != 0u) {
-        instance->data_segment_dropped = (uint8_t *)calloc(
+        instance->data_segment_dropped = (uint8_t *)turbowasm_rt_calloc(
             (size_t)context->data_segment_count, 1u);
         if (instance->data_segment_dropped == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
@@ -832,7 +855,7 @@ static turbowasm_status turbowasm_allocate_segment_lifecycle(
 
     instance->element_segment_count = context->element_segment_count;
     if (context->element_segment_count != 0u) {
-        instance->element_segment_dropped = (uint8_t *)calloc(
+        instance->element_segment_dropped = (uint8_t *)turbowasm_rt_calloc(
             (size_t)context->element_segment_count, 1u);
         if (instance->element_segment_dropped == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
@@ -1078,7 +1101,7 @@ void turbowasm_instance_state_destroy(
     if (instance == NULL)
         return;
 
-    free(instance->globals);
+    turbowasm_rt_free(instance->globals);
     instance->globals = NULL;
     instance->global_count = 0u;
 
@@ -1095,7 +1118,7 @@ void turbowasm_instance_state_destroy(
                 &instance->memories[index]);
         }
     }
-    free(instance->memories);
+    turbowasm_rt_free(instance->memories);
     instance->memories = NULL;
     instance->memory_count = 0u;
 
@@ -1108,18 +1131,18 @@ void turbowasm_instance_state_destroy(
                 index < module->validation.table_count &&
                 module->validation.tables[index].imported)
                 continue;
-            free(instance->tables[index].entries);
+            turbowasm_rt_free(instance->tables[index].entries);
         }
     }
-    free(instance->tables);
+    turbowasm_rt_free(instance->tables);
     instance->tables = NULL;
     instance->table_count = 0u;
 
-    free(instance->data_segment_dropped);
+    turbowasm_rt_free(instance->data_segment_dropped);
     instance->data_segment_dropped = NULL;
     instance->data_segment_count = 0u;
 
-    free(instance->element_segment_dropped);
+    turbowasm_rt_free(instance->element_segment_dropped);
     instance->element_segment_dropped = NULL;
     instance->element_segment_count = 0u;
 }
@@ -2171,7 +2194,9 @@ turbowasm_status turbowasm_instance_memory_grow(
     next_bytes = next_pages * memory->page_size;
     previous_bytes =
         (uint64_t)memory->pages * memory->page_size;
-    if (next_bytes > (uint64_t)SIZE_MAX) {
+    if (next_bytes > (uint64_t)SIZE_MAX ||
+        (memory->resource_max_bytes != 0u &&
+         next_bytes > (uint64_t)memory->resource_max_bytes)) {
         *out_previous_pages = UINT32_MAX;
         turbowasm_instance_memory_wrunlock(memory);
         return TURBOWASM_OK;
@@ -2183,7 +2208,7 @@ turbowasm_status turbowasm_instance_memory_grow(
         return TURBOWASM_OK;
     }
 
-    grown = (uint8_t *)realloc(
+    grown = (uint8_t *)turbowasm_rt_realloc(
         memory->data, (size_t)next_bytes);
     if (grown == NULL) {
         *out_previous_pages = UINT32_MAX;
@@ -2515,7 +2540,7 @@ turbowasm_status turbowasm_instance_table_init(
         if ((uint64_t)length * sizeof(*values) >
             (uint64_t)SIZE_MAX)
             return TURBOWASM_OUT_OF_MEMORY;
-        values = (turbowasm_instance_table_entry *)calloc(
+        values = (turbowasm_instance_table_entry *)turbowasm_rt_calloc(
             (size_t)length, sizeof(*values));
         if (values == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
@@ -2536,7 +2561,7 @@ turbowasm_status turbowasm_instance_table_init(
     }
 
 done:
-    free(values);
+    turbowasm_rt_free(values);
     return status;
 }
 
@@ -2623,6 +2648,8 @@ turbowasm_status turbowasm_instance_table_grow(
     next_size = (uint64_t)table->size + delta;
     if (next_size > UINT32_MAX ||
         (table->has_maximum && next_size > table->maximum) ||
+        (table->resource_max_elements != 0u &&
+         next_size > table->resource_max_elements) ||
         next_size * sizeof(*grown) > (uint64_t)SIZE_MAX) {
         *out_previous_size = UINT32_MAX;
         return TURBOWASM_OK;
@@ -2631,7 +2658,7 @@ turbowasm_status turbowasm_instance_table_grow(
     if (delta == 0u)
         return TURBOWASM_OK;
 
-    grown = (turbowasm_instance_table_entry *)realloc(
+    grown = (turbowasm_instance_table_entry *)turbowasm_rt_realloc(
         table->entries, (size_t)next_size * sizeof(*grown));
     if (grown == NULL) {
         *out_previous_size = UINT32_MAX;

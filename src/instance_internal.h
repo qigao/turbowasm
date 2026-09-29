@@ -38,6 +38,7 @@ typedef struct turbowasm_instance_memory {
     uint32_t pages;
     uint32_t maximum_pages;
     uint32_t page_size;
+    size_t resource_max_bytes;
     bool has_maximum;
     bool shared;
     bool access_lock_initialized;
@@ -61,6 +62,7 @@ typedef struct turbowasm_instance_table {
     turbowasm_instance_table_entry *entries;
     uint32_t size;
     uint32_t maximum;
+    uint32_t resource_max_elements;
     bool has_maximum;
     uint8_t reference_type;
 } turbowasm_instance_table;

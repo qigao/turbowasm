@@ -114,6 +114,9 @@ typedef turbowasm_status (*turbowasm_host_function_fn)(
     turbowasm_trap *trap);
 
 turbowasm_status turbowasm_linker_init(turbowasm_linker *linker);
+turbowasm_status turbowasm_linker_init_with_config(
+    turbowasm_linker *linker,
+    const turbowasm_runtime_config *config);
 void turbowasm_linker_destroy(turbowasm_linker *linker);
 
 turbowasm_status turbowasm_linker_define_instance(

@@ -7,6 +7,7 @@
 #include "relaxed_simd.h"
 #include "simd_exec_table.h"
 #include "validate_type.h"
+#include "runtime_alloc.h"
 
 #include <limits.h>
 #include <math.h>
@@ -232,7 +233,7 @@ static bool turbowasm_stack_reserve(
     if ((uint64_t)next * sizeof(*grown) > (uint64_t)SIZE_MAX)
         return false;
 
-    grown = (turbowasm_value *)realloc(
+    grown = (turbowasm_value *)turbowasm_rt_realloc(
         stack->values, (size_t)next * sizeof(*grown));
     if (grown == NULL)
         return false;
@@ -309,7 +310,7 @@ static bool turbowasm_exec_controls_reserve(
     if ((uint64_t)next * sizeof(*grown) > (uint64_t)SIZE_MAX)
         return false;
 
-    grown = (turbowasm_exec_control_frame *)realloc(
+    grown = (turbowasm_exec_control_frame *)turbowasm_rt_realloc(
         controls->frames, (size_t)next * sizeof(*grown));
     if (grown == NULL)
         return false;
@@ -700,23 +701,23 @@ static turbowasm_status turbowasm_exception_create(
     if (type == NULL || !type->defined || type->result_count != 0u)
         return TURBOWASM_MALFORMED_MODULE;
 
-    exception = (turbowasm_exception *)calloc(1u, sizeof(*exception));
+    exception = (turbowasm_exception *)turbowasm_rt_calloc(1u, sizeof(*exception));
     if (exception == NULL)
         return TURBOWASM_OUT_OF_MEMORY;
 
     status = turbowasm_instance_tag_identity(
         instance, tag_index, &exception->tag);
     if (status != TURBOWASM_OK) {
-        free(exception);
+        turbowasm_rt_free(exception);
         return status;
     }
 
     exception->payload_count = type->param_count;
     if (type->param_count != 0u) {
-        exception->payload = (turbowasm_value *)calloc(
+        exception->payload = (turbowasm_value *)turbowasm_rt_calloc(
             (size_t)type->param_count, sizeof(*exception->payload));
         if (exception->payload == NULL) {
-            free(exception);
+            turbowasm_rt_free(exception);
             return TURBOWASM_OUT_OF_MEMORY;
         }
     }
@@ -728,8 +729,8 @@ static turbowasm_status turbowasm_exception_create(
         if (status != TURBOWASM_OK ||
             !turbowasm_value_matches_type(
                 &exception->payload[index], type->params[index])) {
-            free(exception->payload);
-            free(exception);
+            turbowasm_rt_free(exception->payload);
+            turbowasm_rt_free(exception);
             return status == TURBOWASM_OK
                 ? TURBOWASM_TYPE_MISMATCH
                 : status;
@@ -1000,7 +1001,7 @@ static turbowasm_status turbowasm_exec_take_call_arguments(
     if (type->param_count == 0u)
         return TURBOWASM_OK;
 
-    arguments = (turbowasm_value *)calloc(
+    arguments = (turbowasm_value *)turbowasm_rt_calloc(
         (size_t)type->param_count, sizeof(*arguments));
     if (arguments == NULL)
         return TURBOWASM_OUT_OF_MEMORY;
@@ -1022,7 +1023,7 @@ static turbowasm_status turbowasm_exec_take_call_arguments(
     return TURBOWASM_OK;
 
 fail:
-    free(arguments);
+    turbowasm_rt_free(arguments);
     return status;
 }
 
@@ -1059,7 +1060,7 @@ static turbowasm_status turbowasm_exec_call_index(
         goto done;
 
     if (type->result_count != 0u) {
-        results = (turbowasm_value *)calloc(
+        results = (turbowasm_value *)turbowasm_rt_calloc(
             (size_t)type->result_count, sizeof(*results));
         if (results == NULL) {
             status = TURBOWASM_OUT_OF_MEMORY;
@@ -1093,8 +1094,8 @@ static turbowasm_status turbowasm_exec_call_index(
     }
 
 done:
-    free(arguments);
-    free(results);
+    turbowasm_rt_free(arguments);
+    turbowasm_rt_free(results);
     return status;
 }
 
@@ -4610,7 +4611,7 @@ restart_frame:
     }
 
     if (function->local_count != 0u) {
-        locals = (turbowasm_value *)calloc(
+        locals = (turbowasm_value *)turbowasm_rt_calloc(
             (size_t)function->local_count, sizeof(*locals));
         if (locals == NULL) {
             status = TURBOWASM_OUT_OF_MEMORY;
@@ -4646,7 +4647,7 @@ restart_frame:
         }
     }
 
-    free(owned_arguments);
+    turbowasm_rt_free(owned_arguments);
     owned_arguments = NULL;
     arguments = NULL;
     argument_count = 0u;
@@ -4940,11 +4941,11 @@ restart_frame:
                 if (status != TURBOWASM_OK)
                     goto done;
 
-                free(locals);
+                turbowasm_rt_free(locals);
                 locals = NULL;
-                free(stack.values);
+                turbowasm_rt_free(stack.values);
                 stack = (turbowasm_value_stack){0};
-                free(controls.frames);
+                turbowasm_rt_free(controls.frames);
                 controls = (turbowasm_exec_control_stack){0};
 
                 function_index = target_index;
@@ -4968,11 +4969,11 @@ restart_frame:
                 if (status != TURBOWASM_OK)
                     goto done;
 
-                free(locals);
+                turbowasm_rt_free(locals);
                 locals = NULL;
-                free(stack.values);
+                turbowasm_rt_free(stack.values);
                 stack = (turbowasm_value_stack){0};
-                free(controls.frames);
+                turbowasm_rt_free(controls.frames);
                 controls = (turbowasm_exec_control_stack){0};
 
                 instance = target.instance;
@@ -5599,10 +5600,10 @@ done:
             status = transfer_status;
     }
 
-    free(owned_arguments);
-    free(locals);
-    free(stack.values);
-    free(controls.frames);
+    turbowasm_rt_free(owned_arguments);
+    turbowasm_rt_free(locals);
+    turbowasm_rt_free(stack.values);
+    turbowasm_rt_free(controls.frames);
     return status;
 }
 
@@ -5815,9 +5816,12 @@ turbowasm_status turbowasm_jit_instance_attach_backend(
         return TURBOWASM_INVALID_ARGUMENT;
 
     if (module->validation.function_count != 0u) {
-        states = (turbowasm_jit_function_state *)calloc(
+        turbowasm_runtime_scope scope =
+            turbowasm_runtime_scope_enter(&module->config);
+        states = (turbowasm_jit_function_state *)turbowasm_rt_calloc(
             (size_t)module->validation.function_count,
             sizeof(*states));
+        turbowasm_runtime_scope_leave(scope);
         if (states == NULL)
             return TURBOWASM_OUT_OF_MEMORY;
     }
@@ -5853,7 +5857,7 @@ void turbowasm_jit_instance_detach_backend(
         }
     }
 
-    free(instance->jit_functions);
+    turbowasm_rt_free(instance->jit_functions);
     instance->jit_functions = NULL;
     instance->jit_function_count = 0u;
     instance->jit_hot_threshold = 0u;
@@ -5922,8 +5926,8 @@ static void turbowasm_instance_exception_destroy_all(
     exception = impl->exceptions;
     while (exception != NULL) {
         turbowasm_exception *next = exception->next;
-        free(exception->payload);
-        free(exception);
+        turbowasm_rt_free(exception->payload);
+        turbowasm_rt_free(exception);
         exception = next;
     }
     impl->exceptions = NULL;
@@ -5938,12 +5942,12 @@ static void turbowasm_instance_dispose_unpublished(
     turbowasm_jit_instance_detach_backend(impl);
     turbowasm_instance_exception_destroy_all(impl);
     turbowasm_instance_state_destroy(impl);
-    free(impl->linked_functions);
-    free(impl->linked_globals);
-    free(impl->linked_memories);
-    free(impl->linked_tables);
-    free(impl->linked_tags);
-    free(impl);
+    turbowasm_rt_free(impl->linked_functions);
+    turbowasm_rt_free(impl->linked_globals);
+    turbowasm_rt_free(impl->linked_memories);
+    turbowasm_rt_free(impl->linked_tables);
+    turbowasm_rt_free(impl->linked_tags);
+    turbowasm_rt_free(impl);
 }
 
 static turbowasm_status turbowasm_instance_copy_linkage(
@@ -5963,7 +5967,7 @@ static turbowasm_status turbowasm_instance_copy_linkage(
                 return TURBOWASM_OUT_OF_MEMORY; \
             bytes = (size_t)source->count_field * \
                     sizeof(*source->field); \
-            destination->field = malloc(bytes); \
+            destination->field = turbowasm_rt_malloc(bytes); \
             if (destination->field == NULL) \
                 return TURBOWASM_OUT_OF_MEMORY; \
             memcpy(destination->field, source->field, bytes); \
@@ -6006,22 +6010,32 @@ static turbowasm_status turbowasm_instance_create_internal(
     if (module_impl == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    impl = (turbowasm_instance_impl *)calloc(1u, sizeof(*impl));
-    if (impl == NULL)
-        return TURBOWASM_OUT_OF_MEMORY;
+    {
+        turbowasm_runtime_scope scope =
+            turbowasm_runtime_scope_enter(&module_impl->config);
 
-    impl->module = module;
-
-    if (resolve_imports) {
-        status = turbowasm_linker_bind_instance(
-            impl, module_impl, linker);
-        if (status != TURBOWASM_OK) {
-            turbowasm_instance_dispose_unpublished(impl);
-            return status;
+        impl = (turbowasm_instance_impl *)turbowasm_rt_calloc(
+            1u, sizeof(*impl));
+        if (impl == NULL) {
+            turbowasm_runtime_scope_leave(scope);
+            return TURBOWASM_OUT_OF_MEMORY;
         }
+        impl->module = module;
+
+        if (resolve_imports) {
+            status = turbowasm_linker_bind_instance(
+                impl, module_impl, linker);
+            if (status != TURBOWASM_OK) {
+                turbowasm_runtime_scope_leave(scope);
+                turbowasm_instance_dispose_unpublished(impl);
+                return status;
+            }
+        }
+
+        status = turbowasm_instance_state_init(impl, module_impl);
+        turbowasm_runtime_scope_leave(scope);
     }
 
-    status = turbowasm_instance_state_init(impl, module_impl);
     if (status != TURBOWASM_OK) {
         if (preserve_failed_instance &&
             status == TURBOWASM_TRAPPED) {
@@ -6101,18 +6115,21 @@ turbowasm_status turbowasm_instance_create_sibling_internal(
     if (module_impl == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    impl = (turbowasm_instance_impl *)calloc(1u, sizeof(*impl));
-    if (impl == NULL)
-        return TURBOWASM_OUT_OF_MEMORY;
-    impl->module = parent_impl->module;
-
-    status = turbowasm_instance_copy_linkage(impl, parent_impl);
-    if (status != TURBOWASM_OK) {
-        turbowasm_instance_dispose_unpublished(impl);
-        return status;
+    {
+        turbowasm_runtime_scope scope =
+            turbowasm_runtime_scope_enter(&module_impl->config);
+        impl = (turbowasm_instance_impl *)turbowasm_rt_calloc(
+            1u, sizeof(*impl));
+        if (impl == NULL) {
+            turbowasm_runtime_scope_leave(scope);
+            return TURBOWASM_OUT_OF_MEMORY;
+        }
+        impl->module = parent_impl->module;
+        status = turbowasm_instance_copy_linkage(impl, parent_impl);
+        if (status == TURBOWASM_OK)
+            status = turbowasm_instance_state_init(impl, module_impl);
+        turbowasm_runtime_scope_leave(scope);
     }
-
-    status = turbowasm_instance_state_init(impl, module_impl);
     if (status != TURBOWASM_OK) {
         turbowasm_instance_dispose_unpublished(impl);
         return status;
@@ -6147,22 +6164,22 @@ void turbowasm_instance_destroy(turbowasm_instance *instance) {
     turbowasm_jit_instance_detach_backend(impl);
     turbowasm_instance_exception_destroy_all(impl);
     turbowasm_instance_state_destroy(impl);
-    free(impl->linked_functions);
+    turbowasm_rt_free(impl->linked_functions);
     impl->linked_functions = NULL;
     impl->linked_function_count = 0u;
-    free(impl->linked_globals);
+    turbowasm_rt_free(impl->linked_globals);
     impl->linked_globals = NULL;
     impl->linked_global_count = 0u;
-    free(impl->linked_memories);
+    turbowasm_rt_free(impl->linked_memories);
     impl->linked_memories = NULL;
     impl->linked_memory_count = 0u;
-    free(impl->linked_tables);
+    turbowasm_rt_free(impl->linked_tables);
     impl->linked_tables = NULL;
     impl->linked_table_count = 0u;
-    free(impl->linked_tags);
+    turbowasm_rt_free(impl->linked_tags);
     impl->linked_tags = NULL;
     impl->linked_tag_count = 0u;
-    free(impl);
+    turbowasm_rt_free(impl);
     instance->impl = NULL;
 }
 
@@ -6229,17 +6246,22 @@ turbowasm_status turbowasm_instance_invoke_with_options(
     impl = (turbowasm_instance_impl *)instance->impl;
     impl->pending_exception = NULL;
 
-    return turbowasm_dispatch_function(
-        impl,
-        function_index,
-        arguments,
-        argument_count,
-        results,
-        result_capacity,
-        result_count,
-        trap,
-        execution_ptr,
-        0u);
+    {
+        const turbowasm_module_impl *module_impl =
+            turbowasm_module_impl_get(impl->module);
+        turbowasm_runtime_scope scope;
+        turbowasm_status status;
+
+        if (module_impl == NULL)
+            return TURBOWASM_INVALID_ARGUMENT;
+        scope = turbowasm_runtime_scope_enter(&module_impl->config);
+        status = turbowasm_dispatch_function(
+            impl, function_index, arguments, argument_count,
+            results, result_capacity, result_count, trap,
+            execution_ptr, 0u);
+        turbowasm_runtime_scope_leave(scope);
+        return status;
+    }
 }
 
 const char *turbowasm_trap_string(turbowasm_trap trap) {
