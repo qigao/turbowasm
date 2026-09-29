@@ -6,6 +6,8 @@
 #include <assert.h>
 #include <stdint.h>
 
+#include "../src/validation_context.h"
+
 int main(void) {
     turbowasm_jit_backend backend = {0};
     size_t initial_mapped;
@@ -20,6 +22,18 @@ int main(void) {
 
     assert(!backend.is_function_eligible(
         backend.context, NULL, 0u, NULL));
+
+    {
+        turbowasm_validation_context validation = {0};
+        turbowasm_validation_memory memory = {0};
+        turbowasm_validation_function function = {0};
+
+        memory.memory64 = true;
+        validation.memories = &memory;
+        validation.memory_count = 1u;
+        assert(!backend.is_function_eligible(
+            backend.context, &validation, 0u, &function));
+    }
 
     assert(turbowasm_mir_backend_code_memory_limit(
                &backend) == 8u * 1024u * 1024u);
