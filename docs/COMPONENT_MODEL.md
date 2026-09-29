@@ -211,6 +211,41 @@ Resource handle lift/lower is deliberately excluded from C3b and remains C4.
 UTF-16 and latin1+utf16 string encodings are not yet exposed by this first
 memory codec.
 
+## C4 resource ownership boundary
+
+Resource runtime state is stored in a Component-owned handle table rather than
+Core tables or raw host pointers.
+
+Handles are 28-bit values compatible with the Component canonical i32 carrier:
+
+```text
+bits  0..15  slot + 1
+bits 16..27  generation
+```
+
+Slot zero and generation zero are invalid. A freed slot increments its
+generation before reuse. When generation 4095 is consumed, the slot is
+permanently retired instead of wrapping, preventing an old stale handle from
+becoming valid again through ABA reuse.
+
+Each entry retains the nominal Component resource identity, its Core
+representation value, ownership state, and active lend count.
+
+The first synchronous resource primitives implement the state needed by
+`canon resource.new/rep/drop`: new creates an owned handle; rep validates
+generation plus nominal resource identity; drop is rejected while lends are
+active; successful drop invalidates the handle before an optional destructor
+callback.
+
+The destructor callback is an explicit semantic operation. Generic table
+destruction only releases host bookkeeping and never runs guest code.
+Binding a resource destructor to a Core function remains C5 composition.
+
+The table has an explicit maximum entry count (at most 65535) and uses Runtime
+allocation helpers, so #300 per-allocation limits apply. Async borrow scopes are
+not introduced here; C4 exposes lend acquire/release state only, while
+task/subtask borrow-scope lifecycle remains deferred to the concurrency layer.
+
 ## Deferred work
 
 C1 intentionally does not implement:
