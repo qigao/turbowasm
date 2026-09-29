@@ -1202,7 +1202,10 @@ static turbowasm_status decode_component_semantics(
             ++current_core_modules;
         } else if (section->id == 2u) {
             status = decode_core_instance_section(
-                reader, component, current_core_modules);
+                reader,
+                component,
+                current_core_modules,
+                next_core_function_index);
         } else if (section->id == 6u) {
             status = decode_core_alias_section(
                 reader,
@@ -1214,11 +1217,11 @@ static turbowasm_status decode_component_semantics(
             status = decode_component_type_section(
                 reader, component, &current_types);
         } else if (section->id == 8u) {
-            status = decode_canon_lift_section(
+            status = decode_canon_section(
                 reader,
                 component,
                 current_types,
-                next_core_function_index,
+                &next_core_function_index,
                 next_core_memory_index,
                 &next_component_function_index);
         } else if (section->id == 10u) {
@@ -1250,6 +1253,7 @@ static turbowasm_status decode_component_semantics(
             &component->type_graph))
         return TURBOWASM_MALFORMED_MODULE;
 
+    component->core_function_count = next_core_function_index;
     return TURBOWASM_OK;
 }
 
@@ -1279,6 +1283,7 @@ turbowasm_status turbowasm_component_binary_load_with_config(
         component->core_function_aliases != NULL ||
         component->core_memory_aliases != NULL ||
         component->canon_lifts != NULL ||
+        component->resource_builtins != NULL ||
         component->type_graph.types != NULL ||
         component->type_graph.count != 0u ||
         component->imports != NULL ||
@@ -1361,9 +1366,12 @@ fail:
         uint32_t index;
         for (index = 0u;
              index < component->core_instance_count;
-             ++index)
+             ++index) {
             turbowasm_rt_free(
                 component->core_instances[index].arguments);
+            turbowasm_rt_free(
+                component->core_instances[index].exports);
+        }
     }
     turbowasm_component_type_graph_destroy(
         &component->type_graph);
@@ -1375,6 +1383,7 @@ fail:
     turbowasm_rt_free(component->core_function_aliases);
     turbowasm_rt_free(component->core_memory_aliases);
     turbowasm_rt_free(component->canon_lifts);
+    turbowasm_rt_free(component->resource_builtins);
     memset(component, 0, sizeof(*component));
     turbowasm_runtime_scope_leave(scope);
     return status;
@@ -1392,9 +1401,12 @@ void turbowasm_component_binary_destroy(
         uint32_t index;
         for (index = 0u;
              index < component->core_instance_count;
-             ++index)
+             ++index) {
             turbowasm_rt_free(
                 component->core_instances[index].arguments);
+            turbowasm_rt_free(
+                component->core_instances[index].exports);
+        }
     }
     turbowasm_component_type_graph_destroy(
         &component->type_graph);
@@ -1406,6 +1418,7 @@ void turbowasm_component_binary_destroy(
     turbowasm_rt_free(component->core_function_aliases);
     turbowasm_rt_free(component->core_memory_aliases);
     turbowasm_rt_free(component->canon_lifts);
+    turbowasm_rt_free(component->resource_builtins);
     memset(component, 0, sizeof(*component));
     turbowasm_runtime_scope_leave(scope);
 }
@@ -1464,6 +1477,16 @@ turbowasm_component_binary_canon_lift_at(
     if (component == NULL || index >= component->canon_lift_count)
         return NULL;
     return &component->canon_lifts[index];
+}
+
+const turbowasm_component_resource_builtin *
+turbowasm_component_binary_resource_builtin_at(
+    const turbowasm_component_binary *component,
+    uint32_t index) {
+    if (component == NULL ||
+        index >= component->resource_builtin_count)
+        return NULL;
+    return &component->resource_builtins[index];
 }
 
 const turbowasm_component_import *
