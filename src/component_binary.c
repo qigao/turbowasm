@@ -889,6 +889,9 @@ static turbowasm_status decode_component_semantics(
     turbowasm_component_binary *component) {
     uint32_t total_types = 0u;
     uint32_t current_types = 0u;
+    uint32_t current_core_modules = 0u;
+    uint32_t current_core_instances = 0u;
+    uint32_t current_core_functions = 0u;
     uint32_t i;
 
     if (component == NULL)
@@ -897,9 +900,6 @@ static turbowasm_status decode_component_semantics(
     for (i = 0u; i < component->section_count; ++i) {
         const turbowasm_component_section *section =
             &component->sections[i];
-
-        if (section->id == 6u)
-            return TURBOWASM_UNSUPPORTED;
 
         if (section->id == 7u) {
             turbowasm_reader reader;
@@ -926,9 +926,40 @@ static turbowasm_status decode_component_semantics(
         turbowasm_reader_init(
             &reader, section->payload, section->size);
 
-        if (section->id == 7u) {
+        if (section->id == 1u) {
+            if (current_core_modules == UINT32_MAX)
+                return TURBOWASM_OUT_OF_MEMORY;
+            ++current_core_modules;
+        } else if (section->id == 2u) {
+            uint32_t before = component->core_instance_count;
+            status = decode_core_instance_section(
+                reader, component, current_core_modules);
+            if (status == TURBOWASM_OK) {
+                uint32_t added =
+                    component->core_instance_count - before;
+                if (added > UINT32_MAX - current_core_instances)
+                    return TURBOWASM_OUT_OF_MEMORY;
+                current_core_instances += added;
+            }
+        } else if (section->id == 6u) {
+            uint32_t before =
+                component->core_function_alias_count;
+            status = decode_core_function_alias_section(
+                reader, component, current_core_instances);
+            if (status == TURBOWASM_OK) {
+                uint32_t added =
+                    component->core_function_alias_count - before;
+                if (added > UINT32_MAX - current_core_functions)
+                    return TURBOWASM_OUT_OF_MEMORY;
+                current_core_functions += added;
+            }
+        } else if (section->id == 7u) {
             status = decode_component_type_section(
                 reader, component, &current_types);
+        } else if (section->id == 8u) {
+            status = decode_canon_section(
+                reader, component,
+                current_core_functions, current_types);
         } else if (section->id == 10u) {
             status = decode_component_import_section(
                 reader, component, current_types);
@@ -971,6 +1002,9 @@ turbowasm_status turbowasm_component_binary_load_with_config(
         component->bytes != NULL ||
         component->sections != NULL ||
         component->core_modules != NULL ||
+        component->core_instances != NULL ||
+        component->core_function_aliases != NULL ||
+        component->canon_lifts != NULL ||
         component->type_graph.types != NULL ||
         component->type_graph.count != 0u ||
         component->imports != NULL ||
@@ -1055,6 +1089,9 @@ fail:
     turbowasm_rt_free(component->exports);
     turbowasm_rt_free(component->sections);
     turbowasm_rt_free(component->core_modules);
+    turbowasm_rt_free(component->core_instances);
+    turbowasm_rt_free(component->core_function_aliases);
+    turbowasm_rt_free(component->canon_lifts);
     memset(component, 0, sizeof(*component));
     turbowasm_runtime_scope_leave(scope);
     return status;
@@ -1074,6 +1111,9 @@ void turbowasm_component_binary_destroy(
     turbowasm_rt_free(component->exports);
     turbowasm_rt_free(component->sections);
     turbowasm_rt_free(component->core_modules);
+    turbowasm_rt_free(component->core_instances);
+    turbowasm_rt_free(component->core_function_aliases);
+    turbowasm_rt_free(component->canon_lifts);
     memset(component, 0, sizeof(*component));
     turbowasm_runtime_scope_leave(scope);
 }
@@ -1094,6 +1134,34 @@ turbowasm_component_binary_core_module_at(
     if (component == NULL || index >= component->core_module_count)
         return NULL;
     return &component->core_modules[index];
+}
+
+const turbowasm_component_core_instance *
+turbowasm_component_binary_core_instance_at(
+    const turbowasm_component_binary *component,
+    uint32_t index) {
+    if (component == NULL || index >= component->core_instance_count)
+        return NULL;
+    return &component->core_instances[index];
+}
+
+const turbowasm_component_core_function_alias *
+turbowasm_component_binary_core_function_alias_at(
+    const turbowasm_component_binary *component,
+    uint32_t index) {
+    if (component == NULL ||
+        index >= component->core_function_alias_count)
+        return NULL;
+    return &component->core_function_aliases[index];
+}
+
+const turbowasm_component_canon_lift *
+turbowasm_component_binary_canon_lift_at(
+    const turbowasm_component_binary *component,
+    uint32_t index) {
+    if (component == NULL || index >= component->canon_lift_count)
+        return NULL;
+    return &component->canon_lifts[index];
 }
 
 const turbowasm_component_import *
