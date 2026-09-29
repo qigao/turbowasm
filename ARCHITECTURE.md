@@ -168,6 +168,11 @@ A `turbowasm_module` is a zero-initialized opaque owner handle. The loader
 borrows immutable input bytes while private validation and retained metadata
 remain implementation details behind the public handle.
 
+A configured load may also carry a caller-owned allocator and explicit resource
+limits for module bytes, individual Runtime allocations, owned linear memories
+and owned tables. Module-derived instances and restartable executions inherit
+that policy; imported memories/tables retain the provider instance policy.
+
 ## Capability status
 
 ```text
@@ -189,10 +194,16 @@ scalar/helper-backed SIMD MIR           implemented
 per-function fallback isolation         implemented
 executable MIR mapping budget           implemented
 
-WASI Preview 1 capability layer         in progress
-threads/shared memory/atomics           future work
-memory64                                unsupported
+WASI Preview 1 capability layer         implemented
+WASI filesystem provider ABI            implemented
+Salts HostFS / optional littlefs         implemented
+WASI NativeIO async fd projection       implemented
+threads/shared memory/atomics           implemented + upstream qualified
+legacy WASI threads adapter             implemented
+caller allocator/resource policy        implemented
+memory64                                unsupported; tracked by #304
 WebAssembly GC                          future work
-Component Model                         future work
+Component Model                         tracked by #307
+WASI 0.2 typed interfaces               tracked by #308
 native vector JIT backend               backend-dependent future work
 ```
