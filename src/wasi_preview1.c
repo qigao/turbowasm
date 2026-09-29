@@ -19,6 +19,7 @@ typedef struct turbowasm_wasi_preview1_impl {
     bool allow_random;
     bool allow_fd_write;
     bool allow_fd_read;
+    bool allow_proc_exit;
     bool allow_filesystem;
     turbowasm_wasi_string_list args;
     turbowasm_wasi_string_list environment;
@@ -30,6 +31,8 @@ typedef struct turbowasm_wasi_preview1_impl {
     void *fd_write_context;
     turbowasm_wasi_fd_read_fn fd_read;
     void *fd_read_context;
+    turbowasm_wasi_proc_exit_fn proc_exit;
+    void *proc_exit_context;
     turbowasm_wasi_fs *filesystem;
 } turbowasm_wasi_preview1_impl;
 
@@ -833,6 +836,49 @@ static turbowasm_status turbowasm_wasi_path_open(
         results, result_capacity, result_count, trap, error);
 }
 
+static turbowasm_status turbowasm_wasi_proc_exit(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    turbowasm_wasi_preview1_impl *impl =
+        (turbowasm_wasi_preview1_impl *)context;
+    turbowasm_instance *caller;
+
+    (void)results;
+    (void)result_capacity;
+
+    if (impl == NULL || !impl->allow_proc_exit ||
+        impl->proc_exit == NULL || call == NULL ||
+        arguments == NULL || argument_count != 1u ||
+        arguments[0].kind != TURBOWASM_VALUE_I32 ||
+        result_count == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    caller = turbowasm_host_call_instance(call);
+    if (caller == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    impl->proc_exit(
+        impl->proc_exit_context,
+        caller,
+        (uint32_t)arguments[0].as.i32);
+
+    *result_count = 0u;
+    *trap = TURBOWASM_TRAP_NONE;
+
+    /*
+     * Preview1 proc_exit never returns to guest code. INTERRUPTED is the
+     * existing backend-neutral policy status used to unwind the current Wasm
+     * invocation; the callback owns process/thread-group termination policy.
+     */
+    return TURBOWASM_INTERRUPTED;
+}
+
 turbowasm_status turbowasm_wasi_preview1_init(
     turbowasm_wasi_preview1 *wasi,
     const turbowasm_wasi_preview1_config *config) {
@@ -851,6 +897,7 @@ turbowasm_status turbowasm_wasi_preview1_init(
         (config->allow_random && config->random_fill == NULL) ||
         (config->allow_fd_write && config->fd_write == NULL) ||
         (config->allow_fd_read && config->fd_read == NULL) ||
+        (config->allow_proc_exit && config->proc_exit == NULL) ||
         (config->allow_filesystem && config->filesystem == NULL)) {
         free(impl);
         return TURBOWASM_INVALID_ARGUMENT;
@@ -862,6 +909,7 @@ turbowasm_status turbowasm_wasi_preview1_init(
     impl->allow_random = config->allow_random;
     impl->allow_fd_write = config->allow_fd_write;
     impl->allow_fd_read = config->allow_fd_read;
+    impl->allow_proc_exit = config->allow_proc_exit;
     impl->allow_filesystem = config->allow_filesystem;
     impl->clock_time = config->clock_time;
     impl->clock_context = config->clock_context;
@@ -871,6 +919,8 @@ turbowasm_status turbowasm_wasi_preview1_init(
     impl->fd_write_context = config->fd_write_context;
     impl->fd_read = config->fd_read;
     impl->fd_read_context = config->fd_read_context;
+    impl->proc_exit = config->proc_exit;
+    impl->proc_exit_context = config->proc_exit_context;
     impl->filesystem = config->filesystem;
 
     status = turbowasm_wasi_string_list_copy(
@@ -1053,6 +1103,25 @@ turbowasm_status turbowasm_wasi_preview1_define(
             if (status != TURBOWASM_OK)
                 return status;
         }
+    }
+
+    if (impl->allow_proc_exit) {
+        static const turbowasm_value_kind proc_exit_params[] = {
+            TURBOWASM_VALUE_I32
+        };
+        const turbowasm_host_function_type proc_exit_type = {
+            proc_exit_params, 1u, NULL, 0u
+        };
+
+        status = turbowasm_linker_define_host_function(
+            linker,
+            turbowasm_wasi_namespace(),
+            turbowasm_wasi_name("proc_exit"),
+            &proc_exit_type,
+            turbowasm_wasi_proc_exit,
+            impl);
+        if (status != TURBOWASM_OK)
+            return status;
     }
 
     if (impl->allow_filesystem) {

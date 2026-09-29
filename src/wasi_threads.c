@@ -35,8 +35,10 @@ struct turbowasm_wasi_threads_impl {
     const turbowasm_module *module;
     uint32_t start_function_index;
     atomic_bool fatal;
+    atomic_bool exit_requested;
     turbowasm_status fatal_status;
     turbowasm_trap fatal_trap;
+    uint32_t exit_code;
     salts_mutex_t mutex;
     bool mutex_initialized;
 };
@@ -48,7 +50,9 @@ static bool turbowasm_wasi_threads_should_interrupt(
 
     return impl == NULL ||
            atomic_load_explicit(
-               &impl->fatal, memory_order_acquire);
+               &impl->fatal, memory_order_acquire) ||
+           atomic_load_explicit(
+               &impl->exit_requested, memory_order_acquire);
 }
 
 static bool turbowasm_wasi_threads_policy_should_interrupt(
@@ -63,7 +67,9 @@ static bool turbowasm_wasi_threads_policy_should_interrupt(
 
     impl = (turbowasm_wasi_threads_impl *)policy->threads->impl;
     if (atomic_load_explicit(
-            &impl->fatal, memory_order_acquire))
+            &impl->fatal, memory_order_acquire) ||
+        atomic_load_explicit(
+            &impl->exit_requested, memory_order_acquire))
         return true;
 
     return policy->chained_interrupt != NULL &&
@@ -82,7 +88,9 @@ static void turbowasm_wasi_threads_publish_fatal(
 
     salts_mutex_lock(&impl->mutex);
     if (!atomic_load_explicit(
-            &impl->fatal, memory_order_relaxed)) {
+            &impl->fatal, memory_order_relaxed) &&
+        !atomic_load_explicit(
+            &impl->exit_requested, memory_order_relaxed)) {
         impl->fatal_status = status;
         impl->fatal_trap = trap;
         atomic_store_explicit(
@@ -96,6 +104,33 @@ static void turbowasm_wasi_threads_publish_fatal(
      * across the whole group. Signaling through one sibling therefore wakes
      * root/child waiters without turning the wake into a Wasm notify result.
      */
+    if (first && source != NULL && source->impl != NULL) {
+        turbowasm_instance_interrupt_waiters(
+            (turbowasm_instance_impl *)source->impl);
+    }
+}
+
+static void turbowasm_wasi_threads_publish_exit(
+    turbowasm_wasi_threads_impl *impl,
+    turbowasm_instance *source,
+    uint32_t exit_code) {
+    bool first = false;
+
+    if (impl == NULL)
+        return;
+
+    salts_mutex_lock(&impl->mutex);
+    if (!atomic_load_explicit(
+            &impl->fatal, memory_order_relaxed) &&
+        !atomic_load_explicit(
+            &impl->exit_requested, memory_order_relaxed)) {
+        impl->exit_code = exit_code;
+        atomic_store_explicit(
+            &impl->exit_requested, true, memory_order_release);
+        first = true;
+    }
+    salts_mutex_unlock(&impl->mutex);
+
     if (first && source != NULL && source->impl != NULL) {
         turbowasm_instance_interrupt_waiters(
             (turbowasm_instance_impl *)source->impl);
@@ -270,7 +305,9 @@ static int32_t turbowasm_wasi_threads_reserve(
 
     salts_mutex_lock(&impl->mutex);
     if (atomic_load_explicit(
-            &impl->fatal, memory_order_acquire)) {
+            &impl->fatal, memory_order_acquire) ||
+        atomic_load_explicit(
+            &impl->exit_requested, memory_order_acquire)) {
         salts_mutex_unlock(&impl->mutex);
         return TURBOWASM_WASI_THREADS_SPAWN_GROUP_TERMINATED;
     }
@@ -475,6 +512,7 @@ turbowasm_status turbowasm_wasi_threads_init(
     }
     impl->mutex_initialized = true;
     atomic_init(&impl->fatal, false);
+    atomic_init(&impl->exit_requested, false);
     impl->fatal_status = TURBOWASM_OK;
     impl->fatal_trap = TURBOWASM_TRAP_NONE;
     impl->executor = config->executor;
@@ -571,6 +609,42 @@ bool turbowasm_wasi_threads_group_fatal(
         *out_status = impl->fatal_status;
     if (out_trap != NULL)
         *out_trap = impl->fatal_trap;
+    salts_mutex_unlock(&impl->mutex);
+    return true;
+}
+
+void turbowasm_wasi_threads_proc_exit(
+    void *context,
+    turbowasm_instance *caller,
+    uint32_t exit_code) {
+    turbowasm_wasi_threads *threads =
+        (turbowasm_wasi_threads *)context;
+    turbowasm_wasi_threads_impl *impl;
+
+    if (threads == NULL || threads->impl == NULL)
+        return;
+
+    impl = (turbowasm_wasi_threads_impl *)threads->impl;
+    turbowasm_wasi_threads_publish_exit(
+        impl, caller, exit_code);
+}
+
+bool turbowasm_wasi_threads_group_exit_code(
+    const turbowasm_wasi_threads *threads,
+    uint32_t *out_exit_code) {
+    turbowasm_wasi_threads_impl *impl;
+
+    if (threads == NULL || threads->impl == NULL)
+        return false;
+
+    impl = (turbowasm_wasi_threads_impl *)threads->impl;
+    if (!atomic_load_explicit(
+            &impl->exit_requested, memory_order_acquire))
+        return false;
+
+    salts_mutex_lock(&impl->mutex);
+    if (out_exit_code != NULL)
+        *out_exit_code = impl->exit_code;
     salts_mutex_unlock(&impl->mutex);
     return true;
 }

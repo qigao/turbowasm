@@ -913,7 +913,7 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
   add_executable(turbowasm_wasi_threads_test
     wasi_threads_test.c)
   target_link_libraries(turbowasm_wasi_threads_test
-    PRIVATE TurboWasm::WASIThreads)
+    PRIVATE TurboWasm::WASIThreads Salts::Platform)
   set_target_properties(turbowasm_wasi_threads_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -934,4 +934,22 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
            COMMAND turbowasm_wasi_threads_group_test)
   set_tests_properties(turbowasm_wasi_threads_group_test PROPERTIES
     TIMEOUT 20)
+
+  if(TURBOWASM_ENABLE_WASI_ADAPTER)
+    add_executable(turbowasm_wasi_threads_proc_exit_test
+      wasi_threads_proc_exit_test.c)
+    target_link_libraries(turbowasm_wasi_threads_proc_exit_test
+      PRIVATE
+        TurboWasm::WASIThreads
+        TurboWasm::WASI
+        Salts::Platform)
+    set_target_properties(turbowasm_wasi_threads_proc_exit_test PROPERTIES
+      C_STANDARD 11
+      C_STANDARD_REQUIRED ON
+      C_EXTENSIONS OFF)
+    add_test(NAME turbowasm_wasi_threads_proc_exit_test
+             COMMAND turbowasm_wasi_threads_proc_exit_test)
+    set_tests_properties(turbowasm_wasi_threads_proc_exit_test PROPERTIES
+      TIMEOUT 20)
+  endif()
 endif()
