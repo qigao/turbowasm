@@ -205,7 +205,8 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
       Salts::Platform)
 
   if(MSVC)
-    target_compile_options(turbowasm_wasi_threads PRIVATE /W4)
+    target_compile_options(turbowasm_wasi_threads PRIVATE
+      /W4 /experimental:c11atomics)
   else()
     target_compile_options(turbowasm_wasi_threads PRIVATE
       -Wall -Wextra -Wpedantic)

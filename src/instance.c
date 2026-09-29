@@ -2910,6 +2910,7 @@ static turbowasm_status turbowasm_exec_atomic(
     turbowasm_instance_impl *instance,
     turbowasm_reader *reader,
     turbowasm_value_stack *stack,
+    turbowasm_jit_execution_control *execution,
     turbowasm_trap *trap) {
     const turbowasm_atomic_descriptor *descriptor;
     turbowasm_value address = {0};
@@ -2995,7 +2996,7 @@ static turbowasm_status turbowasm_exec_atomic(
                 &expected32,
                 &expected_value.as.i32,
                 sizeof(expected32));
-            status = turbowasm_instance_memory_wait(
+            status = turbowasm_instance_memory_wait_with_interrupt(
                 instance,
                 memory_index,
                 (uint32_t)address.as.i32,
@@ -3003,6 +3004,12 @@ static turbowasm_status turbowasm_exec_atomic(
                 4u,
                 expected32,
                 timeout.as.i64,
+                execution != NULL
+                    ? execution->should_interrupt
+                    : NULL,
+                execution != NULL
+                    ? execution->interrupt_context
+                    : NULL,
                 &wait_result,
                 trap);
             if (status != TURBOWASM_OK)
@@ -3042,7 +3049,7 @@ static turbowasm_status turbowasm_exec_atomic(
                 &expected64,
                 &expected_value.as.i64,
                 sizeof(expected64));
-            status = turbowasm_instance_memory_wait(
+            status = turbowasm_instance_memory_wait_with_interrupt(
                 instance,
                 memory_index,
                 (uint32_t)address.as.i32,
@@ -3050,6 +3057,12 @@ static turbowasm_status turbowasm_exec_atomic(
                 8u,
                 expected64,
                 timeout.as.i64,
+                execution != NULL
+                    ? execution->should_interrupt
+                    : NULL,
+                execution != NULL
+                    ? execution->interrupt_context
+                    : NULL,
                 &wait_result,
                 trap);
             if (status != TURBOWASM_OK)
@@ -5537,7 +5550,7 @@ restart_frame:
 
             case 0xfeu:
                 status = turbowasm_exec_atomic(
-                    instance, &reader, &stack, trap);
+                    instance, &reader, &stack, execution, trap);
                 if (status != TURBOWASM_OK)
                     goto done;
                 break;

@@ -1694,7 +1694,7 @@ turbowasm_memory_waiter_acquire_slot(
     return NULL;
 }
 
-turbowasm_status turbowasm_instance_memory_wait(
+static turbowasm_status turbowasm_instance_memory_wait_internal(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
     uint32_t address,
@@ -1702,6 +1702,8 @@ turbowasm_status turbowasm_instance_memory_wait(
     uint8_t width,
     uint64_t expected,
     int64_t timeout_ns,
+    turbowasm_interrupt_check_fn should_interrupt,
+    void *interrupt_context,
     uint32_t *out_result,
     turbowasm_trap *trap) {
     turbowasm_instance_memory *memory;
@@ -1712,6 +1714,7 @@ turbowasm_status turbowasm_instance_memory_wait(
     size_t effective = 0u;
     turbowasm_status status;
     int wait_status = 0;
+    bool interrupted = false;
 
     if (instance == NULL || out_result == NULL || trap == NULL ||
         memory_index >= instance->memory_count ||
@@ -1816,6 +1819,17 @@ turbowasm_status turbowasm_instance_memory_wait(
     turbowasm_sc_unlock();
 
     while (!waiter->notified) {
+        /*
+         * Check while holding waiter_mutex. If the interrupt becomes true just
+         * after this check, the interrupter blocks on the same mutex until the
+         * condition wait atomically releases it, then signals this waiter.
+         */
+        if (should_interrupt != NULL &&
+            should_interrupt(interrupt_context)) {
+            interrupted = true;
+            break;
+        }
+
         if (timeout_ns < 0) {
             salts_cond_wait(
                 &waiter->condition,
@@ -1843,7 +1857,7 @@ turbowasm_status turbowasm_instance_memory_wait(
             break;
         if (wait_status != 0)
             break;
-        /* Spurious wake: loop with the original absolute deadline. */
+        /* Spurious/interrupt wake: re-check policy and original deadline. */
     }
 
     if (waiter->notified)
@@ -1858,6 +1872,9 @@ turbowasm_status turbowasm_instance_memory_wait(
         --memory->waiter_count;
     salts_mutex_unlock(&memory->waiter_mutex);
 
+    if (interrupted)
+        return TURBOWASM_INTERRUPTED;
+
     if (wait_status != 0 &&
         wait_status != -ETIMEDOUT)
         return TURBOWASM_UNSUPPORTED;
@@ -1870,6 +1887,73 @@ turbowasm_status turbowasm_instance_memory_wait(
         return turbowasm_threads_sc_fence();
 
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_memory_wait(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    uint8_t width,
+    uint64_t expected,
+    int64_t timeout_ns,
+    uint32_t *out_result,
+    turbowasm_trap *trap) {
+    return turbowasm_instance_memory_wait_internal(
+        instance, memory_index, address, offset, width,
+        expected, timeout_ns, NULL, NULL, out_result, trap);
+}
+
+turbowasm_status turbowasm_instance_memory_wait_with_interrupt(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    uint8_t width,
+    uint64_t expected,
+    int64_t timeout_ns,
+    turbowasm_interrupt_check_fn should_interrupt,
+    void *interrupt_context,
+    uint32_t *out_result,
+    turbowasm_trap *trap) {
+    return turbowasm_instance_memory_wait_internal(
+        instance, memory_index, address, offset, width,
+        expected, timeout_ns,
+        should_interrupt, interrupt_context,
+        out_result, trap);
+}
+
+void turbowasm_instance_interrupt_waiters(
+    turbowasm_instance_impl *instance) {
+    uint32_t memory_index;
+
+    if (instance == NULL)
+        return;
+
+    for (memory_index = 0u;
+         memory_index < instance->memory_count;
+         ++memory_index) {
+        turbowasm_instance_memory *memory =
+            turbowasm_instance_memory_resolve(
+                instance, memory_index);
+        uint32_t waiter_index;
+
+        if (memory == NULL || !memory->shared ||
+            !memory->waiter_mutex_initialized ||
+            memory->waiter_mutex == NULL)
+            continue;
+
+        salts_mutex_lock(&memory->waiter_mutex);
+        for (waiter_index = 0u;
+             waiter_index < memory->waiter_capacity;
+             ++waiter_index) {
+            turbowasm_memory_waiter *waiter =
+                &memory->waiters[waiter_index];
+            if (waiter->active)
+                salts_cond_signal(&waiter->condition);
+        }
+        salts_mutex_unlock(&memory->waiter_mutex);
+    }
 }
 
 turbowasm_status turbowasm_instance_memory_notify(

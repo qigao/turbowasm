@@ -3,6 +3,7 @@
 
 #include <cflow/executor.h>
 #include <turbowasm/link.h>
+#include <turbowasm/instance.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -27,12 +28,32 @@ enum {
     TURBOWASM_WASI_THREADS_SPAWN_CAPACITY = -2,
     TURBOWASM_WASI_THREADS_SPAWN_INSTANTIATE = -3,
     TURBOWASM_WASI_THREADS_SPAWN_EXECUTOR = -4,
-    TURBOWASM_WASI_THREADS_SPAWN_TID_EXHAUSTED = -5
+    TURBOWASM_WASI_THREADS_SPAWN_TID_EXHAUSTED = -5,
+    TURBOWASM_WASI_THREADS_SPAWN_GROUP_TERMINATED = -6
 };
 
 typedef struct turbowasm_wasi_threads {
     void *impl;
 } turbowasm_wasi_threads;
+
+typedef struct turbowasm_wasi_threads_execution_policy {
+    turbowasm_wasi_threads *threads;
+    turbowasm_interrupt_check_fn chained_interrupt;
+    void *chained_context;
+} turbowasm_wasi_threads_execution_policy;
+
+/*
+ * Explicitly compose group-fatal interruption into a root/main invocation.
+ * Child invocations use this policy internally. Existing caller interruption
+ * policy is chained after the group-fatal check.
+ */
+bool turbowasm_wasi_threads_execution_policy_init(
+    turbowasm_wasi_threads_execution_policy *policy,
+    turbowasm_wasi_threads *threads);
+
+bool turbowasm_wasi_threads_execution_policy_apply(
+    turbowasm_wasi_threads_execution_policy *policy,
+    turbowasm_execution_options *options);
 
 typedef struct turbowasm_wasi_threads_config {
     /*
@@ -66,6 +87,16 @@ turbowasm_status turbowasm_wasi_threads_define(
 
 size_t turbowasm_wasi_threads_active(
     const turbowasm_wasi_threads *threads);
+
+/*
+ * Query the first fatal child terminal. A trapped child publishes group-fatal
+ * exactly once; siblings/root executions using the group policy then leave
+ * with TURBOWASM_INTERRUPTED at the next checkpoint or interruptible wait.
+ */
+bool turbowasm_wasi_threads_group_fatal(
+    const turbowasm_wasi_threads *threads,
+    turbowasm_status *out_status,
+    turbowasm_trap *out_trap);
 
 #ifdef __cplusplus
 }

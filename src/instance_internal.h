@@ -371,6 +371,28 @@ turbowasm_status turbowasm_instance_memory_wait(
     uint32_t *out_result,
     turbowasm_trap *trap);
 
+turbowasm_status turbowasm_instance_memory_wait_with_interrupt(
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint32_t address,
+    uint32_t offset,
+    uint8_t width,
+    uint64_t expected,
+    int64_t timeout_ns,
+    turbowasm_interrupt_check_fn should_interrupt,
+    void *interrupt_context,
+    uint32_t *out_result,
+    turbowasm_trap *trap);
+
+/*
+ * Wake active wait32/wait64 waiters reachable through this instance without
+ * marking them notified. Interruptible waiters re-check their policy and may
+ * leave with TURBOWASM_INTERRUPTED; ordinary waits treat this as a spurious
+ * condition wake and continue waiting.
+ */
+void turbowasm_instance_interrupt_waiters(
+    turbowasm_instance_impl *instance);
+
 turbowasm_status turbowasm_instance_memory_notify(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
