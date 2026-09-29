@@ -892,3 +892,18 @@ set_target_properties(turbowasm_atomic_runtime_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_atomic_runtime_test
          COMMAND turbowasm_atomic_runtime_test)
+
+add_executable(turbowasm_wait_notify_test
+  wait_notify_test.c)
+target_link_libraries(turbowasm_wait_notify_test
+  PRIVATE TurboWasm::Runtime Salts::Platform)
+target_include_directories(turbowasm_wait_notify_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_wait_notify_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_wait_notify_test
+         COMMAND turbowasm_wait_notify_test)
+set_tests_properties(turbowasm_wait_notify_test PROPERTIES
+  TIMEOUT 20)
