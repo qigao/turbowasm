@@ -465,3 +465,102 @@ uint32_t turbowasm_wasi_fs_fd_write(
         buffer_count,
         out_written);
 }
+
+uint32_t turbowasm_wasi_fs_fd_seek(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t fd,
+    int64_t offset,
+    uint8_t whence,
+    uint64_t *out_offset) {
+    turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_mut(filesystem);
+    turbowasm_wasi_fs_slot *slot =
+        turbowasm_wasi_fs_find_fd(impl, fd);
+
+    if (impl == NULL || out_offset == NULL)
+        return TURBOWASM_WASI_ERRNO_INVAL;
+    if (slot == NULL)
+        return TURBOWASM_WASI_ERRNO_BADF;
+    if (whence > TURBOWASM_WASI_WHENCE_END)
+        return TURBOWASM_WASI_ERRNO_INVAL;
+
+    /*
+     * Preview1 permits fd_seek(fd, 0, CUR) with FD_TELL alone. Prefer the
+     * provider's explicit tell callback for that restricted operation.
+     */
+    if (offset == 0 &&
+        whence == TURBOWASM_WASI_WHENCE_CUR &&
+        (slot->rights_base & TURBOWASM_WASI_RIGHT_FD_SEEK) == 0u) {
+        if ((slot->rights_base & TURBOWASM_WASI_RIGHT_FD_TELL) == 0u)
+            return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+        if (impl->provider.tell == NULL)
+            return TURBOWASM_WASI_ERRNO_NOSYS;
+        return impl->provider.tell(
+            impl->provider.context,
+            slot->file,
+            out_offset);
+    }
+
+    if ((slot->rights_base & TURBOWASM_WASI_RIGHT_FD_SEEK) == 0u)
+        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+    if (impl->provider.seek == NULL)
+        return TURBOWASM_WASI_ERRNO_NOSYS;
+
+    return impl->provider.seek(
+        impl->provider.context,
+        slot->file,
+        offset,
+        whence,
+        out_offset);
+}
+
+uint32_t turbowasm_wasi_fs_fd_tell(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t fd,
+    uint64_t *out_offset) {
+    turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_mut(filesystem);
+    turbowasm_wasi_fs_slot *slot =
+        turbowasm_wasi_fs_find_fd(impl, fd);
+
+    if (impl == NULL || out_offset == NULL)
+        return TURBOWASM_WASI_ERRNO_INVAL;
+    if (slot == NULL)
+        return TURBOWASM_WASI_ERRNO_BADF;
+    if ((slot->rights_base & TURBOWASM_WASI_RIGHT_FD_TELL) == 0u)
+        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+    if (impl->provider.tell == NULL)
+        return TURBOWASM_WASI_ERRNO_NOSYS;
+
+    return impl->provider.tell(
+        impl->provider.context,
+        slot->file,
+        out_offset);
+}
+
+uint32_t turbowasm_wasi_fs_fd_filestat_get(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t fd,
+    turbowasm_wasi_fs_stat *out_stat) {
+    turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_mut(filesystem);
+    turbowasm_wasi_fs_slot *slot =
+        turbowasm_wasi_fs_find_fd(impl, fd);
+
+    if (impl == NULL || out_stat == NULL)
+        return TURBOWASM_WASI_ERRNO_INVAL;
+    if (slot == NULL)
+        return TURBOWASM_WASI_ERRNO_BADF;
+    if ((slot->rights_base &
+         TURBOWASM_WASI_RIGHT_FD_FILESTAT_GET) == 0u)
+        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+    if (impl->provider.stat == NULL)
+        return TURBOWASM_WASI_ERRNO_NOSYS;
+
+    *out_stat = (turbowasm_wasi_fs_stat){0};
+    return impl->provider.stat(
+        impl->provider.context,
+        slot->file,
+        out_stat);
+}
+
