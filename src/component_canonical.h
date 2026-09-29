@@ -128,6 +128,28 @@ turbowasm_status turbowasm_component_canonical_flatten_function(
     turbowasm_component_flat_signature *out);
 
 /*
+ * Canonical flat value conversion for the retained synchronous subset.
+ * Scalars convert directly. Dynamic string/list values use canonical guest
+ * memory and therefore require a valid memory option; resource handles remain
+ * outside this layer until C5b.
+ */
+turbowasm_status turbowasm_component_canonical_lower_flat_value(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_component_value *value,
+    turbowasm_value out[2],
+    uint32_t *out_count);
+
+turbowasm_status turbowasm_component_canonical_lift_flat_value(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_value *values,
+    uint32_t value_count,
+    turbowasm_component_value *out);
+
+/*
  * Lift/lower the canonical in-memory representation of the retained
  * scalar/string/list subset. String lowering currently implements the pinned
  * UTF-8 canonical option. Resource handles remain C4.
