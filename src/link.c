@@ -699,7 +699,9 @@ turbowasm_status turbowasm_linker_bind_instance(
                     goto fail;
                 }
 
-                if (expected_memory->page_size !=
+                if (expected_memory->shared !=
+                        actual_memory->shared ||
+                    expected_memory->page_size !=
                         actual_memory->page_size ||
                     !turbowasm_link_limits_match(
                         expected_memory->limits,

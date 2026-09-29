@@ -246,15 +246,64 @@ static void test_memory_max_less_than_min(void) {
     assert(module.impl == NULL);
 }
 
-static void test_shared_memory_flags_are_explicitly_unsupported(void) {
+static void test_shared_memory_metadata_is_retained_but_not_executable(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
-        0x05, 0x02,
-        0x01, 0x03
+        /* memory0: shared memory32, min=1, max=2 */
+        0x05, 0x04,
+        0x01, 0x03, 0x01, 0x02
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_memory_desc memory = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_OK);
+    assert(turbowasm_module_memory_count(&module) == 1u);
+    assert(turbowasm_module_memory_at(&module, 0u, &memory));
+    assert(memory.minimum == 1u);
+    assert(memory.maximum == 2u);
+    assert(memory.page_size == 65536u);
+    assert(memory.has_maximum);
+    assert(memory.shared);
+    assert(!memory.imported);
+    assert(!turbowasm_module_memory_at(&module, 1u, &memory));
+
+    /*
+     * T1 retains the type but deliberately refuses executable shared memory
+     * until T2 provides a C-data-race-safe backing/access model.
+     */
+    assert(turbowasm_instance_create(
+               &instance, &module) == TURBOWASM_UNSUPPORTED);
+    assert(instance.impl == NULL);
+
+    turbowasm_module_destroy(&module);
+}
+
+static void test_shared_memory_requires_maximum(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        /* shared bit without maximum-present bit */
+        0x05, 0x03,
+        0x01, 0x02, 0x01
     };
     turbowasm_module module = {0};
 
-    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_UNSUPPORTED);
+    assert(load(bytes, sizeof(bytes), &module) ==
+           TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
+static void test_memory64_remains_explicitly_unsupported(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        /* memory64 + maximum, min=1, max=2 */
+        0x05, 0x04,
+        0x01, 0x05, 0x01, 0x02
+    };
+    turbowasm_module module = {0};
+
+    assert(load(bytes, sizeof(bytes), &module) ==
+           TURBOWASM_UNSUPPORTED);
     assert(module.impl == NULL);
 }
 
@@ -379,7 +428,9 @@ int main(void) {
     test_duplicate_export_name();
     test_invalid_utf8_import_name();
     test_memory_max_less_than_min();
-    test_shared_memory_flags_are_explicitly_unsupported();
+    test_shared_memory_metadata_is_retained_but_not_executable();
+    test_shared_memory_requires_maximum();
+    test_memory64_remains_explicitly_unsupported();
     test_export_index_out_of_range();
     test_data_count_zero_without_data();
     test_data_count_nonzero_requires_data();

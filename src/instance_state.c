@@ -467,6 +467,13 @@ static turbowasm_status turbowasm_allocate_memories(
             (uint64_t)source->limits.minimum *
             source->page_size;
 
+        /*
+         * Shared memory is intentionally validation/link metadata only in T1.
+         * The current byte backing is not safe for concurrent plain-C access.
+         */
+        if (source->shared)
+            return TURBOWASM_UNSUPPORTED;
+
         if (source->imported) {
             if (index >= instance->linked_memory_count ||
                 instance->linked_memories[index].provider == NULL)
