@@ -20,6 +20,10 @@ option(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER
   "Build optional legacy WASI Preview1 threads adapter" ON)
 option(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER
   "Build optional WASI Preview1 NativeIO fd adapter" ON)
+option(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER
+  "Build optional littlefs-backed WASI filesystem provider" OFF)
+set(TURBOWASM_LITTLEFS_SOURCE_DIR "" CACHE PATH
+  "Path to an externally acquired littlefs source checkout")
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
   message(FATAL_ERROR "SALTS_ROOT must point at an installed Salts SDK")
@@ -168,6 +172,41 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
   endif()
 endif()
 
+if(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER)
+  if(NOT TURBOWASM_ENABLE_WASI_ADAPTER)
+    message(FATAL_ERROR
+      "TurboWasm WASILittleFS requires the WASI adapter")
+  endif()
+  if(TURBOWASM_LITTLEFS_SOURCE_DIR STREQUAL "")
+    message(FATAL_ERROR
+      "TURBOWASM_LITTLEFS_SOURCE_DIR must point at an externally acquired littlefs checkout")
+  endif()
+  foreach(_turbowasm_littlefs_file lfs.c lfs_util.c lfs.h lfs_util.h)
+    if(NOT EXISTS
+       "${TURBOWASM_LITTLEFS_SOURCE_DIR}/${_turbowasm_littlefs_file}")
+      message(FATAL_ERROR
+        "Missing littlefs source file: ${TURBOWASM_LITTLEFS_SOURCE_DIR}/${_turbowasm_littlefs_file}")
+    endif()
+  endforeach()
+
+  add_library(turbowasm_wasi_littlefs
+    src/wasi_littlefs.c
+    "${TURBOWASM_LITTLEFS_SOURCE_DIR}/lfs.c"
+    "${TURBOWASM_LITTLEFS_SOURCE_DIR}/lfs_util.c")
+  add_library(TurboWasm::WASILittleFS ALIAS turbowasm_wasi_littlefs)
+  set_target_properties(turbowasm_wasi_littlefs PROPERTIES
+    EXPORT_NAME WASILittleFS)
+  target_compile_features(turbowasm_wasi_littlefs PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi_littlefs
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+    PRIVATE
+      "${TURBOWASM_LITTLEFS_SOURCE_DIR}")
+  target_link_libraries(turbowasm_wasi_littlefs
+    PUBLIC TurboWasm::WASI)
+endif()
+
 if(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER)
   if(NOT TURBOWASM_ENABLE_WASI_ADAPTER OR
      NOT TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)
@@ -309,6 +348,15 @@ endif()
 if(TURBOWASM_ENABLE_WASI_ADAPTER)
   install(
     TARGETS turbowasm_wasi
+    EXPORT TurboWasmTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+if(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER)
+  install(
+    TARGETS turbowasm_wasi_littlefs
     EXPORT TurboWasmTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

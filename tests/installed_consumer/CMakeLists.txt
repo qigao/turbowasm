@@ -75,6 +75,10 @@ if(TARGET TurboWasm::WASI)
     message(FATAL_ERROR
       "TurboWasm::WASI must remain NativeIO-free")
   endif()
+  if("TurboWasm::WASILittleFS" IN_LIST _turbowasm_wasi_links)
+    message(FATAL_ERROR
+      "TurboWasm::WASI must remain littlefs-adapter-free")
+  endif()
 endif()
 
 if(TARGET TurboWasm::WASINativeIO)
@@ -126,4 +130,25 @@ if(TARGET TurboWasm::WASI)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_installed_wasi_fs_consumer
            COMMAND turbowasm_installed_wasi_fs_consumer)
+endif()
+
+if(TARGET TurboWasm::WASILittleFS)
+  get_target_property(_turbowasm_wasi_littlefs_links
+    TurboWasm::WASILittleFS INTERFACE_LINK_LIBRARIES)
+  if(NOT "TurboWasm::WASI" IN_LIST _turbowasm_wasi_littlefs_links)
+    message(FATAL_ERROR
+      "TurboWasm::WASILittleFS must depend on TurboWasm::WASI")
+  endif()
+
+  add_executable(turbowasm_installed_wasi_littlefs_consumer
+    wasi_littlefs_main.c)
+  target_link_libraries(turbowasm_installed_wasi_littlefs_consumer
+    PRIVATE TurboWasm::WASILittleFS)
+  set_target_properties(
+    turbowasm_installed_wasi_littlefs_consumer PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi_littlefs_consumer
+           COMMAND turbowasm_installed_wasi_littlefs_consumer)
 endif()
