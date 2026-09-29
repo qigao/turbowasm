@@ -137,10 +137,11 @@ void turbowasm_component_resource_table_destroy(
     memset(table, 0, sizeof(*table));
 }
 
-turbowasm_status turbowasm_component_resource_new_owned(
+static turbowasm_status resource_new(
     turbowasm_component_resource_table *table,
     uint64_t resource_identity,
     turbowasm_value rep,
+    bool owned,
     turbowasm_component_resource_handle *out_handle) {
     uint32_t index;
     turbowasm_component_resource_entry *entry;
@@ -167,16 +168,35 @@ found:
     entry->rep = rep;
     entry->lend_count = 0u;
     entry->occupied = true;
-    entry->owned = true;
+    entry->owned = owned;
     ++table->live_count;
 
     *out_handle = handle_encode(index, entry->generation);
     if (*out_handle == 0u) {
         entry->occupied = false;
+        entry->owned = false;
         --table->live_count;
         return TURBOWASM_INVALID_ARGUMENT;
     }
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_resource_new_owned(
+    turbowasm_component_resource_table *table,
+    uint64_t resource_identity,
+    turbowasm_value rep,
+    turbowasm_component_resource_handle *out_handle) {
+    return resource_new(
+        table, resource_identity, rep, true, out_handle);
+}
+
+turbowasm_status turbowasm_component_resource_new_borrowed(
+    turbowasm_component_resource_table *table,
+    uint64_t resource_identity,
+    turbowasm_value rep,
+    turbowasm_component_resource_handle *out_handle) {
+    return resource_new(
+        table, resource_identity, rep, false, out_handle);
 }
 
 turbowasm_status turbowasm_component_resource_rep(
@@ -235,37 +255,19 @@ turbowasm_status turbowasm_component_resource_lend_release(
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_component_resource_drop(
+static void resource_entry_remove(
     turbowasm_component_resource_table *table,
-    turbowasm_component_resource_handle handle,
-    uint64_t expected_resource_identity,
-    turbowasm_component_resource_destructor_fn destructor,
-    void *destructor_context) {
-    uint32_t index;
-    uint32_t generation;
-    turbowasm_component_resource_entry *entry;
-    turbowasm_value rep;
-    turbowasm_status status = TURBOWASM_OK;
+    turbowasm_component_resource_entry *entry) {
+    if (table == NULL || entry == NULL)
+        return;
 
-    if (table == NULL || expected_resource_identity == 0u)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (!handle_decode(handle, &index, &generation) ||
-        index >= table->capacity)
-        return TURBOWASM_TRAPPED;
-
-    entry = &table->entries[index];
-    if (!entry->occupied || entry->generation != generation ||
-        entry->resource_identity != expected_resource_identity ||
-        entry->lend_count != 0u)
-        return TURBOWASM_TRAPPED;
-
-    rep = entry->rep;
     entry->occupied = false;
     entry->resource_identity = 0u;
     memset(&entry->rep, 0, sizeof(entry->rep));
     entry->lend_count = 0u;
     entry->owned = false;
-    --table->live_count;
+    if (table->live_count != 0u)
+        --table->live_count;
 
     if (entry->generation ==
         TURBOWASM_COMPONENT_RESOURCE_MAX_GENERATION) {
@@ -273,8 +275,55 @@ turbowasm_status turbowasm_component_resource_drop(
     } else {
         ++entry->generation;
     }
+}
 
-    if (destructor != NULL)
+turbowasm_status turbowasm_component_resource_take_owned(
+    turbowasm_component_resource_table *table,
+    turbowasm_component_resource_handle handle,
+    uint64_t expected_resource_identity,
+    turbowasm_value *out_rep) {
+    turbowasm_component_resource_entry *entry =
+        entry_get(table, handle);
+
+    if (table == NULL || out_rep == NULL ||
+        expected_resource_identity == 0u)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (entry == NULL ||
+        entry->resource_identity != expected_resource_identity ||
+        !entry->owned ||
+        entry->lend_count != 0u)
+        return TURBOWASM_TRAPPED;
+
+    *out_rep = entry->rep;
+    resource_entry_remove(table, entry);
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_resource_drop(
+    turbowasm_component_resource_table *table,
+    turbowasm_component_resource_handle handle,
+    uint64_t expected_resource_identity,
+    turbowasm_component_resource_destructor_fn destructor,
+    void *destructor_context) {
+    turbowasm_component_resource_entry *entry;
+    turbowasm_value rep;
+    bool owned;
+    turbowasm_status status = TURBOWASM_OK;
+
+    if (table == NULL || expected_resource_identity == 0u)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    entry = entry_get(table, handle);
+    if (entry == NULL ||
+        entry->resource_identity != expected_resource_identity ||
+        entry->lend_count != 0u)
+        return TURBOWASM_TRAPPED;
+
+    rep = entry->rep;
+    owned = entry->owned;
+    resource_entry_remove(table, entry);
+
+    if (owned && destructor != NULL)
         status = destructor(
             destructor_context,
             expected_resource_identity,

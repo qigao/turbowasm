@@ -251,6 +251,29 @@ turbowasm_component_type_graph_get(
     return &graph->types[id];
 }
 
+static bool type_ref_contains_borrow(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    uint32_t depth) {
+    const turbowasm_component_type *type;
+
+    if (graph == NULL || depth > graph->count)
+        return true;
+    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE)
+        return false;
+    if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED ||
+        ref.as.indexed >= graph->count)
+        return true;
+
+    type = &graph->types[ref.as.indexed];
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_BORROW)
+        return true;
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
+        return type_ref_contains_borrow(
+            graph, type->as.list.element_type, depth + 1u);
+    return false;
+}
+
 bool turbowasm_component_type_graph_validate(
     const turbowasm_component_type_graph *graph) {
     uint32_t i;
@@ -282,10 +305,13 @@ bool turbowasm_component_type_graph_validate(
                             type->as.function.params[param_index]))
                         return false;
                 }
-                if (type->as.function.has_result &&
-                    !turbowasm_component_type_ref_validate(
-                        graph, type->as.function.result))
-                    return false;
+                if (type->as.function.has_result) {
+                    if (!turbowasm_component_type_ref_validate(
+                            graph, type->as.function.result) ||
+                        type_ref_contains_borrow(
+                            graph, type->as.function.result, 0u))
+                        return false;
+                }
                 break;
             }
 

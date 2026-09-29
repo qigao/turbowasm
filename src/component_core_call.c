@@ -54,8 +54,10 @@ static bool type_ref_supported(
     if (kind == TURBOWASM_COMPONENT_TYPE_LIST)
         return type_ref_supported(
             graph, type->as.list.element_type, depth + 1u);
+    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
+        kind == TURBOWASM_COMPONENT_TYPE_BORROW)
+        return depth == 0u;
 
-    /* Resource/own/borrow are C5b. */
     return false;
 }
 
@@ -82,6 +84,215 @@ static bool type_ref_uses_memory(
         type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
         return true;
     return false;
+}
+
+static bool type_ref_uses_resources(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    uint32_t depth) {
+    const turbowasm_component_type *type;
+
+    if (graph == NULL || depth >= 64u ||
+        ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return false;
+    type = turbowasm_component_type_graph_get(
+        graph, ref.as.indexed);
+    if (type == NULL)
+        return false;
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_OWN ||
+        type->kind == TURBOWASM_COMPONENT_TYPE_BORROW)
+        return true;
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
+        return type_ref_uses_resources(
+            graph, type->as.list.element_type, depth + 1u);
+    return false;
+}
+
+static turbowasm_status resource_handle_info(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    turbowasm_component_type_kind *out_kind,
+    uint64_t *out_identity,
+    turbowasm_value_kind *out_rep_kind) {
+    const turbowasm_component_type *handle_type;
+    const turbowasm_component_type *resource_type;
+
+    if (graph == NULL || out_kind == NULL ||
+        out_identity == NULL || out_rep_kind == NULL ||
+        ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    handle_type = turbowasm_component_type_graph_get(
+        graph, ref.as.indexed);
+    if (handle_type == NULL ||
+        (handle_type->kind != TURBOWASM_COMPONENT_TYPE_OWN &&
+         handle_type->kind != TURBOWASM_COMPONENT_TYPE_BORROW))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    resource_type = turbowasm_component_type_graph_get(
+        graph, handle_type->as.handle.resource_type);
+    if (resource_type == NULL ||
+        resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE ||
+        resource_type->as.resource.identity == 0u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (resource_type->as.resource.rep_type == 0x7fu) {
+        *out_rep_kind = TURBOWASM_VALUE_I32;
+    } else if (resource_type->as.resource.rep_type == 0x7eu) {
+        *out_rep_kind = TURBOWASM_VALUE_I64;
+    } else {
+        return TURBOWASM_UNSUPPORTED;
+    }
+
+    *out_kind = handle_type->kind;
+    *out_identity = resource_type->as.resource.identity;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status lower_resource_argument(
+    const turbowasm_component_core_call_adapter *adapter,
+    turbowasm_component_type_ref ref,
+    const turbowasm_component_value *value,
+    turbowasm_component_resource_handle *out_handle,
+    uint64_t *out_identity,
+    bool *out_borrowed,
+    turbowasm_value *out_flat) {
+    turbowasm_component_type_kind kind;
+    turbowasm_value_kind rep_kind;
+    uint64_t identity;
+    turbowasm_component_resource_handle handle;
+    turbowasm_status status;
+
+    if (adapter == NULL || adapter->resources == NULL ||
+        value == NULL || out_handle == NULL ||
+        out_identity == NULL || out_borrowed == NULL ||
+        out_flat == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = resource_handle_info(
+        adapter->graph, ref, &kind, &identity, &rep_kind);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (value->kind != kind ||
+        value->as.resource_rep.kind != rep_kind)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_OWN) {
+        status = turbowasm_component_resource_new_owned(
+            adapter->resources, identity,
+            value->as.resource_rep, &handle);
+        *out_borrowed = false;
+    } else {
+        status = turbowasm_component_resource_new_borrowed(
+            adapter->resources, identity,
+            value->as.resource_rep, &handle);
+        *out_borrowed = true;
+    }
+    if (status != TURBOWASM_OK)
+        return status;
+
+    memset(out_flat, 0, sizeof(*out_flat));
+    out_flat->kind = TURBOWASM_VALUE_I32;
+    out_flat->as.i32 = (int32_t)handle;
+    *out_handle = handle;
+    *out_identity = identity;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status lift_owned_result(
+    const turbowasm_component_core_call_adapter *adapter,
+    turbowasm_component_type_ref ref,
+    const turbowasm_value *flat,
+    turbowasm_component_value *out) {
+    turbowasm_component_type_kind kind;
+    turbowasm_value_kind rep_kind;
+    uint64_t identity;
+    turbowasm_component_resource_handle handle;
+    turbowasm_value rep = {0};
+    turbowasm_status status;
+
+    if (adapter == NULL || adapter->resources == NULL ||
+        flat == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = resource_handle_info(
+        adapter->graph, ref, &kind, &identity, &rep_kind);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (kind != TURBOWASM_COMPONENT_TYPE_OWN)
+        return TURBOWASM_MALFORMED_MODULE;
+    if (flat->kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    handle = (uint32_t)flat->as.i32;
+    status = turbowasm_component_resource_take_owned(
+        adapter->resources, handle, identity, &rep);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (rep.kind != rep_kind)
+        return TURBOWASM_TRAPPED;
+
+    memset(out, 0, sizeof(*out));
+    out->kind = TURBOWASM_COMPONENT_TYPE_OWN;
+    out->as.resource_rep = rep;
+    return TURBOWASM_OK;
+}
+
+static void rollback_created_handles(
+    const turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_component_resource_handle *handles,
+    const uint64_t *identities,
+    const bool *borrowed,
+    uint32_t count) {
+    uint32_t i;
+
+    if (adapter == NULL || adapter->resources == NULL)
+        return;
+
+    for (i = 0u; i < count; ++i) {
+        if (borrowed[i]) {
+            (void)turbowasm_component_resource_drop(
+                adapter->resources, handles[i], identities[i],
+                NULL, NULL);
+        } else {
+            turbowasm_value rep = {0};
+            (void)turbowasm_component_resource_take_owned(
+                adapter->resources, handles[i], identities[i], &rep);
+        }
+    }
+}
+
+static bool finalize_borrow_scope(
+    const turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_component_resource_handle *handles,
+    const uint64_t *identities,
+    const bool *borrowed,
+    uint32_t count) {
+    uint32_t i;
+    bool clean = true;
+
+    if (adapter == NULL || adapter->resources == NULL)
+        return count == 0u;
+
+    for (i = 0u; i < count; ++i) {
+        turbowasm_value rep = {0};
+        turbowasm_status status;
+
+        if (!borrowed[i])
+            continue;
+
+        status = turbowasm_component_resource_rep(
+            adapter->resources, handles[i], identities[i], &rep);
+        if (status == TURBOWASM_OK) {
+            clean = false;
+            (void)turbowasm_component_resource_drop(
+                adapter->resources, handles[i], identities[i],
+                NULL, NULL);
+        } else if (status != TURBOWASM_TRAPPED) {
+            clean = false;
+        }
+    }
+    return clean;
 }
 
 static turbowasm_value_kind flat_value_kind(
@@ -355,8 +566,22 @@ turbowasm_status turbowasm_component_core_call_adapter_init(
     turbowasm_instance *instance,
     uint32_t function_index,
     const turbowasm_component_canonical_memory *memory) {
+    return turbowasm_component_core_call_adapter_init_with_resources(
+        adapter, graph, function_type,
+        instance, function_index, memory, NULL);
+}
+
+turbowasm_status turbowasm_component_core_call_adapter_init_with_resources(
+    turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    turbowasm_instance *instance,
+    uint32_t function_index,
+    const turbowasm_component_canonical_memory *memory,
+    turbowasm_component_resource_table *resources) {
     const turbowasm_component_type *function;
     bool uses_memory = false;
+    bool uses_resources = false;
     bool needs_realloc = false;
     uint32_t i;
     turbowasm_status status;
@@ -383,14 +608,33 @@ turbowasm_status turbowasm_component_core_call_adapter_init(
             uses_memory = true;
             needs_realloc = true;
         }
+        if (type_ref_uses_resources(
+                graph, function->as.function.params[i], 0u))
+            uses_resources = true;
     }
+
     if (function->as.function.has_result) {
+        turbowasm_component_type_kind result_kind = TURBOWASM_COMPONENT_TYPE_UNDEFINED;
+        uint64_t result_identity = 0u;
+        turbowasm_value_kind result_rep_kind = (turbowasm_value_kind)0;
+
         if (!type_ref_supported(
                 graph, function->as.function.result, 0u))
             return TURBOWASM_UNSUPPORTED;
         if (type_ref_uses_memory(
                 graph, function->as.function.result, 0u))
             uses_memory = true;
+        if (type_ref_uses_resources(
+                graph, function->as.function.result, 0u)) {
+            uses_resources = true;
+            status = resource_handle_info(
+                graph, function->as.function.result,
+                &result_kind, &result_identity, &result_rep_kind);
+            if (status != TURBOWASM_OK)
+                return status;
+            if (result_kind == TURBOWASM_COMPONENT_TYPE_BORROW)
+                return TURBOWASM_MALFORMED_MODULE;
+        }
     }
 
     memset(adapter, 0, sizeof(*adapter));
@@ -399,6 +643,8 @@ turbowasm_status turbowasm_component_core_call_adapter_init(
     adapter->instance = instance;
     adapter->function_index = function_index;
     adapter->uses_memory = uses_memory;
+    adapter->uses_resources = uses_resources;
+    adapter->resources = resources;
 
     status = turbowasm_component_canonical_flatten_function(
         graph, function_type,
@@ -411,11 +657,20 @@ turbowasm_status turbowasm_component_core_call_adapter_init(
         goto fail;
 
     if (adapter->flat_signature.params_indirect) {
+        if (uses_resources) {
+            status = TURBOWASM_UNSUPPORTED;
+            goto fail;
+        }
         adapter->uses_memory = true;
         needs_realloc = true;
     }
     if (adapter->flat_signature.results_indirect)
         adapter->uses_memory = true;
+
+    if (uses_resources && resources == NULL) {
+        status = TURBOWASM_UNSUPPORTED;
+        goto fail;
+    }
 
     status = validate_memory_binding(
         adapter, memory, needs_realloc);
@@ -450,6 +705,11 @@ turbowasm_status turbowasm_component_core_call_invoke(
     const turbowasm_component_type *function;
     turbowasm_value core_args[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS] = {{0}};
     turbowasm_value core_results[TURBOWASM_COMPONENT_MAX_FLAT_RESULTS] = {{0}};
+    turbowasm_component_resource_handle
+        created_handles[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {0};
+    uint64_t created_identities[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {0};
+    bool created_borrowed[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {0};
+    uint32_t created_count = 0u;
     size_t core_arg_count = 0u;
     size_t core_result_count = 0u;
     turbowasm_status status;
@@ -488,30 +748,80 @@ turbowasm_status turbowasm_component_core_call_invoke(
         core_arg_count = 1u;
     } else {
         for (i = 0u; i < function->as.function.param_count; ++i) {
-            turbowasm_value flat[2] = {{0}};
-            uint32_t flat_count = 0u;
+            turbowasm_component_type_ref ref =
+                function->as.function.params[i];
             uint32_t j;
 
-            status = turbowasm_component_canonical_lower_flat_value(
-                adapter->graph,
-                function->as.function.params[i],
-                adapter->uses_memory ? &adapter->memory : NULL,
-                &arguments[i],
-                flat, &flat_count);
-            if (status != TURBOWASM_OK)
-                return status;
-            if (flat_count >
-                TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS -
-                core_arg_count)
-                return TURBOWASM_MALFORMED_MODULE;
+            if (type_ref_uses_resources(adapter->graph, ref, 0u)) {
+                bool borrowed = false;
+                if (created_count >=
+                    TURBOWASM_COMPONENT_MAX_FLAT_PARAMS) {
+                    rollback_created_handles(
+                        adapter, created_handles,
+                        created_identities, created_borrowed,
+                        created_count);
+                    return TURBOWASM_UNSUPPORTED;
+                }
 
-            for (j = 0u; j < flat_count; ++j)
-                core_args[core_arg_count++] = flat[j];
+                status = lower_resource_argument(
+                    adapter, ref, &arguments[i],
+                    &created_handles[created_count],
+                    &created_identities[created_count],
+                    &borrowed,
+                    &core_args[core_arg_count]);
+                if (status != TURBOWASM_OK) {
+                    rollback_created_handles(
+                        adapter, created_handles,
+                        created_identities, created_borrowed,
+                        created_count);
+                    return status;
+                }
+                created_borrowed[created_count] = borrowed;
+                ++created_count;
+                ++core_arg_count;
+                continue;
+            }
+
+            {
+                turbowasm_value flat[2] = {{0}};
+                uint32_t flat_count = 0u;
+
+                status = turbowasm_component_canonical_lower_flat_value(
+                    adapter->graph,
+                    ref,
+                    adapter->uses_memory ? &adapter->memory : NULL,
+                    &arguments[i],
+                    flat, &flat_count);
+                if (status != TURBOWASM_OK) {
+                    rollback_created_handles(
+                        adapter, created_handles,
+                        created_identities, created_borrowed,
+                        created_count);
+                    return status;
+                }
+                if (flat_count >
+                    TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS -
+                    core_arg_count) {
+                    rollback_created_handles(
+                        adapter, created_handles,
+                        created_identities, created_borrowed,
+                        created_count);
+                    return TURBOWASM_MALFORMED_MODULE;
+                }
+
+                for (j = 0u; j < flat_count; ++j)
+                    core_args[core_arg_count++] = flat[j];
+            }
         }
     }
 
-    if (core_arg_count != adapter->flat_signature.param_count)
+    if (core_arg_count != adapter->flat_signature.param_count) {
+        rollback_created_handles(
+            adapter, created_handles,
+            created_identities, created_borrowed,
+            created_count);
         return TURBOWASM_MALFORMED_MODULE;
+    }
 
     status = turbowasm_instance_invoke(
         adapter->instance,
@@ -522,13 +832,45 @@ turbowasm_status turbowasm_component_core_call_invoke(
         adapter->flat_signature.result_count,
         &core_result_count,
         trap);
-    if (status != TURBOWASM_OK)
+
+    if (status != TURBOWASM_OK) {
+        /*
+         * A Core trap aborts the synchronous borrow scope. Transient borrowed
+         * handles are cleaned locally; transferred own handles remain owned by
+         * the callee resource table.
+         */
+        for (i = 0u; i < created_count; ++i) {
+            if (created_borrowed[i]) {
+                (void)turbowasm_component_resource_drop(
+                    adapter->resources,
+                    created_handles[i],
+                    created_identities[i],
+                    NULL, NULL);
+            }
+        }
         return status;
+    }
+
+    if (!finalize_borrow_scope(
+            adapter, created_handles,
+            created_identities, created_borrowed,
+            created_count))
+        return TURBOWASM_TRAPPED;
+
     if (core_result_count != adapter->flat_signature.result_count)
         return TURBOWASM_MALFORMED_MODULE;
 
     if (!function->as.function.has_result)
         return TURBOWASM_OK;
+
+    if (type_ref_uses_resources(
+            adapter->graph, function->as.function.result, 0u)) {
+        if (core_result_count != 1u)
+            return TURBOWASM_MALFORMED_MODULE;
+        return lift_owned_result(
+            adapter, function->as.function.result,
+            &core_results[0], out_result);
+    }
 
     if (adapter->flat_signature.results_indirect) {
         uint64_t pointer;

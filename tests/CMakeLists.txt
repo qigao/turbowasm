@@ -32,6 +32,19 @@ set_target_properties(turbowasm_artifact_restore_test PROPERTIES
 add_test(NAME turbowasm_artifact_restore_test
          COMMAND turbowasm_artifact_restore_test)
 
+add_executable(turbowasm_component_resource_call_test
+  component_resource_call_test.c)
+target_link_libraries(turbowasm_component_resource_call_test
+  PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_component_resource_call_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_resource_call_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_resource_call_test
+         COMMAND turbowasm_component_resource_call_test)
+
 add_executable(turbowasm_component_resource_test
   component_resource_test.c)
 target_link_libraries(turbowasm_component_resource_test

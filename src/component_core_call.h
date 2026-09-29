@@ -2,6 +2,7 @@
 #define TURBOWASM_COMPONENT_CORE_CALL_H
 
 #include "component_canonical.h"
+#include "component_resource.h"
 
 #include <turbowasm/instance.h>
 
@@ -23,8 +24,10 @@ typedef struct turbowasm_component_core_call_adapter {
 
     turbowasm_component_canonical_memory memory;
     turbowasm_component_flat_signature flat_signature;
+    turbowasm_component_resource_table *resources;
 
     bool uses_memory;
+    bool uses_resources;
     bool initialized;
 } turbowasm_component_core_call_adapter;
 
@@ -35,6 +38,15 @@ turbowasm_status turbowasm_component_core_call_adapter_init(
     turbowasm_instance *instance,
     uint32_t function_index,
     const turbowasm_component_canonical_memory *memory);
+
+turbowasm_status turbowasm_component_core_call_adapter_init_with_resources(
+    turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    turbowasm_instance *instance,
+    uint32_t function_index,
+    const turbowasm_component_canonical_memory *memory,
+    turbowasm_component_resource_table *resources);
 
 void turbowasm_component_core_call_adapter_destroy(
     turbowasm_component_core_call_adapter *adapter);

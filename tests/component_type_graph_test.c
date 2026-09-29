@@ -151,11 +151,29 @@ static void test_incomplete_graph_fails_closed(void) {
     turbowasm_component_type_graph_destroy(&graph);
 }
 
+static void test_borrow_result_is_rejected(void) {
+    turbowasm_component_type_graph graph = {0};
+    turbowasm_component_type_ref result;
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 3u));
+    assert(turbowasm_component_type_graph_define_resource_full(
+        &graph, 0u, UINT64_C(0x7001), 0x7fu, false, UINT32_MAX));
+    assert(turbowasm_component_type_graph_define_handle(
+        &graph, 1u, TURBOWASM_COMPONENT_TYPE_BORROW, 0u));
+    result = turbowasm_component_type_ref_indexed(1u);
+    assert(turbowasm_component_type_graph_define_function(
+        &graph, 2u, NULL, 0u, true, result));
+    assert(!turbowasm_component_type_graph_validate(&graph));
+
+    turbowasm_component_type_graph_destroy(&graph);
+}
+
 int main(void) {
     test_scalar_projection();
     test_indexed_type_graph();
     test_inline_and_function_refs();
     test_invalid_resource_links_fail_closed();
     test_incomplete_graph_fails_closed();
+    test_borrow_result_is_rejected();
     return 0;
 }
