@@ -215,7 +215,8 @@ static turbowasm_status append_flat_type(
     const turbowasm_component_flat_type_list *flat) {
     uint32_t i;
 
-    if (out == NULL || count == NULL || flat == NULL)
+    if (out == NULL || count == NULL || flat == NULL ||
+        *count > capacity)
         return TURBOWASM_INVALID_ARGUMENT;
     if (flat->count > capacity - *count)
         return TURBOWASM_INVALID_ARGUMENT;
