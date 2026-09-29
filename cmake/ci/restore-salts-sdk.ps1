@@ -1,5 +1,6 @@
 param(
-  [string]$SaltsRid = ""
+  [string]$SaltsRid = "",
+  [switch]$WithSaltsUtils
 )
 
 Set-StrictMode -Version Latest
@@ -49,11 +50,18 @@ $project = Join-Path $env:RUNNER_TEMP "turbowasm-salts-sdk-restore.csproj"
 dotnet nuget add source "https://nuget.pkg.github.com/qigao/index.json" --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
 if ($LASTEXITCODE -ne 0) { throw "failed to configure GitHub Packages source" }
 
+$saltsUtilsReference = if ($WithSaltsUtils) {
+  '    <PackageReference Include="SaltsUtils.Native" Version="*" />'
+} else {
+  ""
+}
+
 @"
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Salts.Native" Version="$versionSpec" />
+$saltsUtilsReference
   </ItemGroup>
 </Project>
 "@ | Set-Content -LiteralPath $project
@@ -97,3 +105,34 @@ foreach ($target in @("Salts::CMeta", "Salts::SIMD", "Salts::CFlow")) {
 "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
 "QIGAO_NUGET_PACKAGES=$packages" >> $env:GITHUB_ENV
 Write-Host "Restored Salts.Native $saltsVersion ($SaltsRid): $saltsRoot"
+
+if ($WithSaltsUtils) {
+  $utilsLibraries = @(
+    $assets.libraries.PSObject.Properties.Name |
+      Where-Object { $_ -like "SaltsUtils.Native/*" }
+  )
+  if ($utilsLibraries.Count -ne 1) {
+    throw "expected exactly one restored SaltsUtils.Native package, found $($utilsLibraries.Count)"
+  }
+
+  $utilsVersion = ($utilsLibraries[0] -split "/", 2)[1]
+  $utilsPackageRoot = Join-Path (Join-Path $packages "saltsutils.native") $utilsVersion
+  $utilsRoot = Join-Path (Join-Path $utilsPackageRoot "sdk") $SaltsRid
+  $utilsConfig = Join-Path $utilsRoot "lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+  $utilsTargets = Join-Path $utilsRoot "lib/cmake/SaltsUtils/SaltsUtilsTargets.cmake"
+  $producerHeader = Join-Path $utilsRoot "include/data_bind_cmeta_adapter_plan.h"
+
+  foreach ($path in @($utilsConfig, $utilsTargets, $producerHeader)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+      throw "missing restored SaltsUtils SDK file: $path"
+    }
+  }
+
+  $utilsTargetsText = Get-Content -LiteralPath $utilsTargets -Raw
+  if (-not $utilsTargetsText.Contains("Salts::DataBindProducer")) {
+    throw "SaltsUtils.Native $utilsVersion does not export Salts::DataBindProducer"
+  }
+
+  "SALTS_UTILS_ROOT=$utilsRoot" >> $env:GITHUB_ENV
+  Write-Host "Restored SaltsUtils.Native $utilsVersion ($SaltsRid): $utilsRoot"
+}
