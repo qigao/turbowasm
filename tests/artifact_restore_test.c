@@ -10,6 +10,18 @@
 #include <stdint.h>
 #include <string.h>
 
+static const uint8_t memory64_module_bytes[] = {
+    0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+    /* type0: () -> i64 */
+    0x01,0x05,0x01,0x60,0x00,0x01,0x7e,
+    /* function0 type0 */
+    0x03,0x02,0x01,0x00,
+    /* memory64 min=1 */
+    0x05,0x03,0x01,0x04,0x01,
+    /* function0: memory.size 0 */
+    0x0a,0x06,0x01,0x04,0x00,0x3f,0x00,0x0b
+};
+
 static const uint8_t module_bytes[] = {
     0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
 
@@ -50,6 +62,29 @@ static int32_t invoke_value(turbowasm_instance *instance) {
     assert(result_count==1u);
     assert(result.kind==TURBOWASM_VALUE_I32);
     return result.as.i32;
+}
+
+static int64_t invoke_i64(turbowasm_instance *instance) {
+    turbowasm_value result={0};
+    size_t result_count=0u;
+    turbowasm_trap trap=TURBOWASM_TRAP_NONE;
+
+    assert(turbowasm_instance_invoke(
+               instance,0u,
+               NULL,0u,
+               &result,1u,
+               &result_count,&trap)==TURBOWASM_OK);
+    assert(trap==TURBOWASM_TRAP_NONE);
+    assert(result_count==1u);
+    assert(result.kind==TURBOWASM_VALUE_I64);
+    return result.as.i64;
+}
+
+static void write_u32le(uint8_t *p,uint32_t value) {
+    p[0]=(uint8_t)value;
+    p[1]=(uint8_t)(value>>8u);
+    p[2]=(uint8_t)(value>>16u);
+    p[3]=(uint8_t)(value>>24u);
 }
 
 static void test_fresh_and_restored_behavior_match(void) {
@@ -133,6 +168,100 @@ static void test_restore_rejects_wrong_source_and_truncation(void) {
     turbowasm_module_destroy(&fresh);
 }
 
+static void test_memory64_fresh_and_restored_match(void) {
+    turbowasm_module fresh={0};
+    turbowasm_module restored={0};
+    turbowasm_instance fresh_instance={0};
+    turbowasm_instance restored_instance={0};
+    uint8_t artifact[4096]={0};
+    size_t artifact_size=0u;
+
+    assert(turbowasm_module_load_borrowed(
+               &fresh,
+               memory64_module_bytes,
+               sizeof(memory64_module_bytes))==TURBOWASM_OK);
+    assert(turbowasm_module_artifact_write(
+               &fresh,artifact,sizeof(artifact),&artifact_size)==
+           TURBOWASM_OK);
+    assert(turbowasm_module_load_borrowed_from_artifact(
+               &restored,
+               memory64_module_bytes,
+               sizeof(memory64_module_bytes),
+               artifact,artifact_size)==TURBOWASM_OK);
+
+    assert(turbowasm_instance_create(
+               &fresh_instance,&fresh)==TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &restored_instance,&restored)==TURBOWASM_OK);
+    assert(invoke_i64(&fresh_instance)==1);
+    assert(invoke_i64(&restored_instance)==1);
+
+    turbowasm_instance_destroy(&restored_instance);
+    turbowasm_instance_destroy(&fresh_instance);
+    turbowasm_module_destroy(&restored);
+    turbowasm_module_destroy(&fresh);
+}
+
+static void test_integrity_rejects_single_byte_mutations(void) {
+    turbowasm_module fresh={0};
+    turbowasm_module restored={0};
+    uint8_t artifact[4096]={0};
+    uint8_t mutated[4096]={0};
+    size_t artifact_size=0u;
+    size_t index;
+
+    assert(turbowasm_module_load_borrowed(
+               &fresh,module_bytes,sizeof(module_bytes))==TURBOWASM_OK);
+    assert(turbowasm_module_artifact_write(
+               &fresh,artifact,sizeof(artifact),&artifact_size)==
+           TURBOWASM_OK);
+    assert(artifact_size<=sizeof(mutated));
+
+    for(index=0u;index<artifact_size;++index) {
+        memcpy(mutated,artifact,artifact_size);
+        mutated[index]^=1u;
+        assert(turbowasm_module_load_borrowed_from_artifact(
+                   &restored,
+                   module_bytes,sizeof(module_bytes),
+                   mutated,artifact_size)!=TURBOWASM_OK);
+        assert(restored.impl==NULL);
+    }
+
+    turbowasm_module_destroy(&fresh);
+}
+
+static void test_legacy_complete_artifact_remains_readable(void) {
+    turbowasm_module fresh={0};
+    turbowasm_module restored={0};
+    turbowasm_instance instance={0};
+    uint8_t artifact[4096]={0};
+    size_t artifact_size=0u;
+
+    assert(turbowasm_module_load_borrowed(
+               &fresh,module_bytes,sizeof(module_bytes))==TURBOWASM_OK);
+    assert(turbowasm_module_artifact_write(
+               &fresh,artifact,sizeof(artifact),&artifact_size)==
+           TURBOWASM_OK);
+    assert(artifact_size>40u);
+
+    /* schema-v1 pre-integrity COMPLETE artifact: flags=1, sections=3. */
+    write_u32le(artifact+12u,TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA);
+    write_u32le(artifact+64u,3u);
+    artifact_size-=40u;
+
+    assert(turbowasm_module_load_borrowed_from_artifact(
+               &restored,
+               module_bytes,sizeof(module_bytes),
+               artifact,artifact_size)==TURBOWASM_OK);
+    assert(turbowasm_instance_create(
+               &instance,&restored)==TURBOWASM_OK);
+    assert(invoke_value(&instance)==42);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&restored);
+    turbowasm_module_destroy(&fresh);
+}
+
 static void test_restore_respects_runtime_limits(void) {
     turbowasm_module fresh={0};
     turbowasm_module restored={0};
@@ -159,6 +288,9 @@ static void test_restore_respects_runtime_limits(void) {
 
 int main(void) {
     test_fresh_and_restored_behavior_match();
+    test_memory64_fresh_and_restored_match();
+    test_integrity_rejects_single_byte_mutations();
+    test_legacy_complete_artifact_remains_readable();
     test_restore_rejects_wrong_source_and_truncation();
     test_restore_respects_runtime_limits();
     return 0;
