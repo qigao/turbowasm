@@ -8,6 +8,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef EOVERFLOW
+#define EOVERFLOW ERANGE
+#endif
+#ifndef ENAMETOOLONG
+#define ENAMETOOLONG ERANGE
+#endif
+#ifndef ENOTEMPTY
+#define ENOTEMPTY EEXIST
+#endif
+
 enum {
     TURBOWASM_HOST_FS_OFLAGS_CREAT = 1u,
     TURBOWASM_HOST_FS_OFLAGS_DIRECTORY = 2u,
@@ -551,6 +561,7 @@ static uint32_t host_path_open(
     turbowasm_wasi_host_fs_impl *impl =
         (turbowasm_wasi_host_fs_impl *)context;
     turbowasm_wasi_host_fs_slot *slot;
+    char full_path[TURBOWASM_WASI_HOST_FS_PATH_MAX + 1u];
     uint32_t error;
     int result;
     int file_flags = 0;
@@ -572,16 +583,15 @@ static uint32_t host_path_open(
     if ((oflags & TURBOWASM_HOST_FS_OFLAGS_EXCL) != 0u)
         return TURBOWASM_WASI_ERRNO_NOSYS;
 
+    error = host_build_path(
+        impl, directory, path, path_length, full_path);
+    if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
+        return error;
+
     slot = host_reserve_slot(impl);
     if (slot == NULL)
         return TURBOWASM_WASI_ERRNO_MFILE;
-
-    error = host_build_path(
-        impl, directory, path, path_length, slot->path);
-    if (error != TURBOWASM_WASI_ERRNO_SUCCESS) {
-        host_release_slot(slot);
-        return error;
-    }
+    memcpy(slot->path, full_path, strlen(full_path) + 1u);
 
     if ((oflags & TURBOWASM_HOST_FS_OFLAGS_DIRECTORY) != 0u) {
         if ((oflags & (TURBOWASM_HOST_FS_OFLAGS_CREAT |
