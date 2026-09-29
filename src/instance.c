@@ -1,6 +1,7 @@
 #include <turbowasm/instance.h>
 
 #include "instance_internal.h"
+#include "artifact.h"
 #include "link_internal.h"
 #include "module_internal.h"
 #include "reader.h"
@@ -5720,6 +5721,139 @@ turbowasm_status turbowasm_instance_invoke_interpreter_internal(
         0u);
 }
 
+static void turbowasm_jit_artifact_key_build(
+    const turbowasm_instance_impl *instance,
+    uint32_t function_index,
+    turbowasm_jit_artifact_key *out) {
+    if (instance == NULL || out == NULL)
+        return;
+
+    memset(out, 0, sizeof(*out));
+    memcpy(
+        out->source_sha256,
+        instance->jit_artifact_source_sha256,
+        sizeof(out->source_sha256));
+    out->validation_feature_fingerprint =
+        instance->jit_artifact_validation_fingerprint;
+    out->function_index = function_index;
+    memcpy(
+        out->backend_fingerprint,
+        instance->jit_artifact_backend_fingerprint,
+        sizeof(out->backend_fingerprint));
+}
+
+static bool turbowasm_jit_artifact_try_restore(
+    turbowasm_instance_impl *instance,
+    const turbowasm_module_impl *module,
+    uint32_t function_index,
+    const turbowasm_validation_function *function,
+    turbowasm_jit_function_state *entry) {
+    turbowasm_jit_artifact_key key;
+    turbowasm_jit_artifact_view view = {0};
+    turbowasm_status status;
+    bool hit;
+
+    if (instance == NULL || module == NULL ||
+        function == NULL || entry == NULL ||
+        !instance->jit_artifact_cache_enabled ||
+        instance->jit_backend.restore_function_artifact == NULL)
+        return false;
+
+    turbowasm_jit_artifact_key_build(
+        instance, function_index, &key);
+    hit = instance->jit_artifact_cache.lookup(
+        instance->jit_artifact_cache.context,
+        &key, &view);
+    if (!hit)
+        return false;
+
+    if (view.size == 0u ||
+        view.bytes == NULL ||
+        view.size > instance->jit_artifact_cache.max_blob_bytes) {
+        instance->jit_artifact_cache.release(
+            instance->jit_artifact_cache.context, &view);
+        return false;
+    }
+
+    entry->compiled.impl = NULL;
+    status = instance->jit_backend.restore_function_artifact(
+        instance->jit_backend.context,
+        &module->validation,
+        function_index,
+        function,
+        view.bytes,
+        view.size,
+        &entry->compiled);
+
+    instance->jit_artifact_cache.release(
+        instance->jit_artifact_cache.context, &view);
+
+    if (status == TURBOWASM_OK &&
+        entry->compiled.impl != NULL)
+        return true;
+
+    if (entry->compiled.impl != NULL) {
+        instance->jit_backend.destroy_function(
+            instance->jit_backend.context,
+            &entry->compiled);
+    }
+    entry->compiled.impl = NULL;
+    return false;
+}
+
+static void turbowasm_jit_artifact_try_store(
+    turbowasm_instance_impl *instance,
+    const turbowasm_module_impl *module,
+    uint32_t function_index,
+    const turbowasm_jit_function_state *entry) {
+    turbowasm_jit_artifact_key key;
+    turbowasm_runtime_scope scope;
+    turbowasm_status status;
+    uint8_t *bytes = NULL;
+    size_t required = 0u;
+    size_t written = 0u;
+
+    if (instance == NULL || module == NULL || entry == NULL ||
+        entry->compiled.impl == NULL ||
+        !instance->jit_artifact_cache_enabled ||
+        instance->jit_backend.measure_function_artifact == NULL ||
+        instance->jit_backend.write_function_artifact == NULL)
+        return;
+
+    status = instance->jit_backend.measure_function_artifact(
+        instance->jit_backend.context,
+        &entry->compiled,
+        &required);
+    if (status != TURBOWASM_OK ||
+        required == 0u ||
+        required > instance->jit_artifact_cache.max_blob_bytes)
+        return;
+
+    scope = turbowasm_runtime_scope_enter(&module->config);
+    bytes = (uint8_t *)turbowasm_rt_malloc(required);
+    turbowasm_runtime_scope_leave(scope);
+    if (bytes == NULL)
+        return;
+
+    status = instance->jit_backend.write_function_artifact(
+        instance->jit_backend.context,
+        &entry->compiled,
+        bytes,
+        required,
+        &written);
+    if (status == TURBOWASM_OK && written == required) {
+        turbowasm_jit_artifact_key_build(
+            instance, function_index, &key);
+        (void)instance->jit_artifact_cache.store(
+            instance->jit_artifact_cache.context,
+            &key,
+            bytes,
+            written);
+    }
+
+    turbowasm_rt_free(bytes);
+}
+
 static turbowasm_status turbowasm_dispatch_function(
     turbowasm_instance_impl *instance,
     uint32_t function_index,
@@ -5825,6 +5959,13 @@ dispatch_again:
             execution, depth);
     }
 
+    if (turbowasm_jit_artifact_try_restore(
+            instance, module, function_index,
+            function, entry)) {
+        entry->state = TURBOWASM_JIT_COMPILED;
+        goto invoke_compiled;
+    }
+
     status = instance->jit_backend.compile_function(
         instance->jit_backend.context,
         &module->validation,
@@ -5848,6 +5989,8 @@ dispatch_again:
     }
 
     entry->state = TURBOWASM_JIT_COMPILED;
+    turbowasm_jit_artifact_try_store(
+        instance, module, function_index, entry);
 
 invoke_compiled:
     {
@@ -5897,12 +6040,16 @@ invoke_compiled:
     }
 }
 
-turbowasm_status turbowasm_jit_instance_attach_backend(
+turbowasm_status turbowasm_jit_instance_attach_backend_with_cache(
     turbowasm_instance_impl *instance,
     turbowasm_jit_backend *backend,
-    uint32_t hot_threshold) {
+    uint32_t hot_threshold,
+    const turbowasm_jit_artifact_cache *cache) {
     const turbowasm_module_impl *module;
     turbowasm_jit_function_state *states = NULL;
+    uint8_t backend_fingerprint[
+        TURBOWASM_JIT_ARTIFACT_FINGERPRINT_SIZE] = {0};
+    bool cache_enabled = false;
 
     if (instance == NULL || backend == NULL ||
         backend->context == NULL ||
@@ -5915,9 +6062,25 @@ turbowasm_status turbowasm_jit_instance_attach_backend(
         instance->jit_backend_attached)
         return TURBOWASM_INVALID_ARGUMENT;
 
+    if (cache != NULL &&
+        (cache->context == NULL ||
+         cache->max_blob_bytes == 0u ||
+         cache->lookup == NULL ||
+         cache->release == NULL ||
+         cache->store == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+
     module = turbowasm_module_impl_get(instance->module);
     if (module == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+
+    if (cache != NULL &&
+        backend->artifact_fingerprint != NULL &&
+        backend->restore_function_artifact != NULL &&
+        backend->artifact_fingerprint(
+            backend->context, backend_fingerprint)) {
+        cache_enabled = true;
+    }
 
     if (module->validation.function_count != 0u) {
         turbowasm_runtime_scope scope =
@@ -5936,8 +6099,32 @@ turbowasm_status turbowasm_jit_instance_attach_backend(
     instance->jit_function_count =
         module->validation.function_count;
     instance->jit_hot_threshold = hot_threshold;
+
+    if (cache_enabled) {
+        instance->jit_artifact_cache = *cache;
+        turbowasm_sha256(
+            module->bytes,
+            module->size,
+            instance->jit_artifact_source_sha256);
+        instance->jit_artifact_validation_fingerprint =
+            turbowasm_artifact_current_feature_fingerprint();
+        memcpy(
+            instance->jit_artifact_backend_fingerprint,
+            backend_fingerprint,
+            sizeof(instance->jit_artifact_backend_fingerprint));
+        instance->jit_artifact_cache_enabled = true;
+    }
+
     instance->jit_backend_attached = true;
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_jit_instance_attach_backend(
+    turbowasm_instance_impl *instance,
+    turbowasm_jit_backend *backend,
+    uint32_t hot_threshold) {
+    return turbowasm_jit_instance_attach_backend_with_cache(
+        instance, backend, hot_threshold, NULL);
 }
 
 void turbowasm_jit_instance_detach_backend(
@@ -5965,6 +6152,15 @@ void turbowasm_jit_instance_detach_backend(
     instance->jit_functions = NULL;
     instance->jit_function_count = 0u;
     instance->jit_hot_threshold = 0u;
+
+    instance->jit_artifact_cache_enabled = false;
+    memset(&instance->jit_artifact_cache, 0,
+           sizeof(instance->jit_artifact_cache));
+    memset(instance->jit_artifact_source_sha256, 0,
+           sizeof(instance->jit_artifact_source_sha256));
+    instance->jit_artifact_validation_fingerprint = 0u;
+    memset(instance->jit_artifact_backend_fingerprint, 0,
+           sizeof(instance->jit_artifact_backend_fingerprint));
 
     instance->jit_backend.destroy_backend(
         instance->jit_backend.context);
