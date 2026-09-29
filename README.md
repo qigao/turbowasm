@@ -31,13 +31,24 @@ The repository currently provides:
   tags, plus typed synchronous host-function providers;
 - optional `TurboWasm::CFlow` deadline/scheduling projection;
 - optional `TurboWasm::NativeIO` bounded async host-wait bridge;
+- shared-memory/atomic execution with wait/notify and qualified legacy WASI
+  threads support;
+- a capability-gated `TurboWasm::WASI` Preview1 layer for args/environment,
+  clocks, random, fd I/O, proc_exit and filesystem operations;
+- a bounded generation-safe WASI filesystem provider ABI with Salts HostFS and
+  optional littlefs implementations;
+- optional `TurboWasm::WASINativeIO` async fd projection and
+  `TurboWasm::WASIThreads` CFlow-backed thread-spawn/group lifecycle;
+- caller-owned Runtime allocation plus module/allocation/linear-memory/table
+  resource limits for embedded deployments;
 - C/C++ public ABI tests;
 - an installed CMake package and a small module-validation CLI.
 
-The current implementation is intentionally scoped. WASI Preview 1 capability
-adapters are being layered on the typed host boundary. Shared-memory threads/
-atomics, memory64, WebAssembly GC and the Component Model remain outside the
-completed Runtime surface.
+The current implementation is intentionally scoped. Core shared-memory atomics,
+legacy WASI threads and the qualified Preview1 capability layer are part of the
+completed surface. memory64, WebAssembly GC, the Component Model and WASI 0.2
+remain outside the completed Runtime surface and are tracked by Runtime v2
+(#301).
 
 ## Dependency boundary
 
@@ -65,6 +76,10 @@ TurboWasm::Runtime
 TurboWasm::CFlow / TurboWasm::NativeIO
     -> optional host scheduling / async-I/O projections
     -> do not enter the Runtime public link interface
+
+TurboWasm::WASI / WASIThreads / WASINativeIO / WASIHostFS / WASILittleFS
+    -> optional host capability layers
+    -> remain separate from TurboWasm::Runtime
 ```
 
 TurboWasm never includes SIMDe directly and does not expose MIR types through
