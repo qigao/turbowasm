@@ -417,11 +417,16 @@ static turbowasm_status validate_memory_binding(
     if (!adapter->uses_memory)
         return TURBOWASM_OK;
     if (memory == NULL ||
-        memory->instance != adapter->instance ||
+        memory->instance == NULL ||
+        memory->instance->impl == NULL ||
         memory->string_encoding != TURBOWASM_COMPONENT_STRING_UTF8)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    module = turbowasm_instance_module(adapter->instance);
+    /*
+     * Canonical memory is a Core memory option, not necessarily a memory owned
+     * by the lifted callee's Core instance.
+     */
+    module = turbowasm_instance_module(memory->instance);
     if (module == NULL ||
         !turbowasm_module_memory_at(
             module, memory->memory_index, &desc))
@@ -520,7 +525,8 @@ static turbowasm_status lower_indirect_parameters(
         size > (uint64_t)SIZE_MAX)
         return TURBOWASM_TRAPPED;
 
-    instance = (turbowasm_instance_impl *)adapter->instance->impl;
+    instance =
+        (turbowasm_instance_impl *)adapter->memory.instance->impl;
     if (instance == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     {

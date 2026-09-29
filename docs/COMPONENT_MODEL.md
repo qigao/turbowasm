@@ -343,6 +343,52 @@ C5c1 intentionally rejects:
 C5c2 adds memory/realloc options, linked instance arguments and C5b resource
 built-ins without weakening this ownership boundary.
 
+## C5c2a linked instances and canonical memory options
+
+The executable binary subset now accepts two additional pinned-MVP constructs.
+
+### Core instantiate arguments
+
+A Core instance definition may carry `with` arguments of the binary form:
+
+```text
+core-name 0x12 core-instance-index
+```
+
+Each argument must reference an already-created Core instance. At execution
+time TurboWasm creates an ordinary `turbowasm_linker`, defines each provider
+instance under the encoded Core module namespace, and instantiates the consumer
+through `turbowasm_instance_create_linked()`. Component execution therefore
+does not duplicate Core import matching or type checks.
+
+### Canonical memory and realloc options
+
+C5c2a decodes and retains:
+
+- default or explicit UTF-8 string encoding;
+- `memory <core-memory-index>`;
+- `realloc <core-function-index>`.
+
+UTF-16, latin1+UTF-16, post-return, async and callback options still fail
+closed.
+
+Core memory export aliases occupy their own Core-memory index space. Canonical
+memory may be exported by a different Core instance than the lifted callee.
+The memory's actual memory32/memory64 type selects the canonical pointer width.
+
+The realloc option may likewise refer to a Core function from another instance.
+Before use, its reflected signature must be exactly:
+
+```text
+(ptr, ptr, ptr, ptr) -> ptr
+```
+
+where `ptr` is i32 for memory32 and i64 for memory64. The guest realloc
+callback invokes that function only through `turbowasm_instance_invoke()`.
+
+This separation is important: Component canonical options name Core index-space
+items, not fields implicitly owned by the lifted callee's Core instance.
+
 ## Deferred work
 
 C1 intentionally does not implement:
