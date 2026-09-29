@@ -139,11 +139,13 @@ static void test_envelope_round_trip(void) {
                artifact,written,module_bytes,sizeof(module_bytes),&info)==
            TURBOWASM_OK);
     assert(info.schema_version==TURBOWASM_ARTIFACT_SCHEMA_VERSION);
-    assert(info.flags==TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA);
+    assert(info.flags==
+           (TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA |
+            TURBOWASM_ARTIFACT_FLAG_INTEGRITY_SHA256));
     assert(info.feature_fingerprint==
            turbowasm_artifact_current_feature_fingerprint());
     assert(info.source_size==sizeof(module_bytes));
-    assert(info.section_count==3u);
+    assert(info.section_count==4u);
     assert(info.summary.memory_count==1u);
     assert(info.summary.export_count==1u);
     assert(info.has_core_metadata);
@@ -159,6 +161,7 @@ static void test_envelope_round_trip(void) {
     assert(info.metadata_data_segment_count==0u);
     assert(info.metadata_element_segment_count==0u);
     assert(info.metadata_declared_ref_count==0u);
+    assert(info.has_integrity_sha256);
 
     turbowasm_module_destroy(&module);
 }
@@ -226,8 +229,10 @@ static void test_core_metadata_round_trip(void) {
                metadata_module_bytes,sizeof(metadata_module_bytes),
                &info)==TURBOWASM_OK);
 
-    assert(info.section_count==3u);
-    assert(info.flags==TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA);
+    assert(info.section_count==4u);
+    assert(info.flags==
+           (TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA |
+            TURBOWASM_ARTIFACT_FLAG_INTEGRITY_SHA256));
     assert(info.has_core_metadata);
     assert(info.has_state_metadata);
     assert(info.metadata_type_count==1u);
@@ -235,6 +240,7 @@ static void test_core_metadata_round_trip(void) {
     assert(info.metadata_import_count==1u);
     assert(info.metadata_export_count==2u);
     assert(info.metadata_memory_count==1u);
+    assert(info.has_integrity_sha256);
 
     /*
      * v1 writes summary first. Core metadata payload begins after:
@@ -270,8 +276,10 @@ static void test_state_metadata_round_trip(void) {
                state_module_bytes,sizeof(state_module_bytes),
                &info)==TURBOWASM_OK);
 
-    assert(info.flags==TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA);
-    assert(info.section_count==3u);
+    assert(info.flags==
+           (TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA |
+            TURBOWASM_ARTIFACT_FLAG_INTEGRITY_SHA256));
+    assert(info.section_count==4u);
     assert(info.has_core_metadata);
     assert(info.has_state_metadata);
     assert(info.metadata_function_count==1u);
@@ -282,6 +290,7 @@ static void test_state_metadata_round_trip(void) {
     assert(info.metadata_data_segment_count==1u);
     assert(info.metadata_element_segment_count==1u);
     assert(info.metadata_declared_ref_count==1u);
+    assert(info.has_integrity_sha256);
 
     turbowasm_module_destroy(&module);
 }

@@ -912,8 +912,9 @@ turbowasm_status turbowasm_artifact_measure(
     size_t state_size;
     size_t fixed_size=
         TW_ARTIFACT_HEADER_SIZE +
-        3u*TW_ARTIFACT_SECTION_HEADER_SIZE +
-        TW_ARTIFACT_SUMMARY_SIZE;
+        4u*TW_ARTIFACT_SECTION_HEADER_SIZE +
+        TW_ARTIFACT_SUMMARY_SIZE +
+        TURBOWASM_SHA256_DIGEST_SIZE;
 
     if(impl==NULL||out_size==NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -938,9 +939,12 @@ turbowasm_status turbowasm_artifact_write(
     size_t required;
     size_t fixed_size=
         TW_ARTIFACT_HEADER_SIZE+
-        3u*TW_ARTIFACT_SECTION_HEADER_SIZE+
-        TW_ARTIFACT_SUMMARY_SIZE;
+        4u*TW_ARTIFACT_SECTION_HEADER_SIZE+
+        TW_ARTIFACT_SUMMARY_SIZE+
+        TURBOWASM_SHA256_DIGEST_SIZE;
+    size_t integrity_prefix_size;
     uint8_t digest[TURBOWASM_SHA256_DIGEST_SIZE];
+    uint8_t artifact_digest[TURBOWASM_SHA256_DIGEST_SIZE];
     tw_writer w;
 
     if(impl==NULL||out_size==NULL)
@@ -964,11 +968,13 @@ turbowasm_status turbowasm_artifact_write(
     if(!put_bytes(&w,(const uint8_t *)"TWVA",4u) ||
        !put_u32(&w,TURBOWASM_ARTIFACT_SCHEMA_VERSION) ||
        !put_u32(&w,TW_ARTIFACT_HEADER_SIZE) ||
-       !put_u32(&w,TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA) ||
+       !put_u32(&w,
+           TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA |
+           TURBOWASM_ARTIFACT_FLAG_INTEGRITY_SHA256) ||
        !put_u64(&w,turbowasm_artifact_current_feature_fingerprint()) ||
        !put_u64(&w,(uint64_t)impl->size) ||
        !put_bytes(&w,digest,sizeof(digest)) ||
-       !put_u32(&w,3u) ||
+       !put_u32(&w,4u) ||
        !put_u32(&w,0u) ||
        !put_u32(&w,TURBOWASM_ARTIFACT_SECTION_SUMMARY) ||
        !put_u32(&w,TW_ARTIFACT_SUMMARY_SIZE) ||
@@ -978,7 +984,16 @@ turbowasm_status turbowasm_artifact_write(
        !write_core_metadata(&w,impl) ||
        !put_u32(&w,TURBOWASM_ARTIFACT_SECTION_STATE_METADATA) ||
        !put_u32(&w,(uint32_t)state_size) ||
-       !write_state_metadata(&w,impl) ||
+       !write_state_metadata(&w,impl))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    integrity_prefix_size=w.offset;
+    turbowasm_sha256(
+        output,integrity_prefix_size,artifact_digest);
+
+    if(!put_u32(&w,TURBOWASM_ARTIFACT_SECTION_INTEGRITY_SHA256) ||
+       !put_u32(&w,TURBOWASM_SHA256_DIGEST_SIZE) ||
+       !put_bytes(&w,artifact_digest,sizeof(artifact_digest)) ||
        w.offset!=required)
         return TURBOWASM_MALFORMED_MODULE;
     return TURBOWASM_OK;
@@ -999,6 +1014,7 @@ turbowasm_status turbowasm_artifact_inspect(
     bool have_summary=false;
     bool have_core_metadata=false;
     bool have_state_metadata=false;
+    bool have_integrity=false;
     tw_core_metadata_counts core_counts={0};
     tw_state_metadata_counts state_counts={0};
 
@@ -1023,7 +1039,9 @@ turbowasm_status turbowasm_artifact_inspect(
     if(out->schema_version!=TURBOWASM_ARTIFACT_SCHEMA_VERSION ||
        header_size!=TW_ARTIFACT_HEADER_SIZE ||
        reserved!=0u ||
-       (out->flags&~TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA)!=0u ||
+       (out->flags&~(
+           TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA |
+           TURBOWASM_ARTIFACT_FLAG_INTEGRITY_SHA256))!=0u ||
        out->feature_fingerprint!=
            turbowasm_artifact_current_feature_fingerprint() ||
        out->source_size!=(uint64_t)source_size)
@@ -1037,6 +1055,7 @@ turbowasm_status turbowasm_artifact_inspect(
         uint32_t type;
         uint32_t size;
         size_t end;
+        size_t section_header_offset=r.offset;
         if(!get_u32(&r,&type)||!get_u32(&r,&size) ||
            r.offset>r.size || (size_t)size>r.size-r.offset)
             return TURBOWASM_MALFORMED_MODULE;
@@ -1070,6 +1089,20 @@ turbowasm_status turbowasm_artifact_inspect(
                sr.offset!=sr.size)
                 return TURBOWASM_MALFORMED_MODULE;
             have_state_metadata=true;
+        } else if(type==TURBOWASM_ARTIFACT_SECTION_INTEGRITY_SHA256) {
+            uint8_t digest[TURBOWASM_SHA256_DIGEST_SIZE];
+            if(have_integrity ||
+               (out->flags&TURBOWASM_ARTIFACT_FLAG_INTEGRITY_SHA256)==0u ||
+               section_index+1u!=out->section_count ||
+               size!=TURBOWASM_SHA256_DIGEST_SIZE)
+                return TURBOWASM_MALFORMED_MODULE;
+            turbowasm_sha256(
+                artifact,section_header_offset,digest);
+            if(memcmp(
+                    digest,r.data+r.offset,
+                    TURBOWASM_SHA256_DIGEST_SIZE)!=0)
+                return TURBOWASM_MALFORMED_MODULE;
+            have_integrity=true;
         } else {
             return TURBOWASM_MALFORMED_MODULE;
         }
@@ -1081,6 +1114,10 @@ turbowasm_status turbowasm_artifact_inspect(
 
     if((out->flags&TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA)!=0u &&
        (!have_core_metadata||!have_state_metadata))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if((out->flags&TURBOWASM_ARTIFACT_FLAG_INTEGRITY_SHA256)!=0u &&
+       !have_integrity)
         return TURBOWASM_MALFORMED_MODULE;
 
     if(have_core_metadata) {
@@ -1142,6 +1179,7 @@ turbowasm_status turbowasm_artifact_inspect(
             state_counts.declared_ref_count;
     }
 
+    out->has_integrity_sha256=have_integrity;
     return TURBOWASM_OK;
 }
 

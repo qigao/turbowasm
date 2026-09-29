@@ -141,6 +141,22 @@ turbowasm_status turbowasm_module_load_borrowed_from_artifact_with_config(
 }
 
 
+turbowasm_status turbowasm_module_artifact_measure(
+    const turbowasm_module *module,
+    size_t *out_size) {
+    return turbowasm_artifact_measure(module,out_size);
+}
+
+turbowasm_status turbowasm_module_artifact_write(
+    const turbowasm_module *module,
+    uint8_t *output,
+    size_t capacity,
+    size_t *out_size) {
+    return turbowasm_artifact_write(
+        module,output,capacity,out_size);
+}
+
+
 void turbowasm_module_destroy(turbowasm_module *module) {
     turbowasm_module_impl *impl;
     if (module == NULL || module->impl == NULL) return;

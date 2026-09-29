@@ -152,5 +152,84 @@ int main(void) {
         turbowasm_module_destroy(&module);
     }
 
+    {
+        static const uint8_t artifact_module_bytes[] = {
+            0x00, 0x61, 0x73, 0x6d,
+            0x01, 0x00, 0x00, 0x00,
+            0x01, 0x05,
+            0x01, 0x60, 0x00, 0x01, 0x7f,
+            0x03, 0x02,
+            0x01, 0x00,
+            0x0a, 0x06,
+            0x01, 0x04,
+            0x00, 0x41, 0x2a, 0x0b
+        };
+        turbowasm_module fresh = {0};
+        turbowasm_module restored = {0};
+        turbowasm_instance restored_instance = {0};
+        turbowasm_value restored_result = {0};
+        turbowasm_trap restored_trap = TURBOWASM_TRAP_NONE;
+        uint8_t artifact[4096] = {0};
+        size_t artifact_required = 0u;
+        size_t artifact_written = 0u;
+        size_t restored_result_count = 0u;
+
+        if (turbowasm_module_load_borrowed(
+                &fresh,
+                artifact_module_bytes,
+                sizeof(artifact_module_bytes)) != TURBOWASM_OK)
+            return 23;
+        if (turbowasm_module_artifact_measure(
+                &fresh, &artifact_required) != TURBOWASM_OK ||
+            artifact_required == 0u ||
+            artifact_required > sizeof(artifact)) {
+            turbowasm_module_destroy(&fresh);
+            return 24;
+        }
+        if (turbowasm_module_artifact_write(
+                &fresh,
+                artifact,
+                sizeof(artifact),
+                &artifact_written) != TURBOWASM_OK ||
+            artifact_written != artifact_required) {
+            turbowasm_module_destroy(&fresh);
+            return 25;
+        }
+        if (turbowasm_module_load_borrowed_from_artifact(
+                &restored,
+                artifact_module_bytes,
+                sizeof(artifact_module_bytes),
+                artifact,
+                artifact_written) != TURBOWASM_OK) {
+            turbowasm_module_destroy(&fresh);
+            return 26;
+        }
+        if (turbowasm_instance_create(
+                &restored_instance, &restored) != TURBOWASM_OK) {
+            turbowasm_module_destroy(&restored);
+            turbowasm_module_destroy(&fresh);
+            return 27;
+        }
+        if (turbowasm_instance_invoke(
+                &restored_instance, 0u,
+                NULL, 0u,
+                &restored_result, 1u,
+                &restored_result_count,
+                &restored_trap) != TURBOWASM_OK ||
+            restored_trap != TURBOWASM_TRAP_NONE ||
+            restored_result_count != 1u ||
+            restored_result.kind != TURBOWASM_VALUE_I32 ||
+            restored_result.as.i32 != 42) {
+            turbowasm_instance_destroy(&restored_instance);
+            turbowasm_module_destroy(&restored);
+            turbowasm_module_destroy(&fresh);
+            return 28;
+        }
+
+        turbowasm_instance_destroy(&restored_instance);
+        turbowasm_module_destroy(&restored);
+        turbowasm_module_destroy(&fresh);
+    }
+
     return 0;
 }
