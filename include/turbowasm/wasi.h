@@ -13,8 +13,10 @@ extern "C" {
 
 enum {
     TURBOWASM_WASI_ERRNO_SUCCESS = 0,
+    TURBOWASM_WASI_ERRNO_AGAIN = 6,
     TURBOWASM_WASI_ERRNO_BADF = 8,
     TURBOWASM_WASI_ERRNO_FAULT = 21,
+    TURBOWASM_WASI_ERRNO_INTR = 27,
     TURBOWASM_WASI_ERRNO_INVAL = 28,
     TURBOWASM_WASI_ERRNO_IO = 29,
     TURBOWASM_WASI_ERRNO_MFILE = 33,
@@ -74,6 +76,27 @@ typedef uint32_t (*turbowasm_wasi_fd_read_fn)(
     uint32_t *out_read);
 
 /*
+ * Async fd providers receive the live host-call context so optional adapters
+ * can suspend/resume through TurboWasm's backend-neutral host-wait contract.
+ * They return Preview1 errno values exactly like the synchronous providers.
+ */
+typedef uint32_t (*turbowasm_wasi_fd_write_async_fn)(
+    void *context,
+    turbowasm_host_call *call,
+    uint32_t fd,
+    const turbowasm_wasi_const_buffer *buffers,
+    size_t buffer_count,
+    uint32_t *out_written);
+
+typedef uint32_t (*turbowasm_wasi_fd_read_async_fn)(
+    void *context,
+    turbowasm_host_call *call,
+    uint32_t fd,
+    const turbowasm_wasi_buffer *buffers,
+    size_t buffer_count,
+    uint32_t *out_read);
+
+/*
  * Preview1 proc_exit policy callback.
  *
  * The callback observes the caller instance and exit code before TurboWasm
@@ -111,10 +134,12 @@ typedef struct turbowasm_wasi_preview1_config {
 
     bool allow_fd_write;
     turbowasm_wasi_fd_write_fn fd_write;
+    turbowasm_wasi_fd_write_async_fn fd_write_async;
     void *fd_write_context;
 
     bool allow_fd_read;
     turbowasm_wasi_fd_read_fn fd_read;
+    turbowasm_wasi_fd_read_async_fn fd_read_async;
     void *fd_read_context;
 
     bool allow_proc_exit;
