@@ -2,6 +2,7 @@
 #define TURBOWASM_WASI_H
 
 #include <turbowasm/link.h>
+#include <cmeta/function.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -204,6 +205,19 @@ void turbowasm_wasi_preview1_destroy(
 turbowasm_status turbowasm_wasi_preview1_define(
     turbowasm_wasi_preview1 *wasi,
     turbowasm_linker *linker);
+
+/*
+ * Canonical retained metadata for the supported wasi_snapshot_preview1
+ * import surface. Descriptors are immutable process-lifetime storage and are
+ * the same source used to derive linker carrier signatures.
+ */
+size_t turbowasm_wasi_preview1_function_count(void);
+
+const cmeta_function_desc *turbowasm_wasi_preview1_function_at(
+    size_t index);
+
+const cmeta_function_desc *turbowasm_wasi_preview1_find_function(
+    const char *name);
 
 #ifdef __cplusplus
 }

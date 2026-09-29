@@ -41,6 +41,259 @@ typedef struct turbowasm_wasi_preview1_impl {
 static const uint8_t turbowasm_wasi_namespace_bytes[] =
     "wasi_snapshot_preview1";
 
+
+#define TURBOWASM_WASI_META_PARAM32(name_) \
+    { sizeof(cmeta_param_desc), #name_, &cmeta_type_uint32, CMETA_PARAM_IN }
+#define TURBOWASM_WASI_META_PARAM64(name_) \
+    { sizeof(cmeta_param_desc), #name_, &cmeta_type_uint64, CMETA_PARAM_IN }
+#define TURBOWASM_WASI_META_FUNCTION(name_, return_, params_, effects_) \
+    { sizeof(cmeta_function_desc), name_, return_, params_, \
+      sizeof(params_) / sizeof((params_)[0]), effects_, CMETA_PROP_NONE }
+
+static const cmeta_param_desc turbowasm_wasi_meta_args_sizes_get_params[] = {
+    TURBOWASM_WASI_META_PARAM32(argc),
+    TURBOWASM_WASI_META_PARAM32(argv_buf_size)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_args_get_params[] = {
+    TURBOWASM_WASI_META_PARAM32(argv),
+    TURBOWASM_WASI_META_PARAM32(argv_buf)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_environ_sizes_get_params[] = {
+    TURBOWASM_WASI_META_PARAM32(environ_count),
+    TURBOWASM_WASI_META_PARAM32(environ_buf_size)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_environ_get_params[] = {
+    TURBOWASM_WASI_META_PARAM32(environ),
+    TURBOWASM_WASI_META_PARAM32(environ_buf)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_clock_time_get_params[] = {
+    TURBOWASM_WASI_META_PARAM32(clock_id),
+    TURBOWASM_WASI_META_PARAM64(precision),
+    TURBOWASM_WASI_META_PARAM32(timestamp)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_random_get_params[] = {
+    TURBOWASM_WASI_META_PARAM32(buffer),
+    TURBOWASM_WASI_META_PARAM32(buffer_length)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_fd_write_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(iovs),
+    TURBOWASM_WASI_META_PARAM32(iovs_length),
+    TURBOWASM_WASI_META_PARAM32(written)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_fd_read_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(iovs),
+    TURBOWASM_WASI_META_PARAM32(iovs_length),
+    TURBOWASM_WASI_META_PARAM32(read_count)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_proc_exit_params[] = {
+    TURBOWASM_WASI_META_PARAM32(exit_code)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_fd_close_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_fd_prestat_get_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(prestat)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_fd_prestat_dir_name_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(path),
+    TURBOWASM_WASI_META_PARAM32(path_length)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_path_create_directory_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(path),
+    TURBOWASM_WASI_META_PARAM32(path_length)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_path_remove_directory_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(path),
+    TURBOWASM_WASI_META_PARAM32(path_length)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_path_unlink_file_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(path),
+    TURBOWASM_WASI_META_PARAM32(path_length)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_fd_seek_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM64(offset),
+    TURBOWASM_WASI_META_PARAM32(whence),
+    TURBOWASM_WASI_META_PARAM32(new_offset)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_fd_readdir_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(buffer),
+    TURBOWASM_WASI_META_PARAM32(buffer_length),
+    TURBOWASM_WASI_META_PARAM64(cookie),
+    TURBOWASM_WASI_META_PARAM32(bufused)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_fd_tell_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(offset)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_fd_filestat_get_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(filestat)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_path_filestat_get_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(lookup_flags),
+    TURBOWASM_WASI_META_PARAM32(path),
+    TURBOWASM_WASI_META_PARAM32(path_length),
+    TURBOWASM_WASI_META_PARAM32(filestat)
+};
+static const cmeta_param_desc turbowasm_wasi_meta_path_open_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(dirflags),
+    TURBOWASM_WASI_META_PARAM32(path),
+    TURBOWASM_WASI_META_PARAM32(path_length),
+    TURBOWASM_WASI_META_PARAM32(oflags),
+    TURBOWASM_WASI_META_PARAM64(rights_base),
+    TURBOWASM_WASI_META_PARAM64(rights_inheriting),
+    TURBOWASM_WASI_META_PARAM32(fdflags),
+    TURBOWASM_WASI_META_PARAM32(opened_fd)
+};
+
+static const cmeta_function_desc turbowasm_wasi_meta_args_sizes_get =
+    TURBOWASM_WASI_META_FUNCTION(
+        "args_sizes_get", &cmeta_type_uint32,
+        turbowasm_wasi_meta_args_sizes_get_params,
+        CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_args_get =
+    TURBOWASM_WASI_META_FUNCTION(
+        "args_get", &cmeta_type_uint32,
+        turbowasm_wasi_meta_args_get_params,
+        CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_environ_sizes_get =
+    TURBOWASM_WASI_META_FUNCTION(
+        "environ_sizes_get", &cmeta_type_uint32,
+        turbowasm_wasi_meta_environ_sizes_get_params,
+        CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_environ_get =
+    TURBOWASM_WASI_META_FUNCTION(
+        "environ_get", &cmeta_type_uint32,
+        turbowasm_wasi_meta_environ_get_params,
+        CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_clock_time_get =
+    TURBOWASM_WASI_META_FUNCTION(
+        "clock_time_get", &cmeta_type_uint32,
+        turbowasm_wasi_meta_clock_time_get_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_random_get =
+    TURBOWASM_WASI_META_FUNCTION(
+        "random_get", &cmeta_type_uint32,
+        turbowasm_wasi_meta_random_get_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_fd_write =
+    TURBOWASM_WASI_META_FUNCTION(
+        "fd_write", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_write_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_fd_read =
+    TURBOWASM_WASI_META_FUNCTION(
+        "fd_read", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_read_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_proc_exit = {
+    sizeof(cmeta_function_desc), "proc_exit", &cmeta_type_void,
+    turbowasm_wasi_meta_proc_exit_params,
+    sizeof(turbowasm_wasi_meta_proc_exit_params) /
+        sizeof(turbowasm_wasi_meta_proc_exit_params[0]),
+    CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL,
+    CMETA_PROP_NONE
+};
+static const cmeta_function_desc turbowasm_wasi_meta_fd_close =
+    TURBOWASM_WASI_META_FUNCTION(
+        "fd_close", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_close_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_fd_prestat_get =
+    TURBOWASM_WASI_META_FUNCTION(
+        "fd_prestat_get", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_prestat_get_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_fd_prestat_dir_name =
+    TURBOWASM_WASI_META_FUNCTION(
+        "fd_prestat_dir_name", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_prestat_dir_name_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_path_create_directory =
+    TURBOWASM_WASI_META_FUNCTION(
+        "path_create_directory", &cmeta_type_uint32,
+        turbowasm_wasi_meta_path_create_directory_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_path_remove_directory =
+    TURBOWASM_WASI_META_FUNCTION(
+        "path_remove_directory", &cmeta_type_uint32,
+        turbowasm_wasi_meta_path_remove_directory_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_path_unlink_file =
+    TURBOWASM_WASI_META_FUNCTION(
+        "path_unlink_file", &cmeta_type_uint32,
+        turbowasm_wasi_meta_path_unlink_file_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_fd_seek =
+    TURBOWASM_WASI_META_FUNCTION(
+        "fd_seek", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_seek_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_fd_readdir =
+    TURBOWASM_WASI_META_FUNCTION(
+        "fd_readdir", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_readdir_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_fd_tell =
+    TURBOWASM_WASI_META_FUNCTION(
+        "fd_tell", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_tell_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_fd_filestat_get =
+    TURBOWASM_WASI_META_FUNCTION(
+        "fd_filestat_get", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_filestat_get_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_path_filestat_get =
+    TURBOWASM_WASI_META_FUNCTION(
+        "path_filestat_get", &cmeta_type_uint32,
+        turbowasm_wasi_meta_path_filestat_get_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_function_desc turbowasm_wasi_meta_path_open =
+    TURBOWASM_WASI_META_FUNCTION(
+        "path_open", &cmeta_type_uint32,
+        turbowasm_wasi_meta_path_open_params,
+        CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+
+static const cmeta_function_desc *const turbowasm_wasi_preview1_manifest[] = {
+    &turbowasm_wasi_meta_args_sizes_get,
+    &turbowasm_wasi_meta_args_get,
+    &turbowasm_wasi_meta_environ_sizes_get,
+    &turbowasm_wasi_meta_environ_get,
+    &turbowasm_wasi_meta_clock_time_get,
+    &turbowasm_wasi_meta_random_get,
+    &turbowasm_wasi_meta_fd_write,
+    &turbowasm_wasi_meta_fd_read,
+    &turbowasm_wasi_meta_proc_exit,
+    &turbowasm_wasi_meta_fd_close,
+    &turbowasm_wasi_meta_fd_prestat_get,
+    &turbowasm_wasi_meta_fd_prestat_dir_name,
+    &turbowasm_wasi_meta_path_create_directory,
+    &turbowasm_wasi_meta_path_remove_directory,
+    &turbowasm_wasi_meta_path_unlink_file,
+    &turbowasm_wasi_meta_fd_seek,
+    &turbowasm_wasi_meta_fd_readdir,
+    &turbowasm_wasi_meta_fd_tell,
+    &turbowasm_wasi_meta_fd_filestat_get,
+    &turbowasm_wasi_meta_path_filestat_get,
+    &turbowasm_wasi_meta_path_open
+};
+
+#undef TURBOWASM_WASI_META_FUNCTION
+#undef TURBOWASM_WASI_META_PARAM64
+#undef TURBOWASM_WASI_META_PARAM32
+
 static turbowasm_name turbowasm_wasi_name(
     const char *text) {
     turbowasm_name name = {0};
@@ -1388,26 +1641,95 @@ void turbowasm_wasi_preview1_destroy(
     wasi->impl = NULL;
 }
 
-static turbowasm_status turbowasm_wasi_define_function(
+size_t turbowasm_wasi_preview1_function_count(void) {
+    return sizeof(turbowasm_wasi_preview1_manifest) /
+           sizeof(turbowasm_wasi_preview1_manifest[0]);
+}
+
+const cmeta_function_desc *turbowasm_wasi_preview1_function_at(
+    size_t index) {
+    if (index >= turbowasm_wasi_preview1_function_count())
+        return NULL;
+    return turbowasm_wasi_preview1_manifest[index];
+}
+
+const cmeta_function_desc *turbowasm_wasi_preview1_find_function(
+    const char *name) {
+    size_t index;
+
+    if (name == NULL || name[0] == '\0')
+        return NULL;
+    for (index = 0u;
+         index < turbowasm_wasi_preview1_function_count();
+         ++index) {
+        const cmeta_function_desc *function =
+            turbowasm_wasi_preview1_manifest[index];
+        if (function != NULL &&
+            function->name != NULL &&
+            strcmp(function->name, name) == 0)
+            return function;
+    }
+    return NULL;
+}
+
+static bool turbowasm_wasi_cmeta_value_kind(
+    const cmeta_type_desc *type,
+    turbowasm_value_kind *out_kind) {
+    if (type == NULL || out_kind == NULL)
+        return false;
+
+    if (cmeta_type_equal(type, &cmeta_type_uint32) ||
+        cmeta_type_equal(type, &cmeta_type_int32)) {
+        *out_kind = TURBOWASM_VALUE_I32;
+        return true;
+    }
+    if (cmeta_type_equal(type, &cmeta_type_uint64) ||
+        cmeta_type_equal(type, &cmeta_type_int64)) {
+        *out_kind = TURBOWASM_VALUE_I64;
+        return true;
+    }
+    return false;
+}
+
+static turbowasm_status turbowasm_wasi_define_cmeta_function(
     turbowasm_linker *linker,
-    turbowasm_name name,
+    const cmeta_function_desc *metadata,
     turbowasm_host_function_fn function,
     void *context) {
-    static const turbowasm_value_kind params[] = {
-        TURBOWASM_VALUE_I32,
-        TURBOWASM_VALUE_I32
-    };
-    static const turbowasm_value_kind results[] = {
-        TURBOWASM_VALUE_I32
-    };
-    const turbowasm_host_function_type type = {
-        params, 2u, results, 1u
-    };
+    turbowasm_value_kind params[9];
+    turbowasm_value_kind result;
+    turbowasm_host_function_type type = {0};
+    size_t index;
+
+    if (linker == NULL || metadata == NULL || function == NULL ||
+        !cmeta_function_desc_valid(metadata) ||
+        metadata->param_count > sizeof(params) / sizeof(params[0]))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (index = 0u; index < metadata->param_count; ++index) {
+        const cmeta_param_desc *param =
+            cmeta_function_param(metadata, index);
+        if (param == NULL ||
+            !turbowasm_wasi_cmeta_value_kind(
+                param->type, &params[index]))
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    type.params = params;
+    type.param_count = metadata->param_count;
+    if (!cmeta_type_equal(
+            metadata->return_type, &cmeta_type_void)) {
+        if (!turbowasm_wasi_cmeta_value_kind(
+                metadata->return_type, &result))
+            return TURBOWASM_INVALID_ARGUMENT;
+        type.results = &result;
+        type.result_count = 1u;
+    }
 
     return turbowasm_linker_define_host_function(
         linker,
         turbowasm_wasi_namespace(),
-        name,
+        turbowasm_wasi_name(metadata->name),
         &type,
         function,
         context);
@@ -1425,329 +1747,102 @@ turbowasm_status turbowasm_wasi_preview1_define(
 
     impl = (turbowasm_wasi_preview1_impl *)wasi->impl;
 
-    if (impl->allow_args) {
-        status = turbowasm_wasi_define_function(
-            linker,
-            turbowasm_wasi_name("args_sizes_get"),
-            turbowasm_wasi_args_sizes_get,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
+#define TURBOWASM_WASI_DEFINE(metadata_, function_) \
+    do { \
+        status = turbowasm_wasi_define_cmeta_function( \
+            linker, (metadata_), (function_), impl); \
+        if (status != TURBOWASM_OK) \
+            return status; \
+    } while (0)
 
-        status = turbowasm_wasi_define_function(
-            linker,
-            turbowasm_wasi_name("args_get"),
-            turbowasm_wasi_args_get,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
+    if (impl->allow_args) {
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_args_sizes_get,
+            turbowasm_wasi_args_sizes_get);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_args_get,
+            turbowasm_wasi_args_get);
     }
 
     if (impl->allow_environ) {
-        status = turbowasm_wasi_define_function(
-            linker,
-            turbowasm_wasi_name("environ_sizes_get"),
-            turbowasm_wasi_environ_sizes_get,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        status = turbowasm_wasi_define_function(
-            linker,
-            turbowasm_wasi_name("environ_get"),
-            turbowasm_wasi_environ_get,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_environ_sizes_get,
+            turbowasm_wasi_environ_sizes_get);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_environ_get,
+            turbowasm_wasi_environ_get);
     }
 
     if (impl->allow_clock) {
-        static const turbowasm_value_kind clock_params[] = {
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I64,
-            TURBOWASM_VALUE_I32
-        };
-        static const turbowasm_value_kind result_type[] = {
-            TURBOWASM_VALUE_I32
-        };
-        const turbowasm_host_function_type clock_type = {
-            clock_params, 3u, result_type, 1u
-        };
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("clock_time_get"),
-            &clock_type,
-            turbowasm_wasi_clock_time_get,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_clock_time_get,
+            turbowasm_wasi_clock_time_get);
     }
 
     if (impl->allow_random) {
-        status = turbowasm_wasi_define_function(
-            linker,
-            turbowasm_wasi_name("random_get"),
-            turbowasm_wasi_random_get,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_random_get,
+            turbowasm_wasi_random_get);
     }
 
-    if (impl->allow_fd_write || impl->allow_fd_read) {
-        static const turbowasm_value_kind fd_params[] = {
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I32
-        };
-        static const turbowasm_value_kind result_type[] = {
-            TURBOWASM_VALUE_I32
-        };
-        const turbowasm_host_function_type fd_type = {
-            fd_params, 4u, result_type, 1u
-        };
+    if (impl->allow_fd_write) {
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_fd_write,
+            turbowasm_wasi_fd_write);
+    }
 
-        if (impl->allow_fd_write) {
-            status = turbowasm_linker_define_host_function(
-                linker,
-                turbowasm_wasi_namespace(),
-                turbowasm_wasi_name("fd_write"),
-                &fd_type,
-                turbowasm_wasi_fd_write,
-                impl);
-            if (status != TURBOWASM_OK)
-                return status;
-        }
-
-        if (impl->allow_fd_read) {
-            status = turbowasm_linker_define_host_function(
-                linker,
-                turbowasm_wasi_namespace(),
-                turbowasm_wasi_name("fd_read"),
-                &fd_type,
-                turbowasm_wasi_fd_read,
-                impl);
-            if (status != TURBOWASM_OK)
-                return status;
-        }
+    if (impl->allow_fd_read) {
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_fd_read,
+            turbowasm_wasi_fd_read);
     }
 
     if (impl->allow_proc_exit) {
-        static const turbowasm_value_kind proc_exit_params[] = {
-            TURBOWASM_VALUE_I32
-        };
-        const turbowasm_host_function_type proc_exit_type = {
-            proc_exit_params, 1u, NULL, 0u
-        };
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("proc_exit"),
-            &proc_exit_type,
-            turbowasm_wasi_proc_exit,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_proc_exit,
+            turbowasm_wasi_proc_exit);
     }
 
     if (impl->allow_filesystem) {
-        static const turbowasm_value_kind one_i32[] = {
-            TURBOWASM_VALUE_I32
-        };
-        static const turbowasm_value_kind two_i32[] = {
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I32
-        };
-        static const turbowasm_value_kind three_i32[] = {
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I32
-        };
-        static const turbowasm_value_kind result_type[] = {
-            TURBOWASM_VALUE_I32
-        };
-        const turbowasm_host_function_type close_type = {
-            one_i32, 1u, result_type, 1u
-        };
-        const turbowasm_host_function_type prestat_type = {
-            two_i32, 2u, result_type, 1u
-        };
-        const turbowasm_host_function_type dirname_type = {
-            three_i32, 3u, result_type, 1u
-        };
-        static const turbowasm_value_kind seek_params[] = {
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I64,
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I32
-        };
-        const turbowasm_host_function_type seek_type = {
-            seek_params, 4u, result_type, 1u
-        };
-        static const turbowasm_value_kind readdir_params[] = {
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I32,
-            TURBOWASM_VALUE_I64,
-            TURBOWASM_VALUE_I32
-        };
-        const turbowasm_host_function_type readdir_type = {
-            readdir_params, 5u, result_type, 1u
-        };
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("fd_close"),
-            &close_type,
-            turbowasm_wasi_fd_close,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("fd_prestat_get"),
-            &prestat_type,
-            turbowasm_wasi_fd_prestat_get,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("fd_prestat_dir_name"),
-            &dirname_type,
-            turbowasm_wasi_fd_prestat_dir_name,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("path_create_directory"),
-            &dirname_type,
-            turbowasm_wasi_path_create_directory,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("path_remove_directory"),
-            &dirname_type,
-            turbowasm_wasi_path_remove_directory,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("path_unlink_file"),
-            &dirname_type,
-            turbowasm_wasi_path_unlink_file,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("fd_seek"),
-            &seek_type,
-            turbowasm_wasi_fd_seek,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("fd_readdir"),
-            &readdir_type,
-            turbowasm_wasi_fd_readdir,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("fd_tell"),
-            &prestat_type,
-            turbowasm_wasi_fd_tell,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        status = turbowasm_linker_define_host_function(
-            linker,
-            turbowasm_wasi_namespace(),
-            turbowasm_wasi_name("fd_filestat_get"),
-            &prestat_type,
-            turbowasm_wasi_fd_filestat_get,
-            impl);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        {
-            static const turbowasm_value_kind path_filestat_get_params[] = {
-                TURBOWASM_VALUE_I32,
-                TURBOWASM_VALUE_I32,
-                TURBOWASM_VALUE_I32,
-                TURBOWASM_VALUE_I32,
-                TURBOWASM_VALUE_I32
-            };
-            const turbowasm_host_function_type path_filestat_get_type = {
-                path_filestat_get_params, 5u, result_type, 1u
-            };
-
-            status = turbowasm_linker_define_host_function(
-                linker,
-                turbowasm_wasi_namespace(),
-                turbowasm_wasi_name("path_filestat_get"),
-                &path_filestat_get_type,
-                turbowasm_wasi_path_filestat_get,
-                impl);
-            if (status != TURBOWASM_OK)
-                return status;
-        }
-
-        {
-            static const turbowasm_value_kind path_open_params[] = {
-                TURBOWASM_VALUE_I32,
-                TURBOWASM_VALUE_I32,
-                TURBOWASM_VALUE_I32,
-                TURBOWASM_VALUE_I32,
-                TURBOWASM_VALUE_I32,
-                TURBOWASM_VALUE_I64,
-                TURBOWASM_VALUE_I64,
-                TURBOWASM_VALUE_I32,
-                TURBOWASM_VALUE_I32
-            };
-            const turbowasm_host_function_type path_open_type = {
-                path_open_params, 9u, result_type, 1u
-            };
-
-            status = turbowasm_linker_define_host_function(
-                linker,
-                turbowasm_wasi_namespace(),
-                turbowasm_wasi_name("path_open"),
-                &path_open_type,
-                turbowasm_wasi_path_open,
-                impl);
-            if (status != TURBOWASM_OK)
-                return status;
-        }
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_fd_close,
+            turbowasm_wasi_fd_close);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_fd_prestat_get,
+            turbowasm_wasi_fd_prestat_get);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_fd_prestat_dir_name,
+            turbowasm_wasi_fd_prestat_dir_name);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_path_create_directory,
+            turbowasm_wasi_path_create_directory);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_path_remove_directory,
+            turbowasm_wasi_path_remove_directory);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_path_unlink_file,
+            turbowasm_wasi_path_unlink_file);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_fd_seek,
+            turbowasm_wasi_fd_seek);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_fd_readdir,
+            turbowasm_wasi_fd_readdir);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_fd_tell,
+            turbowasm_wasi_fd_tell);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_fd_filestat_get,
+            turbowasm_wasi_fd_filestat_get);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_path_filestat_get,
+            turbowasm_wasi_path_filestat_get);
+        TURBOWASM_WASI_DEFINE(
+            &turbowasm_wasi_meta_path_open,
+            turbowasm_wasi_path_open);
     }
+
+#undef TURBOWASM_WASI_DEFINE
 
     return TURBOWASM_OK;
 }
