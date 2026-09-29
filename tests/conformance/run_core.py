@@ -855,12 +855,14 @@ def run_file(
     json_path = os.path.join(case_dir, "case.json")
     manifest_path = os.path.join(case_dir, "case.twcf")
 
-    try:
-        uses_thread_commands = _wast_uses_thread_commands(wast_path)
-    except (OSError, ValueError) as error:
-        print(f"SPEC {filename} converter_unsupported")
-        print(error)
-        return 0, 0, 1, 1, None, 0, 0, 0
+    uses_thread_commands = False
+    if "--enable-threads" in (wast2json_flags or []):
+        try:
+            uses_thread_commands = _wast_uses_thread_commands(wast_path)
+        except (OSError, ValueError) as error:
+            print(f"SPEC {filename} converter_unsupported")
+            print(error)
+            return 0, 0, 1, 1, None, 0, 0, 0
 
     if uses_thread_commands:
         try:
