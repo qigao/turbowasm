@@ -45,6 +45,11 @@ if(NOT TARGET Salts::Coroutine)
     "TurboWasm requires Salts 1.8.3 with the canonical Salts::Coroutine target")
 endif()
 
+if(NOT TARGET Salts::Platform)
+  message(FATAL_ERROR
+    "TurboWasm requires Salts 1.8.3 with the canonical Salts::Platform target")
+endif()
+
 add_library(turbowasm
   src/execution.c
   src/instance.c
@@ -81,7 +86,7 @@ target_include_directories(turbowasm
     $<INSTALL_INTERFACE:include>)
 target_link_libraries(turbowasm
   PUBLIC Salts::CMeta Salts::SIMD
-  PRIVATE Salts::Coroutine)
+  PRIVATE Salts::Coroutine Salts::Platform)
 if(UNIX)
   target_link_libraries(turbowasm PRIVATE m)
 endif()
