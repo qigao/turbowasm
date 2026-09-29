@@ -62,6 +62,7 @@ endif()
 add_library(turbowasm
   src/artifact.c
   src/atomic.c
+  src/component_type_graph.c
   src/execution.c
   src/instance.c
   src/instance_state.c
