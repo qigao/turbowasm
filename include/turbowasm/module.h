@@ -125,6 +125,27 @@ turbowasm_status turbowasm_module_load_borrowed_with_config(
     const uint8_t *bytes,
     size_t size,
     const turbowasm_runtime_config *config);
+
+/*
+ * Restore a module from a COMPLETE_METADATA artifact produced for the exact
+ * borrowed source bytes. The artifact is structurally verified, matched to the
+ * source SHA-256 and current Runtime feature fingerprint, then retained
+ * validation metadata is reconstructed without rerunning Wasm validation.
+ */
+turbowasm_status turbowasm_module_load_borrowed_from_artifact(
+    turbowasm_module *module,
+    const uint8_t *bytes,
+    size_t size,
+    const uint8_t *artifact,
+    size_t artifact_size);
+
+turbowasm_status turbowasm_module_load_borrowed_from_artifact_with_config(
+    turbowasm_module *module,
+    const uint8_t *bytes,
+    size_t size,
+    const uint8_t *artifact,
+    size_t artifact_size,
+    const turbowasm_runtime_config *config);
 void turbowasm_module_destroy(turbowasm_module *module);
 
 const uint8_t *turbowasm_module_bytes(const turbowasm_module *module);
