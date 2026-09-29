@@ -10,7 +10,6 @@
 #include <string.h>
 
 enum {
-    HOST_OFLAGS_CREAT = 1u,
     HOST_LOOKUPFLAGS_SYMLINK_FOLLOW = 1u
 };
 
@@ -81,6 +80,7 @@ static void test_escape_and_symlink(void) {
     turbowasm_wasi_fs_file root = {0};
     turbowasm_wasi_fs_file file = {0};
     turbowasm_wasi_fs_stat stat = {0};
+    salts_fs_stat_t outside_stat = {0};
     const uint8_t parent_escape[] = {
         '.', '.', '/', 'o', 'u', 't'
     };
@@ -164,7 +164,7 @@ static void test_escape_and_symlink(void) {
             provider.context, root,
             link_path, sizeof(link_path)) ==
             TURBOWASM_WASI_ERRNO_SUCCESS);
-        assert(salts_fs_stat(paths.outside, (salts_fs_stat_t *)&(salts_fs_stat_t){0}) == 0);
+        assert(salts_fs_stat(paths.outside, &outside_stat) == 0);
     }
 
     assert(provider.close(
