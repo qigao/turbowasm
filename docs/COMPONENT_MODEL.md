@@ -389,6 +389,37 @@ callback invokes that function only through `turbowasm_instance_invoke()`.
 This separation is important: Component canonical options name Core index-space
 items, not fields implicitly owned by the lifted callee's Core instance.
 
+## C5c2b resource built-ins in executable Components
+
+The binary executor now retains and executes the synchronous pinned canonical
+resource built-ins:
+
+```text
+canon resource.new R  -> core func (rep(R)) -> i32
+canon resource.rep R  -> core func (i32) -> rep(R)
+canon resource.drop R -> core func (i32) -> ()
+```
+
+These built-ins occupy the ordinary Core-function index space. An inline Core
+instance may export them, and a later embedded Core module may receive that
+inline instance through an ordinary Core instantiate argument. The consumer is
+still instantiated with TurboWasm's existing linker; the Component layer does
+not invent a second Core import path.
+
+All built-ins share the same generation-safe C4 resource table used by C5b
+`own`/`borrow` canonical transfer. Resource type bindings therefore enforce
+the same nominal identity, representation carrier, stale-generation, lend and
+owned-vs-borrowed rules everywhere.
+
+When a resource type declares a Core destructor, `resource.drop` routes that
+destructor through the unified Core function map and ultimately through
+`turbowasm_instance_invoke()`. A borrowed handle never triggers the
+destructor.
+
+C5c2b supports inline Core instances whose exports are resource built-in Core
+functions. General inline Core exports and Component-instance composition
+remain C5c3.
+
 ## Deferred work
 
 C1 intentionally does not implement:
