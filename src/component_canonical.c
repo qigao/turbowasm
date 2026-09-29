@@ -121,16 +121,33 @@ turbowasm_status turbowasm_component_canonical_layout(
             return TURBOWASM_OK;
 
         case TURBOWASM_COMPONENT_TYPE_STRING:
+            out->alignment = ptr;
+            out->size = 2u * ptr;
+            return TURBOWASM_OK;
+
         case TURBOWASM_COMPONENT_TYPE_LIST:
+            if (type == NULL ||
+                !turbowasm_component_type_ref_validate(
+                    graph, type->as.list.element_type))
+                return TURBOWASM_MALFORMED_MODULE;
             out->alignment = ptr;
             out->size = 2u * ptr;
             return TURBOWASM_OK;
 
         case TURBOWASM_COMPONENT_TYPE_OWN:
-        case TURBOWASM_COMPONENT_TYPE_BORROW:
+        case TURBOWASM_COMPONENT_TYPE_BORROW: {
+            const turbowasm_component_type *resource;
+            if (type == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+            resource = turbowasm_component_type_graph_get(
+                graph, type->as.handle.resource_type);
+            if (resource == NULL ||
+                resource->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE)
+                return TURBOWASM_MALFORMED_MODULE;
             out->alignment = 4u;
             out->size = 4u;
             return TURBOWASM_OK;
+        }
 
         case TURBOWASM_COMPONENT_TYPE_RESOURCE:
         case TURBOWASM_COMPONENT_TYPE_FUNCTION:
@@ -169,11 +186,24 @@ turbowasm_status turbowasm_component_canonical_flatten_type(
         case TURBOWASM_COMPONENT_TYPE_S32:
         case TURBOWASM_COMPONENT_TYPE_U32:
         case TURBOWASM_COMPONENT_TYPE_CHAR:
-        case TURBOWASM_COMPONENT_TYPE_OWN:
-        case TURBOWASM_COMPONENT_TYPE_BORROW:
             out->types[0] = TURBOWASM_COMPONENT_FLAT_I32;
             out->count = 1u;
             return TURBOWASM_OK;
+
+        case TURBOWASM_COMPONENT_TYPE_OWN:
+        case TURBOWASM_COMPONENT_TYPE_BORROW: {
+            const turbowasm_component_type *resource;
+            if (type == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+            resource = turbowasm_component_type_graph_get(
+                graph, type->as.handle.resource_type);
+            if (resource == NULL ||
+                resource->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE)
+                return TURBOWASM_MALFORMED_MODULE;
+            out->types[0] = TURBOWASM_COMPONENT_FLAT_I32;
+            out->count = 1u;
+            return TURBOWASM_OK;
+        }
 
         case TURBOWASM_COMPONENT_TYPE_S64:
         case TURBOWASM_COMPONENT_TYPE_U64:
@@ -192,7 +222,16 @@ turbowasm_status turbowasm_component_canonical_flatten_type(
             return TURBOWASM_OK;
 
         case TURBOWASM_COMPONENT_TYPE_STRING:
+            out->types[0] = pointer_flat_type(pointer_type);
+            out->types[1] = pointer_flat_type(pointer_type);
+            out->count = 2u;
+            return TURBOWASM_OK;
+
         case TURBOWASM_COMPONENT_TYPE_LIST:
+            if (type == NULL ||
+                !turbowasm_component_type_ref_validate(
+                    graph, type->as.list.element_type))
+                return TURBOWASM_MALFORMED_MODULE;
             out->types[0] = pointer_flat_type(pointer_type);
             out->types[1] = pointer_flat_type(pointer_type);
             out->count = 2u;
