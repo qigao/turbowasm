@@ -76,7 +76,7 @@ int turbowasm_test_native_io_backend_cancel(
 #include "../src/wasi_native_io.c"
 
 static const uint8_t module_bytes[] = {
-    WASM_HEADER,
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
 
     /* type0: (i32,i32,i32,i32)->i32
        type1: (i32,i32)->()
