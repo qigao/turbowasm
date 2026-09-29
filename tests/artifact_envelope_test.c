@@ -80,6 +80,25 @@ static const uint8_t state_module_bytes[] = {
     0x0b,0x07,0x01,0x00,0x41,0x00,0x0b,0x01,0x78
 };
 
+static const uint8_t tag_module_bytes[] = {
+    0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+
+    /* type0: (i32, i64) -> (); type1: () -> () */
+    0x01,0x09,0x02,
+    0x60,0x02,0x7f,0x7e,0x00,
+    0x60,0x00,0x00,
+
+    /* one function of type1 */
+    0x03,0x02,0x01,0x01,
+
+    /* tag0: type0 */
+    0x0d,0x03,0x01,0x00,0x00,
+
+    /* i32.const 1; i64.const 2; throw tag0 */
+    0x0a,0x0a,0x01,0x08,0x00,
+    0x41,0x01,0x42,0x02,0x08,0x00,0x0b
+};
+
 static void test_sha256_known_vector(void) {
     static const uint8_t expected[32] = {
         0xba,0x78,0x16,0xbf,0x8f,0x01,0xcf,0xea,
@@ -267,6 +286,31 @@ static void test_state_metadata_round_trip(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_tag_state_metadata_round_trip(void) {
+    turbowasm_module module={0};
+    turbowasm_artifact_info info={0};
+    uint8_t artifact[2048]={0};
+    size_t written=0u;
+
+    assert(turbowasm_module_load_borrowed(
+               &module,
+               tag_module_bytes,
+               sizeof(tag_module_bytes))==TURBOWASM_OK);
+    assert(turbowasm_artifact_write(
+               &module,artifact,sizeof(artifact),&written)==TURBOWASM_OK);
+    assert(turbowasm_artifact_inspect(
+               artifact,written,
+               tag_module_bytes,sizeof(tag_module_bytes),
+               &info)==TURBOWASM_OK);
+
+    assert(info.has_state_metadata);
+    assert(info.metadata_tag_count==1u);
+    assert(info.metadata_function_count==1u);
+    assert(info.metadata_type_count==2u);
+
+    turbowasm_module_destroy(&module);
+}
+
 static void test_capacity_contract(void) {
     turbowasm_module module={0};
     uint8_t byte=0u;
@@ -288,6 +332,7 @@ int main(void) {
     test_source_identity_and_corruption();
     test_core_metadata_round_trip();
     test_state_metadata_round_trip();
+    test_tag_state_metadata_round_trip();
     test_capacity_contract();
     return 0;
 }
