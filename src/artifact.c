@@ -126,6 +126,17 @@ typedef struct tw_core_metadata_counts {
     uint32_t memory_count;
 } tw_core_metadata_counts;
 
+typedef struct tw_state_metadata_counts {
+    uint32_t global_count;
+    uint32_t table_count;
+    uint32_t tag_count;
+    uint32_t data_segment_count;
+    uint32_t element_segment_count;
+    uint32_t declared_ref_count;
+    bool has_data_count;
+    uint32_t data_count;
+} tw_state_metadata_counts;
+
 static bool source_span_offset(
     const turbowasm_module_impl *impl,
     const uint8_t *bytes,
@@ -210,6 +221,39 @@ static bool write_name_span(
                impl,name.bytes,name.size,&offset) &&
            put_u64(w,offset) &&
            put_u32(w,name.size);
+}
+
+static bool write_expr_span(
+    tw_writer *w,
+    const turbowasm_module_impl *impl,
+    const turbowasm_validation_expr_span *expr) {
+    uint64_t offset;
+
+    if(expr==NULL)
+        return false;
+    return source_span_offset(
+               impl,expr->bytes,expr->size,&offset) &&
+           put_u64(w,offset) &&
+           put_u32(w,expr->size) &&
+           put_u32(w,(uint32_t)expr->result_type);
+}
+
+static bool read_expr_span(
+    tw_reader *r,
+    uint64_t source_size) {
+    uint64_t offset;
+    uint32_t size;
+    uint32_t result_type;
+
+    if(!get_u64(r,&offset) ||
+       !get_u32(r,&size) ||
+       !get_u32(r,&result_type) ||
+       result_type>UINT8_MAX)
+        return false;
+    if(offset==UINT64_MAX)
+        return size==0u;
+    return offset<=source_size &&
+           (uint64_t)size<=source_size-offset;
 }
 
 uint64_t turbowasm_artifact_current_feature_fingerprint(void) {
@@ -612,23 +656,272 @@ static bool read_core_metadata(
     return true;
 }
 
+static bool write_state_metadata(
+    tw_writer *w,
+    const turbowasm_module_impl *impl) {
+    const turbowasm_validation_context *v;
+    uint32_t i;
+    uint32_t j;
+
+    if(w==NULL||impl==NULL)
+        return false;
+    v=&impl->validation;
+
+    if(!put_u32(w,v->global_count) ||
+       !put_u32(w,v->table_count) ||
+       !put_u32(w,v->tag_count) ||
+       !put_u32(w,v->data_segment_count) ||
+       !put_u32(w,v->element_segment_count) ||
+       !put_u32(w,v->declared_ref_count) ||
+       !put_u32(w,v->has_data_count?1u:0u) ||
+       !put_u32(w,v->data_count))
+        return false;
+
+    for(i=0u;i<v->global_count;++i) {
+        const turbowasm_validation_global *global=&v->globals[i];
+        uint64_t initializer_offset;
+        if(!source_span_offset(
+                impl,global->initializer,
+                global->initializer_size,
+                &initializer_offset) ||
+           !put_u32(w,(uint32_t)global->value_type) ||
+           !write_semantic_value(w,&global->semantic_type) ||
+           !put_u32(w,global->mutable_value?1u:0u) ||
+           !put_u32(w,global->imported?1u:0u) ||
+           !put_u64(w,initializer_offset) ||
+           !put_u32(w,global->initializer_size))
+            return false;
+    }
+
+    for(i=0u;i<v->table_count;++i) {
+        const turbowasm_validation_table *table=&v->tables[i];
+        uint64_t initializer_offset;
+        if(!source_span_offset(
+                impl,table->initializer,
+                table->initializer_size,
+                &initializer_offset) ||
+           !put_u32(w,(uint32_t)table->reference_type) ||
+           !write_semantic_value(w,&table->semantic_type) ||
+           !put_u32(w,table->imported?1u:0u) ||
+           !put_u32(w,table->limits.minimum) ||
+           !put_u32(w,table->limits.maximum) ||
+           !put_u32(w,table->limits.has_maximum?1u:0u) ||
+           !put_u64(w,initializer_offset) ||
+           !put_u32(w,table->initializer_size))
+            return false;
+    }
+
+    for(i=0u;i<v->tag_count;++i) {
+        const turbowasm_validation_tag *tag=&v->tags[i];
+        if(!put_u32(w,tag->type_index) ||
+           !put_u32(w,tag->imported?1u:0u))
+            return false;
+    }
+
+    for(i=0u;i<v->data_segment_count;++i) {
+        const turbowasm_validation_data_segment *segment=
+            &v->data_segments[i];
+        uint64_t data_offset;
+        if(!source_span_offset(
+                impl,segment->data,segment->data_size,&data_offset) ||
+           !put_u32(w,(uint32_t)segment->mode) ||
+           !put_u32(w,segment->memory_index) ||
+           !write_expr_span(w,impl,&segment->offset) ||
+           !put_u64(w,data_offset) ||
+           !put_u32(w,segment->data_size))
+            return false;
+    }
+
+    for(i=0u;i<v->element_segment_count;++i) {
+        const turbowasm_validation_element_segment *segment=
+            &v->element_segments[i];
+        if(!put_u32(w,(uint32_t)segment->mode) ||
+           !put_u32(w,segment->table_index) ||
+           !put_u32(w,(uint32_t)segment->reference_type) ||
+           !write_semantic_value(w,&segment->semantic_type) ||
+           !write_expr_span(w,impl,&segment->offset) ||
+           !put_u32(w,segment->item_count))
+            return false;
+        if(segment->item_count!=0u && segment->items==NULL)
+            return false;
+
+        for(j=0u;j<segment->item_count;++j) {
+            const turbowasm_validation_element_item *item=
+                &segment->items[j];
+            if(!put_u32(w,(uint32_t)item->kind) ||
+               !put_u32(w,item->function_index) ||
+               !write_expr_span(w,impl,&item->expression))
+                return false;
+        }
+    }
+
+    if(v->declared_ref_count!=0u) {
+        if(v->declared_refs==NULL ||
+           !put_bytes(
+               w,v->declared_refs,(size_t)v->declared_ref_count))
+            return false;
+    }
+    return true;
+}
+
+static bool measure_state_metadata(
+    const turbowasm_module_impl *impl,
+    size_t *out_size) {
+    tw_writer w;
+    if(impl==NULL||out_size==NULL)
+        return false;
+    w.data=NULL;
+    w.size=SIZE_MAX;
+    w.offset=0u;
+    if(!write_state_metadata(&w,impl))
+        return false;
+    *out_size=w.offset;
+    return true;
+}
+
+static bool read_state_metadata(
+    tw_reader *r,
+    uint64_t source_size,
+    tw_state_metadata_counts *out) {
+    uint32_t i;
+    uint32_t j;
+    tw_state_metadata_counts counts;
+    uint32_t has_data_count;
+
+    if(r==NULL||out==NULL)
+        return false;
+    memset(&counts,0,sizeof(counts));
+    if(!get_u32(r,&counts.global_count) ||
+       !get_u32(r,&counts.table_count) ||
+       !get_u32(r,&counts.tag_count) ||
+       !get_u32(r,&counts.data_segment_count) ||
+       !get_u32(r,&counts.element_segment_count) ||
+       !get_u32(r,&counts.declared_ref_count) ||
+       !get_u32(r,&has_data_count) ||
+       !get_u32(r,&counts.data_count) ||
+       has_data_count>1u)
+        return false;
+    counts.has_data_count=has_data_count!=0u;
+
+    for(i=0u;i<counts.global_count;++i) {
+        uint32_t value_type;
+        uint32_t mutable_value;
+        uint32_t imported;
+        if(!get_u32(r,&value_type) ||
+           value_type>UINT8_MAX ||
+           !read_semantic_value(r) ||
+           !get_u32(r,&mutable_value) ||
+           !get_u32(r,&imported) ||
+           mutable_value>1u || imported>1u ||
+           !read_source_span(r,source_size))
+            return false;
+    }
+
+    for(i=0u;i<counts.table_count;++i) {
+        uint32_t reference_type;
+        uint32_t imported;
+        uint32_t minimum;
+        uint32_t maximum;
+        uint32_t has_maximum;
+        if(!get_u32(r,&reference_type) ||
+           reference_type>UINT8_MAX ||
+           !read_semantic_value(r) ||
+           !get_u32(r,&imported) ||
+           !get_u32(r,&minimum) ||
+           !get_u32(r,&maximum) ||
+           !get_u32(r,&has_maximum) ||
+           imported>1u || has_maximum>1u ||
+           (has_maximum!=0u && maximum<minimum) ||
+           !read_source_span(r,source_size))
+            return false;
+    }
+
+    for(i=0u;i<counts.tag_count;++i) {
+        uint32_t type_index;
+        uint32_t imported;
+        if(!get_u32(r,&type_index) ||
+           !get_u32(r,&imported) ||
+           imported>1u)
+            return false;
+        (void)type_index;
+    }
+
+    for(i=0u;i<counts.data_segment_count;++i) {
+        uint32_t mode;
+        uint32_t memory_index;
+        if(!get_u32(r,&mode) ||
+           !get_u32(r,&memory_index) ||
+           mode>(uint32_t)TURBOWASM_VALIDATION_SEGMENT_DECLARATIVE ||
+           !read_expr_span(r,source_size) ||
+           !read_source_span(r,source_size))
+            return false;
+        (void)memory_index;
+    }
+
+    for(i=0u;i<counts.element_segment_count;++i) {
+        uint32_t mode;
+        uint32_t table_index;
+        uint32_t reference_type;
+        uint32_t item_count;
+        if(!get_u32(r,&mode) ||
+           !get_u32(r,&table_index) ||
+           !get_u32(r,&reference_type) ||
+           mode>(uint32_t)TURBOWASM_VALIDATION_SEGMENT_DECLARATIVE ||
+           reference_type>UINT8_MAX ||
+           !read_semantic_value(r) ||
+           !read_expr_span(r,source_size) ||
+           !get_u32(r,&item_count))
+            return false;
+        (void)table_index;
+
+        for(j=0u;j<item_count;++j) {
+            uint32_t kind;
+            uint32_t function_index;
+            if(!get_u32(r,&kind) ||
+               !get_u32(r,&function_index) ||
+               kind>(uint32_t)
+                   TURBOWASM_VALIDATION_ELEMENT_CONST_EXPR ||
+               !read_expr_span(r,source_size))
+                return false;
+            (void)function_index;
+        }
+    }
+
+    if(counts.declared_ref_count!=0u) {
+        if(r->offset>r->size ||
+           (size_t)counts.declared_ref_count>r->size-r->offset)
+            return false;
+        for(i=0u;i<counts.declared_ref_count;++i) {
+            if(r->data[r->offset+i]>1u)
+                return false;
+        }
+        r->offset += (size_t)counts.declared_ref_count;
+    }
+
+    *out=counts;
+    return true;
+}
+
 turbowasm_status turbowasm_artifact_measure(
     const turbowasm_module *module,
     size_t *out_size) {
     const turbowasm_module_impl *impl=
         turbowasm_module_impl_get(module);
-    size_t metadata_size;
+    size_t core_size;
+    size_t state_size;
     size_t fixed_size=
         TW_ARTIFACT_HEADER_SIZE +
-        2u*TW_ARTIFACT_SECTION_HEADER_SIZE +
+        3u*TW_ARTIFACT_SECTION_HEADER_SIZE +
         TW_ARTIFACT_SUMMARY_SIZE;
 
     if(impl==NULL||out_size==NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if(!measure_core_metadata(impl,&metadata_size) ||
-       metadata_size>SIZE_MAX-fixed_size)
+    if(!measure_core_metadata(impl,&core_size) ||
+       !measure_state_metadata(impl,&state_size) ||
+       core_size>SIZE_MAX-fixed_size ||
+       state_size>SIZE_MAX-fixed_size-core_size)
         return TURBOWASM_OUT_OF_MEMORY;
-    *out_size=fixed_size+metadata_size;
+    *out_size=fixed_size+core_size+state_size;
     return TURBOWASM_OK;
 }
 
@@ -639,26 +932,27 @@ turbowasm_status turbowasm_artifact_write(
     size_t *out_size) {
     const turbowasm_module_impl *impl=
         turbowasm_module_impl_get(module);
-    size_t metadata_size;
+    size_t core_size;
+    size_t state_size;
     size_t required;
+    size_t fixed_size=
+        TW_ARTIFACT_HEADER_SIZE+
+        3u*TW_ARTIFACT_SECTION_HEADER_SIZE+
+        TW_ARTIFACT_SUMMARY_SIZE;
     uint8_t digest[TURBOWASM_SHA256_DIGEST_SIZE];
     tw_writer w;
 
     if(impl==NULL||out_size==NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if(!measure_core_metadata(impl,&metadata_size) ||
-       metadata_size>UINT32_MAX)
+    if(!measure_core_metadata(impl,&core_size) ||
+       !measure_state_metadata(impl,&state_size) ||
+       core_size>UINT32_MAX ||
+       state_size>UINT32_MAX ||
+       core_size>SIZE_MAX-fixed_size ||
+       state_size>SIZE_MAX-fixed_size-core_size)
         return TURBOWASM_OUT_OF_MEMORY;
-    if(metadata_size>
-       SIZE_MAX-(TW_ARTIFACT_HEADER_SIZE+
-                 2u*TW_ARTIFACT_SECTION_HEADER_SIZE+
-                 TW_ARTIFACT_SUMMARY_SIZE))
-        return TURBOWASM_OUT_OF_MEMORY;
-    required=
-        TW_ARTIFACT_HEADER_SIZE+
-        2u*TW_ARTIFACT_SECTION_HEADER_SIZE+
-        TW_ARTIFACT_SUMMARY_SIZE+
-        metadata_size;
+
+    required=fixed_size+core_size+state_size;
     *out_size=required;
     if(output==NULL||capacity<required)
         return TURBOWASM_OUT_OF_MEMORY;
@@ -669,18 +963,21 @@ turbowasm_status turbowasm_artifact_write(
     if(!put_bytes(&w,(const uint8_t *)"TWVA",4u) ||
        !put_u32(&w,TURBOWASM_ARTIFACT_SCHEMA_VERSION) ||
        !put_u32(&w,TW_ARTIFACT_HEADER_SIZE) ||
-       !put_u32(&w,0u) ||
+       !put_u32(&w,TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA) ||
        !put_u64(&w,turbowasm_artifact_current_feature_fingerprint()) ||
        !put_u64(&w,(uint64_t)impl->size) ||
        !put_bytes(&w,digest,sizeof(digest)) ||
-       !put_u32(&w,2u) ||
+       !put_u32(&w,3u) ||
        !put_u32(&w,0u) ||
        !put_u32(&w,TURBOWASM_ARTIFACT_SECTION_SUMMARY) ||
        !put_u32(&w,TW_ARTIFACT_SUMMARY_SIZE) ||
        !write_summary(&w,&impl->summary) ||
        !put_u32(&w,TURBOWASM_ARTIFACT_SECTION_CORE_METADATA) ||
-       !put_u32(&w,(uint32_t)metadata_size) ||
+       !put_u32(&w,(uint32_t)core_size) ||
        !write_core_metadata(&w,impl) ||
+       !put_u32(&w,TURBOWASM_ARTIFACT_SECTION_STATE_METADATA) ||
+       !put_u32(&w,(uint32_t)state_size) ||
+       !write_state_metadata(&w,impl) ||
        w.offset!=required)
         return TURBOWASM_MALFORMED_MODULE;
     return TURBOWASM_OK;
@@ -700,7 +997,9 @@ turbowasm_status turbowasm_artifact_inspect(
     uint8_t actual_digest[TURBOWASM_SHA256_DIGEST_SIZE];
     bool have_summary=false;
     bool have_core_metadata=false;
-    tw_core_metadata_counts metadata_counts={0};
+    bool have_state_metadata=false;
+    tw_core_metadata_counts core_counts={0};
+    tw_state_metadata_counts state_counts={0};
 
     if(artifact==NULL||out==NULL||
        (source_size!=0u&&source==NULL))
@@ -756,10 +1055,20 @@ turbowasm_status turbowasm_artifact_inspect(
                 return TURBOWASM_MALFORMED_MODULE;
             mr.data=r.data+r.offset; mr.size=size; mr.offset=0u;
             if(!read_core_metadata(
-                    &mr,out->source_size,&metadata_counts) ||
+                    &mr,out->source_size,&core_counts) ||
                mr.offset!=mr.size)
                 return TURBOWASM_MALFORMED_MODULE;
             have_core_metadata=true;
+        } else if(type==TURBOWASM_ARTIFACT_SECTION_STATE_METADATA) {
+            tw_reader sr;
+            if(have_state_metadata)
+                return TURBOWASM_MALFORMED_MODULE;
+            sr.data=r.data+r.offset; sr.size=size; sr.offset=0u;
+            if(!read_state_metadata(
+                    &sr,out->source_size,&state_counts) ||
+               sr.offset!=sr.size)
+                return TURBOWASM_MALFORMED_MODULE;
+            have_state_metadata=true;
         } else {
             return TURBOWASM_MALFORMED_MODULE;
         }
@@ -769,29 +1078,68 @@ turbowasm_status turbowasm_artifact_inspect(
     if(!have_summary||r.offset!=r.size)
         return TURBOWASM_MALFORMED_MODULE;
 
+    if((out->flags&TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA)!=0u &&
+       (!have_core_metadata||!have_state_metadata))
+        return TURBOWASM_MALFORMED_MODULE;
+
     if(have_core_metadata) {
-        if(metadata_counts.type_count!=out->summary.type_count ||
-           metadata_counts.function_count!=
+        if(core_counts.type_count!=out->summary.type_count ||
+           core_counts.function_count!=
                out->summary.imported_function_count+
                out->summary.function_count ||
-           metadata_counts.import_count!=
+           core_counts.import_count!=
                out->summary.imported_function_count+
                out->summary.imported_table_count+
                out->summary.imported_memory_count+
                out->summary.imported_global_count+
                out->summary.imported_tag_count ||
-           metadata_counts.export_count!=out->summary.export_count ||
-           metadata_counts.memory_count!=
+           core_counts.export_count!=out->summary.export_count ||
+           core_counts.memory_count!=
                out->summary.imported_memory_count+
                out->summary.memory_count)
             return TURBOWASM_MALFORMED_MODULE;
 
         out->has_core_metadata=true;
-        out->metadata_type_count=metadata_counts.type_count;
-        out->metadata_function_count=metadata_counts.function_count;
-        out->metadata_import_count=metadata_counts.import_count;
-        out->metadata_export_count=metadata_counts.export_count;
-        out->metadata_memory_count=metadata_counts.memory_count;
+        out->metadata_type_count=core_counts.type_count;
+        out->metadata_function_count=core_counts.function_count;
+        out->metadata_import_count=core_counts.import_count;
+        out->metadata_export_count=core_counts.export_count;
+        out->metadata_memory_count=core_counts.memory_count;
     }
+
+    if(have_state_metadata) {
+        if(state_counts.global_count!=
+               out->summary.imported_global_count+
+               out->summary.global_count ||
+           state_counts.table_count!=
+               out->summary.imported_table_count+
+               out->summary.table_count ||
+           state_counts.tag_count!=
+               out->summary.imported_tag_count+
+               out->summary.tag_count ||
+           state_counts.data_segment_count!=
+               out->summary.data_segment_count ||
+           state_counts.element_segment_count!=
+               out->summary.element_count ||
+           state_counts.has_data_count!=out->summary.has_data_count ||
+           state_counts.data_count!=out->summary.data_count ||
+           (state_counts.declared_ref_count!=0u &&
+            (!have_core_metadata ||
+             state_counts.declared_ref_count!=
+                 core_counts.function_count)))
+            return TURBOWASM_MALFORMED_MODULE;
+
+        out->has_state_metadata=true;
+        out->metadata_global_count=state_counts.global_count;
+        out->metadata_table_count=state_counts.table_count;
+        out->metadata_tag_count=state_counts.tag_count;
+        out->metadata_data_segment_count=
+            state_counts.data_segment_count;
+        out->metadata_element_segment_count=
+            state_counts.element_segment_count;
+        out->metadata_declared_ref_count=
+            state_counts.declared_ref_count;
+    }
+
     return TURBOWASM_OK;
 }
