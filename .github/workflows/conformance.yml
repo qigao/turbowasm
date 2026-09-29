@@ -137,6 +137,18 @@ jobs:
             --suite "$PWD/tests/conformance/core-smoke.txt"
 
 
+      - name: Run development threads proposal qualification
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/conformance/run_proposal.py \
+            --selector threads \
+            --wast2json "$WAST2JSON" \
+            --runner "$PWD/build/conformance/tests/conformance/turbowasm_spec_runner" \
+            --work-dir "$RUNNER_TEMP/turbowasm-proposal-threads"
+
+
   mir-replay:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'core' }}
     name: Pinned core interpreter vs MIR differential
