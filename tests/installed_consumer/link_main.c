@@ -118,7 +118,14 @@ int main(void) {
     turbowasm_value result = {0};
     size_t result_count = 0u;
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_host_memory_span span64 = {0};
     int exit_code = 0;
+
+    if (turbowasm_host_call_memory_span64(
+            NULL, 0u, UINT64_C(0), 0u,
+            &span64, &trap) != TURBOWASM_INVALID_ARGUMENT)
+        return 25;
+    trap = TURBOWASM_TRAP_NONE;
 
     if (turbowasm_module_load_borrowed(
             &provider_module,
