@@ -767,6 +767,72 @@ static turbowasm_status turbowasm_wasi_fd_prestat_dir_name(
         results, result_capacity, result_count, trap, error);
 }
 
+static turbowasm_status turbowasm_wasi_path_open(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    turbowasm_wasi_preview1_impl *impl =
+        (turbowasm_wasi_preview1_impl *)context;
+    turbowasm_host_memory_span path = {0};
+    turbowasm_host_memory_span opened_fd = {0};
+    uint32_t path_length;
+    uint32_t error;
+    uint32_t guest_fd = 0u;
+
+    if (impl == NULL || !impl->allow_filesystem ||
+        impl->filesystem == NULL || call == NULL ||
+        arguments == NULL || argument_count != 9u ||
+        arguments[0].kind != TURBOWASM_VALUE_I32 ||
+        arguments[1].kind != TURBOWASM_VALUE_I32 ||
+        arguments[2].kind != TURBOWASM_VALUE_I32 ||
+        arguments[3].kind != TURBOWASM_VALUE_I32 ||
+        arguments[4].kind != TURBOWASM_VALUE_I32 ||
+        arguments[5].kind != TURBOWASM_VALUE_I64 ||
+        arguments[6].kind != TURBOWASM_VALUE_I64 ||
+        arguments[7].kind != TURBOWASM_VALUE_I32 ||
+        arguments[8].kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    path_length = (uint32_t)arguments[3].as.i32;
+    error = turbowasm_wasi_memory_span(
+        call,
+        (uint32_t)arguments[2].as.i32,
+        path_length,
+        &path);
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = turbowasm_wasi_memory_span(
+            call,
+            (uint32_t)arguments[8].as.i32,
+            4u,
+            &opened_fd);
+    }
+
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = turbowasm_wasi_fs_path_open(
+            impl->filesystem,
+            (uint32_t)arguments[0].as.i32,
+            (uint32_t)arguments[1].as.i32,
+            path.data,
+            path.size,
+            (uint32_t)arguments[4].as.i32,
+            (uint64_t)arguments[5].as.i64,
+            (uint64_t)arguments[6].as.i64,
+            (uint32_t)arguments[7].as.i32,
+            &guest_fd);
+        if (error == TURBOWASM_WASI_ERRNO_SUCCESS)
+            turbowasm_wasi_store_u32(
+                opened_fd.data, guest_fd);
+    }
+
+    return turbowasm_wasi_return_errno(
+        results, result_capacity, result_count, trap, error);
+}
+
 turbowasm_status turbowasm_wasi_preview1_init(
     turbowasm_wasi_preview1 *wasi,
     const turbowasm_wasi_preview1_config *config) {
@@ -1044,6 +1110,33 @@ turbowasm_status turbowasm_wasi_preview1_define(
             impl);
         if (status != TURBOWASM_OK)
             return status;
+
+        {
+            static const turbowasm_value_kind path_open_params[] = {
+                TURBOWASM_VALUE_I32,
+                TURBOWASM_VALUE_I32,
+                TURBOWASM_VALUE_I32,
+                TURBOWASM_VALUE_I32,
+                TURBOWASM_VALUE_I32,
+                TURBOWASM_VALUE_I64,
+                TURBOWASM_VALUE_I64,
+                TURBOWASM_VALUE_I32,
+                TURBOWASM_VALUE_I32
+            };
+            const turbowasm_host_function_type path_open_type = {
+                path_open_params, 9u, result_type, 1u
+            };
+
+            status = turbowasm_linker_define_host_function(
+                linker,
+                turbowasm_wasi_namespace(),
+                turbowasm_wasi_name("path_open"),
+                &path_open_type,
+                turbowasm_wasi_path_open,
+                impl);
+            if (status != TURBOWASM_OK)
+                return status;
+        }
     }
 
     return TURBOWASM_OK;
