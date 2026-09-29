@@ -335,6 +335,507 @@ def convert_json(json_path, manifest_path):
         handle.write("\n")
 
 
+
+class _WastList:
+    __slots__ = ("items", "start", "end", "line")
+
+    def __init__(self, items, start, end, line):
+        self.items = items
+        self.start = start
+        self.end = end
+        self.line = line
+
+
+def _wast_head(node):
+    if not isinstance(node, _WastList) or not node.items:
+        return None
+    head = node.items[0]
+    return head if isinstance(head, str) else None
+
+
+def _wast_string(item):
+    if (
+        isinstance(item, tuple)
+        and len(item) == 2
+        and item[0] == "string"
+    ):
+        return item[1]
+    return None
+
+
+def _parse_wast_script(text):
+    length = len(text)
+    index = 0
+    line = 1
+
+    def skip_space():
+        nonlocal index, line
+        while index < length:
+            ch = text[index]
+            if ch.isspace():
+                if ch == "\n":
+                    line += 1
+                index += 1
+                continue
+            if text.startswith(";;", index):
+                index += 2
+                while index < length and text[index] != "\n":
+                    index += 1
+                continue
+            if text.startswith("(;", index):
+                depth = 1
+                index += 2
+                while index < length and depth:
+                    if text.startswith("(;", index):
+                        depth += 1
+                        index += 2
+                    elif text.startswith(";)", index):
+                        depth -= 1
+                        index += 2
+                    else:
+                        if text[index] == "\n":
+                            line += 1
+                        index += 1
+                if depth:
+                    raise ValueError("unterminated block comment")
+                continue
+            break
+
+    def parse_string():
+        nonlocal index, line
+        data = bytearray()
+        index += 1
+        while index < length:
+            ch = text[index]
+            if ch == '"':
+                index += 1
+                return ("string", data.decode("utf-8"))
+            if ch == "\n":
+                raise ValueError("newline in WAT string")
+            if ch != "\\":
+                data.extend(ch.encode("utf-8"))
+                index += 1
+                continue
+
+            index += 1
+            if index >= length:
+                raise ValueError("unterminated WAT string escape")
+            esc = text[index]
+            if (
+                index + 1 < length
+                and esc in "0123456789abcdefABCDEF"
+                and text[index + 1] in "0123456789abcdefABCDEF"
+            ):
+                data.append(int(text[index:index + 2], 16))
+                index += 2
+                continue
+            escapes = {
+                "n": b"\n",
+                "r": b"\r",
+                "t": b"\t",
+                '"': b'"',
+                "'": b"'",
+                "\\": b"\\",
+            }
+            if esc not in escapes:
+                raise ValueError(f"unsupported WAT string escape \\{esc}")
+            data.extend(escapes[esc])
+            index += 1
+        raise ValueError("unterminated WAT string")
+
+    def parse_atom():
+        nonlocal index
+        start = index
+        while (
+            index < length
+            and not text[index].isspace()
+            and text[index] not in "()"
+        ):
+            index += 1
+        if start == index:
+            raise ValueError(f"unexpected WAST character {text[index]!r}")
+        return text[start:index]
+
+    def parse_item():
+        nonlocal index, line
+        skip_space()
+        if index >= length:
+            raise ValueError("unexpected end of WAST")
+        if text[index] == '"':
+            return parse_string()
+        if text[index] != "(":
+            return parse_atom()
+
+        start = index
+        start_line = line
+        index += 1
+        items = []
+        while True:
+            skip_space()
+            if index >= length:
+                raise ValueError("unterminated WAST list")
+            if text[index] == ")":
+                index += 1
+                return _WastList(items, start, index, start_line)
+            items.append(parse_item())
+
+    forms = []
+    while True:
+        skip_space()
+        if index >= length:
+            break
+        forms.append(parse_item())
+    return forms
+
+
+def _thread_const_value(node):
+    head = _wast_head(node)
+    if head not in ("i32.const", "i64.const"):
+        raise ValueError(f"thread harness constant {head!r} unsupported")
+    if len(node.items) != 2 or not isinstance(node.items[1], str):
+        raise ValueError(f"malformed {head}")
+    bits = 32 if head == "i32.const" else 64
+    value = int(node.items[1], 0) & ((1 << bits) - 1)
+    return {"type": head[:3], "value": str(value)}
+
+
+def _thread_module_name(node):
+    if _wast_head(node) != "module" or len(node.items) < 2:
+        return None
+    name = node.items[1]
+    return name if isinstance(name, str) and name.startswith("$") else None
+
+
+def _compile_thread_module(
+    node,
+    source,
+    case_dir,
+    wast2json,
+    wast2json_flags,
+    counter,
+):
+    module_id = counter[0]
+    counter[0] += 1
+    source_path = os.path.join(case_dir, f"thread-module-{module_id}.wast")
+    json_path = os.path.join(case_dir, f"thread-module-{module_id}.json")
+    with open(source_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(source[node.start:node.end])
+        handle.write("\n")
+
+    args = [wast2json, "--enable-function-references"]
+    args.extend(wast2json_flags or [])
+    args.extend([source_path, "-o", json_path])
+    completed = subprocess.run(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"thread module conversion failed at line {node.line}:\n"
+            f"{completed.stdout}"
+        )
+
+    with open(json_path, "r", encoding="utf-8") as handle:
+        document = json.load(handle)
+    commands = document.get("commands", [])
+    module_command = next(
+        (command for command in commands if command.get("type") == "module"),
+        None,
+    )
+    if module_command is None:
+        raise RuntimeError(
+            f"thread module conversion produced no module at line {node.line}"
+        )
+    filename = module_command.get("filename")
+    if not isinstance(filename, str):
+        raise RuntimeError(
+            f"thread module conversion omitted filename at line {node.line}"
+        )
+    return os.path.abspath(os.path.join(os.path.dirname(json_path), filename))
+
+
+def _convert_threads_wast(
+    wast_path,
+    manifest_path,
+    case_dir,
+    wast2json,
+    wast2json_flags,
+):
+    with open(wast_path, "r", encoding="utf-8") as handle:
+        source = handle.read()
+    forms = _parse_wast_script(source)
+    module_counter = [0]
+    manifest_counter = [0]
+
+    def convert_forms(nodes, path, initial_named_slots=None):
+        named_slots = dict(initial_named_slots or {})
+        current_slot = None
+        next_slot = (
+            max(named_slots.values()) + 1 if named_slots else 0
+        )
+        lines = ["TWCF2"]
+
+        def emit_unsupported(line, reason):
+            lines.append(
+                f"unsupported\t{line}\t{safe_reason(reason)}"
+            )
+
+        def slot_for_action(items, start_index):
+            nonlocal current_slot
+            index = start_index
+            slot = current_slot
+            if (
+                index < len(items)
+                and isinstance(items[index], str)
+                and items[index].startswith("$")
+            ):
+                slot = named_slots.get(items[index])
+                index += 1
+            return slot, index
+
+        def encode_invoke_node(node):
+            if _wast_head(node) != "invoke":
+                raise ValueError("expected invoke action")
+            slot, index = slot_for_action(node.items, 1)
+            if slot is None:
+                raise ValueError("named/default module not available")
+            if index >= len(node.items):
+                raise ValueError("invoke field missing")
+            field = _wast_string(node.items[index])
+            if field is None:
+                raise ValueError("invoke field is not a string")
+            index += 1
+            args = []
+            for value_node in node.items[index:]:
+                args.append(_thread_const_value(value_node))
+            encoded, reason = encode_values(args, expected=False)
+            if encoded is None:
+                raise ValueError(reason)
+            return slot, hex_utf8(field), encoded
+
+        for node in nodes:
+            if not isinstance(node, _WastList):
+                emit_unsupported(0, "top-level atom unsupported")
+                continue
+            command = _wast_head(node)
+            line = node.line
+
+            if command == "module":
+                try:
+                    compiled = _compile_thread_module(
+                        node,
+                        source,
+                        case_dir,
+                        wast2json,
+                        wast2json_flags,
+                        module_counter,
+                    )
+                except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
+                    emit_unsupported(line, error)
+                    continue
+                slot = next_slot
+                next_slot += 1
+                current_slot = slot
+                name = _thread_module_name(node)
+                if name is not None:
+                    named_slots[name] = slot
+                lines.append(f"module\t{line}\t{slot}\t{compiled}")
+                continue
+
+            if command == "register":
+                if len(node.items) < 2:
+                    emit_unsupported(line, "register name missing")
+                    continue
+                alias = _wast_string(node.items[1])
+                if alias is None:
+                    emit_unsupported(line, "register name is not a string")
+                    continue
+                if len(node.items) >= 3:
+                    target = node.items[2]
+                    slot = (
+                        named_slots.get(target)
+                        if isinstance(target, str)
+                        else None
+                    )
+                else:
+                    slot = current_slot
+                if slot is None:
+                    emit_unsupported(line, "register target unavailable")
+                    continue
+                lines.append(
+                    f"register\t{line}\t{slot}\t{hex_utf8(alias)}"
+                )
+                continue
+
+            if command == "invoke":
+                try:
+                    slot, field, args = encode_invoke_node(node)
+                except ValueError as error:
+                    emit_unsupported(line, error)
+                    continue
+                lines.append(
+                    f"action\t{line}\t{slot}\t{field}\t{args}"
+                )
+                continue
+
+            if command == "assert_return":
+                if len(node.items) < 2 or not isinstance(
+                    node.items[1], _WastList
+                ):
+                    emit_unsupported(line, "assert_return action missing")
+                    continue
+                try:
+                    slot, field, args = encode_invoke_node(node.items[1])
+                    expected_nodes = node.items[2:]
+                    if (
+                        len(expected_nodes) == 1
+                        and _wast_head(expected_nodes[0]) == "either"
+                    ):
+                        alternatives = []
+                        for alternative in expected_nodes[0].items[1:]:
+                            token, reason = encode_value(
+                                _thread_const_value(alternative),
+                                expected=True,
+                            )
+                            if token is None:
+                                raise ValueError(reason)
+                            alternatives.append(token)
+                        if not alternatives:
+                            raise ValueError("either expectation is empty")
+                        lines.append(
+                            f"assert_return_either\t{line}\t{slot}\t{field}"
+                            f"\t{args}\t" + "|".join(alternatives)
+                        )
+                    else:
+                        expected = [
+                            _thread_const_value(item)
+                            for item in expected_nodes
+                        ]
+                        encoded, reason = encode_values(
+                            expected, expected=True
+                        )
+                        if encoded is None:
+                            raise ValueError(reason)
+                        lines.append(
+                            f"assert_return\t{line}\t{slot}\t{field}"
+                            f"\t{args}\t{encoded}"
+                        )
+                except ValueError as error:
+                    emit_unsupported(line, error)
+                continue
+
+            if command == "assert_unlinkable":
+                if len(node.items) < 2 or not isinstance(
+                    node.items[1], _WastList
+                ):
+                    emit_unsupported(line, "assert_unlinkable module missing")
+                    continue
+                try:
+                    compiled = _compile_thread_module(
+                        node.items[1],
+                        source,
+                        case_dir,
+                        wast2json,
+                        wast2json_flags,
+                        module_counter,
+                    )
+                except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
+                    emit_unsupported(line, error)
+                    continue
+                lines.append(f"assert_unlinkable\t{line}\t{compiled}")
+                continue
+
+            if command == "thread":
+                if len(node.items) < 2 or not isinstance(node.items[1], str):
+                    emit_unsupported(line, "thread name missing")
+                    continue
+                thread_name = node.items[1]
+                body_start = 2
+                shared = []
+                if (
+                    body_start < len(node.items)
+                    and _wast_head(node.items[body_start]) == "shared"
+                ):
+                    shared_node = node.items[body_start]
+                    body_start += 1
+                    for entry in shared_node.items[1:]:
+                        if _wast_head(entry) != "module" or len(entry.items) != 2:
+                            emit_unsupported(
+                                line, "malformed shared module reference"
+                            )
+                            shared = None
+                            break
+                        module_name = entry.items[1]
+                        if (
+                            not isinstance(module_name, str)
+                            or module_name not in named_slots
+                        ):
+                            emit_unsupported(
+                                line,
+                                f"shared module {module_name!r} unavailable",
+                            )
+                            shared = None
+                            break
+                        shared.append((module_name, named_slots[module_name]))
+                if shared is None:
+                    continue
+
+                child_named = {}
+                bindings = []
+                for child_slot, (module_name, parent_slot) in enumerate(shared):
+                    child_named[module_name] = child_slot
+                    bindings.append(f"{child_slot}:{parent_slot}")
+
+                child_nodes = [
+                    item
+                    for item in node.items[body_start:]
+                    if isinstance(item, _WastList)
+                ]
+                child_id = manifest_counter[0]
+                manifest_counter[0] += 1
+                child_path = os.path.join(
+                    case_dir, f"thread-{child_id}.twcf"
+                )
+                convert_forms(child_nodes, child_path, child_named)
+                binding_text = ",".join(bindings) if bindings else "-"
+                lines.append(
+                    f"thread\t{line}\t{hex_utf8(thread_name)}"
+                    f"\t{binding_text}\t{child_path}"
+                )
+                continue
+
+            if command == "wait":
+                if len(node.items) != 2 or not isinstance(node.items[1], str):
+                    emit_unsupported(line, "wait thread name missing")
+                    continue
+                lines.append(
+                    f"wait\t{line}\t{hex_utf8(node.items[1])}"
+                )
+                continue
+
+            emit_unsupported(
+                line, f"thread script command {command!r} unsupported"
+            )
+
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("\n".join(lines))
+            handle.write("\n")
+
+    convert_forms(forms, manifest_path)
+
+
+def _wast_uses_thread_commands(wast_path):
+    with open(wast_path, "r", encoding="utf-8") as handle:
+        forms = _parse_wast_script(handle.read())
+    return any(
+        _wast_head(form) in ("thread", "wait")
+        for form in forms
+        if isinstance(form, _WastList)
+    )
+
 def run_file(
     wast2json,
     runner,
@@ -352,30 +853,51 @@ def run_file(
     json_path = os.path.join(case_dir, "case.json")
     manifest_path = os.path.join(case_dir, "case.twcf")
 
-    convert_args = [
-        wast2json,
-        "--enable-function-references",
-    ]
-    convert_args.extend(wast2json_flags or [])
-    convert_args.extend([
-        wast_path,
-        "-o",
-        json_path,
-    ])
-
-    convert = subprocess.run(
-        convert_args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
-    )
-    if convert.returncode != 0:
+    try:
+        uses_thread_commands = _wast_uses_thread_commands(wast_path)
+    except (OSError, ValueError) as error:
         print(f"SPEC {filename} converter_unsupported")
-        print(convert.stdout)
+        print(error)
         return 0, 0, 1, 1, None, 0, 0, 0
 
-    convert_json(json_path, manifest_path)
+    if uses_thread_commands:
+        try:
+            _convert_threads_wast(
+                wast_path,
+                manifest_path,
+                case_dir,
+                wast2json,
+                wast2json_flags,
+            )
+        except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
+            print(f"SPEC {filename} converter_unsupported")
+            print(error)
+            return 0, 0, 1, 1, None, 0, 0, 0
+    else:
+        convert_args = [
+            wast2json,
+            "--enable-function-references",
+        ]
+        convert_args.extend(wast2json_flags or [])
+        convert_args.extend([
+            wast_path,
+            "-o",
+            json_path,
+        ])
+
+        convert = subprocess.run(
+            convert_args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+        if convert.returncode != 0:
+            print(f"SPEC {filename} converter_unsupported")
+            print(convert.stdout)
+            return 0, 0, 1, 1, None, 0, 0, 0
+
+        convert_json(json_path, manifest_path)
 
     run_env = os.environ.copy()
     if compare_runner is not None:
