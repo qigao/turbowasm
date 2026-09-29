@@ -5933,6 +5933,45 @@ static void turbowasm_instance_dispose_unpublished(
     free(impl);
 }
 
+static turbowasm_status turbowasm_instance_copy_linkage(
+    turbowasm_instance_impl *destination,
+    const turbowasm_instance_impl *source) {
+    size_t bytes;
+
+    if (destination == NULL || source == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+#define TURBOWASM_COPY_LINKAGE_FIELD(field, count_field) \
+    do { \
+        destination->count_field = source->count_field; \
+        if (source->count_field != 0u) { \
+            if ((size_t)source->count_field > \
+                SIZE_MAX / sizeof(*source->field)) \
+                return TURBOWASM_OUT_OF_MEMORY; \
+            bytes = (size_t)source->count_field * \
+                    sizeof(*source->field); \
+            destination->field = malloc(bytes); \
+            if (destination->field == NULL) \
+                return TURBOWASM_OUT_OF_MEMORY; \
+            memcpy(destination->field, source->field, bytes); \
+        } \
+    } while (0)
+
+    TURBOWASM_COPY_LINKAGE_FIELD(
+        linked_functions, linked_function_count);
+    TURBOWASM_COPY_LINKAGE_FIELD(
+        linked_globals, linked_global_count);
+    TURBOWASM_COPY_LINKAGE_FIELD(
+        linked_memories, linked_memory_count);
+    TURBOWASM_COPY_LINKAGE_FIELD(
+        linked_tables, linked_table_count);
+    TURBOWASM_COPY_LINKAGE_FIELD(
+        linked_tags, linked_tag_count);
+
+#undef TURBOWASM_COPY_LINKAGE_FIELD
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status turbowasm_instance_create_internal(
     turbowasm_instance *instance,
     const turbowasm_module *module,
@@ -6026,6 +6065,65 @@ turbowasm_status turbowasm_instance_create_linked_preserve_failure(
     const struct turbowasm_linker *linker) {
     return turbowasm_instance_create_internal(
         instance, module, linker, true, true);
+}
+
+turbowasm_status turbowasm_instance_create_sibling_internal(
+    turbowasm_instance *instance,
+    const turbowasm_instance *parent) {
+    const turbowasm_instance_impl *parent_impl;
+    const turbowasm_module_impl *module_impl;
+    turbowasm_instance_impl *impl;
+    turbowasm_status status;
+
+    if (instance == NULL || instance->impl != NULL ||
+        parent == NULL || parent->impl == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    parent_impl = (const turbowasm_instance_impl *)parent->impl;
+    if (parent_impl->module == NULL ||
+        parent_impl->module->impl == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    module_impl = turbowasm_module_impl_get(parent_impl->module);
+    if (module_impl == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    impl = (turbowasm_instance_impl *)calloc(1u, sizeof(*impl));
+    if (impl == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+    impl->module = parent_impl->module;
+
+    status = turbowasm_instance_copy_linkage(impl, parent_impl);
+    if (status != TURBOWASM_OK) {
+        turbowasm_instance_dispose_unpublished(impl);
+        return status;
+    }
+
+    status = turbowasm_instance_state_init(impl, module_impl);
+    if (status != TURBOWASM_OK) {
+        turbowasm_instance_dispose_unpublished(impl);
+        return status;
+    }
+
+    instance->impl = impl;
+    if (module_impl->summary.has_start) {
+        size_t result_count = 0u;
+        turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+
+        status = turbowasm_instance_invoke(
+            instance,
+            module_impl->summary.start_function_index,
+            NULL, 0u,
+            NULL, 0u,
+            &result_count,
+            &trap);
+        if (status != TURBOWASM_OK) {
+            turbowasm_instance_destroy(instance);
+            return status;
+        }
+    }
+
+    return TURBOWASM_OK;
 }
 
 void turbowasm_instance_destroy(turbowasm_instance *instance) {
