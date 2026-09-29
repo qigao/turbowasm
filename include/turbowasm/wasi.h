@@ -73,6 +73,19 @@ typedef uint32_t (*turbowasm_wasi_fd_read_fn)(
     size_t buffer_count,
     uint32_t *out_read);
 
+/*
+ * Preview1 proc_exit policy callback.
+ *
+ * The callback observes the caller instance and exit code before TurboWasm
+ * terminates the current Wasm invocation with TURBOWASM_INTERRUPTED. This
+ * keeps process/thread-group policy outside Runtime while preserving proc_exit
+ * as a non-returning guest operation.
+ */
+typedef void (*turbowasm_wasi_proc_exit_fn)(
+    void *context,
+    turbowasm_instance *caller,
+    uint32_t exit_code);
+
 struct turbowasm_wasi_fs;
 
 typedef struct turbowasm_wasi_preview1 {
@@ -103,6 +116,10 @@ typedef struct turbowasm_wasi_preview1_config {
     bool allow_fd_read;
     turbowasm_wasi_fd_read_fn fd_read;
     void *fd_read_context;
+
+    bool allow_proc_exit;
+    turbowasm_wasi_proc_exit_fn proc_exit;
+    void *proc_exit_context;
 
     bool allow_filesystem;
     struct turbowasm_wasi_fs *filesystem;
