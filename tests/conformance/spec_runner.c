@@ -2208,8 +2208,8 @@ command_done:
 
 int main(int argc, char **argv) {
     spec_state state;
-    size_t index;
     int rc;
+    bool failed;
 #ifdef TURBOWASM_SPEC_ENABLE_MIR
     size_t mir_compiled = 0u;
     size_t mir_interpret_only = 0u;
@@ -2249,9 +2249,10 @@ int main(int argc, char **argv) {
            mir_calls);
 #endif
 
+    failed = state.failed != 0u;
     spec_state_destroy(&state);
 
     if (rc != 0)
         return rc;
-    return state.failed == 0u ? 0 : 1;
+    return failed ? 1 : 0;
 }
