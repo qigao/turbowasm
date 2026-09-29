@@ -1042,6 +1042,7 @@ static turbowasm_status decode_component_semantics(
     uint32_t current_types = 0u;
     uint32_t current_core_modules = 0u;
     uint32_t next_core_function_index = 0u;
+    uint32_t next_core_memory_index = 0u;
     uint32_t next_component_function_index = 0u;
     uint32_t i;
 
@@ -1085,11 +1086,12 @@ static turbowasm_status decode_component_semantics(
             status = decode_core_instance_section(
                 reader, component, current_core_modules);
         } else if (section->id == 6u) {
-            status = decode_core_function_alias_section(
+            status = decode_core_alias_section(
                 reader,
                 component,
                 component->core_instance_count,
-                &next_core_function_index);
+                &next_core_function_index,
+                &next_core_memory_index);
         } else if (section->id == 7u) {
             status = decode_component_type_section(
                 reader, component, &current_types);
@@ -1099,6 +1101,7 @@ static turbowasm_status decode_component_semantics(
                 component,
                 current_types,
                 next_core_function_index,
+                next_core_memory_index,
                 &next_component_function_index);
         } else if (section->id == 10u) {
             uint32_t before = component->import_count;
@@ -1156,6 +1159,7 @@ turbowasm_status turbowasm_component_binary_load_with_config(
         component->core_modules != NULL ||
         component->core_instances != NULL ||
         component->core_function_aliases != NULL ||
+        component->core_memory_aliases != NULL ||
         component->canon_lifts != NULL ||
         component->type_graph.types != NULL ||
         component->type_graph.count != 0u ||
@@ -1235,6 +1239,14 @@ turbowasm_status turbowasm_component_binary_load_with_config(
     return TURBOWASM_OK;
 
 fail:
+    {
+        uint32_t index;
+        for (index = 0u;
+             index < component->core_instance_count;
+             ++index)
+            turbowasm_rt_free(
+                component->core_instances[index].arguments);
+    }
     turbowasm_component_type_graph_destroy(
         &component->type_graph);
     turbowasm_rt_free(component->imports);
@@ -1243,6 +1255,7 @@ fail:
     turbowasm_rt_free(component->core_modules);
     turbowasm_rt_free(component->core_instances);
     turbowasm_rt_free(component->core_function_aliases);
+    turbowasm_rt_free(component->core_memory_aliases);
     turbowasm_rt_free(component->canon_lifts);
     memset(component, 0, sizeof(*component));
     turbowasm_runtime_scope_leave(scope);
@@ -1257,6 +1270,14 @@ void turbowasm_component_binary_destroy(
         return;
 
     scope = turbowasm_runtime_scope_enter(&component->config);
+    {
+        uint32_t index;
+        for (index = 0u;
+             index < component->core_instance_count;
+             ++index)
+            turbowasm_rt_free(
+                component->core_instances[index].arguments);
+    }
     turbowasm_component_type_graph_destroy(
         &component->type_graph);
     turbowasm_rt_free(component->imports);
@@ -1265,6 +1286,7 @@ void turbowasm_component_binary_destroy(
     turbowasm_rt_free(component->core_modules);
     turbowasm_rt_free(component->core_instances);
     turbowasm_rt_free(component->core_function_aliases);
+    turbowasm_rt_free(component->core_memory_aliases);
     turbowasm_rt_free(component->canon_lifts);
     memset(component, 0, sizeof(*component));
     turbowasm_runtime_scope_leave(scope);
@@ -1305,6 +1327,16 @@ turbowasm_component_binary_core_function_alias_at(
         index >= component->core_function_alias_count)
         return NULL;
     return &component->core_function_aliases[index];
+}
+
+const turbowasm_component_core_memory_alias *
+turbowasm_component_binary_core_memory_alias_at(
+    const turbowasm_component_binary *component,
+    uint32_t index) {
+    if (component == NULL ||
+        index >= component->core_memory_alias_count)
+        return NULL;
+    return &component->core_memory_aliases[index];
 }
 
 const turbowasm_component_canon_lift *
