@@ -493,12 +493,21 @@ uint32_t turbowasm_wasi_fs_fd_seek(
         (slot->rights_base & TURBOWASM_WASI_RIGHT_FD_SEEK) == 0u) {
         if ((slot->rights_base & TURBOWASM_WASI_RIGHT_FD_TELL) == 0u)
             return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
-        if (impl->provider.tell == NULL)
-            return TURBOWASM_WASI_ERRNO_NOSYS;
-        return impl->provider.tell(
-            impl->provider.context,
-            slot->file,
-            out_offset);
+        if (impl->provider.tell != NULL) {
+            return impl->provider.tell(
+                impl->provider.context,
+                slot->file,
+                out_offset);
+        }
+        if (impl->provider.seek != NULL) {
+            return impl->provider.seek(
+                impl->provider.context,
+                slot->file,
+                0,
+                TURBOWASM_WASI_WHENCE_CUR,
+                out_offset);
+        }
+        return TURBOWASM_WASI_ERRNO_NOSYS;
     }
 
     if ((slot->rights_base & TURBOWASM_WASI_RIGHT_FD_SEEK) == 0u)
@@ -529,13 +538,21 @@ uint32_t turbowasm_wasi_fs_fd_tell(
         return TURBOWASM_WASI_ERRNO_BADF;
     if ((slot->rights_base & TURBOWASM_WASI_RIGHT_FD_TELL) == 0u)
         return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
-    if (impl->provider.tell == NULL)
-        return TURBOWASM_WASI_ERRNO_NOSYS;
-
-    return impl->provider.tell(
-        impl->provider.context,
-        slot->file,
-        out_offset);
+    if (impl->provider.tell != NULL) {
+        return impl->provider.tell(
+            impl->provider.context,
+            slot->file,
+            out_offset);
+    }
+    if (impl->provider.seek != NULL) {
+        return impl->provider.seek(
+            impl->provider.context,
+            slot->file,
+            0,
+            TURBOWASM_WASI_WHENCE_CUR,
+            out_offset);
+    }
+    return TURBOWASM_WASI_ERRNO_NOSYS;
 }
 
 uint32_t turbowasm_wasi_fs_fd_filestat_get(
