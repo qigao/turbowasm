@@ -106,7 +106,7 @@ static void init_memory(
     memory->memory_index = 0u;
     memory->pointer_type = pointer_type;
     memory->string_encoding = TURBOWASM_COMPONENT_STRING_UTF8;
-    memory->realloc = bump_realloc;
+    memory->guest_realloc = bump_realloc;
     memory->realloc_context = allocator;
 }
 
