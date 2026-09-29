@@ -115,22 +115,8 @@ bool turbowasm_wasi_threads_group_exit_code(
     const turbowasm_wasi_threads *threads,
     uint32_t *out_exit_code);
 
-/*
- * Callback-compatible proc_exit bridge for turbowasm_wasi_preview1_config.
- * Configure Preview1 with:
- *   allow_proc_exit = true
- *   proc_exit = turbowasm_wasi_threads_proc_exit
- *   proc_exit_context = &threads
- *
- * The first group terminal wins. proc_exit interrupts siblings/root policy,
- * wakes blocked atomic waiters without synthesizing a notify result, and
- * records the exact Preview1 exit code.
- */
-void turbowasm_wasi_threads_proc_exit(
-    void *context,
-    turbowasm_instance *caller,
-    uint32_t exit_code);
-
+/* Backward-compatible spelling retained for consumers that adopted the
+ * earlier declaration. New code should prefer group_exit_code(). */
 bool turbowasm_wasi_threads_group_exit(
     const turbowasm_wasi_threads *threads,
     uint32_t *out_exit_code);
