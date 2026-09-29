@@ -309,6 +309,40 @@ C5b1 intentionally supports top-level own/borrow values only. Resource handles
 nested inside lists or future composite types remain C5b2 because their
 in-memory canonical representation needs an explicit synchronous borrow scope.
 
+## C5c1 minimal executable Component binary
+
+The first binary composition path executes a closed synchronous scalar
+Component assembled from the pinned MVP binary records:
+
+```text
+embedded Core module
+  -> core instance (instantiate, zero args)
+  -> alias core export ... (core func)
+  -> canon lift (no options)
+  -> Component func export
+```
+
+The decoded binary retains explicit records for the Core instance, Core
+function alias and canonical lift index spaces. Execution reloads the borrowed
+Core module through the ordinary Runtime loader, instantiates it with
+`turbowasm_instance_create()`, resolves the aliased Core export by name, and
+constructs the existing C5a typed Core-call adapter.
+
+No interpreter/JIT entry point is called directly. A Component export therefore
+executes through the same `turbowasm_instance_invoke()` path as every other
+Core call.
+
+C5c1 intentionally rejects:
+
+- Core instantiate arguments;
+- canonical options;
+- Component imports;
+- non-Core-function aliases;
+- unsupported Component export sorts.
+
+C5c2 adds memory/realloc options, linked instance arguments and C5b resource
+built-ins without weakening this ownership boundary.
+
 ## Deferred work
 
 C1 intentionally does not implement:
