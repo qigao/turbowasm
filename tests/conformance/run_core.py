@@ -147,193 +147,298 @@ def convert_json(json_path, manifest_path):
         document = json.load(handle)
 
     json_dir = os.path.dirname(os.path.abspath(json_path))
-    named_slots = {}
-    current_slot = None
+    manifest_dir = os.path.dirname(os.path.abspath(manifest_path))
     next_slot = 0
-    lines = ["TWCF1"]
+    next_thread_manifest = 0
 
-    def emit_unsupported(line, reason):
-        lines.append(
-            f"unsupported\t{line}\t{safe_reason(reason)}"
-        )
+    def write_commands(commands, output_path, inherited_named_slots=None):
+        nonlocal next_slot, next_thread_manifest
 
-    def encode_invoke(command, action, command_type, expected=None, trap=None):
-        line = command.get("line", 0)
-        if action.get("type") != "invoke":
-            emit_unsupported(line, "get action not yet qualified")
-            return
+        named_slots = dict(inherited_named_slots or {})
+        current_slot = None
+        lines = ["TWCF1"]
 
-        slot = action_slot(action, named_slots, current_slot)
-        if slot is None:
-            emit_unsupported(line, "named/default module not available")
-            return
-
-        args, reason = encode_values(action.get("args", []), expected=False)
-        if args is None:
-            emit_unsupported(line, reason)
-            return
-
-        field = action.get("field")
-        if not isinstance(field, str):
-            emit_unsupported(line, "invoke field missing")
-            return
-
-        slot_text = str(slot)
-        field_hex = hex_utf8(field)
-
-        if command_type == "action":
+        def emit_unsupported(line, reason):
             lines.append(
-                f"action\t{line}\t{slot_text}\t{field_hex}\t{args}"
+                f"unsupported\t{line}\t{safe_reason(reason)}"
             )
-            return
 
-        if command_type == "assert_return":
-            either = command.get("either")
-            if either is not None:
-                if not isinstance(either, list) or not either:
-                    emit_unsupported(line, "either expectation is empty")
-                    return
-                encoded_alternatives = []
-                for alternative in either:
-                    token, reason = encode_value(
-                        alternative, expected=True
-                    )
-                    if token is None:
-                        emit_unsupported(line, reason)
-                        return
-                    encoded_alternatives.append(token)
-                lines.append(
-                    f"assert_return_either\t{line}\t{slot_text}"
-                    f"\t{field_hex}\t{args}\t"
-                    + "|".join(encoded_alternatives)
-                )
+        def encode_invoke(
+            command, action, command_type, expected=None, trap=None
+        ):
+            line = command.get("line", 0)
+            if action.get("type") != "invoke":
+                emit_unsupported(line, "get action not yet qualified")
                 return
 
-            encoded_expected, reason = encode_values(
-                expected or [], expected=True
+            slot = action_slot(action, named_slots, current_slot)
+            if slot is None:
+                emit_unsupported(line, "named/default module not available")
+                return
+
+            args, reason = encode_values(
+                action.get("args", []), expected=False
             )
-            if encoded_expected is None:
+            if args is None:
                 emit_unsupported(line, reason)
                 return
-            lines.append(
-                f"assert_return\t{line}\t{slot_text}\t{field_hex}"
-                f"\t{args}\t{encoded_expected}"
-            )
-            return
 
-        if command_type == "assert_trap":
-            if trap is None:
-                emit_unsupported(line, "trap text has no TurboWasm mapping")
+            field = action.get("field")
+            if not isinstance(field, str):
+                emit_unsupported(line, "invoke field missing")
                 return
-            lines.append(
-                f"assert_trap\t{line}\t{slot_text}\t{field_hex}"
-                f"\t{args}\t{trap}"
-            )
-            return
 
-        raise AssertionError(command_type)
+            slot_text = str(slot)
+            field_hex = hex_utf8(field)
 
-    for command in document.get("commands", []):
-        command_type = command.get("type")
-        line = command.get("line", 0)
+            if command_type == "action":
+                lines.append(
+                    f"action\t{line}\t{slot_text}\t{field_hex}\t{args}"
+                )
+                return
 
-        if command_type == "module":
-            filename = command.get("filename")
-            if not isinstance(filename, str):
-                emit_unsupported(line, "module filename missing")
+            if command_type == "assert_return":
+                either = command.get("either")
+                if either is not None:
+                    if not isinstance(either, list) or not either:
+                        emit_unsupported(
+                            line, "either expectation is empty"
+                        )
+                        return
+                    encoded_alternatives = []
+                    for alternative in either:
+                        token, reason = encode_value(
+                            alternative, expected=True
+                        )
+                        if token is None:
+                            emit_unsupported(line, reason)
+                            return
+                        encoded_alternatives.append(token)
+                    lines.append(
+                        f"assert_return_either\t{line}\t{slot_text}"
+                        f"\t{field_hex}\t{args}\t"
+                        + "|".join(encoded_alternatives)
+                    )
+                    return
+
+                encoded_expected, reason = encode_values(
+                    expected or [], expected=True
+                )
+                if encoded_expected is None:
+                    emit_unsupported(line, reason)
+                    return
+                lines.append(
+                    f"assert_return\t{line}\t{slot_text}\t{field_hex}"
+                    f"\t{args}\t{encoded_expected}"
+                )
+                return
+
+            if command_type == "assert_trap":
+                if trap is None:
+                    emit_unsupported(
+                        line, "trap text has no TurboWasm mapping"
+                    )
+                    return
+                lines.append(
+                    f"assert_trap\t{line}\t{slot_text}\t{field_hex}"
+                    f"\t{args}\t{trap}"
+                )
+                return
+
+            raise AssertionError(command_type)
+
+        if not isinstance(commands, list):
+            emit_unsupported(0, "command list is not an array")
+            commands = []
+
+        for command in commands:
+            if not isinstance(command, dict):
+                emit_unsupported(0, "command entry is not an object")
                 continue
 
-            path = os.path.abspath(os.path.join(json_dir, filename))
-            if command.get("definition") in (True, "true"):
-                lines.append(f"module_definition\t{line}\t{path}")
+            command_type = command.get("type")
+            line = command.get("line", 0)
+
+            if command_type == "module":
+                filename = command.get("filename")
+                if not isinstance(filename, str):
+                    emit_unsupported(line, "module filename missing")
+                    continue
+
+                path = os.path.abspath(os.path.join(json_dir, filename))
+                if command.get("definition") in (True, "true"):
+                    lines.append(
+                        f"module_definition\t{line}\t{path}"
+                    )
+                    continue
+
+                slot = next_slot
+                next_slot += 1
+                current_slot = slot
+
+                name = command.get("name")
+                if isinstance(name, str):
+                    named_slots[name] = slot
+
+                lines.append(f"module\t{line}\t{slot}\t{path}")
                 continue
 
-            slot = next_slot
-            next_slot += 1
-            current_slot = slot
-
-            name = command.get("name")
-            if isinstance(name, str):
-                named_slots[name] = slot
-
-            lines.append(f"module\t{line}\t{slot}\t{path}")
-            continue
-
-        if command_type == "register":
-            source_name = command.get("name")
-            slot = (
-                named_slots.get(source_name)
-                if isinstance(source_name, str)
-                else current_slot
-            )
-            alias = command.get("as")
-            if slot is None or not isinstance(alias, str):
-                emit_unsupported(line, "register target/name unavailable")
-                continue
-            lines.append(
-                f"register\t{line}\t{slot}\t{hex_utf8(alias)}"
-            )
-            continue
-
-        if command_type == "action":
-            encode_invoke(
-                command, command.get("action", {}), "action"
-            )
-            continue
-
-        if command_type == "assert_return":
-            encode_invoke(
-                command,
-                command.get("action", {}),
-                "assert_return",
-                expected=command.get("expected", []),
-            )
-            continue
-
-        if command_type == "assert_trap":
-            encode_invoke(
-                command,
-                command.get("action", {}),
-                "assert_trap",
-                trap=trap_kind(command.get("text", "")),
-            )
-            continue
-
-        if command_type == "assert_exhaustion":
-            encode_invoke(
-                command,
-                command.get("action", {}),
-                "assert_trap",
-                trap=2,
-            )
-            continue
-
-        if command_type in (
-            "assert_invalid",
-            "assert_malformed",
-            "assert_unlinkable",
-            "assert_uninstantiable",
-        ):
-            if command.get("module_type") != "binary":
-                emit_unsupported(
-                    line,
-                    f"{command_type} text module not run through TurboWasm binary reader",
+            if command_type == "register":
+                source_name = command.get("name")
+                slot = (
+                    named_slots.get(source_name)
+                    if isinstance(source_name, str)
+                    else current_slot
+                )
+                alias = command.get("as")
+                if slot is None or not isinstance(alias, str):
+                    emit_unsupported(
+                        line, "register target/name unavailable"
+                    )
+                    continue
+                lines.append(
+                    f"register\t{line}\t{slot}\t{hex_utf8(alias)}"
                 )
                 continue
-            filename = command.get("filename")
-            if not isinstance(filename, str):
-                emit_unsupported(line, f"{command_type} filename missing")
+
+            if command_type == "thread":
+                name = command.get("name")
+                shared = command.get("shared", [])
+                nested = command.get("commands")
+                if not isinstance(name, str):
+                    emit_unsupported(line, "thread name missing")
+                    continue
+                if not isinstance(shared, list):
+                    emit_unsupported(line, "thread shared list invalid")
+                    continue
+                if not isinstance(nested, list):
+                    emit_unsupported(line, "thread command list invalid")
+                    continue
+
+                child_named_slots = {}
+                shared_slots = []
+                valid_shared = True
+                for item in shared:
+                    if not isinstance(item, dict):
+                        valid_shared = False
+                        break
+                    module_name = item.get("module")
+                    slot = (
+                        named_slots.get(module_name)
+                        if isinstance(module_name, str)
+                        else None
+                    )
+                    if slot is None:
+                        valid_shared = False
+                        break
+                    child_named_slots[module_name] = slot
+                    shared_slots.append(slot)
+
+                if not valid_shared:
+                    emit_unsupported(
+                        line, "thread shared module unavailable"
+                    )
+                    continue
+
+                child_path = os.path.join(
+                    manifest_dir,
+                    f"thread-{next_thread_manifest}.twcf",
+                )
+                next_thread_manifest += 1
+                write_commands(
+                    nested,
+                    child_path,
+                    inherited_named_slots=child_named_slots,
+                )
+                shared_text = (
+                    ",".join(str(slot) for slot in shared_slots)
+                    if shared_slots
+                    else "-"
+                )
+                lines.append(
+                    f"thread\t{line}\t{hex_utf8(name)}"
+                    f"\t{child_path}\t{shared_text}"
+                )
                 continue
-            path = os.path.abspath(os.path.join(json_dir, filename))
-            lines.append(f"{command_type}\t{line}\t{path}")
-            continue
 
-        emit_unsupported(line, f"command {command_type!r} unsupported")
+            if command_type == "wait":
+                thread_name = command.get("thread")
+                if not isinstance(thread_name, str):
+                    emit_unsupported(line, "wait thread name missing")
+                    continue
+                lines.append(
+                    f"wait\t{line}\t{hex_utf8(thread_name)}"
+                )
+                continue
 
-    with open(manifest_path, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write("\n".join(lines))
-        handle.write("\n")
+            if command_type == "action":
+                encode_invoke(
+                    command, command.get("action", {}), "action"
+                )
+                continue
 
+            if command_type == "assert_return":
+                encode_invoke(
+                    command,
+                    command.get("action", {}),
+                    "assert_return",
+                    expected=command.get("expected", []),
+                )
+                continue
+
+            if command_type == "assert_trap":
+                encode_invoke(
+                    command,
+                    command.get("action", {}),
+                    "assert_trap",
+                    trap=trap_kind(command.get("text", "")),
+                )
+                continue
+
+            if command_type == "assert_exhaustion":
+                encode_invoke(
+                    command,
+                    command.get("action", {}),
+                    "assert_trap",
+                    trap=2,
+                )
+                continue
+
+            if command_type in (
+                "assert_invalid",
+                "assert_malformed",
+                "assert_unlinkable",
+                "assert_uninstantiable",
+            ):
+                if command.get("module_type") != "binary":
+                    emit_unsupported(
+                        line,
+                        f"{command_type} text module not run through TurboWasm binary reader",
+                    )
+                    continue
+                filename = command.get("filename")
+                if not isinstance(filename, str):
+                    emit_unsupported(
+                        line, f"{command_type} filename missing"
+                    )
+                    continue
+                path = os.path.abspath(
+                    os.path.join(json_dir, filename)
+                )
+                lines.append(f"{command_type}\t{line}\t{path}")
+                continue
+
+            emit_unsupported(
+                line, f"command {command_type!r} unsupported"
+            )
+
+        with open(
+            output_path, "w", encoding="utf-8", newline="\n"
+        ) as handle:
+            handle.write("\n".join(lines))
+            handle.write("\n")
+
+    write_commands(document.get("commands", []), manifest_path)
 
 def run_file(
     wast2json,
