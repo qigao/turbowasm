@@ -157,6 +157,23 @@ static void turbowasm_wasi_store_u64(
             (uint8_t)((value >> (index * 8u)) & UINT64_C(0xff));
 }
 
+static void turbowasm_wasi_store_filestat(
+    uint8_t *destination,
+    const turbowasm_wasi_fs_stat *stat) {
+    if (destination == NULL || stat == NULL)
+        return;
+
+    memset(destination, 0, 64u);
+    turbowasm_wasi_store_u64(destination + 0u, stat->device);
+    turbowasm_wasi_store_u64(destination + 8u, stat->inode);
+    destination[16u] = stat->file_type;
+    turbowasm_wasi_store_u64(destination + 24u, stat->link_count);
+    turbowasm_wasi_store_u64(destination + 32u, stat->size);
+    turbowasm_wasi_store_u64(destination + 40u, stat->accessed_ns);
+    turbowasm_wasi_store_u64(destination + 48u, stat->modified_ns);
+    turbowasm_wasi_store_u64(destination + 56u, stat->changed_ns);
+}
+
 static turbowasm_status turbowasm_wasi_return_errno(
     turbowasm_value *results,
     size_t result_capacity,
@@ -787,22 +804,8 @@ static turbowasm_status turbowasm_wasi_fd_filestat_get(
             &stat);
     }
 
-    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        memset(output.data, 0, 64u);
-        turbowasm_wasi_store_u64(output.data + 0u, stat.device);
-        turbowasm_wasi_store_u64(output.data + 8u, stat.inode);
-        output.data[16u] = stat.file_type;
-        turbowasm_wasi_store_u64(
-            output.data + 24u, stat.link_count);
-        turbowasm_wasi_store_u64(
-            output.data + 32u, stat.size);
-        turbowasm_wasi_store_u64(
-            output.data + 40u, stat.accessed_ns);
-        turbowasm_wasi_store_u64(
-            output.data + 48u, stat.modified_ns);
-        turbowasm_wasi_store_u64(
-            output.data + 56u, stat.changed_ns);
-    }
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS)
+        turbowasm_wasi_store_filestat(output.data, &stat);
 
     return turbowasm_wasi_return_errno(
         results, result_capacity, result_count, trap, error);
@@ -938,6 +941,155 @@ static turbowasm_status turbowasm_wasi_fd_prestat_dir_name(
 
     return turbowasm_wasi_return_errno(
         results, result_capacity, result_count, trap, error);
+}
+
+static turbowasm_status turbowasm_wasi_path_filestat_get(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    turbowasm_wasi_preview1_impl *impl =
+        (turbowasm_wasi_preview1_impl *)context;
+    turbowasm_host_memory_span path = {0};
+    turbowasm_host_memory_span output = {0};
+    turbowasm_wasi_fs_stat stat = {0};
+    uint32_t path_length;
+    uint32_t error;
+
+    if (impl == NULL || !impl->allow_filesystem ||
+        impl->filesystem == NULL || call == NULL ||
+        arguments == NULL || argument_count != 5u ||
+        arguments[0].kind != TURBOWASM_VALUE_I32 ||
+        arguments[1].kind != TURBOWASM_VALUE_I32 ||
+        arguments[2].kind != TURBOWASM_VALUE_I32 ||
+        arguments[3].kind != TURBOWASM_VALUE_I32 ||
+        arguments[4].kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    path_length = (uint32_t)arguments[3].as.i32;
+    error = turbowasm_wasi_memory_span(
+        call,
+        (uint32_t)arguments[4].as.i32,
+        64u,
+        &output);
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = turbowasm_wasi_memory_span(
+            call,
+            (uint32_t)arguments[2].as.i32,
+            path_length,
+            &path);
+    }
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = turbowasm_wasi_fs_path_stat(
+            impl->filesystem,
+            (uint32_t)arguments[0].as.i32,
+            (uint32_t)arguments[1].as.i32,
+            path.data,
+            path.size,
+            &stat);
+    }
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS)
+        turbowasm_wasi_store_filestat(output.data, &stat);
+
+    return turbowasm_wasi_return_errno(
+        results, result_capacity, result_count, trap, error);
+}
+
+static turbowasm_status turbowasm_wasi_path_mutation(
+    turbowasm_wasi_preview1_impl *impl,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap,
+    uint32_t (*operation)(
+        turbowasm_wasi_fs *,
+        uint32_t,
+        const uint8_t *,
+        size_t)) {
+    turbowasm_host_memory_span path = {0};
+    uint32_t path_length;
+    uint32_t error;
+
+    if (impl == NULL || !impl->allow_filesystem ||
+        impl->filesystem == NULL || call == NULL ||
+        arguments == NULL || argument_count != 3u ||
+        arguments[0].kind != TURBOWASM_VALUE_I32 ||
+        arguments[1].kind != TURBOWASM_VALUE_I32 ||
+        arguments[2].kind != TURBOWASM_VALUE_I32 ||
+        operation == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    path_length = (uint32_t)arguments[2].as.i32;
+    error = turbowasm_wasi_memory_span(
+        call,
+        (uint32_t)arguments[1].as.i32,
+        path_length,
+        &path);
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+        error = operation(
+            impl->filesystem,
+            (uint32_t)arguments[0].as.i32,
+            path.data,
+            path.size);
+    }
+
+    return turbowasm_wasi_return_errno(
+        results, result_capacity, result_count, trap, error);
+}
+
+static turbowasm_status turbowasm_wasi_path_create_directory(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    return turbowasm_wasi_path_mutation(
+        (turbowasm_wasi_preview1_impl *)context,
+        call, arguments, argument_count,
+        results, result_capacity, result_count, trap,
+        turbowasm_wasi_fs_path_create_directory);
+}
+
+static turbowasm_status turbowasm_wasi_path_remove_directory(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    return turbowasm_wasi_path_mutation(
+        (turbowasm_wasi_preview1_impl *)context,
+        call, arguments, argument_count,
+        results, result_capacity, result_count, trap,
+        turbowasm_wasi_fs_path_remove_directory);
+}
+
+static turbowasm_status turbowasm_wasi_path_unlink_file(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    return turbowasm_wasi_path_mutation(
+        (turbowasm_wasi_preview1_impl *)context,
+        call, arguments, argument_count,
+        results, result_capacity, result_count, trap,
+        turbowasm_wasi_fs_path_unlink_file);
 }
 
 static turbowasm_status turbowasm_wasi_path_open(
@@ -1325,6 +1477,16 @@ turbowasm_status turbowasm_wasi_preview1_define(
         const turbowasm_host_function_type dirname_type = {
             three_i32, 3u, result_type, 1u
         };
+        static const turbowasm_value_kind five_i32[] = {
+            TURBOWASM_VALUE_I32,
+            TURBOWASM_VALUE_I32,
+            TURBOWASM_VALUE_I32,
+            TURBOWASM_VALUE_I32,
+            TURBOWASM_VALUE_I32
+        };
+        const turbowasm_host_function_type path_filestat_type = {
+            five_i32, 5u, result_type, 1u
+        };
         static const turbowasm_value_kind seek_params[] = {
             TURBOWASM_VALUE_I32,
             TURBOWASM_VALUE_I64,
@@ -1391,6 +1553,46 @@ turbowasm_status turbowasm_wasi_preview1_define(
             turbowasm_wasi_name("fd_filestat_get"),
             &prestat_type,
             turbowasm_wasi_fd_filestat_get,
+            impl);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        status = turbowasm_linker_define_host_function(
+            linker,
+            turbowasm_wasi_namespace(),
+            turbowasm_wasi_name("path_filestat_get"),
+            &path_filestat_type,
+            turbowasm_wasi_path_filestat_get,
+            impl);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        status = turbowasm_linker_define_host_function(
+            linker,
+            turbowasm_wasi_namespace(),
+            turbowasm_wasi_name("path_create_directory"),
+            &dirname_type,
+            turbowasm_wasi_path_create_directory,
+            impl);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        status = turbowasm_linker_define_host_function(
+            linker,
+            turbowasm_wasi_namespace(),
+            turbowasm_wasi_name("path_remove_directory"),
+            &dirname_type,
+            turbowasm_wasi_path_remove_directory,
+            impl);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        status = turbowasm_linker_define_host_function(
+            linker,
+            turbowasm_wasi_namespace(),
+            turbowasm_wasi_name("path_unlink_file"),
+            &dirname_type,
+            turbowasm_wasi_path_unlink_file,
             impl);
         if (status != TURBOWASM_OK)
             return status;
