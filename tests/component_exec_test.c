@@ -132,7 +132,7 @@ static void test_non_c5c1_forms_fail_closed(void) {
     /* section8 canon opts vector count */
     bytes[82] = 1u;
     assert(turbowasm_component_binary_load(
-               &component, bytes, sizeof(bytes)) == TURBOWASM_UNSUPPORTED);
+               &component, bytes, sizeof(bytes)) == TURBOWASM_MALFORMED_MODULE);
 }
 
 int main(void) {
