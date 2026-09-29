@@ -217,6 +217,7 @@ static void test_fail_closed_inputs(
         (turbowasm_instance_impl *)memory->instance->impl;
     turbowasm_component_value value = {0};
     uint8_t invalid_bool = 2u;
+    uint8_t invalid_char[4] = {0x00u, 0xd8u, 0x00u, 0x00u};
     uint8_t invalid_utf8[2] = {0xffu, 0xfeu};
     uint8_t pair[16] = {0};
     size_t pointer_width =
@@ -230,6 +231,14 @@ static void test_fail_closed_inputs(
                graph,
                inline_ref(TURBOWASM_COMPONENT_TYPE_BOOL),
                memory, 120u, &value) == TURBOWASM_TRAPPED);
+
+    assert(turbowasm_instance_memory_write_bytes(
+               impl, 0u, 124u, 0u,
+               invalid_char, sizeof(invalid_char)) == TURBOWASM_OK);
+    assert(turbowasm_component_canonical_lift_value(
+               graph,
+               inline_ref(TURBOWASM_COMPONENT_TYPE_CHAR),
+               memory, 124u, &value) == TURBOWASM_TRAPPED);
 
     assert(turbowasm_instance_memory_write_bytes(
                impl, 0u, 512u, 0u,
