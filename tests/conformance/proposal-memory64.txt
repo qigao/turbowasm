@@ -1,0 +1,8 @@
+# Focused memory64 proposal qualification.
+# Keep the gate centered on 64-bit memory addressing/runtime semantics.
+memory64.wast
+memory_grow64.wast
+memory_trap64.wast
+load64.wast
+address64.wast
+align64.wast
