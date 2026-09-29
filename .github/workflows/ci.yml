@@ -26,6 +26,10 @@ jobs:
         shell: bash
         run: python3 cmake/ci/check-unversioned-policy.py
 
+      - name: Guard Runtime portability boundary
+        shell: bash
+        run: python3 cmake/ci/check-portability-boundary.py
+
       - name: Restore latest Salts SDK
         shell: pwsh
         env:
