@@ -26,14 +26,14 @@ typedef struct turbowasm_wasi_preview1_config {
     size_t arg_count;
 
     bool allow_environ;
-    const char *const *environ;
-    size_t environ_count;
+    const char *const *environment;
+    size_t environment_count;
 } turbowasm_wasi_preview1_config;
 
 /*
  * Initialize one Preview1 capability object.
  *
- * argv/environ strings are copied and owned by the object. Each environment
+ * argv/environment strings are copied and owned by the object. Each environment
  * entry is passed to the guest verbatim (normally "KEY=VALUE").
  */
 turbowasm_status turbowasm_wasi_preview1_init(
