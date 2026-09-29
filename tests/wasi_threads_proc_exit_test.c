@@ -177,7 +177,7 @@ static void test_proc_exit_terminates_thread_group(void) {
      */
     assert(cflow_executor_wait_idle(&executor));
     assert(turbowasm_wasi_threads_active(&threads) == 0u);
-    assert(turbowasm_wasi_threads_group_exit(
+    assert(turbowasm_wasi_threads_group_exit_code(
                &threads, &exit_code));
     assert(exit_code == 23u);
     assert(!turbowasm_wasi_threads_group_fatal(
