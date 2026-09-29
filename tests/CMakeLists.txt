@@ -846,6 +846,19 @@ if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
 endif()
 
 if(TURBOWASM_ENABLE_WASI_ADAPTER)
+  add_executable(turbowasm_wasi_smoke_corpus_test
+    wasi_smoke_corpus_test.c)
+  target_link_libraries(turbowasm_wasi_smoke_corpus_test
+    PRIVATE TurboWasm::WASI)
+  set_target_properties(turbowasm_wasi_smoke_corpus_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi_smoke_corpus_test
+           COMMAND turbowasm_wasi_smoke_corpus_test)
+endif()
+
+if(TURBOWASM_ENABLE_WASI_ADAPTER)
   add_executable(turbowasm_wasi_cmeta_manifest_test
     wasi_cmeta_manifest_test.c)
   target_link_libraries(turbowasm_wasi_cmeta_manifest_test
