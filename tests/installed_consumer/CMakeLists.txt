@@ -3,7 +3,7 @@ project(TurboWasmInstalledConsumer LANGUAGES C)
 
 include(CTest)
 
-find_package(TurboWasm 0.1 CONFIG REQUIRED)
+find_package(TurboWasm CONFIG REQUIRED)
 
 add_executable(turbowasm_installed_consumer main.c)
 target_link_libraries(turbowasm_installed_consumer PRIVATE TurboWasm::Runtime)
