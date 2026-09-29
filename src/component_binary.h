@@ -26,10 +26,24 @@ typedef struct turbowasm_component_core_module {
     uint32_t size;
 } turbowasm_component_core_module;
 
+typedef struct turbowasm_component_core_instance {
+    uint32_t module_index;
+} turbowasm_component_core_instance;
+
+typedef struct turbowasm_component_canon_lift {
+    uint32_t core_function_index;
+    uint32_t type_index;
+} turbowasm_component_canon_lift;
+
 typedef struct turbowasm_component_name {
     const uint8_t *bytes;
     uint32_t size;
 } turbowasm_component_name;
+
+typedef struct turbowasm_component_core_function_alias {
+    uint32_t instance_index;
+    turbowasm_component_name name;
+} turbowasm_component_core_function_alias;
 
 typedef enum turbowasm_component_external_kind {
     TURBOWASM_COMPONENT_EXTERN_CORE_MODULE = 0,
@@ -66,6 +80,18 @@ typedef struct turbowasm_component_binary {
     uint32_t core_module_count;
     uint32_t core_module_capacity;
 
+    turbowasm_component_core_instance *core_instances;
+    uint32_t core_instance_count;
+    uint32_t core_instance_capacity;
+
+    turbowasm_component_core_function_alias *core_function_aliases;
+    uint32_t core_function_alias_count;
+    uint32_t core_function_alias_capacity;
+
+    turbowasm_component_canon_lift *canon_lifts;
+    uint32_t canon_lift_count;
+    uint32_t canon_lift_capacity;
+
     turbowasm_component_type_graph type_graph;
 
     turbowasm_component_import *imports;
@@ -100,6 +126,21 @@ turbowasm_component_binary_section_at(
 
 const turbowasm_component_core_module *
 turbowasm_component_binary_core_module_at(
+    const turbowasm_component_binary *component,
+    uint32_t index);
+
+const turbowasm_component_core_instance *
+turbowasm_component_binary_core_instance_at(
+    const turbowasm_component_binary *component,
+    uint32_t index);
+
+const turbowasm_component_core_function_alias *
+turbowasm_component_binary_core_function_alias_at(
+    const turbowasm_component_binary *component,
+    uint32_t index);
+
+const turbowasm_component_canon_lift *
+turbowasm_component_binary_canon_lift_at(
     const turbowasm_component_binary *component,
     uint32_t index);
 
