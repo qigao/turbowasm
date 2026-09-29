@@ -284,6 +284,19 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
            COMMAND turbowasm_wasi_preview1_test)
 endif()
 
+if(TURBOWASM_ENABLE_WASI_ADAPTER)
+  add_executable(turbowasm_wasi_clock_random_test
+    wasi_clock_random_test.c)
+  target_link_libraries(turbowasm_wasi_clock_random_test
+    PRIVATE TurboWasm::WASI)
+  set_target_properties(turbowasm_wasi_clock_random_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi_clock_random_test
+           COMMAND turbowasm_wasi_clock_random_test)
+endif()
+
 add_executable(turbowasm_host_wait_test
   host_wait_test.c)
 target_link_libraries(turbowasm_host_wait_test

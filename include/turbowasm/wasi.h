@@ -13,8 +13,26 @@ extern "C" {
 
 enum {
     TURBOWASM_WASI_ERRNO_SUCCESS = 0,
-    TURBOWASM_WASI_ERRNO_FAULT = 21
+    TURBOWASM_WASI_ERRNO_FAULT = 21,
+    TURBOWASM_WASI_ERRNO_INVAL = 28,
+    TURBOWASM_WASI_ERRNO_IO = 29
 };
+
+enum {
+    TURBOWASM_WASI_CLOCKID_REALTIME = 0,
+    TURBOWASM_WASI_CLOCKID_MONOTONIC = 1
+};
+
+typedef uint32_t (*turbowasm_wasi_clock_time_fn)(
+    void *context,
+    uint32_t clock_id,
+    uint64_t precision_ns,
+    uint64_t *out_timestamp_ns);
+
+typedef uint32_t (*turbowasm_wasi_random_fill_fn)(
+    void *context,
+    uint8_t *buffer,
+    size_t length);
 
 typedef struct turbowasm_wasi_preview1 {
     void *impl;
@@ -28,6 +46,14 @@ typedef struct turbowasm_wasi_preview1_config {
     bool allow_environ;
     const char *const *environment;
     size_t environment_count;
+
+    bool allow_clock;
+    turbowasm_wasi_clock_time_fn clock_time;
+    void *clock_context;
+
+    bool allow_random;
+    turbowasm_wasi_random_fill_fn random_fill;
+    void *random_context;
 } turbowasm_wasi_preview1_config;
 
 /*
