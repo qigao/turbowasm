@@ -855,3 +855,40 @@ set_target_properties(turbowasm_shared_memory_instance_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_shared_memory_instance_test
          COMMAND turbowasm_shared_memory_instance_test)
+
+add_executable(turbowasm_atomic_descriptor_test
+  atomic_descriptor_test.c)
+target_link_libraries(turbowasm_atomic_descriptor_test
+  PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_atomic_descriptor_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_atomic_descriptor_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_atomic_descriptor_test
+         COMMAND turbowasm_atomic_descriptor_test)
+
+add_executable(turbowasm_atomic_validation_test
+  atomic_validation_test.c)
+target_link_libraries(turbowasm_atomic_validation_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_atomic_validation_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_atomic_validation_test
+         COMMAND turbowasm_atomic_validation_test)
+
+add_executable(turbowasm_atomic_runtime_test
+  atomic_runtime_test.c)
+target_link_libraries(turbowasm_atomic_runtime_test
+  PRIVATE TurboWasm::Runtime Salts::Platform)
+target_include_directories(turbowasm_atomic_runtime_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_atomic_runtime_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_atomic_runtime_test
+         COMMAND turbowasm_atomic_runtime_test)

@@ -51,6 +51,7 @@ if(NOT TARGET Salts::Platform)
 endif()
 
 add_library(turbowasm
+  src/atomic.c
   src/execution.c
   src/instance.c
   src/instance_state.c

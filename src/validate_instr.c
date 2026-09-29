@@ -1,4 +1,5 @@
 #include "validate_instr.h"
+#include "atomic.h"
 #include "validate_simd_table.h"
 #include "validate_type.h"
 
@@ -1504,6 +1505,106 @@ static turbowasm_status turbowasm_validate_fc(
     }
 }
 
+static turbowasm_status turbowasm_validate_atomic_memarg(
+    turbowasm_reader *body,
+    const turbowasm_validation_context *context,
+    const turbowasm_atomic_descriptor *descriptor) {
+    uint32_t flags;
+    uint32_t memory_index = 0u;
+    uint32_t offset;
+    uint32_t alignment;
+
+    if (body == NULL || context == NULL || descriptor == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!turbowasm_reader_uleb32(body, &flags) ||
+        flags >= UINT32_C(0x80))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if ((flags & UINT32_C(0x40)) != 0u &&
+        !turbowasm_reader_uleb32(body, &memory_index))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    if (!turbowasm_reader_uleb32(body, &offset))
+        return TURBOWASM_MALFORMED_MODULE;
+    (void)offset;
+
+    if (memory_index >= context->memory_count)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    alignment = flags & UINT32_C(0x3f);
+    return alignment == descriptor->alignment_log2
+        ? TURBOWASM_OK
+        : TURBOWASM_MALFORMED_MODULE;
+}
+
+static turbowasm_status turbowasm_validate_atomic(
+    turbowasm_reader *body,
+    turbowasm_type_stack *stack,
+    const turbowasm_validation_context *context) {
+    const turbowasm_atomic_descriptor *descriptor;
+    uint32_t subopcode;
+    uint8_t type;
+    turbowasm_status status;
+
+    if (body == NULL || stack == NULL || context == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!turbowasm_reader_uleb32(body, &subopcode))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    descriptor = turbowasm_atomic_descriptor_find(subopcode);
+    if (descriptor == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    status = turbowasm_validate_atomic_memarg(
+        body, context, descriptor);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    type = descriptor->value_type == TURBOWASM_ATOMIC_I32
+        ? TW_I32
+        : TW_I64;
+
+    switch (descriptor->kind) {
+        case TURBOWASM_ATOMIC_LOAD:
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_push(stack, type);
+
+        case TURBOWASM_ATOMIC_STORE:
+            status = turbowasm_stack_pop(stack, type);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_pop(stack, TW_I32);
+
+        case TURBOWASM_ATOMIC_RMW:
+            status = turbowasm_stack_pop(stack, type);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_push(stack, type);
+
+        case TURBOWASM_ATOMIC_CMPXCHG:
+            status = turbowasm_stack_pop(stack, type);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, type);
+            if (status != TURBOWASM_OK)
+                return status;
+            status = turbowasm_stack_pop(stack, TW_I32);
+            if (status != TURBOWASM_OK)
+                return status;
+            return turbowasm_stack_push(stack, type);
+
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+}
+
 static turbowasm_status turbowasm_validate_simd_descriptor(
     turbowasm_reader *body,
     turbowasm_type_stack *stack,
@@ -2561,6 +2662,11 @@ turbowasm_status turbowasm_validate_function_body(
                 break;
             case 0xfdu:
                 result = turbowasm_validate_simd(
+                    body, &stack, context);
+                if (result != TURBOWASM_OK) goto done;
+                break;
+            case 0xfeu:
+                result = turbowasm_validate_atomic(
                     body, &stack, context);
                 if (result != TURBOWASM_OK) goto done;
                 break;
