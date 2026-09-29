@@ -629,7 +629,7 @@ void turbowasm_wasi_threads_proc_exit(
         impl, caller, exit_code);
 }
 
-bool turbowasm_wasi_threads_group_exit(
+bool turbowasm_wasi_threads_group_exit_code(
     const turbowasm_wasi_threads *threads,
     uint32_t *out_exit_code) {
     turbowasm_wasi_threads_impl *impl;
