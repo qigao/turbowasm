@@ -20,6 +20,8 @@ option(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER
   "Build optional legacy WASI Preview1 threads adapter" ON)
 option(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER
   "Build optional WASI Preview1 NativeIO fd adapter" ON)
+option(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER
+  "Build optional Salts-backed WASI filesystem provider" ON)
 option(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER
   "Build optional littlefs-backed WASI filesystem provider" OFF)
 set(TURBOWASM_LITTLEFS_SOURCE_DIR "" CACHE PATH
@@ -172,6 +174,37 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
   endif()
 endif()
 
+if(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER)
+  if(NOT TURBOWASM_ENABLE_WASI_ADAPTER)
+    message(FATAL_ERROR
+      "TurboWasm WASIHostFS requires the WASI adapter")
+  endif()
+  if(NOT TARGET Salts::Core)
+    message(FATAL_ERROR
+      "TurboWasm WASIHostFS requires a Salts SDK that exports Salts::Core")
+  endif()
+
+  add_library(turbowasm_wasi_host_fs
+    src/wasi_host_fs.c)
+  add_library(TurboWasm::WASIHostFS ALIAS turbowasm_wasi_host_fs)
+  set_target_properties(turbowasm_wasi_host_fs PROPERTIES
+    EXPORT_NAME WASIHostFS)
+  target_compile_features(turbowasm_wasi_host_fs PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi_host_fs
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>)
+  target_link_libraries(turbowasm_wasi_host_fs
+    PUBLIC TurboWasm::WASI
+    PRIVATE Salts::Core)
+
+  if(MSVC)
+    target_compile_options(turbowasm_wasi_host_fs PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_wasi_host_fs PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
 if(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER)
   if(NOT TURBOWASM_ENABLE_WASI_ADAPTER)
     message(FATAL_ERROR
@@ -354,6 +387,14 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
+if(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER)
+  install(
+    TARGETS turbowasm_wasi_host_fs
+    EXPORT TurboWasmTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 if(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER)
   install(
     TARGETS turbowasm_wasi_littlefs
