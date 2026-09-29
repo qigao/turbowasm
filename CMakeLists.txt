@@ -65,6 +65,7 @@ add_library(turbowasm
   src/component_binary.c
   src/component_canonical.c
   src/component_core_call.c
+  src/component_exec.c
   src/component_resource.c
   src/component_resource_binding.c
   src/component_type_graph.c
