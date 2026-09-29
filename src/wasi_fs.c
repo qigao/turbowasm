@@ -527,6 +527,39 @@ uint32_t turbowasm_wasi_fs_fd_stat(
         out_stat);
 }
 
+uint32_t turbowasm_wasi_fs_path_stat(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    uint32_t lookup_flags,
+    const uint8_t *path,
+    size_t path_length,
+    turbowasm_wasi_fs_stat *out_stat) {
+    turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_mut(filesystem);
+    turbowasm_wasi_fs_slot *directory =
+        turbowasm_wasi_fs_find_fd(impl, directory_fd);
+
+    if (out_stat == NULL ||
+        (path_length != 0u && path == NULL))
+        return TURBOWASM_WASI_ERRNO_INVAL;
+    *out_stat = (turbowasm_wasi_fs_stat){0};
+    if (directory == NULL)
+        return TURBOWASM_WASI_ERRNO_BADF;
+    if ((directory->rights_base &
+         TURBOWASM_WASI_RIGHT_PATH_FILESTAT_GET) == 0u)
+        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+    if (impl->provider.path_stat == NULL)
+        return TURBOWASM_WASI_ERRNO_NOSYS;
+
+    return impl->provider.path_stat(
+        impl->provider.context,
+        directory->file,
+        lookup_flags,
+        path,
+        path_length,
+        out_stat);
+}
+
 uint32_t turbowasm_wasi_fs_fd_write(
     void *context,
     uint32_t fd,
