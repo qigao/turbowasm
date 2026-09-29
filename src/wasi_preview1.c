@@ -60,7 +60,7 @@ static turbowasm_status turbowasm_wasi_string_list_copy(
     size_t index;
 
     if (out == NULL ||
-        count > UINT32_MAX ||
+        count > UINT32_MAX / 4u ||
         (count != 0u && items == NULL))
         return TURBOWASM_INVALID_ARGUMENT;
 
