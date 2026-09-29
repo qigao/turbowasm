@@ -88,6 +88,11 @@ struct turbowasm_component_value {
         uint32_t character;
         turbowasm_component_owned_bytes string;
         turbowasm_component_value_list list;
+        /*
+         * Abstract Component resource value. Canonical Core handles are
+         * created/consumed only at a resource-table boundary.
+         */
+        turbowasm_value resource_rep;
     } as;
 };
 
