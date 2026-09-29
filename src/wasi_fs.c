@@ -489,7 +489,8 @@ uint32_t turbowasm_wasi_fs_fd_tell(
     if (slot == NULL)
         return TURBOWASM_WASI_ERRNO_BADF;
     if ((slot->rights_base &
-         TURBOWASM_WASI_RIGHT_FD_TELL) == 0u)
+         (TURBOWASM_WASI_RIGHT_FD_TELL |
+          TURBOWASM_WASI_RIGHT_FD_SEEK)) == 0u)
         return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
     if (impl->provider.tell == NULL)
         return TURBOWASM_WASI_ERRNO_NOSYS;
