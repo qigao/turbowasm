@@ -30,10 +30,15 @@ typedef struct turbowasm_component_core_instance_def {
     uint32_t module_index;
 } turbowasm_component_core_instance_def;
 
+typedef struct turbowasm_component_name {
+    const uint8_t *bytes;
+    uint32_t size;
+} turbowasm_component_name;
+
 typedef struct turbowasm_component_core_function_alias {
     uint32_t core_function_index;
     uint32_t instance_index;
-    struct turbowasm_component_name name;
+    turbowasm_component_name name;
 } turbowasm_component_core_function_alias;
 
 typedef struct turbowasm_component_canon_lift {
@@ -41,11 +46,6 @@ typedef struct turbowasm_component_canon_lift {
     uint32_t core_function_index;
     uint32_t type_index;
 } turbowasm_component_canon_lift;
-
-typedef struct turbowasm_component_name {
-    const uint8_t *bytes;
-    uint32_t size;
-} turbowasm_component_name;
 
 typedef enum turbowasm_component_external_kind {
     TURBOWASM_COMPONENT_EXTERN_CORE_MODULE = 0,
