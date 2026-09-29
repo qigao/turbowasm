@@ -795,26 +795,14 @@ static turbowasm_status guest_allocate(
         0u, 0u, alignment, size, out_pointer);
 }
 
-static turbowasm_status lift_string(
+static turbowasm_status lift_string_range(
     const turbowasm_component_canonical_memory *memory,
     turbowasm_instance_impl *instance,
-    uint64_t address,
+    uint64_t pointer,
+    uint64_t length,
     turbowasm_component_value *out) {
-    uint64_t pointer;
-    uint64_t length;
-    uint64_t ptr_width = pointer_size(memory->pointer_type);
     turbowasm_status status;
     uint8_t *copy = NULL;
-
-    status = read_pointer(instance, memory, address, &pointer);
-    if (status != TURBOWASM_OK)
-        return status;
-    if (address > UINT64_MAX - ptr_width)
-        return TURBOWASM_TRAPPED;
-    status = read_pointer(
-        instance, memory, address + ptr_width, &length);
-    if (status != TURBOWASM_OK)
-        return status;
 
     if (length > TURBOWASM_COMPONENT_MAX_STRING_BYTE_LENGTH ||
         length > (uint64_t)SIZE_MAX)
@@ -853,16 +841,40 @@ static turbowasm_status lift_string(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status lower_string(
+static turbowasm_status lift_string(
     const turbowasm_component_canonical_memory *memory,
     turbowasm_instance_impl *instance,
     uint64_t address,
-    const turbowasm_component_value *value) {
-    uint64_t pointer = 0u;
+    turbowasm_component_value *out) {
+    uint64_t pointer;
+    uint64_t length;
     uint64_t ptr_width = pointer_size(memory->pointer_type);
     turbowasm_status status;
 
-    if (value == NULL ||
+    status = read_pointer(instance, memory, address, &pointer);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (address > UINT64_MAX - ptr_width)
+        return TURBOWASM_TRAPPED;
+    status = read_pointer(
+        instance, memory, address + ptr_width, &length);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    return lift_string_range(
+        memory, instance, pointer, length, out);
+}
+
+static turbowasm_status lower_string_range(
+    const turbowasm_component_canonical_memory *memory,
+    turbowasm_instance_impl *instance,
+    const turbowasm_component_value *value,
+    uint64_t *out_pointer,
+    uint64_t *out_length) {
+    uint64_t pointer = 0u;
+    turbowasm_status status;
+
+    if (value == NULL || out_pointer == NULL || out_length == NULL ||
         value->kind != TURBOWASM_COMPONENT_TYPE_STRING)
         return TURBOWASM_TYPE_MISMATCH;
     if (value->as.string.size >
@@ -884,29 +896,46 @@ static turbowasm_status lower_string(
             return status;
     }
 
+    *out_pointer = pointer;
+    *out_length = (uint64_t)value->as.string.size;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status lower_string(
+    const turbowasm_component_canonical_memory *memory,
+    turbowasm_instance_impl *instance,
+    uint64_t address,
+    const turbowasm_component_value *value) {
+    uint64_t pointer;
+    uint64_t length;
+    uint64_t ptr_width = pointer_size(memory->pointer_type);
+    turbowasm_status status;
+
+    status = lower_string_range(
+        memory, instance, value, &pointer, &length);
+    if (status != TURBOWASM_OK)
+        return status;
+
     status = write_pointer(instance, memory, address, pointer);
     if (status != TURBOWASM_OK)
         return status;
     if (address > UINT64_MAX - ptr_width)
         return TURBOWASM_TRAPPED;
     return write_pointer(
-        instance, memory, address + ptr_width,
-        (uint64_t)value->as.string.size);
+        instance, memory, address + ptr_width, length);
 }
 
-static turbowasm_status lift_list(
+static turbowasm_status lift_list_range(
     const turbowasm_component_type_graph *graph,
     const turbowasm_component_type *type,
     const turbowasm_component_canonical_memory *memory,
     turbowasm_instance_impl *instance,
-    uint64_t address,
+    uint64_t pointer,
+    uint64_t count,
     uint32_t depth,
     turbowasm_component_value *out) {
     turbowasm_component_layout layout;
-    uint64_t pointer;
-    uint64_t count;
     uint64_t bytes;
-    uint64_t ptr_width = pointer_size(memory->pointer_type);
     uint64_t i;
     turbowasm_component_value *items = NULL;
     turbowasm_status status;
@@ -920,16 +949,6 @@ static turbowasm_status lift_list(
         return status;
     if (layout.size == 0u)
         return TURBOWASM_MALFORMED_MODULE;
-
-    status = read_pointer(instance, memory, address, &pointer);
-    if (status != TURBOWASM_OK)
-        return status;
-    if (address > UINT64_MAX - ptr_width)
-        return TURBOWASM_TRAPPED;
-    status = read_pointer(
-        instance, memory, address + ptr_width, &count);
-    if (status != TURBOWASM_OK)
-        return status;
 
     if (count != 0u && layout.size > UINT64_MAX / count)
         return TURBOWASM_TRAPPED;
@@ -981,23 +1000,52 @@ static turbowasm_status lift_list(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status lower_list(
+static turbowasm_status lift_list(
     const turbowasm_component_type_graph *graph,
     const turbowasm_component_type *type,
     const turbowasm_component_canonical_memory *memory,
     turbowasm_instance_impl *instance,
     uint64_t address,
     uint32_t depth,
-    const turbowasm_component_value *value) {
+    turbowasm_component_value *out) {
+    uint64_t pointer;
+    uint64_t count;
+    uint64_t ptr_width = pointer_size(memory->pointer_type);
+    turbowasm_status status;
+
+    status = read_pointer(instance, memory, address, &pointer);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (address > UINT64_MAX - ptr_width)
+        return TURBOWASM_TRAPPED;
+    status = read_pointer(
+        instance, memory, address + ptr_width, &count);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    return lift_list_range(
+        graph, type, memory, instance,
+        pointer, count, depth, out);
+}
+
+static turbowasm_status lower_list_range(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    const turbowasm_component_canonical_memory *memory,
+    turbowasm_instance_impl *instance,
+    uint32_t depth,
+    const turbowasm_component_value *value,
+    uint64_t *out_pointer,
+    uint64_t *out_count) {
     turbowasm_component_layout layout;
     uint64_t count;
     uint64_t bytes;
     uint64_t pointer = 0u;
-    uint64_t ptr_width = pointer_size(memory->pointer_type);
     uint64_t i;
     turbowasm_status status;
 
     if (type == NULL || value == NULL ||
+        out_pointer == NULL || out_count == NULL ||
         value->kind != TURBOWASM_COMPONENT_TYPE_LIST)
         return TURBOWASM_TYPE_MISMATCH;
 
@@ -1034,6 +1082,30 @@ static turbowasm_status lower_list(
         if (status != TURBOWASM_OK)
             return status;
     }
+
+    *out_pointer = pointer;
+    *out_count = count;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status lower_list(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    const turbowasm_component_canonical_memory *memory,
+    turbowasm_instance_impl *instance,
+    uint64_t address,
+    uint32_t depth,
+    const turbowasm_component_value *value) {
+    uint64_t pointer;
+    uint64_t count;
+    uint64_t ptr_width = pointer_size(memory->pointer_type);
+    turbowasm_status status;
+
+    status = lower_list_range(
+        graph, type, memory, instance,
+        depth, value, &pointer, &count);
+    if (status != TURBOWASM_OK)
+        return status;
 
     status = write_pointer(instance, memory, address, pointer);
     if (status != TURBOWASM_OK)
