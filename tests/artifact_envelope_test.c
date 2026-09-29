@@ -207,8 +207,10 @@ static void test_core_metadata_round_trip(void) {
                metadata_module_bytes,sizeof(metadata_module_bytes),
                &info)==TURBOWASM_OK);
 
-    assert(info.section_count==2u);
+    assert(info.section_count==3u);
+    assert(info.flags==TURBOWASM_ARTIFACT_FLAG_COMPLETE_METADATA);
     assert(info.has_core_metadata);
+    assert(info.has_state_metadata);
     assert(info.metadata_type_count==1u);
     assert(info.metadata_function_count==2u);
     assert(info.metadata_import_count==1u);
