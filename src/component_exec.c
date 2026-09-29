@@ -787,10 +787,26 @@ static void destroy_partial(
                 &exec->functions[i]);
     }
 
-    if (exec->core_instances != NULL) {
-        for (i = exec->core_instance_count; i != 0u; --i)
-            turbowasm_instance_destroy(
-                &exec->core_instances[i - 1u]);
+    if (exec->resource_bindings != NULL) {
+        for (i = 0u; i < exec->resource_binding_count; ++i)
+            turbowasm_component_resource_binding_destroy(
+                &exec->resource_bindings[i]);
+    }
+
+    turbowasm_component_resource_table_destroy(
+        &exec->resource_table);
+
+    if (exec->core_instances != NULL &&
+        exec->binary != NULL) {
+        for (i = exec->core_instance_count; i != 0u; --i) {
+            uint32_t index = i - 1u;
+            if (index < exec->binary->core_instance_count &&
+                exec->binary->core_instances[index].kind ==
+                    TURBOWASM_COMPONENT_CORE_INSTANCE_INSTANTIATE) {
+                turbowasm_instance_destroy(
+                    &exec->core_instances[index]);
+            }
+        }
     }
 
     if (exec->core_modules != NULL) {
@@ -801,6 +817,9 @@ static void destroy_partial(
 
     turbowasm_rt_free(exec->functions);
     turbowasm_rt_free(exec->realloc_contexts);
+    turbowasm_rt_free(exec->resource_builtin_contexts);
+    turbowasm_rt_free(exec->resource_contexts);
+    turbowasm_rt_free(exec->resource_bindings);
     turbowasm_rt_free(exec->core_memories);
     turbowasm_rt_free(exec->core_functions);
     turbowasm_rt_free(exec->core_instances);
