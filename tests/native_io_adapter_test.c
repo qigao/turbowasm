@@ -12,7 +12,10 @@
 #include <stdint.h>
 #include <string.h>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <stdio.h>
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <unistd.h>
 #endif
@@ -46,8 +49,6 @@ static void test_bridge_lifecycle(void) {
     assert(native_io_backend_close(&backend) == SALTS_OK);
     assert(native_io_backend_destroy(&backend) == SALTS_OK);
 }
-
-#if !defined(_WIN32)
 
 typedef struct io_host_context {
     turbowasm_native_io_bridge *bridge;
@@ -164,11 +165,13 @@ static const uint8_t host_read_module[] = {
     0x00, 0x00
 };
 
+#if !defined(_WIN32)
 static void make_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     assert(flags >= 0);
     assert(fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0);
 }
+#endif
 
 static void create_host_instance(
     turbowasm_module *module,
@@ -199,6 +202,7 @@ static void create_host_instance(
     turbowasm_linker_destroy(&linker);
 }
 
+#if !defined(_WIN32)
 static bool run_real_pipe_bridge_and_capacity(
     native_io_backend_kind kind) {
     int descriptors[2] = {-1, -1};
@@ -416,9 +420,209 @@ static void test_real_pipe_cancellation(void) {
 
 #endif /* !_WIN32 */
 
+#if defined(_WIN32)
+
+static void close_windows_pipe(HANDLE handle) {
+    if (handle != NULL && handle != INVALID_HANDLE_VALUE)
+        (void)CloseHandle(handle);
+}
+
+static bool make_windows_pipe_pair(HANDLE pipes[2]) {
+    static LONG sequence = 0;
+    char name[128];
+    OVERLAPPED connect = {0};
+    HANDLE event = NULL;
+    DWORD error = ERROR_SUCCESS;
+    BOOL pending = FALSE;
+    int length;
+
+    if (pipes == NULL)
+        return false;
+
+    pipes[0] = INVALID_HANDLE_VALUE;
+    pipes[1] = INVALID_HANDLE_VALUE;
+
+    length = snprintf(
+        name, sizeof(name),
+        "\\\\.\\pipe\\turbowasm-native-io-%lu-%ld",
+        GetCurrentProcessId(),
+        InterlockedIncrement(&sequence));
+    if (length < 0 || (size_t)length >= sizeof(name))
+        return false;
+
+    pipes[0] = CreateNamedPipeA(
+        name,
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        1u,
+        4096u,
+        4096u,
+        0u,
+        NULL);
+    if (pipes[0] == INVALID_HANDLE_VALUE)
+        return false;
+
+    event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (event == NULL)
+        goto failed;
+    connect.hEvent = event;
+
+    if (!ConnectNamedPipe(pipes[0], &connect)) {
+        error = GetLastError();
+        if (error == ERROR_IO_PENDING) {
+            pending = TRUE;
+        } else if (error != ERROR_PIPE_CONNECTED) {
+            goto failed;
+        }
+    }
+
+    pipes[1] = CreateFileA(
+        name,
+        GENERIC_READ | GENERIC_WRITE,
+        0u,
+        NULL,
+        OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED,
+        NULL);
+    if (pipes[1] == INVALID_HANDLE_VALUE)
+        goto failed;
+
+    if (pending) {
+        DWORD transferred = 0u;
+        if (!GetOverlappedResult(
+                pipes[0], &connect,
+                &transferred, TRUE))
+            goto failed;
+    }
+
+    (void)CloseHandle(event);
+    return true;
+
+failed:
+    close_windows_pipe(pipes[1]);
+    close_windows_pipe(pipes[0]);
+    if (event != NULL)
+        (void)CloseHandle(event);
+    pipes[0] = INVALID_HANDLE_VALUE;
+    pipes[1] = INVALID_HANDLE_VALUE;
+    return false;
+}
+
+static void windows_write_byte(
+    HANDLE handle,
+    unsigned char value) {
+    OVERLAPPED operation = {0};
+    HANDLE event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    DWORD transferred = 0u;
+    BOOL completed;
+
+    assert(event != NULL);
+    operation.hEvent = event;
+
+    completed = WriteFile(
+        handle, &value, 1u,
+        &transferred, &operation);
+    if (!completed) {
+        DWORD error = GetLastError();
+        assert(error == ERROR_IO_PENDING);
+        assert(GetOverlappedResult(
+            handle, &operation,
+            &transferred, TRUE));
+    }
+    assert(transferred == 1u);
+    (void)CloseHandle(event);
+}
+
+static void test_windows_iocp_host_wait_bridge(void) {
+    HANDLE pipes[2] = {
+        INVALID_HANDLE_VALUE,
+        INVALID_HANDLE_VALUE
+    };
+    native_io_backend backend = {0};
+    native_io_endpoint endpoint = {0};
+    turbowasm_native_io_bridge bridge = {0};
+    const native_io_backend_config config = {
+        NATIVE_IO_BACKEND_IOCP, 1u, 2u, 2u
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_execution execution = {0};
+    io_host_context host = {0};
+    native_io_completion event = {0};
+    size_t event_count = 0u;
+    const turbowasm_value *result;
+    unsigned char payload = 0x2au;
+
+    assert(make_windows_pipe_pair(pipes));
+    assert(native_io_backend_init(
+               &backend, &config) == SALTS_OK);
+    assert(native_io_backend_attach_pipe(
+               &backend,
+               (uintptr_t)pipes[0],
+               NATIVE_IO_PIPE_ENDPOINT_ASYNC_CAPABLE,
+               &endpoint) == SALTS_OK);
+    assert(turbowasm_native_io_bridge_init(
+               &bridge, &backend, 1u) == SALTS_OK);
+
+    host.bridge = &bridge;
+    host.endpoint = endpoint;
+    create_host_instance(
+        &module, &instance, &host, host_read_one);
+
+    assert(turbowasm_execution_create(
+               &execution, &instance, 0u,
+               NULL, 0u) == TURBOWASM_OK);
+    assert(turbowasm_execution_resume(
+               &execution, NULL) == TURBOWASM_YIELDED);
+    assert(turbowasm_execution_yield_reason_get(
+               &execution) == TURBOWASM_YIELD_HOST_WAIT);
+    assert(host.calls == 1u);
+
+    windows_write_byte(pipes[1], payload);
+
+    assert(native_io_backend_observe(
+               &backend,
+               &event, 1u, 1000u,
+               &event_count) == SALTS_OK);
+    assert(event_count == 1u);
+    assert(event.kind == NATIVE_IO_COMPLETION_OK);
+    assert(event.bytes == 1u);
+
+    assert(turbowasm_native_io_bridge_complete(
+               &bridge, &event) == SALTS_OK);
+    assert(turbowasm_execution_resume(
+               &execution, NULL) == TURBOWASM_OK);
+
+    result = turbowasm_execution_result_at(
+        &execution, 0u);
+    assert(result != NULL);
+    assert(result->kind == TURBOWASM_VALUE_I32);
+    assert(result->as.i32 == 42);
+    assert(host.await_status == SALTS_OK);
+    assert(host.calls == 1u);
+
+    turbowasm_execution_destroy(&execution);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+    assert(turbowasm_native_io_bridge_destroy(
+               &bridge) == SALTS_OK);
+    assert(native_io_backend_release_pipe(
+               &backend, endpoint) == SALTS_OK);
+    close_windows_pipe(pipes[1]);
+    close_windows_pipe(pipes[0]);
+    assert(native_io_backend_close(
+               &backend) == SALTS_OK);
+    assert(native_io_backend_destroy(
+               &backend) == SALTS_OK);
+}
+
+#endif /* _WIN32 */
+
 int main(void) {
     test_bridge_lifecycle();
-#if !defined(_WIN32)
+#if defined(_WIN32)
+    test_windows_iocp_host_wait_bridge();
+#else
     assert(run_real_pipe_bridge_and_capacity(
         test_backend_kind()));
     test_real_pipe_cancellation();
