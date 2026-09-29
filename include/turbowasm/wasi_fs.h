@@ -39,6 +39,13 @@ typedef struct turbowasm_wasi_fs_stat {
     uint64_t size;
     uint64_t modified_ns;
     uint8_t file_type;
+
+    /* Appended full Preview1 filestat fields; zero is allowed when unknown. */
+    uint64_t device;
+    uint64_t inode;
+    uint64_t link_count;
+    uint64_t accessed_ns;
+    uint64_t changed_ns;
 } turbowasm_wasi_fs_stat;
 
 typedef uint32_t (*turbowasm_wasi_fs_close_fn)(
@@ -199,6 +206,23 @@ uint32_t turbowasm_wasi_fs_fd_write(
     const turbowasm_wasi_const_buffer *buffers,
     size_t buffer_count,
     uint32_t *out_written);
+
+uint32_t turbowasm_wasi_fs_fd_seek(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t fd,
+    int64_t offset,
+    uint8_t whence,
+    uint64_t *out_offset);
+
+uint32_t turbowasm_wasi_fs_fd_tell(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t fd,
+    uint64_t *out_offset);
+
+uint32_t turbowasm_wasi_fs_fd_stat(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t fd,
+    turbowasm_wasi_fs_stat *out_stat);
 
 #ifdef __cplusplus
 }
