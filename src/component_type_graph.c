@@ -10,6 +10,44 @@ static bool scalar_kind(turbowasm_component_type_kind kind) {
            kind <= TURBOWASM_COMPONENT_TYPE_CHAR;
 }
 
+static bool inline_kind(turbowasm_component_type_kind kind) {
+    return scalar_kind(kind) ||
+           kind == TURBOWASM_COMPONENT_TYPE_STRING;
+}
+
+turbowasm_component_type_ref turbowasm_component_type_ref_indexed(
+    turbowasm_component_type_id id) {
+    turbowasm_component_type_ref ref;
+    memset(&ref, 0, sizeof(ref));
+    ref.kind = TURBOWASM_COMPONENT_TYPE_REF_INDEXED;
+    ref.as.indexed = id;
+    return ref;
+}
+
+turbowasm_component_type_ref turbowasm_component_type_ref_inline(
+    turbowasm_component_type_kind kind) {
+    turbowasm_component_type_ref ref;
+    memset(&ref, 0, sizeof(ref));
+    ref.kind = TURBOWASM_COMPONENT_TYPE_REF_INLINE;
+    ref.as.inline_type = kind;
+    return ref;
+}
+
+bool turbowasm_component_type_ref_validate(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref) {
+    if (graph == NULL)
+        return false;
+    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE)
+        return inline_kind(ref.as.inline_type);
+    if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED ||
+        ref.as.indexed >= graph->count ||
+        graph->types == NULL)
+        return false;
+    return graph->types[ref.as.indexed].kind !=
+           TURBOWASM_COMPONENT_TYPE_UNDEFINED;
+}
+
 static turbowasm_component_type *slot(
     turbowasm_component_type_graph *graph,
     turbowasm_component_type_id id) {
@@ -40,8 +78,22 @@ bool turbowasm_component_type_graph_allocate(
 
 void turbowasm_component_type_graph_destroy(
     turbowasm_component_type_graph *graph) {
+    uint32_t index;
+
     if (graph == NULL)
         return;
+
+    if (graph->types != NULL) {
+        for (index = 0u; index < graph->count; ++index) {
+            if (graph->types[index].kind ==
+                    TURBOWASM_COMPONENT_TYPE_FUNCTION) {
+                turbowasm_rt_free(
+                    graph->types[index].as.function.params);
+                graph->types[index].as.function.params = NULL;
+            }
+        }
+    }
+
     turbowasm_rt_free(graph->types);
     memset(graph, 0, sizeof(*graph));
 }
@@ -71,18 +123,96 @@ bool turbowasm_component_type_graph_define_string(
     return true;
 }
 
+bool turbowasm_component_type_graph_define_list_ref(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_type_ref element_type) {
+    turbowasm_component_type *type = slot(graph, id);
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED)
+        return false;
+
+    if (element_type.kind ==
+            TURBOWASM_COMPONENT_TYPE_REF_INDEXED) {
+        if (element_type.as.indexed >= graph->count)
+            return false;
+    } else if (element_type.kind ==
+                   TURBOWASM_COMPONENT_TYPE_REF_INLINE) {
+        if (!inline_kind(element_type.as.inline_type))
+            return false;
+    } else {
+        return false;
+    }
+
+    type->kind = TURBOWASM_COMPONENT_TYPE_LIST;
+    type->as.list.element_type = element_type;
+    return true;
+}
+
 bool turbowasm_component_type_graph_define_list(
     turbowasm_component_type_graph *graph,
     turbowasm_component_type_id id,
     turbowasm_component_type_id element_type) {
-    turbowasm_component_type *type = slot(graph, id);
+    return turbowasm_component_type_graph_define_list_ref(
+        graph, id,
+        turbowasm_component_type_ref_indexed(element_type));
+}
 
-    if (type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
-        element_type >= graph->count)
+bool turbowasm_component_type_graph_define_function(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_type_ref *params,
+    uint32_t param_count,
+    bool has_result,
+    turbowasm_component_type_ref result) {
+    turbowasm_component_type *type = slot(graph, id);
+    turbowasm_component_type_ref *copy = NULL;
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        (param_count != 0u && params == NULL))
         return false;
 
-    type->kind = TURBOWASM_COMPONENT_TYPE_LIST;
-    type->as.list.element_type = element_type;
+    if (param_count != 0u) {
+        if ((size_t)param_count >
+            SIZE_MAX / sizeof(*copy))
+            return false;
+        copy = (turbowasm_component_type_ref *)turbowasm_rt_malloc(
+            (size_t)param_count * sizeof(*copy));
+        if (copy == NULL)
+            return false;
+        memcpy(copy, params,
+               (size_t)param_count * sizeof(*copy));
+    }
+
+    type->kind = TURBOWASM_COMPONENT_TYPE_FUNCTION;
+    type->as.function.params = copy;
+    type->as.function.param_count = param_count;
+    type->as.function.has_result = has_result;
+    type->as.function.result = result;
+    return true;
+}
+
+bool turbowasm_component_type_graph_define_resource_full(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    uint64_t nominal_identity,
+    uint8_t rep_type,
+    bool has_destructor,
+    uint32_t destructor_index) {
+    turbowasm_component_type *type = slot(graph, id);
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        nominal_identity == 0u)
+        return false;
+
+    type->kind = TURBOWASM_COMPONENT_TYPE_RESOURCE;
+    type->as.resource.identity = nominal_identity;
+    type->as.resource.rep_type = rep_type;
+    type->as.resource.has_destructor = has_destructor;
+    type->as.resource.destructor_index = destructor_index;
     return true;
 }
 
@@ -90,15 +220,8 @@ bool turbowasm_component_type_graph_define_resource(
     turbowasm_component_type_graph *graph,
     turbowasm_component_type_id id,
     uint64_t nominal_identity) {
-    turbowasm_component_type *type = slot(graph, id);
-
-    if (type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
-        nominal_identity == 0u)
-        return false;
-
-    type->kind = TURBOWASM_COMPONENT_TYPE_RESOURCE;
-    type->as.resource.identity = nominal_identity;
-    return true;
+    return turbowasm_component_type_graph_define_resource_full(
+        graph, id, nominal_identity, 0u, false, UINT32_MAX);
 }
 
 bool turbowasm_component_type_graph_define_handle(
@@ -144,9 +267,27 @@ bool turbowasm_component_type_graph_validate(
 
         switch (type->kind) {
             case TURBOWASM_COMPONENT_TYPE_LIST:
-                if (type->as.list.element_type >= graph->count)
+                if (!turbowasm_component_type_ref_validate(
+                        graph, type->as.list.element_type))
                     return false;
                 break;
+
+            case TURBOWASM_COMPONENT_TYPE_FUNCTION: {
+                uint32_t param_index;
+                for (param_index = 0u;
+                     param_index < type->as.function.param_count;
+                     ++param_index) {
+                    if (!turbowasm_component_type_ref_validate(
+                            graph,
+                            type->as.function.params[param_index]))
+                        return false;
+                }
+                if (type->as.function.has_result &&
+                    !turbowasm_component_type_ref_validate(
+                        graph, type->as.function.result))
+                    return false;
+                break;
+            }
 
             case TURBOWASM_COMPONENT_TYPE_RESOURCE:
                 if (type->as.resource.identity == 0u)
