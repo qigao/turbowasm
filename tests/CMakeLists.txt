@@ -173,6 +173,17 @@ set_target_properties(turbowasm_memory64_validation_test PROPERTIES
 add_test(NAME turbowasm_memory64_validation_test
          COMMAND turbowasm_memory64_validation_test)
 
+add_executable(turbowasm_memory64_runtime_test
+  memory64_runtime_test.c)
+target_link_libraries(turbowasm_memory64_runtime_test
+  PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_memory64_runtime_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_memory64_runtime_test
+         COMMAND turbowasm_memory64_runtime_test)
+
 add_executable(turbowasm_multi_memory_scalar_test
   multi_memory_scalar_test.c)
 target_link_libraries(turbowasm_multi_memory_scalar_test
