@@ -1,5 +1,5 @@
 add_executable(turbowasm_spec_runner spec_runner.c)
-target_link_libraries(turbowasm_spec_runner PRIVATE TurboWasm::Runtime)
+target_link_libraries(turbowasm_spec_runner PRIVATE\n  TurboWasm::Runtime Salts::Platform)
 target_include_directories(turbowasm_spec_runner
   PRIVATE "${PROJECT_SOURCE_DIR}/src")
 set_target_properties(turbowasm_spec_runner PROPERTIES
