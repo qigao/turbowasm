@@ -24,6 +24,8 @@ TRAP_MAP = [
     ("integer divide by zero", 3),
     ("integer overflow", 4),
     ("invalid conversion to integer", 9),
+    ("unaligned atomic", 11),
+    ("expected shared memory", 12),
     ("out of bounds memory access", 5),
     ("out of bounds table access", 6),
     ("undefined element", 6),
