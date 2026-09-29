@@ -1,6 +1,5 @@
 {
   "name": "qigao-turbowasm-spec-tools-cache",
-  "version-string": "1",
   "description": "Host WABT tooling profile for TurboWasm WebAssembly spec conformance conversion.",
   "dependencies": [
     {
