@@ -296,7 +296,6 @@ static uint32_t host_close(
     turbowasm_wasi_host_fs_impl *impl =
         (turbowasm_wasi_host_fs_impl *)context;
     turbowasm_wasi_host_fs_slot *slot;
-    int result = 0;
 
     if (impl == NULL)
         return TURBOWASM_WASI_ERRNO_INVAL;
@@ -305,21 +304,35 @@ static uint32_t host_close(
             return TURBOWASM_WASI_ERRNO_BADF;
         impl->root_open = false;
         if (impl->root_dir != NULL) {
-            result = salts_fs_root_closedir(impl->root_dir);
+            /*
+             * Salts root-directory close consumes the opaque identity even
+             * when the native close reports an error. Propagating that error
+             * would make turbowasm_wasi_fs retain a descriptor whose provider
+             * identity no longer exists, so HostFS close is ownership-
+             * consuming and reports success once the close was attempted.
+             */
+            (void)salts_fs_root_closedir(impl->root_dir);
             impl->root_dir = NULL;
         }
-        return host_errno(result);
+        return TURBOWASM_WASI_ERRNO_SUCCESS;
     }
 
     slot = host_slot_from_file(impl, file);
     if (slot == NULL)
         return TURBOWASM_WASI_ERRNO_BADF;
+
+    /*
+     * salts_fs_root_file_close()/closedir() always consume their opaque
+     * object, including native-close failure paths. Release the HostFS slot in
+     * the same operation and report success so the upper descriptor table
+     * cannot retain a dangling provider identity and retry an unsafe close.
+     */
     if (slot->directory)
-        result = salts_fs_root_closedir(slot->dir);
+        (void)salts_fs_root_closedir(slot->dir);
     else
-        result = salts_fs_root_file_close(slot->file);
+        (void)salts_fs_root_file_close(slot->file);
     host_release_slot(slot);
-    return host_errno(result);
+    return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
 static uint32_t host_read(
