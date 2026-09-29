@@ -2448,8 +2448,10 @@ static turbowasm_status turbowasm_exec_memory_load(
     turbowasm_value out = {0};
     uint32_t memory_index;
     uint32_t offset;
+    uint8_t shared_bytes[8] = {0};
     uint8_t *p;
     size_t width;
+    bool shared = false;
     turbowasm_status status;
 
     status = turbowasm_exec_read_indexed_memarg(
@@ -2474,9 +2476,23 @@ static turbowasm_status turbowasm_exec_memory_load(
         default: return TURBOWASM_UNSUPPORTED;
     }
 
-    status = turbowasm_instance_memory_bounds(
-        instance, memory_index, (uint32_t)address.as.i32,
-        offset, width, &p);
+    status = turbowasm_instance_memory_shared(
+        instance, memory_index, &shared);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (shared) {
+        status = turbowasm_instance_memory_read_bytes(
+            instance, memory_index,
+            (uint32_t)address.as.i32,
+            offset, shared_bytes, width);
+        p = shared_bytes;
+    } else {
+        status = turbowasm_instance_memory_bounds(
+            instance, memory_index,
+            (uint32_t)address.as.i32,
+            offset, width, &p);
+    }
     if (status == TURBOWASM_TRAPPED) {
         *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
         return TURBOWASM_TRAPPED;
@@ -2565,8 +2581,10 @@ static turbowasm_status turbowasm_exec_memory_store(
     turbowasm_value_kind expected;
     uint32_t memory_index;
     uint32_t offset;
+    uint8_t shared_bytes[8] = {0};
     uint8_t *p;
     size_t width;
+    bool shared = false;
     turbowasm_status status;
 
     status = turbowasm_exec_read_indexed_memarg(
@@ -2600,15 +2618,25 @@ static turbowasm_status turbowasm_exec_memory_store(
     if (status != TURBOWASM_OK)
         return status;
 
-    status = turbowasm_instance_memory_bounds(
-        instance, memory_index, (uint32_t)address.as.i32,
-        offset, width, &p);
-    if (status == TURBOWASM_TRAPPED) {
-        *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
-        return TURBOWASM_TRAPPED;
-    }
+    status = turbowasm_instance_memory_shared(
+        instance, memory_index, &shared);
     if (status != TURBOWASM_OK)
         return status;
+
+    if (shared) {
+        p = shared_bytes;
+    } else {
+        status = turbowasm_instance_memory_bounds(
+            instance, memory_index,
+            (uint32_t)address.as.i32,
+            offset, width, &p);
+        if (status == TURBOWASM_TRAPPED) {
+            *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+            return TURBOWASM_TRAPPED;
+        }
+        if (status != TURBOWASM_OK)
+            return status;
+    }
 
     switch (opcode) {
         case 0x36u:
@@ -2646,6 +2674,19 @@ static turbowasm_status turbowasm_exec_memory_store(
             break;
         default:
             return TURBOWASM_UNSUPPORTED;
+    }
+
+    if (shared) {
+        status = turbowasm_instance_memory_write_bytes(
+            instance, memory_index,
+            (uint32_t)address.as.i32,
+            offset, shared_bytes, width);
+        if (status == TURBOWASM_TRAPPED) {
+            *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+            return TURBOWASM_TRAPPED;
+        }
+        if (status != TURBOWASM_OK)
+            return status;
     }
 
     return TURBOWASM_OK;
@@ -3401,8 +3442,10 @@ static turbowasm_status turbowasm_exec_simd_memory(
     turbowasm_value vector_value;
     turbowasm_value out = {0};
     salts_simd_scalar scalar = {0};
+    uint8_t shared_bytes[16] = {0};
     uint8_t *memory;
     turbowasm_status status;
+    bool shared = false;
     bool supported;
 
     if (instance == NULL || reader == NULL ||
@@ -3433,11 +3476,31 @@ static turbowasm_status turbowasm_exec_simd_memory(
     if (status != TURBOWASM_OK)
         return status;
 
-    status = turbowasm_instance_memory_bounds(
-        instance, memory_index,
-        (uint32_t)address.as.i32,
-        offset, descriptor->memory_width,
-        &memory);
+    status = turbowasm_instance_memory_shared(
+        instance, memory_index, &shared);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (shared) {
+        if (descriptor->memory_width > sizeof(shared_bytes))
+            return TURBOWASM_MALFORMED_MODULE;
+        memory = shared_bytes;
+        if (descriptor->kind !=
+            TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE) {
+            status = turbowasm_instance_memory_read_bytes(
+                instance, memory_index,
+                (uint32_t)address.as.i32,
+                offset,
+                shared_bytes,
+                descriptor->memory_width);
+        }
+    } else {
+        status = turbowasm_instance_memory_bounds(
+            instance, memory_index,
+            (uint32_t)address.as.i32,
+            offset, descriptor->memory_width,
+            &memory);
+    }
     if (status == TURBOWASM_TRAPPED) {
         *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
         return TURBOWASM_TRAPPED;
@@ -3456,19 +3519,35 @@ static turbowasm_status turbowasm_exec_simd_memory(
         switch (descriptor->memory_width) {
             case 1u:
                 memory[0] = scalar.u8;
-                return TURBOWASM_OK;
+                break;
             case 2u:
                 turbowasm_write_u16_le(memory, scalar.u16);
-                return TURBOWASM_OK;
+                break;
             case 4u:
                 turbowasm_write_u32_le(memory, scalar.u32);
-                return TURBOWASM_OK;
+                break;
             case 8u:
                 turbowasm_write_u64_le(memory, scalar.u64);
-                return TURBOWASM_OK;
+                break;
             default:
                 return TURBOWASM_MALFORMED_MODULE;
         }
+
+        if (shared) {
+            status = turbowasm_instance_memory_write_bytes(
+                instance, memory_index,
+                (uint32_t)address.as.i32,
+                offset,
+                shared_bytes,
+                descriptor->memory_width);
+            if (status == TURBOWASM_TRAPPED) {
+                *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+                return TURBOWASM_TRAPPED;
+            }
+            if (status != TURBOWASM_OK)
+                return status;
+        }
+        return TURBOWASM_OK;
     }
 
     out.kind = TURBOWASM_VALUE_V128;
@@ -3744,7 +3823,9 @@ static turbowasm_status turbowasm_exec_simd(
             uint32_t offset;
             turbowasm_value address;
             turbowasm_value out = {0};
+            uint8_t shared_bytes[16] = {0};
             uint8_t *source;
+            bool shared = false;
 
             status = turbowasm_exec_read_indexed_memarg(
                 reader, &memory_index, &offset);
@@ -3755,10 +3836,23 @@ static turbowasm_status turbowasm_exec_simd(
             if (status != TURBOWASM_OK)
                 return status;
 
-            status = turbowasm_instance_memory_bounds(
-                instance, memory_index,
-                (uint32_t)address.as.i32,
-                offset, 16u, &source);
+            status = turbowasm_instance_memory_shared(
+                instance, memory_index, &shared);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            if (shared) {
+                status = turbowasm_instance_memory_read_bytes(
+                    instance, memory_index,
+                    (uint32_t)address.as.i32,
+                    offset, shared_bytes, 16u);
+                source = shared_bytes;
+            } else {
+                status = turbowasm_instance_memory_bounds(
+                    instance, memory_index,
+                    (uint32_t)address.as.i32,
+                    offset, 16u, &source);
+            }
             if (status == TURBOWASM_TRAPPED) {
                 *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
                 return TURBOWASM_TRAPPED;
@@ -3777,7 +3871,9 @@ static turbowasm_status turbowasm_exec_simd(
             uint32_t offset;
             turbowasm_value value;
             turbowasm_value address;
+            uint8_t shared_bytes[16] = {0};
             uint8_t *destination;
+            bool shared = false;
 
             status = turbowasm_exec_read_indexed_memarg(
                 reader, &memory_index, &offset);
@@ -3792,19 +3888,41 @@ static turbowasm_status turbowasm_exec_simd(
             if (status != TURBOWASM_OK)
                 return status;
 
-            status = turbowasm_instance_memory_bounds(
-                instance, memory_index,
-                (uint32_t)address.as.i32,
-                offset, 16u, &destination);
-            if (status == TURBOWASM_TRAPPED) {
-                *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
-                return TURBOWASM_TRAPPED;
-            }
+            status = turbowasm_instance_memory_shared(
+                instance, memory_index, &shared);
             if (status != TURBOWASM_OK)
                 return status;
 
+            if (shared) {
+                destination = shared_bytes;
+            } else {
+                status = turbowasm_instance_memory_bounds(
+                    instance, memory_index,
+                    (uint32_t)address.as.i32,
+                    offset, 16u, &destination);
+                if (status == TURBOWASM_TRAPPED) {
+                    *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+                    return TURBOWASM_TRAPPED;
+                }
+                if (status != TURBOWASM_OK)
+                    return status;
+            }
+
             salts_simd_v128_store(
                 destination, &value.as.v128.bits);
+
+            if (shared) {
+                status = turbowasm_instance_memory_write_bytes(
+                    instance, memory_index,
+                    (uint32_t)address.as.i32,
+                    offset, shared_bytes, 16u);
+                if (status == TURBOWASM_TRAPPED) {
+                    *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+                    return TURBOWASM_TRAPPED;
+                }
+                if (status != TURBOWASM_OK)
+                    return status;
+            }
             return TURBOWASM_OK;
         }
 

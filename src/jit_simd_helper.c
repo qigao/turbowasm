@@ -398,7 +398,9 @@ int64_t turbowasm_jit_simd_memory(
     int64_t address,
     int64_t offset) {
     salts_v128 *value;
+    uint8_t shared_bytes[16] = {0};
     uint8_t *memory;
+    bool shared = false;
     turbowasm_status status;
 
     if (context == NULL || context->instance == NULL ||
@@ -416,11 +418,31 @@ int64_t turbowasm_jit_simd_memory(
             context, TURBOWASM_INVALID_ARGUMENT,
             TURBOWASM_TRAP_NONE);
 
+    status = turbowasm_instance_memory_shared(
+        context->instance,
+        (uint32_t)memory_index,
+        &shared);
+    if (status != TURBOWASM_OK) {
+        return turbowasm_jit_simd_status(
+            context, status, TURBOWASM_TRAP_NONE);
+    }
+
     if ((uint32_t)opcode == 0x00u) {
-        status = turbowasm_instance_memory_bounds(
-            context->instance, (uint32_t)memory_index,
-            (uint32_t)address, (uint32_t)offset,
-            16u, &memory);
+        if (shared) {
+            status = turbowasm_instance_memory_read_bytes(
+                context->instance,
+                (uint32_t)memory_index,
+                (uint32_t)address,
+                (uint32_t)offset,
+                shared_bytes,
+                sizeof(shared_bytes));
+            memory = shared_bytes;
+        } else {
+            status = turbowasm_instance_memory_bounds(
+                context->instance, (uint32_t)memory_index,
+                (uint32_t)address, (uint32_t)offset,
+                16u, &memory);
+        }
         if (status != TURBOWASM_OK) {
             return turbowasm_jit_simd_status(
                 context,
@@ -436,21 +458,45 @@ int64_t turbowasm_jit_simd_memory(
     }
 
     if ((uint32_t)opcode == 0x0bu) {
-        status = turbowasm_instance_memory_bounds(
-            context->instance, (uint32_t)memory_index,
-            (uint32_t)address, (uint32_t)offset,
-            16u, &memory);
-        if (status != TURBOWASM_OK) {
-            return turbowasm_jit_simd_status(
-                context,
-                status == TURBOWASM_TRAPPED
-                    ? TURBOWASM_TRAPPED
-                    : status,
-                status == TURBOWASM_TRAPPED
-                    ? TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS
-                    : TURBOWASM_TRAP_NONE);
+        if (shared) {
+            memory = shared_bytes;
+        } else {
+            status = turbowasm_instance_memory_bounds(
+                context->instance, (uint32_t)memory_index,
+                (uint32_t)address, (uint32_t)offset,
+                16u, &memory);
+            if (status != TURBOWASM_OK) {
+                return turbowasm_jit_simd_status(
+                    context,
+                    status == TURBOWASM_TRAPPED
+                        ? TURBOWASM_TRAPPED
+                        : status,
+                    status == TURBOWASM_TRAPPED
+                        ? TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS
+                        : TURBOWASM_TRAP_NONE);
+            }
         }
+
         salts_simd_v128_store(memory, value);
+        if (shared) {
+            status = turbowasm_instance_memory_write_bytes(
+                context->instance,
+                (uint32_t)memory_index,
+                (uint32_t)address,
+                (uint32_t)offset,
+                shared_bytes,
+                sizeof(shared_bytes));
+            if (status != TURBOWASM_OK) {
+                return turbowasm_jit_simd_status(
+                    context,
+                    status == TURBOWASM_TRAPPED
+                        ? TURBOWASM_TRAPPED
+                        : status,
+                    status == TURBOWASM_TRAPPED
+                        ? TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS
+                        : TURBOWASM_TRAP_NONE);
+            }
+        }
         return (int64_t)TURBOWASM_OK;
     }
 
