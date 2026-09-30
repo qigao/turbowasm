@@ -2,6 +2,7 @@
 #define TURBOWASM_WASI02_FILESYSTEM_H
 
 #include "component_resource.h"
+#include "component_exec.h"
 #include "wasi02_provider.h"
 
 #include <turbowasm/wasi_fs.h>
@@ -23,6 +24,8 @@
 typedef struct turbowasm_wasi02_filesystem {
     turbowasm_wasi_fs *filesystem;
     turbowasm_component_resource_table resources;
+    uint64_t descriptor_identity;
+    bool descriptor_identity_bound;
     bool initialized;
 } turbowasm_wasi02_filesystem;
 
@@ -61,5 +64,14 @@ turbowasm_status turbowasm_wasi02_filesystem_descriptor_resolve(
 turbowasm_status turbowasm_wasi02_filesystem_descriptor_drop(
     turbowasm_wasi02_filesystem *filesystem,
     uint32_t resource);
+
+/*
+ * Instantiate the real W3 preopens import path through Component canonical ABI.
+ * The bridge is borrowed and must outlive the executable.
+ */
+turbowasm_status turbowasm_wasi02_filesystem_component_exec_init(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary,
+    turbowasm_wasi02_filesystem *filesystem);
 
 #endif /* TURBOWASM_WASI02_FILESYSTEM_H */
