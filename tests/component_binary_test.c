@@ -386,7 +386,9 @@ static void test_flat_instance_import_alias_and_lower(void) {
     assert(instance_type->as.instance->type_graph.count == 1u);
     assert(instance_type->as.instance->export_count == 1u);
     assert(instance_type->as.instance->exports[0].name_size == 3u);
-    assert(instance_type->as.instance->exports[0].function_type == 0u);
+    assert(instance_type->as.instance->exports[0].kind ==
+           TURBOWASM_COMPONENT_INSTANCE_EXPORT_FUNCTION);
+    assert(instance_type->as.instance->exports[0].type_index == 0u);
 
     assert(component.import_count == 1u);
     import_desc = turbowasm_component_binary_import_at(
@@ -507,7 +509,9 @@ static void test_named_record_inside_instance_type(void) {
     assert(outer->as.instance->type_graph.count == 3u);
     assert(outer->as.instance->export_count == 1u);
     assert(outer->as.instance->exports[0].name_size == 3u);
-    assert(outer->as.instance->exports[0].function_type == 2u);
+    assert(outer->as.instance->exports[0].kind ==
+           TURBOWASM_COMPONENT_INSTANCE_EXPORT_FUNCTION);
+    assert(outer->as.instance->exports[0].type_index == 2u);
 
     record = turbowasm_component_type_graph_get(
         &outer->as.instance->type_graph, 0u);
