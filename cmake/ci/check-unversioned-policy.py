@@ -108,44 +108,7 @@ def check_salts_restore() -> None:
     path = ROOT / "cmake" / "ci" / "restore-salts-sdk.ps1"
     text = path.read_text(encoding="utf-8")
 
-    for package_id in ("Salts.Native", "SaltsUtils.Native"):
-        if re.search(
-            rf'PackageReference[^>]*Include="{re.escape(package_id)}"[^>]*Version="\s*[\[\(]?\d',
-            text,
-            flags=re.IGNORECASE | re.DOTALL,
-        ):
-            fail(path, f"{package_id} PackageReference uses a literal numeric version")
-
-    if re.search(r'\$requestedVersion|\$versionSpec|Version="\    for package_id in ("Salts.Native", "SaltsUtils.Native"):
-        match = re.search(
-            rf'PackageReference[^>]*Include="{re.escape(package_id)}"[^>]*Version="([^"]+)"',
-            text,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if match and match.group(1).strip() != "*":
-            fail(path, f"{package_id} GitHub PackageReference must use Version=\"*\"")
-
-
-def main() -> int:
-    for path in cmake_files():
-        check_cmake(path)
-    check_vcpkg()
-    check_workflows()
-    check_salts_restore()
-
-    if ERRORS:
-        print("Unversioned dependency policy violations:", file=sys.stderr)
-        for error in ERRORS:
-            print(f"  - {error}", file=sys.stderr)
-        return 1
-
-    print("Unversioned dependency policy: OK")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-, text):
+    if re.search(r"\$requestedVersion|\$versionSpec|Version=\"\$", text):
         fail(path, "GitHub package version selection through variables is forbidden")
 
     for package_id in ("Salts.Native", "SaltsUtils.Native"):
@@ -155,7 +118,7 @@ if __name__ == "__main__":
             flags=re.IGNORECASE | re.DOTALL,
         )
         if match and match.group(1).strip() != "*":
-            fail(path, f"{package_id} GitHub PackageReference must use Version=\"*\"")
+            fail(path, f'{package_id} GitHub PackageReference must use Version="*"')
 
 
 def main() -> int:
