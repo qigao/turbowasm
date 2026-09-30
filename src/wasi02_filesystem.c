@@ -1641,10 +1641,12 @@ static turbowasm_status wasi02_fs_resource_lift(
     turbowasm_component_type_kind kind;
     turbowasm_wasi_fs_descriptor_info info = {0};
 
-    if (out == NULL ||
-        !imported_resource_identity(
-            filesystem, graph, type, &kind) ||
-        turbowasm_wasi02_filesystem_descriptor_resolve(
+    if (out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!imported_resource_identity(
+            filesystem, graph, type, &kind))
+        return TURBOWASM_TYPE_MISMATCH;
+    if (turbowasm_wasi02_filesystem_descriptor_resolve(
             filesystem, handle, &info) != TURBOWASM_OK)
         return TURBOWASM_TRAPPED;
 
