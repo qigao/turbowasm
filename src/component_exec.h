@@ -69,6 +69,7 @@ typedef bool (*turbowasm_component_import_can_bind_fn)(
 
 typedef turbowasm_status (*turbowasm_component_import_invoke_fn)(
     void *context,
+    turbowasm_host_call *call,
     turbowasm_component_name instance_name,
     turbowasm_component_name function_name,
     const turbowasm_component_type_graph *graph,
