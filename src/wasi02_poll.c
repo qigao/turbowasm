@@ -2,6 +2,7 @@
 
 #include "wasi02_component.h"
 #include "wasi02_descriptor.h"
+#include "runtime_alloc.h"
 
 #include <string.h>
 
@@ -187,6 +188,196 @@ turbowasm_status turbowasm_wasi02_pollable_block(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status poll_many_scan(
+    turbowasm_wasi02_poll *poll,
+    const uint32_t *resources,
+    size_t resource_count,
+    turbowasm_value *reps,
+    bool *ready_flags,
+    size_t *out_ready_count) {
+    size_t i;
+    size_t ready_count = 0u;
+
+    if (poll == NULL || resources == NULL ||
+        reps == NULL || ready_flags == NULL ||
+        out_ready_count == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (i = 0u; i < resource_count; ++i) {
+        turbowasm_status status;
+        bool ready = false;
+
+        status = pollable_rep_get(
+            poll, resources[i], &reps[i]);
+        if (status != TURBOWASM_OK)
+            return TURBOWASM_TRAPPED;
+
+        status = poll->provider.ready(
+            poll->provider.context,
+            reps[i],
+            &ready);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        ready_flags[i] = ready;
+        if (ready)
+            ++ready_count;
+    }
+
+    *out_ready_count = ready_count;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status poll_many_build_result(
+    const bool *ready_flags,
+    size_t resource_count,
+    size_t ready_count,
+    turbowasm_component_value *out_result) {
+    turbowasm_component_value *items = NULL;
+    size_t i;
+    size_t cursor = 0u;
+
+    if (ready_flags == NULL || out_result == NULL ||
+        ready_count == 0u)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (ready_count > SIZE_MAX / sizeof(*items))
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    items = (turbowasm_component_value *)turbowasm_rt_calloc(
+        ready_count, sizeof(*items));
+    if (items == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    for (i = 0u; i < resource_count; ++i) {
+        if (!ready_flags[i])
+            continue;
+        items[cursor].kind = TURBOWASM_COMPONENT_TYPE_U32;
+        items[cursor].as.u32 = (uint32_t)i;
+        ++cursor;
+    }
+
+    if (cursor != ready_count) {
+        turbowasm_rt_free(items);
+        return TURBOWASM_TRAPPED;
+    }
+
+    memset(out_result, 0, sizeof(*out_result));
+    out_result->kind = TURBOWASM_COMPONENT_TYPE_LIST;
+    out_result->as.list.items = items;
+    out_result->as.list.count = ready_count;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_wasi02_poll_many(
+    turbowasm_wasi02_poll *poll,
+    const uint32_t *resources,
+    size_t resource_count,
+    turbowasm_host_call *call,
+    turbowasm_component_value *out_result,
+    turbowasm_trap *trap) {
+    turbowasm_value *reps = NULL;
+    bool *ready_flags = NULL;
+    size_t ready_count = 0u;
+    uintptr_t operation_token = 0u;
+    turbowasm_host_wait wait = {0};
+    int completion_status = 0;
+    turbowasm_status status;
+
+    if (poll == NULL || !poll->initialized ||
+        out_result == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *trap = TURBOWASM_TRAP_NONE;
+    memset(out_result, 0, sizeof(*out_result));
+
+    if (resource_count == 0u ||
+        resource_count > UINT32_MAX ||
+        resources == NULL) {
+        *trap = TURBOWASM_TRAP_UNREACHABLE;
+        return TURBOWASM_TRAPPED;
+    }
+
+    if (resource_count > SIZE_MAX / sizeof(*reps) ||
+        resource_count > SIZE_MAX / sizeof(*ready_flags))
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    reps = (turbowasm_value *)turbowasm_rt_calloc(
+        resource_count, sizeof(*reps));
+    ready_flags = (bool *)turbowasm_rt_calloc(
+        resource_count, sizeof(*ready_flags));
+    if (reps == NULL || ready_flags == NULL) {
+        status = TURBOWASM_OUT_OF_MEMORY;
+        goto done;
+    }
+
+    status = poll_many_scan(
+        poll, resources, resource_count,
+        reps, ready_flags, &ready_count);
+    if (status != TURBOWASM_OK)
+        goto done;
+
+    if (ready_count != 0u) {
+        status = poll_many_build_result(
+            ready_flags, resource_count,
+            ready_count, out_result);
+        goto done;
+    }
+
+    if (call == NULL ||
+        !turbowasm_host_call_can_wait(call) ||
+        poll->provider.arm_many == NULL) {
+        status = TURBOWASM_UNSUPPORTED;
+        goto done;
+    }
+
+    status = poll->provider.arm_many(
+        poll->provider.context,
+        reps,
+        resource_count,
+        &operation_token);
+    if (status != TURBOWASM_OK)
+        goto done;
+
+    status = turbowasm_host_call_wait(
+        call,
+        operation_token,
+        &wait,
+        &completion_status);
+    if (status != TURBOWASM_OK)
+        goto done;
+
+    (void)wait;
+    (void)completion_status;
+
+    memset(ready_flags, 0, resource_count * sizeof(*ready_flags));
+    status = poll_many_scan(
+        poll, resources, resource_count,
+        reps, ready_flags, &ready_count);
+    if (status != TURBOWASM_OK)
+        goto done;
+
+    /*
+     * Provider arm_many promised wakeup only when at least one source becomes
+     * ready. Treat a spurious wake as an adapter contract violation.
+     */
+    if (ready_count == 0u) {
+        status = TURBOWASM_TRAPPED;
+        goto done;
+    }
+
+    status = poll_many_build_result(
+        ready_flags, resource_count,
+        ready_count, out_result);
+
+done:
+    turbowasm_rt_free(ready_flags);
+    turbowasm_rt_free(reps);
+    if (status != TURBOWASM_OK)
+        turbowasm_component_value_destroy(out_result);
+    return status;
+}
+
+
 static bool type_ref_is_kind(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
@@ -276,15 +467,48 @@ static bool bind_poll_method_shape(
         function_type_index >= graph->count)
         return false;
 
-    if (strcmp(function->name, "poll") == 0)
-        return false; /* W4b2b wait-any slice. */
-
     function_type = turbowasm_component_type_graph_get(
         graph, function_type_index);
     if (function_type == NULL ||
         function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
-        function_type->as.function.param_count != 1u ||
-        !bind_pollable_identity(
+        function_type->as.function.param_count != 1u)
+        return false;
+
+    if (strcmp(function->name, "poll") == 0) {
+        const turbowasm_component_type *input_list;
+        const turbowasm_component_type *output_list;
+
+        if (!function_type->as.function.has_result ||
+            function_type->as.function.params[0].kind !=
+                TURBOWASM_COMPONENT_TYPE_REF_INDEXED ||
+            function_type->as.function.result.kind !=
+                TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+            return false;
+
+        input_list = turbowasm_component_type_graph_get(
+            graph,
+            function_type->as.function.params[0].as.indexed);
+        output_list = turbowasm_component_type_graph_get(
+            graph,
+            function_type->as.function.result.as.indexed);
+        if (input_list == NULL ||
+            input_list->kind != TURBOWASM_COMPONENT_TYPE_LIST ||
+            output_list == NULL ||
+            output_list->kind != TURBOWASM_COMPONENT_TYPE_LIST)
+            return false;
+
+        return bind_pollable_identity(
+                   poll,
+                   graph,
+                   input_list->as.list.element_type,
+                   TURBOWASM_COMPONENT_TYPE_BORROW) &&
+               type_ref_is_kind(
+                   graph,
+                   output_list->as.list.element_type,
+                   TURBOWASM_COMPONENT_TYPE_U32);
+    }
+
+    if (!bind_pollable_identity(
             poll,
             graph,
             function_type->as.function.params[0],
@@ -459,13 +683,60 @@ static turbowasm_status wasi02_poll_invoke(
         arguments == NULL ||
         !wasi02_poll_can_bind(
             context, instance_name, function_name,
-            graph, function_type) ||
-        arguments[0].kind != TURBOWASM_COMPONENT_TYPE_BORROW ||
+            graph, function_type))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    *trap = TURBOWASM_TRAP_NONE;
+
+    if (component_name_is(
+            function_name,
+            "poll")) {
+        uint32_t *resources = NULL;
+        uint64_t i;
+        uint64_t count;
+
+        if (out_result == NULL ||
+            arguments[0].kind != TURBOWASM_COMPONENT_TYPE_LIST)
+            return TURBOWASM_TYPE_MISMATCH;
+
+        count = arguments[0].as.list.count;
+        if (count > SIZE_MAX / sizeof(*resources))
+            return TURBOWASM_OUT_OF_MEMORY;
+        if (count != 0u) {
+            resources = (uint32_t *)turbowasm_rt_calloc(
+                (size_t)count, sizeof(*resources));
+            if (resources == NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+        }
+
+        for (i = 0u; i < count; ++i) {
+            const turbowasm_component_value *item =
+                &arguments[0].as.list.items[i];
+            if (item->kind != TURBOWASM_COMPONENT_TYPE_BORROW ||
+                item->as.resource_rep.kind != TURBOWASM_VALUE_I32) {
+                turbowasm_rt_free(resources);
+                return TURBOWASM_TYPE_MISMATCH;
+            }
+            resources[i] =
+                (uint32_t)item->as.resource_rep.as.i32;
+        }
+
+        status = turbowasm_wasi02_poll_many(
+            poll,
+            resources,
+            (size_t)count,
+            call,
+            out_result,
+            trap);
+        turbowasm_rt_free(resources);
+        return status;
+    }
+
+    if (arguments[0].kind != TURBOWASM_COMPONENT_TYPE_BORROW ||
         arguments[0].as.resource_rep.kind !=
             TURBOWASM_VALUE_I32)
         return TURBOWASM_TYPE_MISMATCH;
 
-    *trap = TURBOWASM_TRAP_NONE;
     resource =
         (uint32_t)arguments[0].as.resource_rep.as.i32;
 
