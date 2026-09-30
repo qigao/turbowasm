@@ -163,7 +163,7 @@ turbowasm_status turbowasm_wasi02_filesystem_get_directories(
         rep.kind = TURBOWASM_VALUE_I64;
         rep.as.i64 = (int64_t)pack_descriptor(
             info.descriptor);
-        status = turbowasm_component_resource_new_owned(
+        status = turbowasm_component_resource_new_borrowed(
             &filesystem->resources,
             TURBOWASM_WASI02_FS_DESCRIPTOR_ID,
             rep,
@@ -242,22 +242,40 @@ turbowasm_status turbowasm_wasi02_filesystem_descriptor_resolve(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status descriptor_backing_close(
+    void *context,
+    uint64_t resource_identity,
+    turbowasm_value rep) {
+    turbowasm_wasi02_filesystem *filesystem =
+        (turbowasm_wasi02_filesystem *)context;
+    turbowasm_wasi_fs_descriptor descriptor;
+    uint32_t error;
+
+    if (filesystem == NULL || !filesystem->initialized ||
+        resource_identity != TURBOWASM_WASI02_FS_DESCRIPTOR_ID ||
+        rep.kind != TURBOWASM_VALUE_I64)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    descriptor = unpack_descriptor((uint64_t)rep.as.i64);
+    error = turbowasm_wasi_fs_close_descriptor(
+        filesystem->filesystem, descriptor);
+    return error == TURBOWASM_WASI_ERRNO_SUCCESS
+        ? TURBOWASM_OK
+        : TURBOWASM_TRAPPED;
+}
+
 turbowasm_status turbowasm_wasi02_filesystem_descriptor_drop(
     turbowasm_wasi02_filesystem *filesystem,
     uint32_t resource) {
     if (filesystem == NULL || !filesystem->initialized)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    /*
-     * Preopen resources are logical guest handles. The backing preopen remains
-     * host-owned and can be projected again by get-directories().
-     */
     return turbowasm_component_resource_drop(
         &filesystem->resources,
         resource,
         TURBOWASM_WASI02_FS_DESCRIPTOR_ID,
-        NULL,
-        NULL);
+        descriptor_backing_close,
+        filesystem);
 }
 
 static bool component_name_is(
