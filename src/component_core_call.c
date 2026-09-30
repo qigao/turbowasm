@@ -1096,7 +1096,8 @@ turbowasm_status turbowasm_component_core_call_invoke(
 
     if (type_ref_is_resource_handle(
             adapter->graph, function->as.function.result)) {
-        if (core_result_count != 1u) {
+        if (core_result_count != 1u ||
+            core_results[0].kind != TURBOWASM_VALUE_I32) {
             resource_scope_destroy(&resource_scope);
             return TURBOWASM_MALFORMED_MODULE;
         }
