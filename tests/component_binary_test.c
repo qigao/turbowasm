@@ -339,6 +339,83 @@ static void test_repeated_type_sections_preserve_index_space(void) {
     turbowasm_component_binary_destroy(&component);
 }
 
+static void test_flat_instance_import_alias_and_lower(void) {
+    static const uint8_t bytes[] = {
+        COMPONENT_HEADER,
+
+        /*
+         * type0 = instance {
+         *   local type0 = func() -> u64;
+         *   export "now" : func local-type0;
+         * }
+         */
+        0x07,0x10,0x01,
+          0x42,0x02,
+            0x01,0x40,0x00,0x00,0x77,
+            0x04,0x00,0x03,'n','o','w',0x01,0x00,
+
+        /* import "clock" : instance type0 => component instance0 */
+        0x0a,0x0a,0x01,
+          0x00,0x05,'c','l','o','c','k',
+          0x05,0x00,
+
+        /* component func0 = alias export instance0 "now" */
+        0x06,0x08,0x01,
+          0x01,0x00,0x00,
+          0x03,'n','o','w',
+
+        /* core func0 = canon lower component func0, no options */
+        0x08,0x05,0x01,
+          0x01,0x00,0x00,0x00
+    };
+    turbowasm_component_binary component = {0};
+    const turbowasm_component_type *instance_type;
+    const turbowasm_component_import *import_desc;
+    const turbowasm_component_function_alias *alias;
+    const turbowasm_component_canon_lower *lower;
+
+    assert(turbowasm_component_binary_load(
+               &component, bytes, sizeof(bytes)) == TURBOWASM_OK);
+
+    assert(component.type_graph.count == 1u);
+    instance_type = turbowasm_component_type_graph_get(
+        &component.type_graph, 0u);
+    assert(instance_type != NULL);
+    assert(instance_type->kind == TURBOWASM_COMPONENT_TYPE_INSTANCE);
+    assert(instance_type->as.instance != NULL);
+    assert(instance_type->as.instance->type_graph.count == 1u);
+    assert(instance_type->as.instance->export_count == 1u);
+    assert(instance_type->as.instance->exports[0].name_size == 3u);
+    assert(instance_type->as.instance->exports[0].function_type == 0u);
+
+    assert(component.import_count == 1u);
+    import_desc = turbowasm_component_binary_import_at(
+        &component, 0u);
+    assert(import_desc != NULL);
+    assert(import_desc->kind == TURBOWASM_COMPONENT_EXTERN_INSTANCE);
+    assert(import_desc->type_index == 0u);
+    assert(import_desc->item_index == 0u);
+    assert(component.component_instance_index_count == 1u);
+
+    assert(component.component_function_alias_count == 1u);
+    alias = turbowasm_component_binary_component_function_alias_at(
+        &component, 0u);
+    assert(alias != NULL);
+    assert(alias->instance_index == 0u);
+    assert(alias->component_function_index == 0u);
+
+    assert(component.canon_lower_count == 1u);
+    lower = turbowasm_component_binary_canon_lower_at(
+        &component, 0u);
+    assert(lower != NULL);
+    assert(lower->component_function_index == 0u);
+    assert(lower->core_function_index == 0u);
+    assert(component.component_function_count == 1u);
+    assert(component.core_function_count == 1u);
+
+    turbowasm_component_binary_destroy(&component);
+}
+
 static void test_semantic_unsupported_and_invalid_forms(void) {
     static const uint8_t alias[] = {
         COMPONENT_HEADER,
@@ -413,6 +490,7 @@ int main(void) {
     test_component_module_size_limit();
     test_type_import_export_semantics();
     test_repeated_type_sections_preserve_index_space();
+    test_flat_instance_import_alias_and_lower();
     test_semantic_unsupported_and_invalid_forms();
     return 0;
 }
