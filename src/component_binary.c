@@ -582,7 +582,7 @@ static turbowasm_status decode_component_function_type(
     turbowasm_reader *reader,
     turbowasm_component_binary *component,
     uint32_t type_index) {
-    if (component == NULL)
+    if (component == NULL || next_component_instance_index == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     return decode_function_type_into_graph(
         reader, &component->type_graph, type_index);
@@ -997,7 +997,8 @@ static turbowasm_status decode_canon_section(
 static turbowasm_status decode_component_instance_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
-    uint32_t current_component_functions) {
+    uint32_t current_component_functions,
+    uint32_t *next_component_instance_index) {
     uint32_t count;
     uint32_t i;
 
@@ -1071,10 +1072,17 @@ static turbowasm_status decode_component_instance_section(
             }
         }
 
+        if (*next_component_instance_index == UINT32_MAX) {
+            status = TURBOWASM_OUT_OF_MEMORY;
+            goto fail_definition;
+        }
+        definition.component_instance_index =
+            *next_component_instance_index;
         if (!append_component_instance(component, definition)) {
             status = TURBOWASM_OUT_OF_MEMORY;
             goto fail_definition;
         }
+        ++*next_component_instance_index;
         continue;
 
 fail_definition:
