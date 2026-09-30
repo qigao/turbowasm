@@ -13,6 +13,21 @@
  * shapes with pinned canonical memory/realloc semantics. Resource-valued
  * pollables remain fail-closed for W4.
  */
+/*
+ * Internal typed value bridge shared by WASI 0.2 capability adapters.
+ * RESOURCE values map from Component own/borrow on input and to own on output.
+ * The caller validates nominal resource identity before conversion.
+ */
+turbowasm_status turbowasm_wasi02_component_value_to_wasi(
+    const turbowasm_wasi02_type_desc *type,
+    const turbowasm_component_value *value,
+    turbowasm_wasi02_value *out);
+
+turbowasm_status turbowasm_wasi02_component_value_from_wasi(
+    const turbowasm_wasi02_type_desc *type,
+    const turbowasm_wasi02_value *value,
+    turbowasm_component_value *out);
+
 turbowasm_status turbowasm_wasi02_component_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,

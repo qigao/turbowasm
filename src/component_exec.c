@@ -2093,6 +2093,15 @@ turbowasm_status turbowasm_component_exec_init_with_imports(
         if (status != TURBOWASM_OK)
             goto fail;
 
+        if (exec->imports.resource_lower != NULL ||
+            exec->imports.resource_lift != NULL) {
+            turbowasm_component_core_call_adapter_set_external_resources(
+                &exec->functions[i],
+                exec->imports.resource_lower,
+                exec->imports.resource_lift,
+                exec->imports.context);
+        }
+
         exec->function_adapter_indices[
             lift->component_function_index] = i;
     }

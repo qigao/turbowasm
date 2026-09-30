@@ -126,6 +126,28 @@ static bool type_ref_is_resource_handle(
 }
 
 
+static bool resource_handle_is_external(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref) {
+    const turbowasm_component_type *handle_type;
+    const turbowasm_component_type *resource_type;
+
+    if (graph == NULL ||
+        ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return false;
+    handle_type = turbowasm_component_type_graph_get(
+        graph, ref.as.indexed);
+    if (handle_type == NULL ||
+        (handle_type->kind != TURBOWASM_COMPONENT_TYPE_OWN &&
+         handle_type->kind != TURBOWASM_COMPONENT_TYPE_BORROW))
+        return false;
+    resource_type = turbowasm_component_type_graph_get(
+        graph, handle_type->as.handle.resource_type);
+    return resource_type != NULL &&
+           resource_type->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE &&
+           resource_type->as.resource.identity_alias;
+}
+
 static turbowasm_status resource_handle_info(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
@@ -923,6 +945,18 @@ fail:
     return status;
 }
 
+void turbowasm_component_core_call_adapter_set_external_resources(
+    turbowasm_component_core_call_adapter *adapter,
+    turbowasm_component_resource_lower_fn lower,
+    turbowasm_component_resource_lift_fn lift,
+    void *context) {
+    if (adapter == NULL || !adapter->initialized)
+        return;
+    adapter->external_resource_lower = lower;
+    adapter->external_resource_lift = lift;
+    adapter->external_resource_context = context;
+}
+
 void turbowasm_component_core_call_adapter_destroy(
     turbowasm_component_core_call_adapter *adapter) {
     if (adapter == NULL)
@@ -1003,12 +1037,26 @@ turbowasm_status turbowasm_component_core_call_invoke(
             if (type_ref_is_resource_handle(adapter->graph, ref)) {
                 uint32_t handle;
 
-                status = canonical_resource_lower(
-                    &codec,
-                    adapter->graph,
-                    ref,
-                    &arguments[i],
-                    &handle);
+                if (resource_handle_is_external(
+                        adapter->graph, ref)) {
+                    if (adapter->external_resource_lower == NULL) {
+                        status = TURBOWASM_UNSUPPORTED;
+                        goto lowering_failed;
+                    }
+                    status = adapter->external_resource_lower(
+                        adapter->external_resource_context,
+                        adapter->graph,
+                        ref,
+                        &arguments[i],
+                        &handle);
+                } else {
+                    status = canonical_resource_lower(
+                        &codec,
+                        adapter->graph,
+                        ref,
+                        &arguments[i],
+                        &handle);
+                }
                 if (status != TURBOWASM_OK)
                     goto lowering_failed;
 
@@ -1107,12 +1155,27 @@ turbowasm_status turbowasm_component_core_call_invoke(
             return TURBOWASM_MALFORMED_MODULE;
         }
 
-        status = canonical_resource_lift(
-            &codec,
-            adapter->graph,
-            function->as.function.result,
-            (uint32_t)core_results[0].as.i32,
-            out_result);
+        if (resource_handle_is_external(
+                adapter->graph,
+                function->as.function.result)) {
+            if (adapter->external_resource_lift == NULL) {
+                resource_scope_destroy(&resource_scope);
+                return TURBOWASM_UNSUPPORTED;
+            }
+            status = adapter->external_resource_lift(
+                adapter->external_resource_context,
+                adapter->graph,
+                function->as.function.result,
+                (uint32_t)core_results[0].as.i32,
+                out_result);
+        } else {
+            status = canonical_resource_lift(
+                &codec,
+                adapter->graph,
+                function->as.function.result,
+                (uint32_t)core_results[0].as.i32,
+                out_result);
+        }
         resource_scope_destroy(&resource_scope);
         return status;
     }
