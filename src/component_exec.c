@@ -782,7 +782,7 @@ static void destroy_partial(
         return;
 
     if (exec->functions != NULL) {
-        for (i = 0u; i < exec->function_count; ++i)
+        for (i = 0u; i < exec->adapter_count; ++i)
             turbowasm_component_core_call_adapter_destroy(
                 &exec->functions[i]);
     }
@@ -815,6 +815,7 @@ static void destroy_partial(
                 &exec->core_modules[i - 1u]);
     }
 
+    turbowasm_rt_free(exec->function_adapter_indices);
     turbowasm_rt_free(exec->functions);
     turbowasm_rt_free(exec->realloc_contexts);
     turbowasm_rt_free(exec->resource_builtin_contexts);
