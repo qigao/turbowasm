@@ -337,10 +337,70 @@ static void test_filesystem_types_surface(void) {
     assert(unlink_file->param_count == 2u);
 }
 
+static void test_io_poll_surface(void) {
+    const turbowasm_wasi02_interface_desc *poll =
+        turbowasm_wasi02_find_interface(
+            "wasi:io", "poll");
+    const turbowasm_wasi02_function_desc *ready;
+    const turbowasm_wasi02_function_desc *block;
+    const turbowasm_wasi02_function_desc *poll_fn;
+    const turbowasm_wasi02_type_desc *pollable;
+
+    assert(poll != NULL);
+    assert_v028(poll->version);
+    assert(strcmp(
+        poll->source_commit,
+        "3983fe1feab6b3a3b4e5c47c8b13daaf22266f00") == 0);
+    assert(poll->function_count == 3u);
+
+    ready = turbowasm_wasi02_find_function(
+        poll, "[method]pollable.ready");
+    block = turbowasm_wasi02_find_function(
+        poll, "[method]pollable.block");
+    poll_fn = turbowasm_wasi02_find_function(
+        poll, "poll");
+
+    assert(ready != NULL);
+    assert(ready->param_count == 1u);
+    pollable = ready->params[0].type;
+    assert(pollable != NULL);
+    assert(pollable->kind ==
+           TURBOWASM_WASI02_TYPE_RESOURCE);
+    assert(strcmp(
+        pollable->as.resource.package_name,
+        "wasi:io") == 0);
+    assert(strcmp(
+        pollable->as.resource.interface_name,
+        "poll") == 0);
+    assert(strcmp(
+        pollable->as.resource.resource_name,
+        "pollable") == 0);
+    assert(ready->result != NULL);
+    assert(ready->result->kind ==
+           TURBOWASM_WASI02_TYPE_BOOL);
+
+    assert(block != NULL);
+    assert(block->param_count == 1u);
+    assert(block->params[0].type == pollable);
+    assert(block->result == NULL);
+
+    assert(poll_fn != NULL);
+    assert(poll_fn->param_count == 1u);
+    assert(poll_fn->params[0].type->kind ==
+           TURBOWASM_WASI02_TYPE_LIST);
+    assert(poll_fn->params[0].type->as.list.element ==
+           pollable);
+    assert(poll_fn->result != NULL);
+    assert(poll_fn->result->kind ==
+           TURBOWASM_WASI02_TYPE_LIST);
+    assert(poll_fn->result->as.list.element->kind ==
+           TURBOWASM_WASI02_TYPE_U32);
+}
+
 int main(void) {
     size_t i;
 
-    assert(turbowasm_wasi02_interface_count() == 9u);
+    assert(turbowasm_wasi02_interface_count() == 10u);
     for (i = 0u; i < turbowasm_wasi02_interface_count(); ++i) {
         const turbowasm_wasi02_interface_desc *iface =
             turbowasm_wasi02_interface_at(i);
@@ -360,5 +420,6 @@ int main(void) {
     test_cli();
     test_filesystem_preopens();
     test_filesystem_types_surface();
+    test_io_poll_surface();
     return 0;
 }
