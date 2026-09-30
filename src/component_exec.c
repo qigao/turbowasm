@@ -774,6 +774,83 @@ static turbowasm_status initialize_resource_state(
     return TURBOWASM_OK;
 }
 
+static const turbowasm_component_inline_export *
+find_component_instance_export(
+    const turbowasm_component_instance_def *instance,
+    turbowasm_component_name name) {
+    uint32_t i;
+
+    if (instance == NULL)
+        return NULL;
+
+    for (i = 0u; i < instance->export_count; ++i) {
+        const turbowasm_component_inline_export *export_desc =
+            &instance->exports[i];
+
+        if (export_desc->kind ==
+                TURBOWASM_COMPONENT_EXTERN_FUNCTION &&
+            component_name_equal(
+                export_desc->name,
+                name.bytes,
+                name.size))
+            return export_desc;
+    }
+
+    return NULL;
+}
+
+static turbowasm_status resolve_component_function_aliases(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary) {
+    uint32_t i;
+
+    if (exec == NULL || binary == NULL ||
+        exec->function_adapter_indices == NULL)
+        return binary != NULL && binary->component_function_count == 0u
+            ? TURBOWASM_OK
+            : TURBOWASM_INVALID_ARGUMENT;
+
+    for (i = 0u;
+         i < binary->component_function_alias_count;
+         ++i) {
+        const turbowasm_component_function_alias *alias =
+            &binary->component_function_aliases[i];
+        const turbowasm_component_instance_def *instance;
+        const turbowasm_component_inline_export *export_desc;
+        uint32_t source_adapter;
+
+        if (alias->component_function_index >=
+                exec->function_count ||
+            alias->instance_index >=
+                binary->component_instance_count)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        instance =
+            &binary->component_instances[alias->instance_index];
+        export_desc = find_component_instance_export(
+            instance, alias->name);
+        if (export_desc == NULL ||
+            export_desc->item_index >= exec->function_count)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        source_adapter =
+            exec->function_adapter_indices[
+                export_desc->item_index];
+        if (source_adapter == UINT32_MAX ||
+            source_adapter >= exec->adapter_count)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        if (exec->function_adapter_indices[
+                alias->component_function_index] != UINT32_MAX)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        exec->function_adapter_indices[
+            alias->component_function_index] = source_adapter;
+    }
+
+    return TURBOWASM_OK;
+}
+
 static void destroy_partial(
     turbowasm_component_exec *exec) {
     uint32_t i;
