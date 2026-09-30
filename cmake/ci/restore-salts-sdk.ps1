@@ -67,7 +67,7 @@ $saltsUtilsReference
 </Project>
 "@ | Set-Content -LiteralPath $project
 
-dotnet restore $project --packages $packages --configfile $config --no-cache
+dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate
 if ($LASTEXITCODE -ne 0) { throw "failed to restore latest Salts.Native" }
 
 $assetsPath = Join-Path $env:RUNNER_TEMP "obj/project.assets.json"
