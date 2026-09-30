@@ -116,12 +116,17 @@ def check_salts_restore() -> None:
         ):
             fail(path, f"{package_id} PackageReference uses a literal numeric version")
 
-    if re.search(
-        r"SALTS_SDK_VERSION.{0,200}?else\s*\{\s*['\"]\d",
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    ):
-        fail(path, "SALTS_SDK_VERSION has a numeric default")
+    if "SALTS_SDK_VERSION" in text:
+        fail(path, "SALTS_SDK_VERSION override is forbidden; GitHub package restore must resolve latest")
+
+    for package_id in ("Salts.Native", "SaltsUtils.Native"):
+        match = re.search(
+            rf'PackageReference[^>]*Include="{re.escape(package_id)}"[^>]*Version="([^"]+)"',
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if match and match.group(1).strip() != "*":
+            fail(path, f"{package_id} GitHub PackageReference must use Version=\"*\"")
 
 
 def main() -> int:
