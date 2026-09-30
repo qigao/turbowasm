@@ -2951,6 +2951,24 @@ static turbowasm_status lower_flat_value_inner(
         return status;
     }
 
+    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
+        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+        uint32_t handle;
+        if (out_capacity < 1u)
+            return TURBOWASM_INVALID_ARGUMENT;
+        if (memory == NULL || memory->resource_lower == NULL)
+            return TURBOWASM_UNSUPPORTED;
+        status = memory->resource_lower(
+            memory->resource_context,
+            graph, ref, value, &handle);
+        if (status != TURBOWASM_OK)
+            return status;
+        out[0].kind = TURBOWASM_VALUE_I32;
+        out[0].as.i32 = (int32_t)handle;
+        *out_count = 1u;
+        return TURBOWASM_OK;
+    }
+
     return TURBOWASM_UNSUPPORTED;
 }
 
@@ -3005,6 +3023,20 @@ static turbowasm_status lift_flat_value_inner(
             return TURBOWASM_TYPE_MISMATCH;
         return lift_flat_label_value(
             type, kind, &values[0], out);
+    }
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
+        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+        if (value_count != 1u ||
+            values[0].kind != TURBOWASM_VALUE_I32)
+            return TURBOWASM_TYPE_MISMATCH;
+        if (memory == NULL || memory->resource_lift == NULL)
+            return TURBOWASM_UNSUPPORTED;
+        return memory->resource_lift(
+            memory->resource_context,
+            graph, ref,
+            (uint32_t)values[0].as.i32,
+            out);
     }
 
     return TURBOWASM_UNSUPPORTED;

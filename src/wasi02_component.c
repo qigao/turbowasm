@@ -609,6 +609,16 @@ static turbowasm_status component_to_wasi_value(
             return TURBOWASM_OK;
         }
 
+        case TURBOWASM_WASI02_TYPE_RESOURCE:
+            if ((value->kind != TURBOWASM_COMPONENT_TYPE_OWN &&
+                 value->kind != TURBOWASM_COMPONENT_TYPE_BORROW) ||
+                value->as.resource_rep.kind != TURBOWASM_VALUE_I32)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->kind = TURBOWASM_WASI02_VALUE_RESOURCE;
+            out->as.resource =
+                (uint32_t)value->as.resource_rep.as.i32;
+            return TURBOWASM_OK;
+
         default:
             return TURBOWASM_UNSUPPORTED;
     }
@@ -863,9 +873,32 @@ static turbowasm_status wasi_to_component_value(
             return TURBOWASM_OK;
         }
 
+        case TURBOWASM_WASI02_TYPE_RESOURCE:
+            if (value->kind != TURBOWASM_WASI02_VALUE_RESOURCE)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->kind = TURBOWASM_COMPONENT_TYPE_OWN;
+            out->as.resource_rep.kind = TURBOWASM_VALUE_I32;
+            out->as.resource_rep.as.i32 =
+                (int32_t)value->as.resource;
+            return TURBOWASM_OK;
+
         default:
             return TURBOWASM_UNSUPPORTED;
     }
+}
+
+turbowasm_status turbowasm_wasi02_component_value_to_wasi(
+    const turbowasm_wasi02_type_desc *type,
+    const turbowasm_component_value *value,
+    turbowasm_wasi02_value *out) {
+    return component_to_wasi_value(type, value, out);
+}
+
+turbowasm_status turbowasm_wasi02_component_value_from_wasi(
+    const turbowasm_wasi02_type_desc *type,
+    const turbowasm_wasi02_value *value,
+    turbowasm_component_value *out) {
+    return wasi_to_component_value(type, value, out);
 }
 
 static turbowasm_status wasi02_component_invoke(

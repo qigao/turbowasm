@@ -1,4 +1,5 @@
 #include "wasi02_filesystem.h"
+#include "wasi02_component.h"
 
 
 #include "runtime_alloc.h"
@@ -958,6 +959,333 @@ static bool bind_preopens_shape(
     return true;
 }
 
+static const turbowasm_wasi02_type_desc *fs_wasi_type_base(
+    const turbowasm_wasi02_type_desc *type) {
+    uint32_t depth = 0u;
+
+    while (type != NULL &&
+           type->kind == TURBOWASM_WASI02_TYPE_ALIAS) {
+        if (++depth > 32u)
+            return NULL;
+        type = type->as.alias.target;
+    }
+    return type;
+}
+
+static bool fs_ref_kind(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    turbowasm_component_type_kind *out_kind,
+    const turbowasm_component_type **out_type) {
+    if (graph == NULL || out_kind == NULL || out_type == NULL)
+        return false;
+
+    *out_type = NULL;
+    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE) {
+        *out_kind = ref.as.inline_type;
+        return true;
+    }
+    if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return false;
+
+    *out_type = turbowasm_component_type_graph_get(
+        graph, ref.as.indexed);
+    if (*out_type == NULL)
+        return false;
+    *out_kind = (*out_type)->kind;
+    return true;
+}
+
+static bool fs_bind_descriptor_identity(
+    turbowasm_wasi02_filesystem *filesystem,
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *handle_type,
+    turbowasm_component_type_kind expected_handle_kind) {
+    const turbowasm_component_type *resource_type;
+    uint64_t identity;
+
+    if (filesystem == NULL || graph == NULL ||
+        handle_type == NULL ||
+        handle_type->kind != expected_handle_kind)
+        return false;
+
+    resource_type = turbowasm_component_type_graph_get(
+        graph, handle_type->as.handle.resource_type);
+    if (resource_type == NULL ||
+        resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE)
+        return false;
+
+    identity = resource_type->as.resource.identity;
+    if (identity == 0u)
+        return false;
+    if (filesystem->descriptor_identity_bound &&
+        filesystem->descriptor_identity != identity)
+        return false;
+
+    filesystem->descriptor_identity = identity;
+    filesystem->descriptor_identity_bound = true;
+    return true;
+}
+
+static bool fs_component_type_matches_wasi(
+    turbowasm_wasi02_filesystem *filesystem,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_wasi02_type_desc *wasi_type,
+    turbowasm_component_type_kind resource_handle_kind,
+    uint32_t depth) {
+    const turbowasm_wasi02_type_desc *base;
+    const turbowasm_component_type *type;
+    turbowasm_component_type_kind kind;
+    uint32_t i;
+
+    if (depth > 64u)
+        return false;
+    base = fs_wasi_type_base(wasi_type);
+    if (base == NULL ||
+        !fs_ref_kind(graph, ref, &kind, &type))
+        return false;
+
+    switch (base->kind) {
+        case TURBOWASM_WASI02_TYPE_BOOL:
+            return kind == TURBOWASM_COMPONENT_TYPE_BOOL;
+        case TURBOWASM_WASI02_TYPE_U8:
+            return kind == TURBOWASM_COMPONENT_TYPE_U8;
+        case TURBOWASM_WASI02_TYPE_U32:
+            return kind == TURBOWASM_COMPONENT_TYPE_U32;
+        case TURBOWASM_WASI02_TYPE_U64:
+            return kind == TURBOWASM_COMPONENT_TYPE_U64;
+        case TURBOWASM_WASI02_TYPE_STRING:
+            return kind == TURBOWASM_COMPONENT_TYPE_STRING;
+
+        case TURBOWASM_WASI02_TYPE_LIST:
+            return kind == TURBOWASM_COMPONENT_TYPE_LIST &&
+                   type != NULL &&
+                   fs_component_type_matches_wasi(
+                       filesystem, graph,
+                       type->as.list.element_type,
+                       base->as.list.element,
+                       resource_handle_kind,
+                       depth + 1u);
+
+        case TURBOWASM_WASI02_TYPE_TUPLE:
+            if (kind != TURBOWASM_COMPONENT_TYPE_TUPLE ||
+                type == NULL ||
+                type->as.tuple.count != base->as.tuple.count)
+                return false;
+            for (i = 0u; i < base->as.tuple.count; ++i) {
+                if (!fs_component_type_matches_wasi(
+                        filesystem, graph,
+                        type->as.tuple.elements[i],
+                        base->as.tuple.elements[i],
+                        resource_handle_kind,
+                        depth + 1u))
+                    return false;
+            }
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_RECORD:
+            if (kind != TURBOWASM_COMPONENT_TYPE_RECORD ||
+                type == NULL ||
+                type->as.record.count != base->as.record.count)
+                return false;
+            for (i = 0u; i < base->as.record.count; ++i) {
+                const turbowasm_component_record_field *field =
+                    &type->as.record.fields[i];
+                const turbowasm_wasi02_record_field *expected =
+                    &base->as.record.fields[i];
+                size_t name_size;
+
+                if (expected->name == NULL)
+                    return false;
+                name_size = strlen(expected->name);
+                if (name_size != field->name_size ||
+                    field->name == NULL ||
+                    memcmp(
+                        field->name,
+                        expected->name,
+                        name_size) != 0 ||
+                    !fs_component_type_matches_wasi(
+                        filesystem, graph, field->type,
+                        expected->type, resource_handle_kind,
+                        depth + 1u))
+                    return false;
+            }
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_OPTION:
+            return kind == TURBOWASM_COMPONENT_TYPE_OPTION &&
+                   type != NULL &&
+                   fs_component_type_matches_wasi(
+                       filesystem, graph,
+                       type->as.option.payload,
+                       base->as.option.payload,
+                       resource_handle_kind,
+                       depth + 1u);
+
+        case TURBOWASM_WASI02_TYPE_RESULT:
+            if (kind != TURBOWASM_COMPONENT_TYPE_RESULT ||
+                type == NULL ||
+                type->as.result.has_ok !=
+                    (base->as.result.ok != NULL) ||
+                type->as.result.has_error !=
+                    (base->as.result.error != NULL))
+                return false;
+            if (type->as.result.has_ok &&
+                !fs_component_type_matches_wasi(
+                    filesystem, graph,
+                    type->as.result.ok,
+                    base->as.result.ok,
+                    resource_handle_kind,
+                    depth + 1u))
+                return false;
+            if (type->as.result.has_error &&
+                !fs_component_type_matches_wasi(
+                    filesystem, graph,
+                    type->as.result.error,
+                    base->as.result.error,
+                    resource_handle_kind,
+                    depth + 1u))
+                return false;
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_ENUM: {
+            const turbowasm_component_label *labels;
+
+            if (kind != TURBOWASM_COMPONENT_TYPE_ENUM ||
+                type == NULL ||
+                type->as.enumeration.count !=
+                    base->as.enumeration.count ||
+                type->as.enumeration.labels == NULL ||
+                base->as.enumeration.labels == NULL)
+                return false;
+            labels = type->as.enumeration.labels;
+            for (i = 0u; i < base->as.enumeration.count; ++i) {
+                size_t name_size;
+
+                if (base->as.enumeration.labels[i] == NULL)
+                    return false;
+                name_size = strlen(
+                    base->as.enumeration.labels[i]);
+                if (name_size != labels[i].name_size ||
+                    labels[i].name == NULL ||
+                    memcmp(
+                        labels[i].name,
+                        base->as.enumeration.labels[i],
+                        name_size) != 0)
+                    return false;
+            }
+            return true;
+        }
+
+        case TURBOWASM_WASI02_TYPE_FLAGS: {
+            const turbowasm_component_label *labels;
+
+            if (kind != TURBOWASM_COMPONENT_TYPE_FLAGS ||
+                type == NULL ||
+                type->as.flags.count != base->as.flags.count ||
+                type->as.flags.labels == NULL ||
+                base->as.flags.labels == NULL)
+                return false;
+            labels = type->as.flags.labels;
+            for (i = 0u; i < base->as.flags.count; ++i) {
+                size_t name_size;
+
+                if (base->as.flags.labels[i] == NULL)
+                    return false;
+                name_size = strlen(
+                    base->as.flags.labels[i]);
+                if (name_size != labels[i].name_size ||
+                    labels[i].name == NULL ||
+                    memcmp(
+                        labels[i].name,
+                        base->as.flags.labels[i],
+                        name_size) != 0)
+                    return false;
+            }
+            return true;
+        }
+
+        case TURBOWASM_WASI02_TYPE_RESOURCE:
+            return type != NULL &&
+                   fs_bind_descriptor_identity(
+                       filesystem, graph, type,
+                       resource_handle_kind);
+
+        case TURBOWASM_WASI02_TYPE_UNIT:
+        case TURBOWASM_WASI02_TYPE_ALIAS:
+        default:
+            return false;
+    }
+}
+
+static const turbowasm_wasi02_function_desc *
+fs_function_by_component_name(
+    turbowasm_component_name name) {
+    const turbowasm_wasi02_interface_desc *iface =
+        turbowasm_wasi02_find_interface(
+            "wasi:filesystem", "types");
+    uint32_t i;
+
+    if (iface == NULL ||
+        (name.size != 0u && name.bytes == NULL))
+        return NULL;
+
+    for (i = 0u; i < iface->function_count; ++i) {
+        const turbowasm_wasi02_function_desc *function =
+            &iface->functions[i];
+        size_t size = strlen(function->name);
+
+        if (size == name.size &&
+            (size == 0u ||
+             memcmp(name.bytes, function->name, size) == 0))
+            return function;
+    }
+    return NULL;
+}
+
+static bool bind_filesystem_method_shape(
+    turbowasm_wasi02_filesystem *filesystem,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type_index,
+    const turbowasm_wasi02_function_desc *function) {
+    const turbowasm_component_type *function_type;
+    uint32_t i;
+
+    if (filesystem == NULL || graph == NULL ||
+        function == NULL)
+        return false;
+    function_type = turbowasm_component_type_graph_get(
+        graph, function_type_index);
+    if (function_type == NULL ||
+        function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
+        function_type->as.function.param_count !=
+            function->param_count ||
+        function_type->as.function.has_result !=
+            (function->result != NULL))
+        return false;
+
+    for (i = 0u; i < function->param_count; ++i) {
+        if (!fs_component_type_matches_wasi(
+                filesystem, graph,
+                function_type->as.function.params[i],
+                function->params[i].type,
+                TURBOWASM_COMPONENT_TYPE_BORROW,
+                0u))
+            return false;
+    }
+
+    if (function->result != NULL &&
+        !fs_component_type_matches_wasi(
+            filesystem, graph,
+            function_type->as.function.result,
+            function->result,
+            TURBOWASM_COMPONENT_TYPE_OWN,
+            0u))
+        return false;
+    return true;
+}
+
 static bool wasi02_fs_can_bind(
     void *context,
     turbowasm_component_name instance_name,
@@ -967,16 +1295,25 @@ static bool wasi02_fs_can_bind(
     turbowasm_wasi02_filesystem *filesystem =
         (turbowasm_wasi02_filesystem *)context;
 
-    if (!component_name_is(
+    if (component_name_is(
             instance_name,
-            "wasi:filesystem/preopens@0.2.8") ||
-        !component_name_is(
+            "wasi:filesystem/preopens@0.2.8") &&
+        component_name_is(
             function_name,
             "get-directories"))
-        return false;
+        return bind_preopens_shape(
+            filesystem, graph, function_type);
 
-    return bind_preopens_shape(
-        filesystem, graph, function_type);
+    if (component_name_is(
+            instance_name,
+            "wasi:filesystem/types@0.2.8")) {
+        const turbowasm_wasi02_function_desc *function =
+            fs_function_by_component_name(function_name);
+        return bind_filesystem_method_shape(
+            filesystem, graph, function_type, function);
+    }
+
+    return false;
 }
 
 static void rollback_wasi_preopen_resources(
@@ -1104,6 +1441,81 @@ oom:
     return TURBOWASM_OUT_OF_MEMORY;
 }
 
+static void rollback_method_result_resource(
+    turbowasm_wasi02_filesystem *filesystem,
+    const turbowasm_wasi02_function_desc *function,
+    turbowasm_wasi02_value *result) {
+    if (filesystem == NULL || function == NULL ||
+        result == NULL ||
+        strcmp(
+            function->name,
+            "[method]descriptor.open-at") != 0 ||
+        result->kind != TURBOWASM_WASI02_VALUE_RESULT ||
+        result->as.result.is_error ||
+        result->as.result.value == NULL ||
+        result->as.result.value->kind !=
+            TURBOWASM_WASI02_VALUE_RESOURCE)
+        return;
+
+    (void)turbowasm_wasi02_filesystem_descriptor_drop(
+        filesystem,
+        result->as.result.value->as.resource);
+}
+
+static turbowasm_status invoke_filesystem_method(
+    turbowasm_wasi02_filesystem *filesystem,
+    turbowasm_component_name function_name,
+    const turbowasm_component_value *arguments,
+    size_t argument_count,
+    turbowasm_component_value *out_result) {
+    const turbowasm_wasi02_function_desc *function =
+        fs_function_by_component_name(function_name);
+    turbowasm_wasi02_value
+        wasi_arguments[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {{0}};
+    turbowasm_wasi02_value result = {0};
+    size_t i;
+    turbowasm_status status = TURBOWASM_OK;
+
+    if (filesystem == NULL || function == NULL ||
+        out_result == NULL ||
+        argument_count != function->param_count ||
+        argument_count > TURBOWASM_COMPONENT_MAX_FLAT_PARAMS ||
+        (argument_count != 0u && arguments == NULL))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    for (i = 0u; i < argument_count; ++i) {
+        status = turbowasm_wasi02_component_value_to_wasi(
+            function->params[i].type,
+            &arguments[i],
+            &wasi_arguments[i]);
+        if (status != TURBOWASM_OK)
+            goto done;
+    }
+
+    status = turbowasm_wasi02_filesystem_call(
+        filesystem,
+        function->name,
+        wasi_arguments,
+        argument_count,
+        &result);
+    if (status != TURBOWASM_OK)
+        goto done;
+
+    status = turbowasm_wasi02_component_value_from_wasi(
+        function->result,
+        &result,
+        out_result);
+    if (status != TURBOWASM_OK)
+        rollback_method_result_resource(
+            filesystem, function, &result);
+
+done:
+    for (i = 0u; i < argument_count; ++i)
+        turbowasm_wasi02_value_destroy(&wasi_arguments[i]);
+    turbowasm_wasi02_value_destroy(&result);
+    return status;
+}
+
 static turbowasm_status wasi02_fs_invoke(
     void *context,
     turbowasm_component_name instance_name,
@@ -1119,17 +1531,25 @@ static turbowasm_status wasi02_fs_invoke(
     turbowasm_wasi02_value result = {0};
     turbowasm_status status;
 
-    (void)arguments;
-
     if (filesystem == NULL || !filesystem->initialized ||
         out_result == NULL || trap == NULL ||
-        argument_count != 0u ||
         !wasi02_fs_can_bind(
             context, instance_name, function_name,
             graph, function_type))
         return TURBOWASM_TYPE_MISMATCH;
 
     *trap = TURBOWASM_TRAP_NONE;
+
+    if (component_name_is(
+            instance_name,
+            "wasi:filesystem/types@0.2.8"))
+        return invoke_filesystem_method(
+            filesystem, function_name,
+            arguments, argument_count, out_result);
+
+    if (argument_count != 0u)
+        return TURBOWASM_TYPE_MISMATCH;
+
     status = turbowasm_wasi02_filesystem_get_directories(
         filesystem, &result);
     if (status != TURBOWASM_OK)
