@@ -66,6 +66,18 @@ turbowasm_status turbowasm_wasi02_filesystem_descriptor_drop(
     uint32_t resource);
 
 /*
+ * Execute the retained synchronous wasi:filesystem/types@0.2.8 W3c subset.
+ * function_name uses canonical Component extern names such as
+ * "[method]descriptor.stat". Arguments/results use the typed W2 value model.
+ */
+turbowasm_status turbowasm_wasi02_filesystem_call(
+    turbowasm_wasi02_filesystem *filesystem,
+    const char *function_name,
+    const turbowasm_wasi02_value *arguments,
+    size_t argument_count,
+    turbowasm_wasi02_value *out_result);
+
+/*
  * Instantiate the real W3 preopens import path through Component canonical ABI.
  * The bridge is borrowed and must outlive the executable.
  */

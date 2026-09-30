@@ -99,6 +99,10 @@ static void host_fill_stat(
     out_stat->accessed_ns = host_us_to_ns(source->atime);
     out_stat->modified_ns = host_us_to_ns(source->mtime);
     out_stat->changed_ns = host_us_to_ns(source->ctime);
+    out_stat->timestamp_valid =
+        TURBOWASM_WASI_FS_TIME_ACCESSED_VALID |
+        TURBOWASM_WASI_FS_TIME_MODIFIED_VALID |
+        TURBOWASM_WASI_FS_TIME_CHANGED_VALID;
     if (source->is_symlink)
         out_stat->file_type = TURBOWASM_WASI_FILETYPE_SYMBOLIC_LINK;
     else if (source->is_directory)
