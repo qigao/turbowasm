@@ -597,20 +597,31 @@ bool turbowasm_component_type_graph_validate(
                      ++export_index) {
                     const turbowasm_component_instance_type_export *export_desc =
                         &instance_type->exports[export_index];
-                    const turbowasm_component_type *function_type;
+                    const turbowasm_component_type *export_type;
 
-                    if (export_desc->function_type >=
+                    if (export_desc->type_index >=
                             instance_type->type_graph.count ||
                         (export_desc->name_size != 0u &&
                          export_desc->name == NULL))
                         return false;
-                    function_type = turbowasm_component_type_graph_get(
+                    export_type = turbowasm_component_type_graph_get(
                         &instance_type->type_graph,
-                        export_desc->function_type);
-                    if (function_type == NULL ||
-                        function_type->kind !=
-                            TURBOWASM_COMPONENT_TYPE_FUNCTION)
+                        export_desc->type_index);
+                    if (export_type == NULL)
                         return false;
+                    if (export_desc->kind ==
+                            TURBOWASM_COMPONENT_INSTANCE_EXPORT_FUNCTION) {
+                        if (export_type->kind !=
+                            TURBOWASM_COMPONENT_TYPE_FUNCTION)
+                            return false;
+                    } else if (export_desc->kind ==
+                                   TURBOWASM_COMPONENT_INSTANCE_EXPORT_TYPE) {
+                        if (export_type->kind ==
+                            TURBOWASM_COMPONENT_TYPE_UNDEFINED)
+                            return false;
+                    } else {
+                        return false;
+                    }
                 }
                 break;
             }
