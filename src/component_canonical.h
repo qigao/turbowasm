@@ -38,7 +38,13 @@ typedef struct turbowasm_component_layout {
 } turbowasm_component_layout;
 
 typedef struct turbowasm_component_flat_type_list {
-    turbowasm_component_flat_type types[2];
+    /*
+     * Internal flatten scratch capacity. The synchronous ABI switches to
+     * indirect parameters above 16 flat carriers; one extra slot preserves
+     * that over-limit distinction for retained composites.
+     */
+    turbowasm_component_flat_type
+        types[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS];
     uint32_t count;
 } turbowasm_component_flat_type_list;
 

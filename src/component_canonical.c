@@ -84,10 +84,32 @@ static turbowasm_status resolved_kind(
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_component_canonical_layout(
+static bool align_up_u64(
+    uint64_t value,
+    uint64_t alignment,
+    uint64_t *out) {
+    uint64_t remainder;
+    uint64_t delta;
+
+    if (out == NULL || alignment == 0u)
+        return false;
+    remainder = value % alignment;
+    if (remainder == 0u) {
+        *out = value;
+        return true;
+    }
+    delta = alignment - remainder;
+    if (value > UINT64_MAX - delta)
+        return false;
+    *out = value + delta;
+    return true;
+}
+
+static turbowasm_status canonical_layout_inner(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
     turbowasm_component_pointer_type pointer_type,
+    uint32_t depth,
     turbowasm_component_layout *out) {
     turbowasm_component_type_kind kind;
     const turbowasm_component_type *type;
@@ -96,6 +118,8 @@ turbowasm_status turbowasm_component_canonical_layout(
 
     if (out == NULL || !pointer_type_valid(pointer_type))
         return TURBOWASM_INVALID_ARGUMENT;
+    if (depth >= TURBOWASM_COMPONENT_CANONICAL_MAX_DEPTH)
+        return TURBOWASM_UNSUPPORTED;
 
     status = resolved_kind(graph, ref, &kind, &type);
     if (status != TURBOWASM_OK)
@@ -147,6 +171,99 @@ turbowasm_status turbowasm_component_canonical_layout(
             out->size = 2u * ptr;
             return TURBOWASM_OK;
 
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+        case TURBOWASM_COMPONENT_TYPE_TUPLE: {
+            uint32_t count;
+            uint32_t i;
+            uint64_t alignment = 1u;
+            uint64_t offset = 0u;
+
+            if (type == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+            count = kind == TURBOWASM_COMPONENT_TYPE_RECORD
+                ? type->as.record.count
+                : type->as.tuple.count;
+            if (count == 0u)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            for (i = 0u; i < count; ++i) {
+                turbowasm_component_type_ref child =
+                    kind == TURBOWASM_COMPONENT_TYPE_RECORD
+                        ? type->as.record.fields[i].type
+                        : type->as.tuple.elements[i];
+                turbowasm_component_layout child_layout;
+                uint64_t aligned;
+
+                status = canonical_layout_inner(
+                    graph, child, pointer_type,
+                    depth + 1u, &child_layout);
+                if (status != TURBOWASM_OK)
+                    return status;
+                if (child_layout.alignment > alignment)
+                    alignment = child_layout.alignment;
+                if (!align_up_u64(
+                        offset, child_layout.alignment, &aligned) ||
+                    aligned > UINT64_MAX - child_layout.size)
+                    return TURBOWASM_UNSUPPORTED;
+                offset = aligned + child_layout.size;
+            }
+
+            if (!align_up_u64(offset, alignment, &out->size))
+                return TURBOWASM_UNSUPPORTED;
+            out->alignment = alignment;
+            return TURBOWASM_OK;
+        }
+
+        case TURBOWASM_COMPONENT_TYPE_OPTION:
+        case TURBOWASM_COMPONENT_TYPE_RESULT: {
+            turbowasm_component_type_ref cases[2];
+            bool present[2] = {false, false};
+            uint64_t payload_alignment = 1u;
+            uint64_t payload_size = 0u;
+            uint64_t payload_offset;
+            uint32_t i;
+
+            if (type == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
+                present[1] = true;
+                cases[1] = type->as.option.payload;
+            } else {
+                present[0] = type->as.result.has_ok;
+                cases[0] = type->as.result.ok;
+                present[1] = type->as.result.has_error;
+                cases[1] = type->as.result.error;
+            }
+
+            for (i = 0u; i < 2u; ++i) {
+                turbowasm_component_layout case_layout;
+                if (!present[i])
+                    continue;
+                status = canonical_layout_inner(
+                    graph, cases[i], pointer_type,
+                    depth + 1u, &case_layout);
+                if (status != TURBOWASM_OK)
+                    return status;
+                if (case_layout.alignment > payload_alignment)
+                    payload_alignment = case_layout.alignment;
+                if (case_layout.size > payload_size)
+                    payload_size = case_layout.size;
+            }
+
+            out->alignment = payload_alignment;
+            if (!align_up_u64(
+                    UINT64_C(1), payload_alignment,
+                    &payload_offset) ||
+                payload_offset > UINT64_MAX - payload_size ||
+                !align_up_u64(
+                    payload_offset + payload_size,
+                    out->alignment,
+                    &out->size))
+                return TURBOWASM_UNSUPPORTED;
+            return TURBOWASM_OK;
+        }
+
         case TURBOWASM_COMPONENT_TYPE_OWN:
         case TURBOWASM_COMPONENT_TYPE_BORROW: {
             const turbowasm_component_type *resource;
@@ -164,6 +281,7 @@ turbowasm_status turbowasm_component_canonical_layout(
 
         case TURBOWASM_COMPONENT_TYPE_RESOURCE:
         case TURBOWASM_COMPONENT_TYPE_FUNCTION:
+        case TURBOWASM_COMPONENT_TYPE_INSTANCE:
             (void)type;
             return TURBOWASM_UNSUPPORTED;
 
@@ -172,10 +290,48 @@ turbowasm_status turbowasm_component_canonical_layout(
     }
 }
 
-turbowasm_status turbowasm_component_canonical_flatten_type(
+turbowasm_status turbowasm_component_canonical_layout(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
     turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_layout *out) {
+    return canonical_layout_inner(
+        graph, ref, pointer_type, 0u, out);
+}
+
+static bool append_flat_capped(
+    turbowasm_component_flat_type_list *out,
+    const turbowasm_component_flat_type_list *part) {
+    uint32_t capacity = TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS;
+    uint32_t i;
+
+    if (out == NULL || part == NULL ||
+        out->count > capacity || part->count > capacity)
+        return false;
+
+    for (i = 0u; i < part->count && out->count < capacity; ++i)
+        out->types[out->count++] = part->types[i];
+    return true;
+}
+
+static turbowasm_component_flat_type join_flat_type(
+    turbowasm_component_flat_type left,
+    turbowasm_component_flat_type right) {
+    if (left == right)
+        return left;
+    if ((left == TURBOWASM_COMPONENT_FLAT_I32 &&
+         right == TURBOWASM_COMPONENT_FLAT_F32) ||
+        (left == TURBOWASM_COMPONENT_FLAT_F32 &&
+         right == TURBOWASM_COMPONENT_FLAT_I32))
+        return TURBOWASM_COMPONENT_FLAT_I32;
+    return TURBOWASM_COMPONENT_FLAT_I64;
+}
+
+static turbowasm_status canonical_flatten_type_inner(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    turbowasm_component_pointer_type pointer_type,
+    uint32_t depth,
     turbowasm_component_flat_type_list *out) {
     turbowasm_component_type_kind kind;
     const turbowasm_component_type *type;
@@ -183,6 +339,8 @@ turbowasm_status turbowasm_component_canonical_flatten_type(
 
     if (out == NULL || !pointer_type_valid(pointer_type))
         return TURBOWASM_INVALID_ARGUMENT;
+    if (depth >= TURBOWASM_COMPONENT_CANONICAL_MAX_DEPTH)
+        return TURBOWASM_UNSUPPORTED;
 
     status = resolved_kind(graph, ref, &kind, &type);
     if (status != TURBOWASM_OK)
@@ -250,14 +408,105 @@ turbowasm_status turbowasm_component_canonical_flatten_type(
             out->count = 2u;
             return TURBOWASM_OK;
 
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+        case TURBOWASM_COMPONENT_TYPE_TUPLE: {
+            uint32_t count;
+            uint32_t i;
+
+            if (type == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+            count = kind == TURBOWASM_COMPONENT_TYPE_RECORD
+                ? type->as.record.count
+                : type->as.tuple.count;
+            if (count == 0u)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            for (i = 0u; i < count; ++i) {
+                turbowasm_component_type_ref child =
+                    kind == TURBOWASM_COMPONENT_TYPE_RECORD
+                        ? type->as.record.fields[i].type
+                        : type->as.tuple.elements[i];
+                turbowasm_component_flat_type_list part;
+
+                status = canonical_flatten_type_inner(
+                    graph, child, pointer_type,
+                    depth + 1u, &part);
+                if (status != TURBOWASM_OK)
+                    return status;
+                if (!append_flat_capped(out, &part))
+                    return TURBOWASM_UNSUPPORTED;
+            }
+            return TURBOWASM_OK;
+        }
+
+        case TURBOWASM_COMPONENT_TYPE_OPTION:
+        case TURBOWASM_COMPONENT_TYPE_RESULT: {
+            turbowasm_component_type_ref cases[2];
+            bool present[2] = {false, false};
+            turbowasm_component_flat_type_list joined = {{0}, 0u};
+            uint32_t i;
+
+            if (type == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
+                present[1] = true;
+                cases[1] = type->as.option.payload;
+            } else {
+                present[0] = type->as.result.has_ok;
+                cases[0] = type->as.result.ok;
+                present[1] = type->as.result.has_error;
+                cases[1] = type->as.result.error;
+            }
+
+            for (i = 0u; i < 2u; ++i) {
+                turbowasm_component_flat_type_list part;
+                uint32_t j;
+
+                if (!present[i])
+                    continue;
+                status = canonical_flatten_type_inner(
+                    graph, cases[i], pointer_type,
+                    depth + 1u, &part);
+                if (status != TURBOWASM_OK)
+                    return status;
+
+                for (j = 0u; j < part.count; ++j) {
+                    if (j < joined.count) {
+                        joined.types[j] = join_flat_type(
+                            joined.types[j], part.types[j]);
+                    } else if (joined.count <
+                               TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS) {
+                        joined.types[joined.count++] = part.types[j];
+                    }
+                }
+            }
+
+            out->types[0] = TURBOWASM_COMPONENT_FLAT_I32;
+            out->count = 1u;
+            if (!append_flat_capped(out, &joined))
+                return TURBOWASM_UNSUPPORTED;
+            return TURBOWASM_OK;
+        }
+
         case TURBOWASM_COMPONENT_TYPE_RESOURCE:
         case TURBOWASM_COMPONENT_TYPE_FUNCTION:
+        case TURBOWASM_COMPONENT_TYPE_INSTANCE:
             (void)type;
             return TURBOWASM_UNSUPPORTED;
 
         default:
             return TURBOWASM_UNSUPPORTED;
     }
+}
+
+turbowasm_status turbowasm_component_canonical_flatten_type(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_flat_type_list *out) {
+    return canonical_flatten_type_inner(
+        graph, ref, pointer_type, 0u, out);
 }
 
 static turbowasm_status append_flat_type(
