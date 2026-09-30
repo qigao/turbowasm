@@ -138,6 +138,29 @@ static turbowasm_status slot_from_resource(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status clear_transient_pollable(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_wasi02_stream_slot *slot) {
+    turbowasm_status status;
+
+    if (streams == NULL || slot == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!slot->transient_pollable_valid)
+        return TURBOWASM_OK;
+    if (streams->poll == NULL)
+        return TURBOWASM_TRAPPED;
+
+    status = turbowasm_wasi02_pollable_drop(
+        streams->poll,
+        slot->transient_pollable);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    slot->transient_pollable_valid = false;
+    slot->transient_pollable = 0u;
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status resource_destructor(
     void *context,
     uint64_t resource_identity,
@@ -159,6 +182,13 @@ static turbowasm_status resource_destructor(
     if (!slot->active ||
         identity_for_kind(slot->kind) != resource_identity)
         return TURBOWASM_TRAPPED;
+
+    {
+        turbowasm_status status =
+            clear_transient_pollable(streams, slot);
+        if (status != TURBOWASM_OK)
+            return status;
+    }
 
     switch (slot->kind) {
         case TURBOWASM_WASI02_STREAM_SLOT_INPUT:
@@ -713,18 +743,18 @@ static turbowasm_status call_output_flush(
     return make_result_unit_ok(out);
 }
 
-static turbowasm_status call_subscribe(
+static turbowasm_status create_subscription_resource(
     turbowasm_wasi02_streams *streams,
-    const turbowasm_wasi02_value *arguments,
+    uint32_t stream_resource,
     turbowasm_wasi02_stream_slot_kind kind,
-    turbowasm_wasi02_value *out) {
+    uint32_t *out_pollable_resource) {
     turbowasm_wasi02_stream_slot *slot;
     turbowasm_wasi02_stream_subscribe_fn subscribe;
     turbowasm_value pollable_rep = {0};
-    uint32_t pollable_resource = 0u;
     turbowasm_status status;
 
-    if (streams == NULL || streams->poll == NULL)
+    if (streams == NULL || streams->poll == NULL ||
+        out_pollable_resource == NULL)
         return TURBOWASM_UNSUPPORTED;
 
     subscribe = kind == TURBOWASM_WASI02_STREAM_SLOT_INPUT
@@ -735,7 +765,7 @@ static turbowasm_status call_subscribe(
 
     status = slot_from_resource(
         streams,
-        arguments[0].as.resource,
+        stream_resource,
         kind,
         &slot);
     if (status != TURBOWASM_OK)
@@ -751,7 +781,7 @@ static turbowasm_status call_subscribe(
     status = turbowasm_wasi02_pollable_new(
         streams->poll,
         pollable_rep,
-        &pollable_resource);
+        out_pollable_resource);
     if (status != TURBOWASM_OK) {
         if (streams->poll->provider.drop != NULL) {
             turbowasm_status drop_status =
@@ -764,9 +794,197 @@ static turbowasm_status call_subscribe(
         return status;
     }
 
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status call_subscribe(
+    turbowasm_wasi02_streams *streams,
+    const turbowasm_wasi02_value *arguments,
+    turbowasm_wasi02_stream_slot_kind kind,
+    turbowasm_wasi02_value *out) {
+    uint32_t pollable_resource = 0u;
+    turbowasm_status status;
+
+    status = create_subscription_resource(
+        streams,
+        arguments[0].as.resource,
+        kind,
+        &pollable_resource);
+    if (status != TURBOWASM_OK)
+        return status;
+
     memset(out, 0, sizeof(*out));
     out->kind = TURBOWASM_WASI02_VALUE_RESOURCE;
     out->as.resource = pollable_resource;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status wait_input_once(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_host_call *call,
+    uint32_t stream_resource) {
+    turbowasm_wasi02_stream_slot *slot;
+    uint32_t pollable_resource = 0u;
+    turbowasm_status status;
+    turbowasm_status cleanup_status;
+
+    if (streams == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    /*
+     * Fail before provider subscribe when this invocation cannot suspend.
+     */
+    if (call == NULL ||
+        !turbowasm_host_call_can_wait(call))
+        return TURBOWASM_UNSUPPORTED;
+
+    status = slot_from_resource(
+        streams,
+        stream_resource,
+        TURBOWASM_WASI02_STREAM_SLOT_INPUT,
+        &slot);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = clear_transient_pollable(streams, slot);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = create_subscription_resource(
+        streams,
+        stream_resource,
+        TURBOWASM_WASI02_STREAM_SLOT_INPUT,
+        &pollable_resource);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    slot->transient_pollable_valid = true;
+    slot->transient_pollable = pollable_resource;
+
+    status = turbowasm_wasi02_pollable_block(
+        streams->poll,
+        pollable_resource,
+        call);
+
+    cleanup_status = clear_transient_pollable(
+        streams, slot);
+    if (cleanup_status != TURBOWASM_OK)
+        return cleanup_status;
+    return status;
+}
+
+static bool read_result_has_progress(
+    const turbowasm_wasi02_value *result,
+    bool *out_error,
+    bool *out_progress) {
+    if (result == NULL || out_error == NULL ||
+        out_progress == NULL ||
+        result->kind != TURBOWASM_WASI02_VALUE_RESULT)
+        return false;
+
+    *out_error = result->as.result.is_error;
+    if (*out_error) {
+        *out_progress = true;
+        return true;
+    }
+
+    if (result->as.result.value == NULL ||
+        result->as.result.value->kind !=
+            TURBOWASM_WASI02_VALUE_LIST)
+        return false;
+
+    *out_progress =
+        result->as.result.value->as.list.count != 0u;
+    return true;
+}
+
+static bool skip_result_has_progress(
+    const turbowasm_wasi02_value *result,
+    bool *out_error,
+    bool *out_progress) {
+    if (result == NULL || out_error == NULL ||
+        out_progress == NULL ||
+        result->kind != TURBOWASM_WASI02_VALUE_RESULT)
+        return false;
+
+    *out_error = result->as.result.is_error;
+    if (*out_error) {
+        *out_progress = true;
+        return true;
+    }
+
+    if (result->as.result.value == NULL ||
+        result->as.result.value->kind !=
+            TURBOWASM_WASI02_VALUE_U64)
+        return false;
+
+    *out_progress = result->as.result.value->as.u64 != 0u;
+    return true;
+}
+
+static turbowasm_status call_input_blocking(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_host_call *call,
+    const turbowasm_wasi02_value *arguments,
+    bool skip,
+    turbowasm_wasi02_value *out) {
+    bool is_error = false;
+    bool progress = false;
+    uint64_t requested = arguments[1].as.u64;
+    turbowasm_status status;
+
+    status = skip
+        ? call_input_skip(streams, arguments, out)
+        : call_input_read(streams, arguments, out);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (!(skip
+            ? skip_result_has_progress(
+                out, &is_error, &progress)
+            : read_result_has_progress(
+                out, &is_error, &progress))) {
+        turbowasm_wasi02_value_destroy(out);
+        return TURBOWASM_MALFORMED_MODULE;
+    }
+
+    if (is_error || progress || requested == 0u)
+        return TURBOWASM_OK;
+
+    turbowasm_wasi02_value_destroy(out);
+
+    status = wait_input_once(
+        streams,
+        call,
+        arguments[0].as.resource);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = skip
+        ? call_input_skip(streams, arguments, out)
+        : call_input_read(streams, arguments, out);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (!(skip
+            ? skip_result_has_progress(
+                out, &is_error, &progress)
+            : read_result_has_progress(
+                out, &is_error, &progress))) {
+        turbowasm_wasi02_value_destroy(out);
+        return TURBOWASM_MALFORMED_MODULE;
+    }
+
+    if (!is_error && !progress) {
+        /*
+         * A completed input subscription promises readable data or terminal
+         * stream state. A second empty success is therefore a provider
+         * contract violation rather than a reason to spin.
+         */
+        turbowasm_wasi02_value_destroy(out);
+        return TURBOWASM_TRAPPED;
+    }
+
     return TURBOWASM_OK;
 }
 
@@ -797,8 +1015,9 @@ static turbowasm_status call_error_debug(
     return copy_debug_string(view, out);
 }
 
-turbowasm_status turbowasm_wasi02_streams_call(
+turbowasm_status turbowasm_wasi02_streams_call_with_host(
     turbowasm_wasi02_streams *streams,
+    turbowasm_host_call *call,
     const char *interface_name,
     const char *function_name,
     const turbowasm_wasi02_value *arguments,
@@ -835,7 +1054,17 @@ turbowasm_status turbowasm_wasi02_streams_call(
     if (strcmp(interface_name, "streams") == 0) {
         if (strcmp(
                 function_name,
-                "[method]input-stream.read") == 0) {
+                "[method]input-stream.blocking-read") == 0) {
+            status = call_input_blocking(
+                streams, call, arguments, false, out_result);
+        } else if (strcmp(
+                       function_name,
+                       "[method]input-stream.blocking-skip") == 0) {
+            status = call_input_blocking(
+                streams, call, arguments, true, out_result);
+        } else if (strcmp(
+                       function_name,
+                       "[method]input-stream.read") == 0) {
             status = call_input_read(
                 streams, arguments, out_result);
         } else if (strcmp(
@@ -899,4 +1128,21 @@ turbowasm_status turbowasm_wasi02_streams_call(
         return TURBOWASM_MALFORMED_MODULE;
     }
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_wasi02_streams_call(
+    turbowasm_wasi02_streams *streams,
+    const char *interface_name,
+    const char *function_name,
+    const turbowasm_wasi02_value *arguments,
+    size_t argument_count,
+    turbowasm_wasi02_value *out_result) {
+    return turbowasm_wasi02_streams_call_with_host(
+        streams,
+        NULL,
+        interface_name,
+        function_name,
+        arguments,
+        argument_count,
+        out_result);
 }

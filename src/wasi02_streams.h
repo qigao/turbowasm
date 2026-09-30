@@ -110,6 +110,9 @@ typedef struct turbowasm_wasi02_stream_slot {
 
     bool write_permit_valid;
     uint64_t write_permit;
+
+    bool transient_pollable_valid;
+    uint32_t transient_pollable;
 } turbowasm_wasi02_stream_slot;
 
 typedef struct turbowasm_wasi02_streams {
@@ -166,6 +169,15 @@ turbowasm_status turbowasm_wasi02_stream_resource_drop(
  *
  * blocking methods and splice remain unsupported here.
  */
+turbowasm_status turbowasm_wasi02_streams_call_with_host(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_host_call *call,
+    const char *interface_name,
+    const char *function_name,
+    const turbowasm_wasi02_value *arguments,
+    size_t argument_count,
+    turbowasm_wasi02_value *out_result);
+
 turbowasm_status turbowasm_wasi02_streams_call(
     turbowasm_wasi02_streams *streams,
     const char *interface_name,
