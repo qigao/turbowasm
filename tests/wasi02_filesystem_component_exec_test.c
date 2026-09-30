@@ -6,6 +6,7 @@
 #endif
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 typedef struct fake_fs {
@@ -92,6 +93,27 @@ static const uint8_t preopens_component[] = {
     0x00,0x03,0x00,0x03,0x0b,0x09,0x01,0x00,0x03,0x72,0x75,0x6e,0x01,0x01,0x00,
 };
 
+static void diagnose_component_sections(void) {
+    static const size_t ends[] = {
+        88u,174u,180u,203u,223u,257u,274u,320u,357u,
+        379u,393u,412u,426u,437u,444u,452u,463u
+    };
+    size_t i;
+
+    for (i = 0u; i < sizeof(ends) / sizeof(ends[0]); ++i) {
+        turbowasm_component_binary prefix = {0};
+        turbowasm_status status = turbowasm_component_binary_load(
+            &prefix, preopens_component, ends[i]);
+        fprintf(
+            stderr,
+            "w3b fixture prefix %zu end=%zu status=%d\n",
+            i, ends[i], (int)status);
+        turbowasm_component_binary_destroy(&prefix);
+        if (status != TURBOWASM_OK)
+            break;
+    }
+}
+
 static void test_preopens_component_resource_roundtrip(void) {
     fake_fs fake = {0};
     turbowasm_wasi_fs filesystem = {0};
@@ -124,10 +146,16 @@ static void test_preopens_component_resource_roundtrip(void) {
 
     assert(turbowasm_wasi02_filesystem_init(
                &bridge, &filesystem, 8u) == TURBOWASM_OK);
-    assert(turbowasm_component_binary_load(
-               &binary,
-               preopens_component,
-               sizeof(preopens_component)) == TURBOWASM_OK);
+    {
+        turbowasm_status load_status =
+            turbowasm_component_binary_load(
+                &binary,
+                preopens_component,
+                sizeof(preopens_component));
+        if (load_status != TURBOWASM_OK)
+            diagnose_component_sections();
+        assert(load_status == TURBOWASM_OK);
+    }
     assert(binary.import_count == 2u);
     assert(binary.resource_builtin_count == 1u);
     assert(binary.canon_lower_count == 1u);
