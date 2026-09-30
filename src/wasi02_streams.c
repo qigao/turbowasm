@@ -229,6 +229,12 @@ turbowasm_status turbowasm_wasi02_streams_init(
         max_resources > TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS ||
         streams->initialized)
         return TURBOWASM_INVALID_ARGUMENT;
+    if ((provider->stdin_stream != NULL &&
+         provider->input_drop == NULL) ||
+        ((provider->stdout_stream != NULL ||
+          provider->stderr_stream != NULL) &&
+         provider->output_drop == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
 
     memset(streams, 0, sizeof(*streams));
     streams->slots = (turbowasm_wasi02_stream_slot *)
@@ -1794,6 +1800,18 @@ stream_interface_by_component_name(
             name, "wasi:io/error@0.2.8"))
         return turbowasm_wasi02_find_interface(
             "wasi:io", "error");
+    if (stream_component_name_is(
+            name, "wasi:cli/stdin@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:cli", "stdin");
+    if (stream_component_name_is(
+            name, "wasi:cli/stdout@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:cli", "stdout");
+    if (stream_component_name_is(
+            name, "wasi:cli/stderr@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:cli", "stderr");
     return NULL;
 }
 
@@ -2322,6 +2340,60 @@ static turbowasm_status wasi02_streams_resource_drop(
         streams);
 }
 
+static turbowasm_status call_cli_stdio_factory(
+    turbowasm_wasi02_streams *streams,
+    const char *interface_name,
+    turbowasm_wasi02_value *out) {
+    turbowasm_wasi02_stream_factory_fn factory = NULL;
+    turbowasm_wasi02_stream_slot_kind kind =
+        TURBOWASM_WASI02_STREAM_SLOT_NONE;
+    turbowasm_value rep = {0};
+    uint32_t resource = 0u;
+    turbowasm_status status;
+
+    if (streams == NULL || interface_name == NULL ||
+        out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (strcmp(interface_name, "stdin") == 0) {
+        factory = streams->provider.stdin_stream;
+        kind = TURBOWASM_WASI02_STREAM_SLOT_INPUT;
+    } else if (strcmp(interface_name, "stdout") == 0) {
+        factory = streams->provider.stdout_stream;
+        kind = TURBOWASM_WASI02_STREAM_SLOT_OUTPUT;
+    } else if (strcmp(interface_name, "stderr") == 0) {
+        factory = streams->provider.stderr_stream;
+        kind = TURBOWASM_WASI02_STREAM_SLOT_OUTPUT;
+    } else {
+        return TURBOWASM_UNSUPPORTED;
+    }
+
+    if (factory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    status = factory(streams->provider.context, &rep);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = new_resource(
+        streams, kind, rep, &resource);
+    if (status != TURBOWASM_OK) {
+        if (kind == TURBOWASM_WASI02_STREAM_SLOT_INPUT) {
+            streams->provider.input_drop(
+                streams->provider.context, rep);
+        } else {
+            streams->provider.output_drop(
+                streams->provider.context, rep);
+        }
+        return status;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = TURBOWASM_WASI02_VALUE_RESOURCE;
+    out->as.resource = resource;
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status wasi02_streams_invoke(
     void *context,
     turbowasm_host_call *call,
@@ -2376,14 +2448,21 @@ static turbowasm_status wasi02_streams_invoke(
             goto done;
     }
 
-    status = turbowasm_wasi02_streams_call_with_host(
-        streams,
-        call,
-        iface->interface_name,
-        function->name,
-        wasi_arguments,
-        argument_count,
-        &wasi_result);
+    if (strcmp(iface->package_name, "wasi:cli") == 0) {
+        status = call_cli_stdio_factory(
+            streams,
+            iface->interface_name,
+            &wasi_result);
+    } else {
+        status = turbowasm_wasi02_streams_call_with_host(
+            streams,
+            call,
+            iface->interface_name,
+            function->name,
+            wasi_arguments,
+            argument_count,
+            &wasi_result);
+    }
     if (status != TURBOWASM_OK)
         goto done;
 
