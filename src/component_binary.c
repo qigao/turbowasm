@@ -1490,16 +1490,25 @@ static turbowasm_status read_function_externtype(
 static turbowasm_status decode_component_import_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
-    uint32_t current_type_count) {
+    uint32_t current_type_count,
+    uint32_t *next_component_function_index,
+    uint32_t *next_component_instance_index) {
     uint32_t count;
     uint32_t i;
 
+    if (component == NULL ||
+        next_component_function_index == NULL ||
+        next_component_instance_index == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(&section, &count))
         return TURBOWASM_MALFORMED_MODULE;
 
     for (i = 0u; i < count; ++i) {
         turbowasm_component_import import_desc;
+        const turbowasm_component_type *type;
+        uint8_t external_kind;
         turbowasm_status status;
+
         memset(&import_desc, 0, sizeof(import_desc));
 
         status = read_name_attributes(
@@ -1507,12 +1516,46 @@ static turbowasm_status decode_component_import_section(
         if (status != TURBOWASM_OK)
             return status;
 
-        import_desc.kind = TURBOWASM_COMPONENT_EXTERN_FUNCTION;
-        status = read_function_externtype(
-            &section, component, current_type_count,
-            &import_desc.type_index);
-        if (status != TURBOWASM_OK)
-            return status;
+        if (!turbowasm_reader_u8(
+                &section, &external_kind) ||
+            !turbowasm_reader_uleb32(
+                &section, &import_desc.type_index) ||
+            import_desc.type_index >= current_type_count)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        type = turbowasm_component_type_graph_get(
+            &component->type_graph,
+            import_desc.type_index);
+        if (type == NULL)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        if (external_kind == 0x01u) {
+            if (type->kind !=
+                    TURBOWASM_COMPONENT_TYPE_FUNCTION)
+                return TURBOWASM_MALFORMED_MODULE;
+            if (*next_component_function_index == UINT32_MAX)
+                return TURBOWASM_OUT_OF_MEMORY;
+
+            import_desc.kind =
+                TURBOWASM_COMPONENT_EXTERN_FUNCTION;
+            import_desc.item_index =
+                *next_component_function_index;
+            ++*next_component_function_index;
+        } else if (external_kind == 0x05u) {
+            if (type->kind !=
+                    TURBOWASM_COMPONENT_TYPE_INSTANCE)
+                return TURBOWASM_MALFORMED_MODULE;
+            if (*next_component_instance_index == UINT32_MAX)
+                return TURBOWASM_OUT_OF_MEMORY;
+
+            import_desc.kind =
+                TURBOWASM_COMPONENT_EXTERN_INSTANCE;
+            import_desc.item_index =
+                *next_component_instance_index;
+            ++*next_component_instance_index;
+        } else {
+            return TURBOWASM_UNSUPPORTED;
+        }
 
         if (!append_import(component, import_desc))
             return TURBOWASM_OUT_OF_MEMORY;
