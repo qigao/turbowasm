@@ -236,7 +236,9 @@ if(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)
   endif()
 endif()
 
-if(TARGET turbowasm_wasi02_core AND TARGET TurboWasm::Component)
+if(TARGET turbowasm_wasi02_core AND
+   TARGET turbowasm_wasi02_poll_core AND
+   TARGET TurboWasm::Component)
   # W4c stream provider bridge remains internal until Component execution,
   # pollable subscription, and blocking semantics qualify.
   add_library(turbowasm_wasi02_streams_core STATIC
@@ -249,6 +251,7 @@ if(TARGET turbowasm_wasi02_core AND TARGET TurboWasm::Component)
   target_link_libraries(turbowasm_wasi02_streams_core
     PRIVATE
       turbowasm_wasi02_core
+      turbowasm_wasi02_poll_core
       TurboWasm::Component)
   if(MSVC)
     target_compile_options(turbowasm_wasi02_streams_core PRIVATE /W4)

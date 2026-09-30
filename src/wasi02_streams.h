@@ -3,6 +3,7 @@
 
 #include "component_resource.h"
 #include "wasi02_provider.h"
+#include "wasi02_poll.h"
 
 #include <turbowasm/status.h>
 #include <turbowasm/value.h>
@@ -61,6 +62,11 @@ typedef turbowasm_status (*turbowasm_wasi02_output_write_zeroes_fn)(
     uint64_t size,
     turbowasm_wasi02_stream_error *out_error);
 
+typedef turbowasm_status (*turbowasm_wasi02_stream_subscribe_fn)(
+    void *context,
+    turbowasm_value stream_rep,
+    turbowasm_value *out_pollable_rep);
+
 typedef turbowasm_status (*turbowasm_wasi02_error_debug_fn)(
     void *context,
     turbowasm_value error_rep,
@@ -75,11 +81,13 @@ typedef struct turbowasm_wasi02_stream_provider {
 
     turbowasm_wasi02_input_read_fn input_read;
     turbowasm_wasi02_input_skip_fn input_skip;
+    turbowasm_wasi02_stream_subscribe_fn input_subscribe;
 
     turbowasm_wasi02_output_check_write_fn output_check_write;
     turbowasm_wasi02_output_write_fn output_write;
     turbowasm_wasi02_output_flush_fn output_flush;
     turbowasm_wasi02_output_write_zeroes_fn output_write_zeroes;
+    turbowasm_wasi02_stream_subscribe_fn output_subscribe;
 
     turbowasm_wasi02_error_debug_fn error_debug;
 
@@ -113,6 +121,7 @@ typedef struct turbowasm_wasi02_streams {
     uint32_t capacity;
     uint32_t free_count;
 
+    turbowasm_wasi02_poll *poll;
     bool initialized;
 } turbowasm_wasi02_streams;
 
@@ -123,6 +132,10 @@ turbowasm_status turbowasm_wasi02_streams_init(
 
 turbowasm_status turbowasm_wasi02_streams_destroy(
     turbowasm_wasi02_streams *streams);
+
+turbowasm_status turbowasm_wasi02_streams_attach_poll(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_wasi02_poll *poll);
 
 turbowasm_status turbowasm_wasi02_input_stream_new(
     turbowasm_wasi02_streams *streams,
@@ -148,7 +161,10 @@ turbowasm_status turbowasm_wasi02_stream_resource_drop(
  *   output check-write/write/flush/write-zeroes
  *   error.to-debug-string
  *
- * subscribe, blocking methods and splice remain unsupported here.
+ * subscribe is available when a poll bridge is attached and the provider
+ * supplies the corresponding subscribe callback.
+ *
+ * blocking methods and splice remain unsupported here.
  */
 turbowasm_status turbowasm_wasi02_streams_call(
     turbowasm_wasi02_streams *streams,

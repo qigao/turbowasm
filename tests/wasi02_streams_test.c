@@ -25,6 +25,8 @@ typedef struct stream_probe {
     uint32_t output_drop_calls;
     uint32_t error_drop_calls;
     uint32_t debug_calls;
+    uint32_t input_subscribe_calls;
+    uint32_t output_subscribe_calls;
 
     bool read_error;
     bool skip_closed;
@@ -201,16 +203,48 @@ static void probe_error_drop(
     ++probe->error_drop_calls;
 }
 
+static turbowasm_status probe_input_subscribe(
+    void *context,
+    turbowasm_value stream_rep,
+    turbowasm_value *out_pollable_rep) {
+    stream_probe *probe = (stream_probe *)context;
+    assert(probe != NULL);
+    assert(stream_rep.kind == TURBOWASM_VALUE_I64);
+    assert(stream_rep.as.i64 == 11);
+    assert(out_pollable_rep != NULL);
+    ++probe->input_subscribe_calls;
+    out_pollable_rep->kind = TURBOWASM_VALUE_I64;
+    out_pollable_rep->as.i64 = 101;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status probe_output_subscribe(
+    void *context,
+    turbowasm_value stream_rep,
+    turbowasm_value *out_pollable_rep) {
+    stream_probe *probe = (stream_probe *)context;
+    assert(probe != NULL);
+    assert(stream_rep.kind == TURBOWASM_VALUE_I64);
+    assert(stream_rep.as.i64 == 22);
+    assert(out_pollable_rep != NULL);
+    ++probe->output_subscribe_calls;
+    out_pollable_rep->kind = TURBOWASM_VALUE_I64;
+    out_pollable_rep->as.i64 = 202;
+    return TURBOWASM_OK;
+}
+
 static turbowasm_wasi02_stream_provider make_provider(
     stream_probe *probe) {
     turbowasm_wasi02_stream_provider provider = {0};
     provider.context = probe;
     provider.input_read = probe_read;
     provider.input_skip = probe_skip;
+    provider.input_subscribe = probe_input_subscribe;
     provider.output_check_write = probe_check_write;
     provider.output_write = probe_write;
     provider.output_flush = probe_flush;
     provider.output_write_zeroes = probe_write_zeroes;
+    provider.output_subscribe = probe_output_subscribe;
     provider.error_debug = probe_error_debug;
     provider.input_drop = probe_input_drop;
     provider.output_drop = probe_output_drop;
@@ -449,7 +483,154 @@ static void test_nonblocking_stream_contract(void) {
                &streams) == TURBOWASM_OK);
 }
 
+typedef struct subscribe_poll_probe {
+    uint32_t ready_calls;
+    uint32_t drop_calls;
+    int64_t last_dropped;
+} subscribe_poll_probe;
+
+static turbowasm_status subscribe_poll_ready(
+    void *context,
+    turbowasm_value rep,
+    bool *out_ready) {
+    subscribe_poll_probe *probe =
+        (subscribe_poll_probe *)context;
+    assert(probe != NULL);
+    assert(rep.kind == TURBOWASM_VALUE_I64);
+    assert(out_ready != NULL);
+    ++probe->ready_calls;
+    *out_ready = rep.as.i64 == 101;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status subscribe_poll_drop(
+    void *context,
+    turbowasm_value rep) {
+    subscribe_poll_probe *probe =
+        (subscribe_poll_probe *)context;
+    assert(probe != NULL);
+    assert(rep.kind == TURBOWASM_VALUE_I64);
+    ++probe->drop_calls;
+    probe->last_dropped = rep.as.i64;
+    return TURBOWASM_OK;
+}
+
+static void test_stream_subscribe_pollable_bridge(void) {
+    stream_probe stream = {0};
+    subscribe_poll_probe poll_probe = {0};
+    turbowasm_wasi02_stream_provider stream_provider =
+        make_provider(&stream);
+    turbowasm_wasi02_poll_provider poll_provider = {0};
+    turbowasm_wasi02_streams streams = {0};
+    turbowasm_wasi02_poll poll = {0};
+    turbowasm_value rep = {0};
+    turbowasm_wasi02_value argument = {0};
+    turbowasm_wasi02_value result = {0};
+    uint32_t input = 0u;
+    uint32_t output = 0u;
+    uint32_t input_pollable = 0u;
+    uint32_t output_pollable = 0u;
+    bool ready = false;
+
+    poll_provider.context = &poll_probe;
+    poll_provider.ready = subscribe_poll_ready;
+    poll_provider.drop = subscribe_poll_drop;
+
+    assert(turbowasm_wasi02_streams_init(
+               &streams,
+               &stream_provider,
+               4u) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_poll_init(
+               &poll,
+               &poll_provider,
+               1u) == TURBOWASM_OK);
+
+    rep.kind = TURBOWASM_VALUE_I64;
+    rep.as.i64 = 11;
+    assert(turbowasm_wasi02_input_stream_new(
+               &streams, rep, &input) == TURBOWASM_OK);
+    rep.as.i64 = 22;
+    assert(turbowasm_wasi02_output_stream_new(
+               &streams, rep, &output) == TURBOWASM_OK);
+
+    set_resource(&argument, input);
+    assert(turbowasm_wasi02_streams_call(
+               &streams,
+               "streams",
+               "[method]input-stream.subscribe",
+               &argument, 1u, &result) == TURBOWASM_UNSUPPORTED);
+    assert(stream.input_subscribe_calls == 0u);
+
+    assert(turbowasm_wasi02_streams_attach_poll(
+               &streams, &poll) == TURBOWASM_OK);
+
+    assert(turbowasm_wasi02_streams_call(
+               &streams,
+               "streams",
+               "[method]input-stream.subscribe",
+               &argument, 1u, &result) == TURBOWASM_OK);
+    assert(result.kind == TURBOWASM_WASI02_VALUE_RESOURCE);
+    input_pollable = result.as.resource;
+    assert(input_pollable != 0u);
+    assert(stream.input_subscribe_calls == 1u);
+    assert(turbowasm_wasi02_pollable_ready(
+               &poll,
+               input_pollable,
+               &ready) == TURBOWASM_OK);
+    assert(ready);
+    turbowasm_wasi02_value_destroy(&result);
+
+    /*
+     * Poll capacity is one. Provider subscription succeeds, but bridge
+     * allocation fails and must release the returned provider rep.
+     */
+    set_resource(&argument, output);
+    assert(turbowasm_wasi02_streams_call(
+               &streams,
+               "streams",
+               "[method]output-stream.subscribe",
+               &argument, 1u, &result) == TURBOWASM_OUT_OF_MEMORY);
+    assert(stream.output_subscribe_calls == 1u);
+    assert(poll_probe.drop_calls == 1u);
+    assert(poll_probe.last_dropped == 202);
+
+    assert(turbowasm_wasi02_pollable_drop(
+               &poll, input_pollable) == TURBOWASM_OK);
+    assert(poll_probe.drop_calls == 2u);
+    assert(poll_probe.last_dropped == 101);
+
+    assert(turbowasm_wasi02_streams_call(
+               &streams,
+               "streams",
+               "[method]output-stream.subscribe",
+               &argument, 1u, &result) == TURBOWASM_OK);
+    output_pollable = result.as.resource;
+    assert(output_pollable != 0u);
+    assert(stream.output_subscribe_calls == 2u);
+    assert(turbowasm_wasi02_pollable_ready(
+               &poll,
+               output_pollable,
+               &ready) == TURBOWASM_OK);
+    assert(!ready);
+    turbowasm_wasi02_value_destroy(&result);
+
+    assert(turbowasm_wasi02_pollable_drop(
+               &poll, output_pollable) == TURBOWASM_OK);
+    assert(poll_probe.drop_calls == 3u);
+    assert(poll_probe.last_dropped == 202);
+
+    assert(turbowasm_wasi02_stream_resource_drop(
+               &streams, output) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_stream_resource_drop(
+               &streams, input) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_streams_destroy(
+               &streams) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_poll_destroy(
+               &poll) == TURBOWASM_OK);
+}
+
 int main(void) {
     test_nonblocking_stream_contract();
+    test_stream_subscribe_pollable_bridge();
     return 0;
 }

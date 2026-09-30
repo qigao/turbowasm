@@ -248,6 +248,16 @@ turbowasm_status turbowasm_wasi02_streams_destroy(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_wasi02_streams_attach_poll(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_wasi02_poll *poll) {
+    if (streams == NULL || !streams->initialized ||
+        poll == NULL || !poll->initialized)
+        return TURBOWASM_INVALID_ARGUMENT;
+    streams->poll = poll;
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_wasi02_input_stream_new(
     turbowasm_wasi02_streams *streams,
     turbowasm_value provider_rep,
@@ -703,6 +713,63 @@ static turbowasm_status call_output_flush(
     return make_result_unit_ok(out);
 }
 
+static turbowasm_status call_subscribe(
+    turbowasm_wasi02_streams *streams,
+    const turbowasm_wasi02_value *arguments,
+    turbowasm_wasi02_stream_slot_kind kind,
+    turbowasm_wasi02_value *out) {
+    turbowasm_wasi02_stream_slot *slot;
+    turbowasm_wasi02_stream_subscribe_fn subscribe;
+    turbowasm_value pollable_rep = {0};
+    uint32_t pollable_resource = 0u;
+    turbowasm_status status;
+
+    if (streams == NULL || streams->poll == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    subscribe = kind == TURBOWASM_WASI02_STREAM_SLOT_INPUT
+        ? streams->provider.input_subscribe
+        : streams->provider.output_subscribe;
+    if (subscribe == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    status = slot_from_resource(
+        streams,
+        arguments[0].as.resource,
+        kind,
+        &slot);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = subscribe(
+        streams->provider.context,
+        slot->provider_rep,
+        &pollable_rep);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = turbowasm_wasi02_pollable_new(
+        streams->poll,
+        pollable_rep,
+        &pollable_resource);
+    if (status != TURBOWASM_OK) {
+        if (streams->poll->provider.drop != NULL) {
+            turbowasm_status drop_status =
+                streams->poll->provider.drop(
+                    streams->poll->provider.context,
+                    pollable_rep);
+            if (drop_status != TURBOWASM_OK)
+                return drop_status;
+        }
+        return status;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = TURBOWASM_WASI02_VALUE_RESOURCE;
+    out->as.resource = pollable_resource;
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status call_error_debug(
     turbowasm_wasi02_streams *streams,
     const turbowasm_wasi02_value *arguments,
@@ -778,6 +845,13 @@ turbowasm_status turbowasm_wasi02_streams_call(
                 streams, arguments, out_result);
         } else if (strcmp(
                        function_name,
+                       "[method]input-stream.subscribe") == 0) {
+            status = call_subscribe(
+                streams, arguments,
+                TURBOWASM_WASI02_STREAM_SLOT_INPUT,
+                out_result);
+        } else if (strcmp(
+                       function_name,
                        "[method]output-stream.check-write") == 0) {
             status = call_output_check_write(
                 streams, arguments, out_result);
@@ -796,6 +870,13 @@ turbowasm_status turbowasm_wasi02_streams_call(
                        "[method]output-stream.write-zeroes") == 0) {
             status = call_output_write(
                 streams, arguments, true, out_result);
+        } else if (strcmp(
+                       function_name,
+                       "[method]output-stream.subscribe") == 0) {
+            status = call_subscribe(
+                streams, arguments,
+                TURBOWASM_WASI02_STREAM_SLOT_OUTPUT,
+                out_result);
         } else {
             return TURBOWASM_UNSUPPORTED;
         }

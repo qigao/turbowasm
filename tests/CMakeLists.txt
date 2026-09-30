@@ -257,6 +257,7 @@ if(TARGET turbowasm_wasi02_streams_core)
   target_link_libraries(turbowasm_wasi02_streams_test
     PRIVATE
       turbowasm_wasi02_streams_core
+      turbowasm_wasi02_poll_core
       TurboWasm::Component)
   target_include_directories(turbowasm_wasi02_streams_test
     PRIVATE
