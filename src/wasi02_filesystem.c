@@ -278,6 +278,355 @@ turbowasm_status turbowasm_wasi02_filesystem_descriptor_drop(
         filesystem);
 }
 
+enum {
+    TW_WASI02_PATH_SYMLINK_FOLLOW = 1u << 0,
+    TW_WASI02_OPEN_CREATE = 1u << 0,
+    TW_WASI02_OPEN_DIRECTORY = 1u << 1,
+    TW_WASI02_OPEN_EXCLUSIVE = 1u << 2,
+    TW_WASI02_OPEN_TRUNCATE = 1u << 3,
+    TW_WASI02_DESCRIPTOR_READ = 1u << 0,
+    TW_WASI02_DESCRIPTOR_WRITE = 1u << 1,
+    TW_WASI02_DESCRIPTOR_FILE_SYNC = 1u << 2,
+    TW_WASI02_DESCRIPTOR_DATA_SYNC = 1u << 3,
+    TW_WASI02_DESCRIPTOR_REQUESTED_WRITE_SYNC = 1u << 4,
+    TW_WASI02_DESCRIPTOR_MUTATE_DIRECTORY = 1u << 5,
+
+    TW_WASI_PREVIEW1_LOOKUP_SYMLINK_FOLLOW = 1u,
+    TW_WASI_PREVIEW1_O_CREAT = 1u,
+    TW_WASI_PREVIEW1_O_DIRECTORY = 2u,
+    TW_WASI_PREVIEW1_O_EXCL = 4u,
+    TW_WASI_PREVIEW1_O_TRUNC = 8u,
+    TW_WASI_PREVIEW1_FDFLAG_DSYNC = 2u,
+    TW_WASI_PREVIEW1_FDFLAG_RSYNC = 8u,
+    TW_WASI_PREVIEW1_FDFLAG_SYNC = 16u
+};
+
+static bool errno_to_wasi02_error_code(
+    uint32_t error,
+    uint32_t *out_case) {
+    if (out_case == NULL)
+        return false;
+
+    switch (error) {
+        case TURBOWASM_WASI_ERRNO_AGAIN:
+            *out_case = 1u;  /* would-block */
+            return true;
+        case TURBOWASM_WASI_ERRNO_BADF:
+            *out_case = 3u;  /* bad-descriptor */
+            return true;
+        case TURBOWASM_WASI_ERRNO_EXIST:
+            *out_case = 7u;  /* exist */
+            return true;
+        case TURBOWASM_WASI_ERRNO_FAULT:
+        case TURBOWASM_WASI_ERRNO_INVAL:
+            *out_case = 12u; /* invalid */
+            return true;
+        case TURBOWASM_WASI_ERRNO_FBIG:
+            *out_case = 8u;  /* file-too-large */
+            return true;
+        case TURBOWASM_WASI_ERRNO_INTR:
+            *out_case = 11u; /* interrupted */
+            return true;
+        case TURBOWASM_WASI_ERRNO_IO:
+            *out_case = 13u; /* io */
+            return true;
+        case TURBOWASM_WASI_ERRNO_ISDIR:
+            *out_case = 14u; /* is-directory */
+            return true;
+        case TURBOWASM_WASI_ERRNO_NAMETOOLONG:
+            *out_case = 18u; /* name-too-long */
+            return true;
+        case TURBOWASM_WASI_ERRNO_NOENT:
+            *out_case = 20u; /* no-entry */
+            return true;
+        case TURBOWASM_WASI_ERRNO_NOMEM:
+            *out_case = 22u; /* insufficient-memory */
+            return true;
+        case TURBOWASM_WASI_ERRNO_NOSPC:
+            *out_case = 23u; /* insufficient-space */
+            return true;
+        case TURBOWASM_WASI_ERRNO_NOSYS:
+            *out_case = 27u; /* unsupported */
+            return true;
+        case TURBOWASM_WASI_ERRNO_NOTDIR:
+            *out_case = 24u; /* not-directory */
+            return true;
+        case TURBOWASM_WASI_ERRNO_NOTEMPTY:
+            *out_case = 25u; /* not-empty */
+            return true;
+        case TURBOWASM_WASI_ERRNO_NOTCAPABLE:
+            *out_case = 31u; /* not-permitted */
+            return true;
+        default:
+            return false;
+    }
+}
+
+static turbowasm_status make_wasi02_error_result(
+    uint32_t error,
+    turbowasm_wasi02_value *out_result) {
+    turbowasm_wasi02_value *payload;
+    uint32_t error_case;
+
+    if (out_result == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (error == TURBOWASM_WASI_ERRNO_MFILE)
+        return TURBOWASM_OUT_OF_MEMORY;
+    if (!errno_to_wasi02_error_code(error, &error_case))
+        return TURBOWASM_UNSUPPORTED;
+
+    payload = (turbowasm_wasi02_value *)turbowasm_rt_calloc(
+        1u, sizeof(*payload));
+    if (payload == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+    payload->kind = TURBOWASM_WASI02_VALUE_ENUM;
+    payload->as.enum_index = error_case;
+
+    memset(out_result, 0, sizeof(*out_result));
+    out_result->kind = TURBOWASM_WASI02_VALUE_RESULT;
+    out_result->as.result.is_error = true;
+    out_result->as.result.value = payload;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status make_wasi02_unit_success(
+    turbowasm_wasi02_value *out_result) {
+    if (out_result == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    memset(out_result, 0, sizeof(*out_result));
+    out_result->kind = TURBOWASM_WASI02_VALUE_RESULT;
+    out_result->as.result.is_error = false;
+    out_result->as.result.value = NULL;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status descriptor_resource_create_owned(
+    turbowasm_wasi02_filesystem *filesystem,
+    turbowasm_wasi_fs_descriptor descriptor,
+    uint32_t *out_resource) {
+    turbowasm_value rep = {0};
+
+    if (filesystem == NULL || out_resource == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    rep.kind = TURBOWASM_VALUE_I64;
+    rep.as.i64 = (int64_t)pack_descriptor(descriptor);
+    return turbowasm_component_resource_new_owned(
+        &filesystem->resources,
+        TURBOWASM_WASI02_FS_DESCRIPTOR_ID,
+        rep,
+        out_resource);
+}
+
+static turbowasm_status make_wasi02_resource_success(
+    uint32_t resource,
+    turbowasm_wasi02_value *out_result) {
+    turbowasm_wasi02_value *payload;
+
+    if (out_result == NULL || resource == 0u)
+        return TURBOWASM_INVALID_ARGUMENT;
+    payload = (turbowasm_wasi02_value *)turbowasm_rt_calloc(
+        1u, sizeof(*payload));
+    if (payload == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+    payload->kind = TURBOWASM_WASI02_VALUE_RESOURCE;
+    payload->as.resource = resource;
+
+    memset(out_result, 0, sizeof(*out_result));
+    out_result->kind = TURBOWASM_WASI02_VALUE_RESULT;
+    out_result->as.result.is_error = false;
+    out_result->as.result.value = payload;
+    return TURBOWASM_OK;
+}
+
+typedef uint32_t (*wasi02_path_mutation_fn)(
+    turbowasm_wasi_fs *filesystem,
+    uint32_t directory_fd,
+    const uint8_t *path,
+    size_t path_length);
+
+static turbowasm_status wasi02_path_mutation(
+    turbowasm_wasi02_filesystem *filesystem,
+    uint32_t descriptor_resource,
+    turbowasm_wasi02_string_view path,
+    wasi02_path_mutation_fn mutation,
+    turbowasm_wasi02_value *out_result) {
+    turbowasm_wasi_fs_descriptor_info info = {0};
+    uint32_t error;
+
+    if (filesystem == NULL || !filesystem->initialized ||
+        mutation == NULL || out_result == NULL ||
+        (path.size != 0u && path.data == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (turbowasm_wasi02_filesystem_descriptor_resolve(
+            filesystem, descriptor_resource, &info) != TURBOWASM_OK)
+        return TURBOWASM_TRAPPED;
+
+    error = mutation(
+        filesystem->filesystem,
+        info.guest_fd,
+        path.data,
+        path.size);
+    if (error == TURBOWASM_WASI_ERRNO_SUCCESS)
+        return make_wasi02_unit_success(out_result);
+    return make_wasi02_error_result(error, out_result);
+}
+
+turbowasm_status turbowasm_wasi02_filesystem_create_directory_at(
+    turbowasm_wasi02_filesystem *filesystem,
+    uint32_t descriptor_resource,
+    turbowasm_wasi02_string_view path,
+    turbowasm_wasi02_value *out_result) {
+    return wasi02_path_mutation(
+        filesystem,
+        descriptor_resource,
+        path,
+        turbowasm_wasi_fs_path_create_directory,
+        out_result);
+}
+
+turbowasm_status turbowasm_wasi02_filesystem_remove_directory_at(
+    turbowasm_wasi02_filesystem *filesystem,
+    uint32_t descriptor_resource,
+    turbowasm_wasi02_string_view path,
+    turbowasm_wasi02_value *out_result) {
+    return wasi02_path_mutation(
+        filesystem,
+        descriptor_resource,
+        path,
+        turbowasm_wasi_fs_path_remove_directory,
+        out_result);
+}
+
+turbowasm_status turbowasm_wasi02_filesystem_unlink_file_at(
+    turbowasm_wasi02_filesystem *filesystem,
+    uint32_t descriptor_resource,
+    turbowasm_wasi02_string_view path,
+    turbowasm_wasi02_value *out_result) {
+    return wasi02_path_mutation(
+        filesystem,
+        descriptor_resource,
+        path,
+        turbowasm_wasi_fs_path_unlink_file,
+        out_result);
+}
+
+turbowasm_status turbowasm_wasi02_filesystem_open_at(
+    turbowasm_wasi02_filesystem *filesystem,
+    uint32_t descriptor_resource,
+    uint32_t path_flags,
+    turbowasm_wasi02_string_view path,
+    uint32_t open_flags,
+    uint32_t descriptor_flags,
+    turbowasm_wasi02_value *out_result) {
+    turbowasm_wasi_fs_descriptor_info base = {0};
+    turbowasm_wasi_fs_descriptor_info child = {0};
+    uint32_t dirflags = 0u;
+    uint32_t oflags = 0u;
+    uint32_t fdflags = 0u;
+    uint64_t rights_base = TURBOWASM_WASI_RIGHT_FD_FILESTAT_GET;
+    uint64_t rights_inheriting = 0u;
+    uint32_t guest_fd = 0u;
+    uint32_t resource = 0u;
+    uint32_t error;
+    turbowasm_status status;
+
+    if (filesystem == NULL || !filesystem->initialized ||
+        out_result == NULL ||
+        (path.size != 0u && path.data == NULL) ||
+        (path_flags & ~UINT32_C(0x1)) != 0u ||
+        (open_flags & ~UINT32_C(0xf)) != 0u ||
+        (descriptor_flags & ~UINT32_C(0x3f)) != 0u)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (turbowasm_wasi02_filesystem_descriptor_resolve(
+            filesystem, descriptor_resource, &base) != TURBOWASM_OK)
+        return TURBOWASM_TRAPPED;
+
+    if ((path_flags & TW_WASI02_PATH_SYMLINK_FOLLOW) != 0u)
+        dirflags |= TW_WASI_PREVIEW1_LOOKUP_SYMLINK_FOLLOW;
+    if ((open_flags & TW_WASI02_OPEN_CREATE) != 0u)
+        oflags |= TW_WASI_PREVIEW1_O_CREAT;
+    if ((open_flags & TW_WASI02_OPEN_DIRECTORY) != 0u)
+        oflags |= TW_WASI_PREVIEW1_O_DIRECTORY;
+    if ((open_flags & TW_WASI02_OPEN_EXCLUSIVE) != 0u)
+        oflags |= TW_WASI_PREVIEW1_O_EXCL;
+    if ((open_flags & TW_WASI02_OPEN_TRUNCATE) != 0u)
+        oflags |= TW_WASI_PREVIEW1_O_TRUNC;
+
+    if ((descriptor_flags & TW_WASI02_DESCRIPTOR_READ) != 0u) {
+        rights_base |= TURBOWASM_WASI_RIGHT_FD_READ |
+                       TURBOWASM_WASI_RIGHT_FD_SEEK |
+                       TURBOWASM_WASI_RIGHT_FD_TELL;
+    }
+    if ((descriptor_flags & TW_WASI02_DESCRIPTOR_WRITE) != 0u) {
+        rights_base |= TURBOWASM_WASI_RIGHT_FD_WRITE |
+                       TURBOWASM_WASI_RIGHT_FD_SEEK |
+                       TURBOWASM_WASI_RIGHT_FD_TELL;
+    }
+
+    if ((descriptor_flags & TW_WASI02_DESCRIPTOR_FILE_SYNC) != 0u)
+        fdflags |= TW_WASI_PREVIEW1_FDFLAG_SYNC;
+    if ((descriptor_flags & TW_WASI02_DESCRIPTOR_DATA_SYNC) != 0u)
+        fdflags |= TW_WASI_PREVIEW1_FDFLAG_DSYNC;
+    if ((descriptor_flags &
+         TW_WASI02_DESCRIPTOR_REQUESTED_WRITE_SYNC) != 0u)
+        fdflags |= TW_WASI_PREVIEW1_FDFLAG_RSYNC;
+
+    if ((open_flags & TW_WASI02_OPEN_DIRECTORY) != 0u ||
+        (descriptor_flags &
+         TW_WASI02_DESCRIPTOR_MUTATE_DIRECTORY) != 0u) {
+        rights_base |= TURBOWASM_WASI_RIGHT_FD_READDIR |
+                       TURBOWASM_WASI_RIGHT_PATH_OPEN |
+                       TURBOWASM_WASI_RIGHT_PATH_FILESTAT_GET;
+        if ((descriptor_flags &
+             TW_WASI02_DESCRIPTOR_MUTATE_DIRECTORY) != 0u) {
+            rights_base |=
+                TURBOWASM_WASI_RIGHT_PATH_CREATE_DIRECTORY |
+                TURBOWASM_WASI_RIGHT_PATH_REMOVE_DIRECTORY |
+                TURBOWASM_WASI_RIGHT_PATH_UNLINK_FILE;
+        }
+        rights_inheriting = rights_base;
+    }
+
+    error = turbowasm_wasi_fs_path_open(
+        filesystem->filesystem,
+        base.guest_fd,
+        dirflags,
+        path.data,
+        path.size,
+        oflags,
+        rights_base,
+        rights_inheriting,
+        fdflags,
+        &guest_fd);
+    if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
+        return make_wasi02_error_result(error, out_result);
+
+    if (!turbowasm_wasi_fs_descriptor_info_get(
+            filesystem->filesystem, guest_fd, &child)) {
+        (void)turbowasm_wasi_fs_close_fd(
+            filesystem->filesystem, guest_fd);
+        return TURBOWASM_TRAPPED;
+    }
+
+    status = descriptor_resource_create_owned(
+        filesystem, child.descriptor, &resource);
+    if (status != TURBOWASM_OK) {
+        (void)turbowasm_wasi_fs_close_fd(
+            filesystem->filesystem, guest_fd);
+        return status;
+    }
+
+    status = make_wasi02_resource_success(resource, out_result);
+    if (status != TURBOWASM_OK) {
+        (void)turbowasm_wasi02_filesystem_descriptor_drop(
+            filesystem, resource);
+        return status;
+    }
+    return TURBOWASM_OK;
+}
+
 static bool component_name_is(
     turbowasm_component_name name,
     const char *expected) {
