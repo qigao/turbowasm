@@ -1,23 +1,12 @@
 #include <turbowasm/component.h>
 
-#include "component_binary.h"
-#include "component_exec.h"
+#include "component_api_internal.h"
 #include "component_type_graph.h"
 #include "runtime_alloc.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-
-typedef struct turbowasm_component_public_impl {
-    turbowasm_component_binary binary;
-    uint32_t ref_count;
-} turbowasm_component_public_impl;
-
-typedef struct turbowasm_component_instance_public_impl {
-    turbowasm_component_public_impl *component;
-    turbowasm_component_exec exec;
-} turbowasm_component_instance_public_impl;
 
 #define TW_COMPONENT_PUBLIC_KIND_MATCH(public_kind, internal_kind) \
     _Static_assert( \
@@ -55,21 +44,32 @@ TW_COMPONENT_PUBLIC_KIND_MATCH(
 
 #undef TW_COMPONENT_PUBLIC_KIND_MATCH
 
-static turbowasm_component_public_impl *component_impl(
+turbowasm_component_public_impl *
+turbowasm_component_public_impl_get(
     const turbowasm_component *component) {
     return component != NULL
         ? (turbowasm_component_public_impl *)component->impl
         : NULL;
 }
 
-static turbowasm_component_instance_public_impl *instance_impl(
+turbowasm_component_instance_public_impl *
+turbowasm_component_instance_public_impl_get(
     const turbowasm_component_instance *instance) {
     return instance != NULL
         ? (turbowasm_component_instance_public_impl *)instance->impl
         : NULL;
 }
 
-static void component_impl_release(
+bool turbowasm_component_public_impl_retain(
+    turbowasm_component_public_impl *impl) {
+    if (impl == NULL || impl->ref_count == 0u ||
+        impl->ref_count == UINT32_MAX)
+        return false;
+    ++impl->ref_count;
+    return true;
+}
+
+void turbowasm_component_public_impl_release(
     turbowasm_component_public_impl *impl) {
     turbowasm_runtime_config config;
     turbowasm_runtime_scope scope;
@@ -413,9 +413,9 @@ void turbowasm_component_destroy(
 
     if (component == NULL)
         return;
-    impl = component_impl(component);
+    impl = turbowasm_component_public_impl_get(component);
     component->impl = NULL;
-    component_impl_release(impl);
+    turbowasm_component_public_impl_release(impl);
 }
 
 turbowasm_status turbowasm_component_instance_create(
@@ -430,9 +430,8 @@ turbowasm_status turbowasm_component_instance_create(
         instance->impl != NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    component_state = component_impl(component);
-    if (component_state == NULL ||
-        component_state->ref_count == UINT32_MAX)
+    component_state = turbowasm_component_public_impl_get(component);
+    if (component_state == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     scope = turbowasm_runtime_scope_enter(
@@ -443,7 +442,14 @@ turbowasm_status turbowasm_component_instance_create(
     if (impl == NULL)
         return TURBOWASM_OUT_OF_MEMORY;
 
-    ++component_state->ref_count;
+    if (!turbowasm_component_public_impl_retain(
+            component_state)) {
+        scope = turbowasm_runtime_scope_enter(
+            &component_state->binary.config);
+        turbowasm_rt_free(impl);
+        turbowasm_runtime_scope_leave(scope);
+        return TURBOWASM_INVALID_ARGUMENT;
+    }
     impl->component = component_state;
 
     status = turbowasm_component_exec_init(
@@ -453,7 +459,7 @@ turbowasm_status turbowasm_component_instance_create(
             &component_state->binary.config);
         turbowasm_rt_free(impl);
         turbowasm_runtime_scope_leave(scope);
-        component_impl_release(component_state);
+        turbowasm_component_public_impl_release(component_state);
         return status;
     }
 
@@ -471,7 +477,7 @@ void turbowasm_component_instance_destroy(
     if (instance == NULL)
         return;
 
-    impl = instance_impl(instance);
+    impl = turbowasm_component_instance_public_impl_get(instance);
     instance->impl = NULL;
     if (impl == NULL)
         return;
@@ -481,11 +487,14 @@ void turbowasm_component_instance_destroy(
 
     turbowasm_component_exec_destroy(&impl->exec);
 
+    if (impl->owner_release != NULL)
+        impl->owner_release(impl->owner_context);
+
     scope = turbowasm_runtime_scope_enter(&config);
     turbowasm_rt_free(impl);
     turbowasm_runtime_scope_leave(scope);
 
-    component_impl_release(component_state);
+    turbowasm_component_public_impl_release(component_state);
 }
 
 static bool public_export_result_type(
@@ -589,7 +598,7 @@ turbowasm_status turbowasm_component_instance_invoke(
         (argument_count != 0u && arguments == NULL))
         return TURBOWASM_INVALID_ARGUMENT;
 
-    impl = instance_impl(instance);
+    impl = turbowasm_component_instance_public_impl_get(instance);
     if (impl == NULL || impl->component == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
