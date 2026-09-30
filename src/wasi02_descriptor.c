@@ -54,6 +54,106 @@ static const turbowasm_wasi02_type_desc type_fs_descriptor = {
     }}
 };
 
+static const char *const fs_descriptor_type_labels[] = {
+    "unknown", "block-device", "character-device", "directory",
+    "fifo", "symbolic-link", "regular-file", "socket"
+};
+static const turbowasm_wasi02_type_desc type_fs_descriptor_type = {
+    TURBOWASM_WASI02_TYPE_ENUM,
+    "descriptor-type",
+    {.enumeration = {fs_descriptor_type_labels, 8u}}
+};
+
+static const char *const fs_descriptor_flags_labels[] = {
+    "read", "write", "file-integrity-sync", "data-integrity-sync",
+    "requested-write-sync", "mutate-directory"
+};
+static const turbowasm_wasi02_type_desc type_fs_descriptor_flags = {
+    TURBOWASM_WASI02_TYPE_FLAGS,
+    "descriptor-flags",
+    {.flags = {fs_descriptor_flags_labels, 6u}}
+};
+
+static const char *const fs_path_flags_labels[] = {
+    "symlink-follow"
+};
+static const turbowasm_wasi02_type_desc type_fs_path_flags = {
+    TURBOWASM_WASI02_TYPE_FLAGS,
+    "path-flags",
+    {.flags = {fs_path_flags_labels, 1u}}
+};
+
+static const char *const fs_open_flags_labels[] = {
+    "create", "directory", "exclusive", "truncate"
+};
+static const turbowasm_wasi02_type_desc type_fs_open_flags = {
+    TURBOWASM_WASI02_TYPE_FLAGS,
+    "open-flags",
+    {.flags = {fs_open_flags_labels, 4u}}
+};
+
+static const char *const fs_error_code_labels[] = {
+    "access", "would-block", "already", "bad-descriptor", "busy",
+    "deadlock", "quota", "exist", "file-too-large",
+    "illegal-byte-sequence", "in-progress", "interrupted", "invalid",
+    "io", "is-directory", "loop", "too-many-links", "message-size",
+    "name-too-long", "no-device", "no-entry", "no-lock",
+    "insufficient-memory", "insufficient-space", "not-directory",
+    "not-empty", "not-recoverable", "unsupported", "no-tty",
+    "no-such-device", "overflow", "not-permitted", "pipe", "read-only",
+    "invalid-seek", "text-file-busy", "cross-device"
+};
+static const turbowasm_wasi02_type_desc type_fs_error_code = {
+    TURBOWASM_WASI02_TYPE_ENUM,
+    "error-code",
+    {.enumeration = {fs_error_code_labels, 37u}}
+};
+
+static const turbowasm_wasi02_type_desc type_fs_filesize = {
+    TURBOWASM_WASI02_TYPE_ALIAS,
+    "filesize",
+    {.alias = {&type_u64}}
+};
+static const turbowasm_wasi02_type_desc type_fs_link_count = {
+    TURBOWASM_WASI02_TYPE_ALIAS,
+    "link-count",
+    {.alias = {&type_u64}}
+};
+static const turbowasm_wasi02_type_desc type_optional_datetime = {
+    TURBOWASM_WASI02_TYPE_OPTION,
+    NULL,
+    {.option = {&type_datetime}}
+};
+static const turbowasm_wasi02_record_field fs_descriptor_stat_fields[] = {
+    {"type", &type_fs_descriptor_type},
+    {"link-count", &type_fs_link_count},
+    {"size", &type_fs_filesize},
+    {"data-access-timestamp", &type_optional_datetime},
+    {"data-modification-timestamp", &type_optional_datetime},
+    {"status-change-timestamp", &type_optional_datetime}
+};
+static const turbowasm_wasi02_type_desc type_fs_descriptor_stat = {
+    TURBOWASM_WASI02_TYPE_RECORD,
+    "descriptor-stat",
+    {.record = {fs_descriptor_stat_fields, 6u}}
+};
+
+static const turbowasm_wasi02_type_desc type_fs_result_unit = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {NULL, &type_fs_error_code}}
+};
+static const turbowasm_wasi02_type_desc type_fs_result_stat = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_fs_descriptor_stat, &type_fs_error_code}}
+};
+static const turbowasm_wasi02_type_desc type_fs_result_descriptor = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_fs_descriptor, &type_fs_error_code}}
+};
+
 static const turbowasm_wasi02_type_desc type_list_u8 = {
     TURBOWASM_WASI02_TYPE_LIST,
     NULL,
@@ -157,6 +257,44 @@ static const turbowasm_wasi02_function_desc exit_functions[] = {
     {"exit", exit_params, 1u, NULL}
 };
 
+static const turbowasm_wasi02_param_desc fs_create_dir_params[] = {
+    {"self", &type_fs_descriptor},
+    {"path", &type_string}
+};
+static const turbowasm_wasi02_param_desc fs_stat_params[] = {
+    {"self", &type_fs_descriptor}
+};
+static const turbowasm_wasi02_param_desc fs_stat_at_params[] = {
+    {"self", &type_fs_descriptor},
+    {"path-flags", &type_fs_path_flags},
+    {"path", &type_string}
+};
+static const turbowasm_wasi02_param_desc fs_open_at_params[] = {
+    {"self", &type_fs_descriptor},
+    {"path-flags", &type_fs_path_flags},
+    {"path", &type_string},
+    {"open-flags", &type_fs_open_flags},
+    {"flags", &type_fs_descriptor_flags}
+};
+static const turbowasm_wasi02_param_desc fs_path_only_params[] = {
+    {"self", &type_fs_descriptor},
+    {"path", &type_string}
+};
+static const turbowasm_wasi02_function_desc filesystem_types_functions[] = {
+    {"[method]descriptor.create-directory-at",
+     fs_create_dir_params, 2u, &type_fs_result_unit},
+    {"[method]descriptor.stat",
+     fs_stat_params, 1u, &type_fs_result_stat},
+    {"[method]descriptor.stat-at",
+     fs_stat_at_params, 3u, &type_fs_result_stat},
+    {"[method]descriptor.open-at",
+     fs_open_at_params, 5u, &type_fs_result_descriptor},
+    {"[method]descriptor.remove-directory-at",
+     fs_path_only_params, 2u, &type_fs_result_unit},
+    {"[method]descriptor.unlink-file-at",
+     fs_path_only_params, 2u, &type_fs_result_unit}
+};
+
 static const turbowasm_wasi02_function_desc preopens_functions[] = {
     {"get-directories", NULL, 0u, &type_preopen_list}
 };
@@ -203,6 +341,12 @@ static const turbowasm_wasi02_interface_desc interfaces[] = {
         "https://github.com/WebAssembly/wasi-cli",
         "e922fd7bd137cd284a5e6c4815a5a630d32fdd01",
         exit_functions, 1u
+    },
+    {
+        "wasi:filesystem", "types", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-filesystem",
+        "971b11617b50e7496bea85f36e60141bda172964",
+        filesystem_types_functions, 6u
     },
     {
         "wasi:filesystem", "preopens", TW_WASI02_V028,

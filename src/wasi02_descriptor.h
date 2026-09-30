@@ -23,6 +23,8 @@ typedef enum turbowasm_wasi02_type_kind {
     TURBOWASM_WASI02_TYPE_RECORD,
     TURBOWASM_WASI02_TYPE_OPTION,
     TURBOWASM_WASI02_TYPE_RESULT,
+    TURBOWASM_WASI02_TYPE_ENUM,
+    TURBOWASM_WASI02_TYPE_FLAGS,
     TURBOWASM_WASI02_TYPE_RESOURCE
 } turbowasm_wasi02_type_kind;
 
@@ -33,6 +35,11 @@ typedef struct turbowasm_wasi02_record_field {
     const char *name;
     const turbowasm_wasi02_type_desc *type;
 } turbowasm_wasi02_record_field;
+
+typedef struct turbowasm_wasi02_label_set {
+    const char *const *labels;
+    uint32_t count;
+} turbowasm_wasi02_label_set;
 
 struct turbowasm_wasi02_type_desc {
     turbowasm_wasi02_type_kind kind;
@@ -60,6 +67,8 @@ struct turbowasm_wasi02_type_desc {
             const turbowasm_wasi02_type_desc *ok;
             const turbowasm_wasi02_type_desc *error;
         } result;
+        turbowasm_wasi02_label_set enumeration;
+        turbowasm_wasi02_label_set flags;
         struct {
             const char *package_name;
             const char *interface_name;
