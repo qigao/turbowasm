@@ -119,6 +119,23 @@ typedef struct turbowasm_component_export {
     uint32_t type_index;
 } turbowasm_component_export;
 
+typedef struct turbowasm_component_inline_export {
+    turbowasm_component_name name;
+    turbowasm_component_external_kind kind;
+    uint32_t item_index;
+} turbowasm_component_inline_export;
+
+typedef struct turbowasm_component_instance_def {
+    turbowasm_component_inline_export *exports;
+    uint32_t export_count;
+} turbowasm_component_instance_def;
+
+typedef struct turbowasm_component_function_alias {
+    uint32_t component_function_index;
+    uint32_t instance_index;
+    turbowasm_component_name name;
+} turbowasm_component_function_alias;
+
 typedef struct turbowasm_component_binary {
     const uint8_t *bytes;
     size_t size;
@@ -152,6 +169,16 @@ typedef struct turbowasm_component_binary {
     uint32_t resource_builtin_capacity;
 
     uint32_t core_function_count;
+
+    turbowasm_component_instance_def *component_instances;
+    uint32_t component_instance_count;
+    uint32_t component_instance_capacity;
+
+    turbowasm_component_function_alias *component_function_aliases;
+    uint32_t component_function_alias_count;
+    uint32_t component_function_alias_capacity;
+
+    uint32_t component_function_count;
 
     turbowasm_component_type_graph type_graph;
 
@@ -212,6 +239,16 @@ turbowasm_component_binary_canon_lift_at(
 
 const turbowasm_component_resource_builtin *
 turbowasm_component_binary_resource_builtin_at(
+    const turbowasm_component_binary *component,
+    uint32_t index);
+
+const turbowasm_component_instance_def *
+turbowasm_component_binary_component_instance_at(
+    const turbowasm_component_binary *component,
+    uint32_t index);
+
+const turbowasm_component_function_alias *
+turbowasm_component_binary_component_function_alias_at(
     const turbowasm_component_binary *component,
     uint32_t index);
 
