@@ -496,8 +496,9 @@ static turbowasm_status component_canon_lower_host(
             &flat);
         if (status != TURBOWASM_OK)
             goto done;
-        if (flat.count >
-            (uint32_t)argument_count - core_cursor) {
+        if (core_cursor > argument_count ||
+            flat.count >
+                (uint32_t)argument_count - core_cursor) {
             status = TURBOWASM_TYPE_MISMATCH;
             goto done;
         }
