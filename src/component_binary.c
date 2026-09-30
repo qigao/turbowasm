@@ -1405,6 +1405,11 @@ static turbowasm_status decode_component_type_section(
                 &section, component, id);
             if (status != TURBOWASM_OK)
                 return status;
+        } else if (opcode == 0x42u) {
+            status = decode_flat_instance_type(
+                &section, &component->type_graph, id);
+            if (status != TURBOWASM_OK)
+                return status;
         } else if (opcode == 0x43u) {
             return TURBOWASM_UNSUPPORTED;
         } else {
