@@ -1086,10 +1086,13 @@ turbowasm_status turbowasm_component_exec_init(
                 export_desc->item_index;
     }
 
-    if (binary->canon_lift_count != 0u) {
-        if ((size_t)binary->canon_lift_count >
+    exec->adapter_count = binary->canon_lift_count;
+    exec->function_count = binary->component_function_count;
+
+    if (exec->adapter_count != 0u) {
+        if ((size_t)exec->adapter_count >
                 SIZE_MAX / sizeof(*exec->functions) ||
-            (size_t)binary->canon_lift_count >
+            (size_t)exec->adapter_count >
                 SIZE_MAX / sizeof(*exec->realloc_contexts)) {
             status = TURBOWASM_OUT_OF_MEMORY;
             goto fail;
@@ -1098,12 +1101,12 @@ turbowasm_status turbowasm_component_exec_init(
         exec->functions =
             (turbowasm_component_core_call_adapter *)
                 turbowasm_rt_calloc(
-                    binary->canon_lift_count,
+                    exec->adapter_count,
                     sizeof(*exec->functions));
         exec->realloc_contexts =
             (turbowasm_component_exec_realloc_context *)
                 turbowasm_rt_calloc(
-                    binary->canon_lift_count,
+                    exec->adapter_count,
                     sizeof(*exec->realloc_contexts));
 
         if (exec->functions == NULL ||
@@ -1112,7 +1115,24 @@ turbowasm_status turbowasm_component_exec_init(
             goto fail;
         }
     }
-    exec->function_count = binary->canon_lift_count;
+
+    if (exec->function_count != 0u) {
+        if ((size_t)exec->function_count >
+            SIZE_MAX / sizeof(*exec->function_adapter_indices)) {
+            status = TURBOWASM_OUT_OF_MEMORY;
+            goto fail;
+        }
+        exec->function_adapter_indices =
+            (uint32_t *)turbowasm_rt_malloc(
+                (size_t)exec->function_count *
+                sizeof(*exec->function_adapter_indices));
+        if (exec->function_adapter_indices == NULL) {
+            status = TURBOWASM_OUT_OF_MEMORY;
+            goto fail;
+        }
+        for (i = 0u; i < exec->function_count; ++i)
+            exec->function_adapter_indices[i] = UINT32_MAX;
+    }
 
     for (i = 0u; i < binary->canon_lift_count; ++i) {
         const turbowasm_component_canon_lift *lift =
@@ -1123,7 +1143,9 @@ turbowasm_status turbowasm_component_exec_init(
 
         if (lift->component_function_index >= exec->function_count ||
             lift->core_function_index >= exec->core_function_count ||
-            lift->type_index >= binary->type_graph.count) {
+            lift->type_index >= binary->type_graph.count ||
+            exec->function_adapter_indices[
+                lift->component_function_index] != UINT32_MAX) {
             status = TURBOWASM_MALFORMED_MODULE;
             goto fail;
         }
@@ -1211,9 +1233,7 @@ turbowasm_status turbowasm_component_exec_init(
                     goto fail;
                 }
 
-                context =
-                    &exec->realloc_contexts[
-                        lift->component_function_index];
+                context = &exec->realloc_contexts[i];
                 context->instance =
                     &exec->core_instances[
                         realloc_function->instance_index];
@@ -1238,8 +1258,7 @@ turbowasm_status turbowasm_component_exec_init(
 
         status =
             turbowasm_component_core_call_adapter_init_with_resources(
-                &exec->functions[
-                    lift->component_function_index],
+                &exec->functions[i],
                 &binary->type_graph,
                 lift->type_index,
                 &exec->core_instances[
@@ -1249,11 +1268,19 @@ turbowasm_status turbowasm_component_exec_init(
                 &exec->resource_table);
         if (status != TURBOWASM_OK)
             goto fail;
+
+        exec->function_adapter_indices[
+            lift->component_function_index] = i;
     }
+
+    status = resolve_component_function_aliases(exec, binary);
+    if (status != TURBOWASM_OK)
+        goto fail;
 
     for (i = 0u; i < binary->export_count; ++i) {
         const turbowasm_component_export *export_desc =
             &binary->exports[i];
+        uint32_t adapter_index;
 
         if (export_desc->kind !=
                 TURBOWASM_COMPONENT_EXTERN_FUNCTION ||
@@ -1262,9 +1289,18 @@ turbowasm_status turbowasm_component_exec_init(
             goto fail;
         }
 
+        adapter_index =
+            exec->function_adapter_indices[
+                export_desc->item_index];
+        if (adapter_index == UINT32_MAX ||
+            adapter_index >= exec->adapter_count) {
+            status = TURBOWASM_MALFORMED_MODULE;
+            goto fail;
+        }
+
         if (export_desc->has_ascribed_type) {
             const turbowasm_component_canon_lift *lift =
-                &binary->canon_lifts[export_desc->item_index];
+                &binary->canon_lifts[adapter_index];
 
             if (export_desc->type_index != lift->type_index) {
                 status = TURBOWASM_TYPE_MISMATCH;
@@ -1314,10 +1350,17 @@ turbowasm_status turbowasm_component_exec_invoke_export(
                 TURBOWASM_COMPONENT_EXTERN_FUNCTION &&
             component_name_equal(
                 export_desc->name, name, name_size)) {
+            uint32_t adapter_index;
             if (export_desc->item_index >= exec->function_count)
                 return TURBOWASM_MALFORMED_MODULE;
+            adapter_index =
+                exec->function_adapter_indices[
+                    export_desc->item_index];
+            if (adapter_index == UINT32_MAX ||
+                adapter_index >= exec->adapter_count)
+                return TURBOWASM_MALFORMED_MODULE;
             return turbowasm_component_core_call_invoke(
-                &exec->functions[export_desc->item_index],
+                &exec->functions[adapter_index],
                 arguments,
                 argument_count,
                 out_result,
