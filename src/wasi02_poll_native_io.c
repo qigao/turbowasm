@@ -207,6 +207,32 @@ static void release_route(
     impl->route_free[impl->route_free_count++] = index;
 }
 
+static turbowasm_wasi02_native_io_route *route_from_token(
+    turbowasm_wasi02_native_io_poll_impl *impl,
+    uintptr_t token) {
+    uintptr_t base;
+    uintptr_t address;
+    uintptr_t offset;
+    size_t index;
+
+    if (impl == NULL || impl->routes == NULL ||
+        impl->route_capacity == 0u || token == 0u)
+        return NULL;
+
+    base = (uintptr_t)impl->routes;
+    address = token;
+    if (address < base)
+        return NULL;
+
+    offset = address - base;
+    if (offset % sizeof(*impl->routes) != 0u)
+        return NULL;
+    index = (size_t)(offset / sizeof(*impl->routes));
+    if (index >= impl->route_capacity)
+        return NULL;
+    return &impl->routes[index];
+}
+
 static bool route_contains(
     const turbowasm_wasi02_native_io_route *route,
     uint64_t pollable) {
@@ -588,4 +614,19 @@ turbowasm_status turbowasm_wasi02_native_io_poll_complete(
         release_slot(impl, slot);
 
     return final_status;
+}
+
+turbowasm_status turbowasm_wasi02_native_io_poll_abandon_wait(
+    turbowasm_wasi02_native_io_poll *adapter,
+    uintptr_t operation_token) {
+    turbowasm_wasi02_native_io_poll_impl *impl =
+        impl_mut(adapter);
+    turbowasm_wasi02_native_io_route *route =
+        route_from_token(impl, operation_token);
+
+    if (route == NULL || !route->active)
+        return TURBOWASM_TRAPPED;
+
+    release_route(impl, route);
+    return TURBOWASM_OK;
 }
