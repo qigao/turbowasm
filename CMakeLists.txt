@@ -158,6 +158,28 @@ if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
   endif()
 endif()
 
+if(TARGET turbowasm_wasi02_core AND TARGET TurboWasm::Component)
+  # W4 pollable capability stays internal until stream/poll qualification
+  # completes. It depends only on the typed WASI 0.2 core + Component layer.
+  add_library(turbowasm_wasi02_poll_core STATIC
+    src/wasi02_poll.c)
+  target_compile_features(turbowasm_wasi02_poll_core PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02_poll_core
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(turbowasm_wasi02_poll_core
+    PRIVATE
+      turbowasm_wasi02_core
+      TurboWasm::Component)
+  if(MSVC)
+    target_compile_options(turbowasm_wasi02_poll_core PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_wasi02_poll_core PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
 if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
   if(NOT TARGET Salts::CFlow)
     message(FATAL_ERROR
