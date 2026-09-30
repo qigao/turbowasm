@@ -1554,8 +1554,20 @@ static turbowasm_status decode_component_import_section(
             return status;
 
         if (!turbowasm_reader_u8(
-                &section, &external_kind) ||
-            !turbowasm_reader_uleb32(
+                &section, &external_kind))
+            return TURBOWASM_MALFORMED_MODULE;
+
+        /*
+         * Only func and instance externtypes carry a plain typeidx here.
+         * Other external kinds have different payload grammars (for example
+         * type imports carry a typebound) and remain fail-closed until their
+         * own retained semantics are implemented.
+         */
+        if (external_kind != 0x01u &&
+            external_kind != 0x05u)
+            return TURBOWASM_UNSUPPORTED;
+
+        if (!turbowasm_reader_uleb32(
                 &section, &import_desc.type_index) ||
             import_desc.type_index >= current_type_count)
             return TURBOWASM_MALFORMED_MODULE;
@@ -1578,7 +1590,7 @@ static turbowasm_status decode_component_import_section(
             import_desc.item_index =
                 *next_component_function_index;
             ++*next_component_function_index;
-        } else if (external_kind == 0x05u) {
+        } else {
             if (type->kind !=
                     TURBOWASM_COMPONENT_TYPE_INSTANCE)
                 return TURBOWASM_MALFORMED_MODULE;
@@ -1590,8 +1602,6 @@ static turbowasm_status decode_component_import_section(
             import_desc.item_index =
                 *next_component_instance_index;
             ++*next_component_instance_index;
-        } else {
-            return TURBOWASM_UNSUPPORTED;
         }
 
         if (!append_import(component, import_desc))
