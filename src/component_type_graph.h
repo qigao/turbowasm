@@ -94,6 +94,7 @@ typedef struct turbowasm_component_type {
             uint64_t identity;
             uint8_t rep_type;
             bool has_destructor;
+            bool identity_alias;
             uint32_t destructor_index;
         } resource;
         struct {
@@ -196,6 +197,14 @@ bool turbowasm_component_type_graph_define_resource(
     uint64_t nominal_identity);
 
 bool turbowasm_component_type_graph_define_resource_full(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    uint64_t nominal_identity,
+    uint8_t rep_type,
+    bool has_destructor,
+    uint32_t destructor_index);
+
+bool turbowasm_component_type_graph_define_resource_alias(
     turbowasm_component_type_graph *graph,
     turbowasm_component_type_id id,
     uint64_t nominal_identity,
