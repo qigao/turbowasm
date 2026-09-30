@@ -1099,20 +1099,34 @@ done:
     return status;
 }
 
+turbowasm_status turbowasm_wasi02_component_imports(
+    turbowasm_wasi02_provider *provider,
+    turbowasm_component_exec_imports *out_imports) {
+    if (provider == NULL || !provider->initialized ||
+        out_imports == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memset(out_imports, 0, sizeof(*out_imports));
+    out_imports->context = provider;
+    out_imports->can_bind = wasi02_component_can_bind;
+    out_imports->invoke = wasi02_component_invoke;
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_wasi02_component_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
     turbowasm_wasi02_provider *provider) {
     turbowasm_component_exec_imports imports;
+    turbowasm_status status;
 
-    if (exec == NULL || binary == NULL ||
-        provider == NULL || !provider->initialized)
+    if (exec == NULL || binary == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    memset(&imports, 0, sizeof(imports));
-    imports.context = provider;
-    imports.can_bind = wasi02_component_can_bind;
-    imports.invoke = wasi02_component_invoke;
+    status = turbowasm_wasi02_component_imports(
+        provider, &imports);
+    if (status != TURBOWASM_OK)
+        return status;
 
     return turbowasm_component_exec_init_with_imports(
         exec, binary, &imports);

@@ -116,6 +116,10 @@ turbowasm_status turbowasm_wasi02_poll_many(
     turbowasm_component_value *out_result,
     turbowasm_trap *trap);
 
+turbowasm_status turbowasm_wasi02_poll_imports(
+    turbowasm_wasi02_poll *poll,
+    turbowasm_component_exec_imports *out_imports);
+
 turbowasm_status turbowasm_wasi02_poll_component_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,

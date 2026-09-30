@@ -327,6 +327,34 @@ if(TARGET turbowasm_wasi02_core AND TARGET TurboWasm::WASI)
   endif()
 endif()
 
+if(TARGET turbowasm_wasi02_core AND
+   TARGET turbowasm_wasi02_fs_core AND
+   TARGET turbowasm_wasi02_poll_core AND
+   TARGET turbowasm_wasi02_streams_core)
+  # Internal aggregate import dispatcher used to qualify one Component exec
+  # across the W2/W3/W4 capability families before the public W5 façade.
+  add_library(turbowasm_wasi02_exec_core STATIC
+    src/wasi02_exec.c)
+  target_compile_features(turbowasm_wasi02_exec_core PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02_exec_core
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(turbowasm_wasi02_exec_core
+    PRIVATE
+      turbowasm_wasi02_core
+      turbowasm_wasi02_fs_core
+      turbowasm_wasi02_poll_core
+      turbowasm_wasi02_streams_core
+      TurboWasm::Component)
+  if(MSVC)
+    target_compile_options(turbowasm_wasi02_exec_core PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_wasi02_exec_core PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
 
 if(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN)
   if(NOT TURBOWASM_ENABLE_WASI_ADAPTER)
