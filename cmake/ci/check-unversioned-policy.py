@@ -108,20 +108,17 @@ def check_salts_restore() -> None:
     path = ROOT / "cmake" / "ci" / "restore-salts-sdk.ps1"
     text = path.read_text(encoding="utf-8")
 
+    if re.search(r"\$requestedVersion|\$versionSpec|Version=\"\$", text):
+        fail(path, "GitHub package version selection through variables is forbidden")
+
     for package_id in ("Salts.Native", "SaltsUtils.Native"):
-        if re.search(
-            rf'PackageReference[^>]*Include="{re.escape(package_id)}"[^>]*Version="\s*[\[\(]?\d',
+        match = re.search(
+            rf'PackageReference[^>]*Include="{re.escape(package_id)}"[^>]*Version="([^"]+)"',
             text,
             flags=re.IGNORECASE | re.DOTALL,
-        ):
-            fail(path, f"{package_id} PackageReference uses a literal numeric version")
-
-    if re.search(
-        r"SALTS_SDK_VERSION.{0,200}?else\s*\{\s*['\"]\d",
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    ):
-        fail(path, "SALTS_SDK_VERSION has a numeric default")
+        )
+        if match and match.group(1).strip() != "*":
+            fail(path, f'{package_id} GitHub PackageReference must use Version="*"')
 
 
 def main() -> int:
