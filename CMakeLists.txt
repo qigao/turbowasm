@@ -11,6 +11,8 @@ option(TURBOWASM_BUILD_TESTS "Build TurboWasm tests" ON)
 option(TURBOWASM_BUILD_CONFORMANCE_RUNNER
   "Build the non-installed WebAssembly spec conformance runner" OFF)
 option(TURBOWASM_ENABLE_MIR_JIT "Enable optional MIR JIT backend" OFF)
+option(TURBOWASM_ENABLE_COMPONENT
+  "Build installed synchronous Component Model façade" ON)
 option(TURBOWASM_ENABLE_CFLOW_ADAPTER "Build optional CFlow execution adapter" ON)
 option(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER
   "Build optional Salts NativeIO host-wait adapter" ON)
@@ -107,6 +109,30 @@ target_link_libraries(turbowasm
   PRIVATE Salts::Coroutine Salts::Platform)
 if(UNIX)
   target_link_libraries(turbowasm PRIVATE m)
+endif()
+
+if(TURBOWASM_ENABLE_COMPONENT)
+  add_library(turbowasm_component
+    src/component_api.c)
+  add_library(TurboWasm::Component ALIAS turbowasm_component)
+  set_target_properties(turbowasm_component PROPERTIES
+    EXPORT_NAME Component)
+  target_compile_features(turbowasm_component PUBLIC c_std_11)
+  target_include_directories(turbowasm_component
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(turbowasm_component
+    PUBLIC TurboWasm::Runtime)
+
+  if(MSVC)
+    target_compile_options(turbowasm_component PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_component PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
 endif()
 
 if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
@@ -429,6 +455,15 @@ install(
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+if(TURBOWASM_ENABLE_COMPONENT)
+  install(
+    TARGETS turbowasm_component
+    EXPORT TurboWasmTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 
 if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
   install(

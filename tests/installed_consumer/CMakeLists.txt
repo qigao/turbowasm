@@ -64,6 +64,50 @@ if("Salts::NativeIO" IN_LIST _turbowasm_runtime_links)
     "TurboWasm::Runtime must remain NativeIO-free")
 endif()
 
+if("TurboWasm::Component" IN_LIST _turbowasm_runtime_links)
+  message(FATAL_ERROR
+    "TurboWasm::Runtime must remain Component-facade-free")
+endif()
+
+if(TARGET TurboWasm::Component)
+  get_target_property(_turbowasm_component_links
+    TurboWasm::Component INTERFACE_LINK_LIBRARIES)
+  if(NOT "TurboWasm::Runtime" IN_LIST _turbowasm_component_links)
+    message(FATAL_ERROR
+      "TurboWasm::Component must depend on TurboWasm::Runtime")
+  endif()
+  if("Salts::CFlow" IN_LIST _turbowasm_component_links OR
+     "Salts::NativeIO" IN_LIST _turbowasm_component_links OR
+     "TurboWasm::WASI" IN_LIST _turbowasm_component_links)
+    message(FATAL_ERROR
+      "TurboWasm::Component must remain independent of CFlow/NativeIO/WASI")
+  endif()
+
+  add_executable(turbowasm_installed_component_consumer
+    component_main.c)
+  target_link_libraries(turbowasm_installed_component_consumer
+    PRIVATE TurboWasm::Component)
+  set_target_properties(
+    turbowasm_installed_component_consumer PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_component_consumer
+           COMMAND turbowasm_installed_component_consumer)
+
+  add_executable(turbowasm_installed_component_cpp_consumer
+    component_cpp_main.cpp)
+  target_link_libraries(turbowasm_installed_component_cpp_consumer
+    PRIVATE TurboWasm::Component)
+  set_target_properties(
+    turbowasm_installed_component_cpp_consumer PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_component_cpp_consumer
+           COMMAND turbowasm_installed_component_cpp_consumer)
+endif()
+
 if(TARGET TurboWasm::CFlow)
   add_executable(turbowasm_installed_cflow_consumer cflow_main.c)
   target_link_libraries(turbowasm_installed_cflow_consumer

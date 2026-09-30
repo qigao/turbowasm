@@ -46,9 +46,11 @@ The repository currently provides:
 
 The current implementation is intentionally scoped. Core shared-memory atomics,
 legacy WASI threads, the qualified Preview1 capability layer, and interpreter
-memory64 are part of the completed surface. memory64 modules remain
+memory64 are part of the completed Runtime surface. memory64 modules remain
 interpreter-only for the current MIR backend, and shared+memory64 remains
-unsupported. WebAssembly GC, the Component Model and WASI 0.2 remain outside
+unsupported. The synchronous Component Model subset is exposed separately
+through the optional `TurboWasm::Component` façade; it does not enter the
+`TurboWasm::Runtime` public ABI. WebAssembly GC and WASI 0.2 remain outside
 the completed Runtime surface and are tracked by Runtime v2 (#301).
 
 ## Dependency boundary
@@ -81,6 +83,11 @@ TurboWasm::CFlow / TurboWasm::NativeIO
 TurboWasm::WASI / WASIThreads / WASINativeIO / WASIHostFS / WASILittleFS
     -> optional host capability layers
     -> remain separate from TurboWasm::Runtime
+
+TurboWasm::Component
+    -> optional synchronous Component Model façade
+    -> public component.h is opt-in and is not included by turbowasm.h
+    -> depends on TurboWasm::Runtime, never the reverse
 ```
 
 TurboWasm never includes SIMDe directly and does not expose MIR types through
