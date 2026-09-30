@@ -1854,6 +1854,7 @@ static bool stream_identity_conflicts(
         streams->error_identity == candidate)
         return true;
     if (streams->poll != NULL &&
+        target != &streams->poll->pollable_identity &&
         streams->poll->pollable_identity_bound &&
         streams->poll->pollable_identity == candidate)
         return true;
@@ -1923,7 +1924,10 @@ static bool stream_bind_resource_identity(
         turbowasm_wasi02_poll *poll = streams->poll;
 
         if (poll == NULL || !poll->initialized ||
-            stream_identity_conflicts(streams, identity, NULL))
+            stream_identity_conflicts(
+                streams,
+                identity,
+                &poll->pollable_identity))
             return false;
         if (poll->pollable_identity_bound &&
             poll->pollable_identity != identity)
