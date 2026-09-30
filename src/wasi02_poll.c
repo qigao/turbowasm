@@ -566,7 +566,7 @@ static bool bind_poll_method_shape(
     return false;
 }
 
-static bool wasi02_poll_can_bind(
+bool turbowasm_wasi02_poll_import_can_bind(
     void *context,
     turbowasm_component_name instance_name,
     turbowasm_component_name function_name,
@@ -622,7 +622,7 @@ static bool imported_pollable_identity(
     return true;
 }
 
-static turbowasm_status wasi02_poll_resource_lower(
+turbowasm_status turbowasm_wasi02_poll_import_resource_lower(
     void *context,
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref type,
@@ -652,7 +652,7 @@ static turbowasm_status wasi02_poll_resource_lower(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status wasi02_poll_resource_lift(
+turbowasm_status turbowasm_wasi02_poll_import_resource_lift(
     void *context,
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref type,
@@ -677,7 +677,7 @@ static turbowasm_status wasi02_poll_resource_lift(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status wasi02_poll_resource_drop(
+turbowasm_status turbowasm_wasi02_poll_import_resource_drop(
     void *context,
     uint64_t resource_identity,
     uint32_t handle) {
@@ -693,7 +693,7 @@ static turbowasm_status wasi02_poll_resource_drop(
         poll, handle);
 }
 
-static turbowasm_status wasi02_poll_invoke(
+turbowasm_status turbowasm_wasi02_poll_import_invoke(
     void *context,
     turbowasm_host_call *call,
     turbowasm_component_name instance_name,
@@ -714,7 +714,7 @@ static turbowasm_status wasi02_poll_invoke(
         trap == NULL ||
         argument_count != 1u ||
         arguments == NULL ||
-        !wasi02_poll_can_bind(
+        !turbowasm_wasi02_poll_import_can_bind(
             context, instance_name, function_name,
             graph, function_type))
         return TURBOWASM_TYPE_MISMATCH;
@@ -810,11 +810,11 @@ turbowasm_status turbowasm_wasi02_poll_component_exec_init(
 
     memset(&imports, 0, sizeof(imports));
     imports.context = poll;
-    imports.can_bind = wasi02_poll_can_bind;
-    imports.invoke = wasi02_poll_invoke;
-    imports.resource_lower = wasi02_poll_resource_lower;
-    imports.resource_lift = wasi02_poll_resource_lift;
-    imports.resource_drop = wasi02_poll_resource_drop;
+    imports.can_bind = turbowasm_wasi02_poll_import_can_bind;
+    imports.invoke = turbowasm_wasi02_poll_import_invoke;
+    imports.resource_lower = turbowasm_wasi02_poll_import_resource_lower;
+    imports.resource_lift = turbowasm_wasi02_poll_import_resource_lift;
+    imports.resource_drop = turbowasm_wasi02_poll_import_resource_drop;
 
     return turbowasm_component_exec_init_with_imports(
         exec, binary, &imports);
