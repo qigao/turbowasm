@@ -1,6 +1,7 @@
 #include "wasi02_streams.h"
 
 #include "runtime_alloc.h"
+#include "wasi02_component.h"
 #include "wasi02_descriptor.h"
 
 #include <limits.h>
