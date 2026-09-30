@@ -356,6 +356,55 @@ if(TARGET turbowasm_wasi02_core AND
 endif()
 
 
+if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
+   TARGET TurboWasm::Component)
+  set(_turbowasm_wasi02_public_sources
+    src/wasi02_api.c
+    src/wasi02_component.c
+    src/wasi02_descriptor.c
+    src/wasi02_provider.c
+    src/wasi02_poll.c
+    src/wasi02_streams.c
+    src/wasi02_exec.c)
+
+  if(TARGET TurboWasm::WASI)
+    list(APPEND _turbowasm_wasi02_public_sources
+      src/wasi02_filesystem.c)
+  endif()
+
+  add_library(turbowasm_wasi02
+    ${_turbowasm_wasi02_public_sources})
+  add_library(TurboWasm::WASI02 ALIAS turbowasm_wasi02)
+  set_target_properties(turbowasm_wasi02 PROPERTIES
+    EXPORT_NAME WASI02)
+  target_compile_features(turbowasm_wasi02 PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(turbowasm_wasi02
+    PUBLIC TurboWasm::Component)
+
+  if(TARGET TurboWasm::WASI)
+    target_compile_definitions(turbowasm_wasi02 PRIVATE
+      TURBOWASM_WASI02_HAS_FILESYSTEM=1)
+    target_link_libraries(turbowasm_wasi02
+      PRIVATE TurboWasm::WASI)
+  else()
+    target_compile_definitions(turbowasm_wasi02 PRIVATE
+      TURBOWASM_WASI02_HAS_FILESYSTEM=0)
+  endif()
+
+  if(MSVC)
+    target_compile_options(turbowasm_wasi02 PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_wasi02 PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
 if(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN)
   if(NOT TURBOWASM_ENABLE_WASI_ADAPTER)
     message(FATAL_ERROR
@@ -603,6 +652,15 @@ install(
 if(TURBOWASM_ENABLE_COMPONENT)
   install(
     TARGETS turbowasm_component
+    EXPORT TurboWasmTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+if(TARGET turbowasm_wasi02)
+  install(
+    TARGETS turbowasm_wasi02
     EXPORT TurboWasmTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
