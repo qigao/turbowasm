@@ -264,7 +264,50 @@ if(TARGET turbowasm_wasi02_core)
            COMMAND turbowasm_wasi02_component_exec_test)
 endif()
 
+if(TARGET turbowasm_wasi02_exec_core)
+  add_executable(turbowasm_wasi02_exec_test
+    wasi02_exec_test.c)
+  target_link_libraries(turbowasm_wasi02_exec_test
+    PRIVATE
+      turbowasm_wasi02_exec_core
+      turbowasm_wasi02_core
+      turbowasm_wasi02_poll_core
+      turbowasm_wasi02_streams_core
+      turbowasm_wasi02_fs_core
+      TurboWasm::Component)
+  target_include_directories(turbowasm_wasi02_exec_test
+    PRIVATE
+      "${PROJECT_SOURCE_DIR}/src"
+      "${PROJECT_SOURCE_DIR}/include")
+  set_target_properties(turbowasm_wasi02_exec_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi02_exec_test
+           COMMAND turbowasm_wasi02_exec_test)
+endif()
+
 if(TARGET turbowasm_wasi02_streams_core)
+  add_executable(turbowasm_wasi02_stream_component_bridge_test
+    wasi02_stream_component_bridge_test.c)
+  target_link_libraries(turbowasm_wasi02_stream_component_bridge_test
+    PRIVATE
+      turbowasm_wasi02_streams_core
+      turbowasm_wasi02_poll_core
+      turbowasm_wasi02_core
+      TurboWasm::Component)
+  target_include_directories(turbowasm_wasi02_stream_component_bridge_test
+    PRIVATE
+      "${PROJECT_SOURCE_DIR}/src"
+      "${PROJECT_SOURCE_DIR}/include")
+  set_target_properties(
+    turbowasm_wasi02_stream_component_bridge_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi02_stream_component_bridge_test
+           COMMAND turbowasm_wasi02_stream_component_bridge_test)
+
   add_executable(turbowasm_wasi02_streams_test
     wasi02_streams_test.c)
   target_link_libraries(turbowasm_wasi02_streams_test
