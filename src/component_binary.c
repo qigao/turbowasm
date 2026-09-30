@@ -294,6 +294,25 @@ static bool append_canon_lift(
     return true;
 }
 
+static bool append_canon_lower(
+    turbowasm_component_binary *component,
+    turbowasm_component_canon_lower lower) {
+    uint32_t required;
+
+    if (component == NULL ||
+        component->canon_lower_count == UINT32_MAX)
+        return false;
+    required = component->canon_lower_count + 1u;
+    if (!reserve_array(
+            (void **)&component->canon_lowers,
+            &component->canon_lower_capacity,
+            required,
+            sizeof(*component->canon_lowers)))
+        return false;
+    component->canon_lowers[component->canon_lower_count++] = lower;
+    return true;
+}
+
 static bool append_resource_builtin(
     turbowasm_component_binary *component,
     turbowasm_component_resource_builtin builtin) {
