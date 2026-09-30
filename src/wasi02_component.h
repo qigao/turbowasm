@@ -28,6 +28,10 @@ turbowasm_status turbowasm_wasi02_component_value_from_wasi(
     const turbowasm_wasi02_value *value,
     turbowasm_component_value *out);
 
+turbowasm_status turbowasm_wasi02_component_imports(
+    turbowasm_wasi02_provider *provider,
+    turbowasm_component_exec_imports *out_imports);
+
 turbowasm_status turbowasm_wasi02_component_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
