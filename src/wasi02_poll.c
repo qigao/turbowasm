@@ -798,23 +798,37 @@ static turbowasm_status wasi02_poll_invoke(
     return TURBOWASM_UNSUPPORTED;
 }
 
+turbowasm_status turbowasm_wasi02_poll_imports(
+    turbowasm_wasi02_poll *poll,
+    turbowasm_component_exec_imports *out_imports) {
+    if (poll == NULL || !poll->initialized ||
+        out_imports == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memset(out_imports, 0, sizeof(*out_imports));
+    out_imports->context = poll;
+    out_imports->can_bind = wasi02_poll_can_bind;
+    out_imports->invoke = wasi02_poll_invoke;
+    out_imports->resource_lower = wasi02_poll_resource_lower;
+    out_imports->resource_lift = wasi02_poll_resource_lift;
+    out_imports->resource_drop = wasi02_poll_resource_drop;
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_wasi02_poll_component_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
     turbowasm_wasi02_poll *poll) {
     turbowasm_component_exec_imports imports;
+    turbowasm_status status;
 
-    if (exec == NULL || binary == NULL ||
-        poll == NULL || !poll->initialized)
+    if (exec == NULL || binary == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    memset(&imports, 0, sizeof(imports));
-    imports.context = poll;
-    imports.can_bind = wasi02_poll_can_bind;
-    imports.invoke = wasi02_poll_invoke;
-    imports.resource_lower = wasi02_poll_resource_lower;
-    imports.resource_lift = wasi02_poll_resource_lift;
-    imports.resource_drop = wasi02_poll_resource_drop;
+    status = turbowasm_wasi02_poll_imports(
+        poll, &imports);
+    if (status != TURBOWASM_OK)
+        return status;
 
     return turbowasm_component_exec_init_with_imports(
         exec, binary, &imports);
