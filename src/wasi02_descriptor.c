@@ -49,6 +49,12 @@ static const turbowasm_wasi02_type_desc type_pollable = {
     }}
 };
 
+static const turbowasm_wasi02_type_desc type_list_u8 = {
+    TURBOWASM_WASI02_TYPE_LIST,
+    NULL,
+    {.list = {&type_u8}}
+};
+
 static const turbowasm_wasi02_type_desc type_io_error = {
     TURBOWASM_WASI02_TYPE_RESOURCE,
     "error",
@@ -205,12 +211,6 @@ static const turbowasm_wasi02_type_desc type_fs_result_descriptor = {
     TURBOWASM_WASI02_TYPE_RESULT,
     NULL,
     {.result = {&type_fs_descriptor, &type_fs_error_code}}
-};
-
-static const turbowasm_wasi02_type_desc type_list_u8 = {
-    TURBOWASM_WASI02_TYPE_LIST,
-    NULL,
-    {.list = {&type_u8}}
 };
 
 static const turbowasm_wasi02_type_desc type_list_u32 = {
