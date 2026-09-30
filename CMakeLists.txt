@@ -235,6 +235,30 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
   endif()
 endif()
 
+if(TARGET turbowasm_wasi02_core AND TARGET TurboWasm::WASI)
+  # W3 filesystem capability bridge stays internal until resource/package
+  # qualification is complete. Keep the W1/W2 core free of Preview1/WASI deps.
+  add_library(turbowasm_wasi02_fs_core STATIC
+    src/wasi02_filesystem.c)
+  target_compile_features(turbowasm_wasi02_fs_core PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02_fs_core
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(turbowasm_wasi02_fs_core
+    PRIVATE
+      turbowasm_wasi02_core
+      TurboWasm::WASI
+      TurboWasm::Component)
+  if(MSVC)
+    target_compile_options(turbowasm_wasi02_fs_core PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_wasi02_fs_core PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
+
 if(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN)
   if(NOT TURBOWASM_ENABLE_WASI_ADAPTER)
     message(FATAL_ERROR

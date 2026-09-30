@@ -46,6 +46,14 @@ static const turbowasm_wasi02_type_desc type_pollable = {
     }}
 };
 
+static const turbowasm_wasi02_type_desc type_fs_descriptor = {
+    TURBOWASM_WASI02_TYPE_RESOURCE,
+    "descriptor",
+    {.resource = {
+        "wasi:filesystem", "types", TW_WASI02_V028, "descriptor"
+    }}
+};
+
 static const turbowasm_wasi02_type_desc type_list_u8 = {
     TURBOWASM_WASI02_TYPE_LIST,
     NULL,
@@ -83,6 +91,20 @@ static const turbowasm_wasi02_type_desc type_optional_string = {
     TURBOWASM_WASI02_TYPE_OPTION,
     NULL,
     {.option = {&type_string}}
+};
+
+static const turbowasm_wasi02_type_desc *const preopen_pair_elements[] = {
+    &type_fs_descriptor, &type_string
+};
+static const turbowasm_wasi02_type_desc type_preopen_pair = {
+    TURBOWASM_WASI02_TYPE_TUPLE,
+    NULL,
+    {.tuple = {preopen_pair_elements, 2u}}
+};
+static const turbowasm_wasi02_type_desc type_preopen_list = {
+    TURBOWASM_WASI02_TYPE_LIST,
+    NULL,
+    {.list = {&type_preopen_pair}}
 };
 static const turbowasm_wasi02_type_desc type_unit_result = {
     TURBOWASM_WASI02_TYPE_RESULT,
@@ -135,6 +157,10 @@ static const turbowasm_wasi02_function_desc exit_functions[] = {
     {"exit", exit_params, 1u, NULL}
 };
 
+static const turbowasm_wasi02_function_desc preopens_functions[] = {
+    {"get-directories", NULL, 0u, &type_preopen_list}
+};
+
 static const turbowasm_wasi02_interface_desc interfaces[] = {
     {
         "wasi:clocks", "wall-clock", TW_WASI02_V028,
@@ -177,6 +203,12 @@ static const turbowasm_wasi02_interface_desc interfaces[] = {
         "https://github.com/WebAssembly/wasi-cli",
         "e922fd7bd137cd284a5e6c4815a5a630d32fdd01",
         exit_functions, 1u
+    },
+    {
+        "wasi:filesystem", "preopens", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-filesystem",
+        "971b11617b50e7496bea85f36e60141bda172964",
+        preopens_functions, 1u
     }
 };
 

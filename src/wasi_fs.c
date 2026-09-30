@@ -248,6 +248,87 @@ bool turbowasm_wasi_fs_descriptor_info_get(
     return true;
 }
 
+bool turbowasm_wasi_fs_retained_descriptor_info_get(
+    const turbowasm_wasi_fs *filesystem,
+    turbowasm_wasi_fs_descriptor descriptor,
+    turbowasm_wasi_fs_descriptor_info *out_info) {
+    const turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_get(filesystem);
+    const turbowasm_wasi_fs_slot *slot;
+
+    if (impl == NULL || out_info == NULL ||
+        descriptor.generation == 0u ||
+        descriptor.slot >= impl->capacity)
+        return false;
+
+    slot = &impl->slots[descriptor.slot];
+    if (!slot->active ||
+        slot->generation != descriptor.generation)
+        return false;
+
+    out_info->descriptor = descriptor;
+    out_info->guest_fd = slot->guest_fd;
+    out_info->file = slot->file;
+    out_info->preopen = slot->preopen;
+    out_info->guest_path = slot->guest_path;
+    out_info->rights_base = slot->rights_base;
+    out_info->rights_inheriting = slot->rights_inheriting;
+    return true;
+}
+
+size_t turbowasm_wasi_fs_preopen_count(
+    const turbowasm_wasi_fs *filesystem) {
+    const turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_get(filesystem);
+    uint32_t index;
+    size_t count = 0u;
+
+    if (impl == NULL)
+        return 0u;
+
+    for (index = 0u; index < impl->capacity; ++index) {
+        if (impl->slots[index].active &&
+            impl->slots[index].preopen)
+            ++count;
+    }
+    return count;
+}
+
+bool turbowasm_wasi_fs_preopen_at(
+    const turbowasm_wasi_fs *filesystem,
+    size_t preopen_index,
+    turbowasm_wasi_fs_descriptor_info *out_info) {
+    const turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_get(filesystem);
+    uint32_t index;
+    size_t ordinal = 0u;
+
+    if (impl == NULL || out_info == NULL)
+        return false;
+
+    for (index = 0u; index < impl->capacity; ++index) {
+        const turbowasm_wasi_fs_slot *slot =
+            &impl->slots[index];
+
+        if (!slot->active || !slot->preopen)
+            continue;
+        if (ordinal++ != preopen_index)
+            continue;
+
+        out_info->descriptor.slot = index;
+        out_info->descriptor.generation = slot->generation;
+        out_info->guest_fd = slot->guest_fd;
+        out_info->file = slot->file;
+        out_info->preopen = true;
+        out_info->guest_path = slot->guest_path;
+        out_info->rights_base = slot->rights_base;
+        out_info->rights_inheriting = slot->rights_inheriting;
+        return true;
+    }
+
+    return false;
+}
+
 uint32_t turbowasm_wasi_fs_close_descriptor(
     turbowasm_wasi_fs *filesystem,
     turbowasm_wasi_fs_descriptor descriptor) {
