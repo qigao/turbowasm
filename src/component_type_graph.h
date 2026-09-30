@@ -94,6 +94,7 @@ typedef struct turbowasm_component_type {
             uint64_t identity;
             uint8_t rep_type;
             bool has_destructor;
+            bool identity_alias;
             uint32_t destructor_index;
         } resource;
         struct {
@@ -108,10 +109,16 @@ typedef struct turbowasm_component_type_graph {
     uint32_t count;
 } turbowasm_component_type_graph;
 
+typedef enum turbowasm_component_instance_type_export_kind {
+    TURBOWASM_COMPONENT_INSTANCE_EXPORT_FUNCTION = 1,
+    TURBOWASM_COMPONENT_INSTANCE_EXPORT_TYPE = 3
+} turbowasm_component_instance_type_export_kind;
+
 typedef struct turbowasm_component_instance_type_export {
     const uint8_t *name;
     uint32_t name_size;
-    turbowasm_component_type_id function_type;
+    turbowasm_component_instance_type_export_kind kind;
+    turbowasm_component_type_id type_index;
 } turbowasm_component_instance_type_export;
 
 struct turbowasm_component_instance_type {
@@ -190,6 +197,14 @@ bool turbowasm_component_type_graph_define_resource(
     uint64_t nominal_identity);
 
 bool turbowasm_component_type_graph_define_resource_full(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    uint64_t nominal_identity,
+    uint8_t rep_type,
+    bool has_destructor,
+    uint32_t destructor_index);
+
+bool turbowasm_component_type_graph_define_resource_alias(
     turbowasm_component_type_graph *graph,
     turbowasm_component_type_id id,
     uint64_t nominal_identity,

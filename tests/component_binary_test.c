@@ -386,7 +386,9 @@ static void test_flat_instance_import_alias_and_lower(void) {
     assert(instance_type->as.instance->type_graph.count == 1u);
     assert(instance_type->as.instance->export_count == 1u);
     assert(instance_type->as.instance->exports[0].name_size == 3u);
-    assert(instance_type->as.instance->exports[0].function_type == 0u);
+    assert(instance_type->as.instance->exports[0].kind ==
+           TURBOWASM_COMPONENT_INSTANCE_EXPORT_FUNCTION);
+    assert(instance_type->as.instance->exports[0].type_index == 0u);
 
     assert(component.import_count == 1u);
     import_desc = turbowasm_component_binary_import_at(
@@ -505,9 +507,15 @@ static void test_named_record_inside_instance_type(void) {
     assert(outer->kind == TURBOWASM_COMPONENT_TYPE_INSTANCE);
     assert(outer->as.instance != NULL);
     assert(outer->as.instance->type_graph.count == 3u);
-    assert(outer->as.instance->export_count == 1u);
-    assert(outer->as.instance->exports[0].name_size == 3u);
-    assert(outer->as.instance->exports[0].function_type == 2u);
+    assert(outer->as.instance->export_count == 2u);
+    assert(outer->as.instance->exports[0].name_size == 8u);
+    assert(outer->as.instance->exports[0].kind ==
+           TURBOWASM_COMPONENT_INSTANCE_EXPORT_TYPE);
+    assert(outer->as.instance->exports[0].type_index == 1u);
+    assert(outer->as.instance->exports[1].name_size == 3u);
+    assert(outer->as.instance->exports[1].kind ==
+           TURBOWASM_COMPONENT_INSTANCE_EXPORT_FUNCTION);
+    assert(outer->as.instance->exports[1].type_index == 2u);
 
     record = turbowasm_component_type_graph_get(
         &outer->as.instance->type_graph, 0u);
@@ -528,6 +536,132 @@ static void test_named_record_inside_instance_type(void) {
     assert(function->as.function.result.kind ==
            TURBOWASM_COMPONENT_TYPE_REF_INDEXED);
     assert(function->as.function.result.as.indexed == 1u);
+
+    turbowasm_component_binary_destroy(&component);
+}
+
+static void test_cross_interface_abstract_resource_identity(void) {
+    static const uint8_t bytes[] = {
+        COMPONENT_HEADER,
+
+        /*
+         * type0 = instance {
+         *   export "descriptor" : type (sub resource)
+         * }
+         */
+        0x07,0x12,0x01,
+          0x42,0x01,
+            0x04,0x00,0x0a,
+              'd','e','s','c','r','i','p','t','o','r',
+              0x03,0x01,
+
+        /* import types : type0 => component instance0 */
+        0x0a,0x20,0x01,
+          0x00,0x1b,
+            'w','a','s','i',':','f','i','l','e','s','y','s','t','e','m','/',
+            't','y','p','e','s','@','0','.','2','.','8',
+          0x05,0x00,
+
+        /*
+         * top-level type1 = alias export instance0 "descriptor" (type)
+         */
+        0x06,0x0f,0x01,
+          0x03,0x00,0x00,0x0a,
+            'd','e','s','c','r','i','p','t','o','r',
+
+        /*
+         * type2 = instance {
+         *   local type0 = alias outer 1 type1;
+         *   local type1 = own<type0>;
+         *   local type2 = tuple<type1,string>;
+         *   local type3 = list<type2>;
+         *   local type4 = func() -> type3;
+         *   export "get-directories" : func local-type4;
+         * }
+         */
+        0x07,0x2c,0x01,
+          0x42,0x06,
+            0x02,0x03,0x02,0x01,0x01,
+            0x01,0x69,0x00,
+            0x01,0x6f,0x02,0x01,0x73,
+            0x01,0x70,0x02,
+            0x01,0x40,0x00,0x00,0x03,
+            0x04,0x00,0x0f,
+              'g','e','t','-','d','i','r','e','c','t','o','r','i','e','s',
+              0x01,0x04,
+
+        /* import preopens : type2 => component instance1 */
+        0x0a,0x23,0x01,
+          0x00,0x1e,
+            'w','a','s','i',':','f','i','l','e','s','y','s','t','e','m','/',
+            'p','r','e','o','p','e','n','s','@','0','.','2','.','8',
+          0x05,0x02
+    };
+    turbowasm_component_binary component = {0};
+    const turbowasm_component_type *types_instance;
+    const turbowasm_component_type *descriptor;
+    const turbowasm_component_type *preopens_instance;
+    const turbowasm_component_type *local_descriptor;
+    const turbowasm_component_type *local_own;
+    const turbowasm_component_type *function_type;
+    uint64_t identity;
+
+    assert(turbowasm_component_binary_load(
+               &component, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(component.type_graph.count == 3u);
+    assert(component.import_count == 2u);
+    assert(component.component_instance_index_count == 2u);
+
+    types_instance = turbowasm_component_type_graph_get(
+        &component.type_graph, 0u);
+    assert(types_instance != NULL);
+    assert(types_instance->kind == TURBOWASM_COMPONENT_TYPE_INSTANCE);
+    assert(types_instance->as.instance != NULL);
+    assert(types_instance->as.instance->export_count == 1u);
+    assert(types_instance->as.instance->exports[0].kind ==
+           TURBOWASM_COMPONENT_INSTANCE_EXPORT_TYPE);
+    assert(types_instance->as.instance->exports[0].type_index == 0u);
+
+    descriptor = turbowasm_component_type_graph_get(
+        &component.type_graph, 1u);
+    assert(descriptor != NULL);
+    assert(descriptor->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE);
+    assert(descriptor->as.resource.identity_alias);
+    identity = descriptor->as.resource.identity;
+    assert(identity != 0u);
+
+    preopens_instance = turbowasm_component_type_graph_get(
+        &component.type_graph, 2u);
+    assert(preopens_instance != NULL);
+    assert(preopens_instance->kind == TURBOWASM_COMPONENT_TYPE_INSTANCE);
+    assert(preopens_instance->as.instance != NULL);
+    assert(preopens_instance->as.instance->type_graph.count == 5u);
+    assert(preopens_instance->as.instance->export_count == 1u);
+    assert(preopens_instance->as.instance->exports[0].kind ==
+           TURBOWASM_COMPONENT_INSTANCE_EXPORT_FUNCTION);
+    assert(preopens_instance->as.instance->exports[0].type_index == 4u);
+
+    local_descriptor = turbowasm_component_type_graph_get(
+        &preopens_instance->as.instance->type_graph, 0u);
+    assert(local_descriptor != NULL);
+    assert(local_descriptor->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE);
+    assert(local_descriptor->as.resource.identity_alias);
+    assert(local_descriptor->as.resource.identity == identity);
+
+    local_own = turbowasm_component_type_graph_get(
+        &preopens_instance->as.instance->type_graph, 1u);
+    assert(local_own != NULL);
+    assert(local_own->kind == TURBOWASM_COMPONENT_TYPE_OWN);
+    assert(local_own->as.handle.resource_type == 0u);
+
+    function_type = turbowasm_component_type_graph_get(
+        &preopens_instance->as.instance->type_graph, 4u);
+    assert(function_type != NULL);
+    assert(function_type->kind == TURBOWASM_COMPONENT_TYPE_FUNCTION);
+    assert(function_type->as.function.has_result);
+    assert(function_type->as.function.result.kind ==
+           TURBOWASM_COMPONENT_TYPE_REF_INDEXED);
+    assert(function_type->as.function.result.as.indexed == 3u);
 
     turbowasm_component_binary_destroy(&component);
 }
@@ -609,6 +743,7 @@ int main(void) {
     test_flat_instance_import_alias_and_lower();
     test_composite_type_binary_retention();
     test_named_record_inside_instance_type();
+    test_cross_interface_abstract_resource_identity();
     test_semantic_unsupported_and_invalid_forms();
     return 0;
 }
