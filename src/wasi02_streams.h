@@ -125,6 +125,18 @@ typedef struct turbowasm_wasi02_streams {
     uint32_t free_count;
 
     turbowasm_wasi02_poll *poll;
+
+    /*
+     * Component-graph nominal identities are bound lazily by the import
+     * bridge. Internal stream resource-table identities remain private.
+     */
+    uint64_t component_input_identity;
+    uint64_t component_output_identity;
+    uint64_t component_error_identity;
+    bool component_input_identity_bound;
+    bool component_output_identity_bound;
+    bool component_error_identity_bound;
+
     bool initialized;
 } turbowasm_wasi02_streams;
 
@@ -188,5 +200,14 @@ turbowasm_status turbowasm_wasi02_streams_call(
     const turbowasm_wasi02_value *arguments,
     size_t argument_count,
     turbowasm_wasi02_value *out_result);
+
+turbowasm_status turbowasm_wasi02_streams_imports(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_component_exec_imports *out_imports);
+
+turbowasm_status turbowasm_wasi02_streams_component_exec_init(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary,
+    turbowasm_wasi02_streams *streams);
 
 #endif /* TURBOWASM_WASI02_STREAMS_H */
