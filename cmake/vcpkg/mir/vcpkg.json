@@ -3,6 +3,5 @@
   "description": "Host MIR JIT dependency profile for TurboWasm optional JIT backend.",
   "dependencies": [
     "mir-jit"
-  ],
-  "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"
+  ]
 }
