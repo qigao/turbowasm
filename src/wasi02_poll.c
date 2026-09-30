@@ -663,10 +663,12 @@ static turbowasm_status wasi02_poll_resource_lift(
     turbowasm_component_type_kind kind;
     turbowasm_value rep = {0};
 
-    if (out == NULL ||
-        !imported_pollable_identity(
-            poll, graph, type, &kind) ||
-        pollable_rep_get(poll, handle, &rep) !=
+    if (out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!imported_pollable_identity(
+            poll, graph, type, &kind))
+        return TURBOWASM_TYPE_MISMATCH;
+    if (pollable_rep_get(poll, handle, &rep) !=
             TURBOWASM_OK)
         return TURBOWASM_TRAPPED;
 
