@@ -557,7 +557,7 @@ static void test_cross_interface_abstract_resource_identity(void) {
 
         /* import types : type0 => component instance0 */
         0x0a,0x20,0x01,
-          0x00,0x1c,
+          0x00,0x1b,
             'w','a','s','i',':','f','i','l','e','s','y','s','t','e','m','/',
             't','y','p','e','s','@','0','.','2','.','8',
           0x05,0x00,
@@ -592,7 +592,7 @@ static void test_cross_interface_abstract_resource_identity(void) {
 
         /* import preopens : type2 => component instance1 */
         0x0a,0x23,0x01,
-          0x00,0x1f,
+          0x00,0x1e,
             'w','a','s','i',':','f','i','l','e','s','y','s','t','e','m','/',
             'p','r','e','o','p','e','n','s','@','0','.','2','.','8',
           0x05,0x02
