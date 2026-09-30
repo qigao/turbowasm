@@ -1,4 +1,5 @@
 #include "wasi_fs_contract.h"
+#include "wasi02_fs_contract.h"
 
 #include <turbowasm/wasi_littlefs.h>
 
@@ -183,5 +184,10 @@ int main(void) {
         littlefs_teardown
     };
 
-    return turbowasm_wasi_fs_contract_run(&fixture);
+    {
+        int result = turbowasm_wasi_fs_contract_run(&fixture);
+        if (result != 0)
+            return result;
+    }
+    return turbowasm_wasi02_fs_contract_run(&fixture);
 }

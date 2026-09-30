@@ -1341,9 +1341,15 @@ endif()
 if(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER)
   add_executable(turbowasm_wasi_fs_contract_host_test
     wasi_fs_contract.c
+    wasi02_fs_contract.c
     wasi_fs_contract_host_test.c)
+  target_include_directories(turbowasm_wasi_fs_contract_host_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src")
   target_link_libraries(turbowasm_wasi_fs_contract_host_test
-    PRIVATE TurboWasm::WASIHostFS)
+    PRIVATE
+      TurboWasm::WASIHostFS
+      turbowasm_wasi02_fs_core
+      TurboWasm::Component)
   set_target_properties(
     turbowasm_wasi_fs_contract_host_test PROPERTIES
     C_STANDARD 11
@@ -1368,11 +1374,17 @@ endif()
 if(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER)
   add_executable(turbowasm_wasi_fs_contract_littlefs_test
     wasi_fs_contract.c
+    wasi02_fs_contract.c
     wasi_fs_contract_littlefs_test.c)
   target_include_directories(turbowasm_wasi_fs_contract_littlefs_test
-    PRIVATE "${TURBOWASM_LITTLEFS_SOURCE_DIR}")
+    PRIVATE
+      "${TURBOWASM_LITTLEFS_SOURCE_DIR}"
+      "${PROJECT_SOURCE_DIR}/src")
   target_link_libraries(turbowasm_wasi_fs_contract_littlefs_test
-    PRIVATE TurboWasm::WASILittleFS)
+    PRIVATE
+      TurboWasm::WASILittleFS
+      turbowasm_wasi02_fs_core
+      TurboWasm::Component)
   set_target_properties(
     turbowasm_wasi_fs_contract_littlefs_test PROPERTIES
     C_STANDARD 11
