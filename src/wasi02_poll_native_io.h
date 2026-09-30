@@ -64,4 +64,13 @@ turbowasm_status turbowasm_wasi02_native_io_poll_complete(
     turbowasm_wasi02_native_io_poll *adapter,
     const native_io_completion *completion);
 
+/*
+ * Explicitly detach one aggregate Runtime wait before destroying/abandoning
+ * the corresponding execution. This does not cancel NativeIO requests; their
+ * owners remain responsible for cancellation and terminal drain.
+ */
+turbowasm_status turbowasm_wasi02_native_io_poll_abandon_wait(
+    turbowasm_wasi02_native_io_poll *adapter,
+    uintptr_t operation_token);
+
 #endif /* TURBOWASM_WASI02_POLL_NATIVE_IO_H */
