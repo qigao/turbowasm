@@ -743,13 +743,13 @@ static turbowasm_status wasi_to_component_value(
             return status;
 
         case TURBOWASM_WASI02_TYPE_RESULT: {
-            const turbowasm_wasi02_type_desc *arm =
-                value->as.result.is_error
-                    ? base->as.result.error
-                    : base->as.result.ok;
+            const turbowasm_wasi02_type_desc *arm;
 
             if (value->kind != TURBOWASM_WASI02_VALUE_RESULT)
                 return TURBOWASM_TYPE_MISMATCH;
+            arm = value->as.result.is_error
+                ? base->as.result.error
+                : base->as.result.ok;
             out->kind = TURBOWASM_COMPONENT_TYPE_RESULT;
             out->as.result.case_index =
                 value->as.result.is_error ? 1u : 0u;
