@@ -28,6 +28,10 @@ typedef enum turbowasm_component_type_kind {
     TURBOWASM_COMPONENT_TYPE_CHAR,
     TURBOWASM_COMPONENT_TYPE_STRING,
     TURBOWASM_COMPONENT_TYPE_LIST,
+    TURBOWASM_COMPONENT_TYPE_RECORD,
+    TURBOWASM_COMPONENT_TYPE_TUPLE,
+    TURBOWASM_COMPONENT_TYPE_OPTION,
+    TURBOWASM_COMPONENT_TYPE_RESULT,
     TURBOWASM_COMPONENT_TYPE_FUNCTION,
     TURBOWASM_COMPONENT_TYPE_RESOURCE,
     TURBOWASM_COMPONENT_TYPE_OWN,
@@ -51,12 +55,35 @@ typedef struct turbowasm_component_type_ref {
 typedef struct turbowasm_component_instance_type
     turbowasm_component_instance_type;
 
+typedef struct turbowasm_component_record_field {
+    const uint8_t *name;
+    uint32_t name_size;
+    turbowasm_component_type_ref type;
+} turbowasm_component_record_field;
+
 typedef struct turbowasm_component_type {
     turbowasm_component_type_kind kind;
     union {
         struct {
             turbowasm_component_type_ref element_type;
         } list;
+        struct {
+            turbowasm_component_record_field *fields;
+            uint32_t count;
+        } record;
+        struct {
+            turbowasm_component_type_ref *elements;
+            uint32_t count;
+        } tuple;
+        struct {
+            turbowasm_component_type_ref payload;
+        } option;
+        struct {
+            bool has_ok;
+            turbowasm_component_type_ref ok;
+            bool has_error;
+            turbowasm_component_type_ref error;
+        } result;
         struct {
             turbowasm_component_type_ref *params;
             uint32_t param_count;
@@ -123,6 +150,31 @@ bool turbowasm_component_type_graph_define_list_ref(
     turbowasm_component_type_graph *graph,
     turbowasm_component_type_id id,
     turbowasm_component_type_ref element_type);
+
+bool turbowasm_component_type_graph_define_record(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_record_field *fields,
+    uint32_t field_count);
+
+bool turbowasm_component_type_graph_define_tuple(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_type_ref *elements,
+    uint32_t element_count);
+
+bool turbowasm_component_type_graph_define_option(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_type_ref payload);
+
+bool turbowasm_component_type_graph_define_result(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    bool has_ok,
+    turbowasm_component_type_ref ok,
+    bool has_error,
+    turbowasm_component_type_ref error);
 
 bool turbowasm_component_type_graph_define_function(
     turbowasm_component_type_graph *graph,

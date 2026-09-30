@@ -168,6 +168,96 @@ static void test_borrow_result_is_rejected(void) {
     turbowasm_component_type_graph_destroy(&graph);
 }
 
+static void test_composite_type_graph(void) {
+    turbowasm_component_type_graph graph = {0};
+    turbowasm_component_record_field fields[2];
+    turbowasm_component_type_ref tuple_elements[2];
+    turbowasm_component_type_ref unit = {0};
+    const turbowasm_component_type *type;
+    static const uint8_t first_name[] = "seconds";
+    static const uint8_t second_name[] = "nanoseconds";
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 8u));
+    assert(turbowasm_component_type_graph_define_scalar(
+        &graph, 0u, TURBOWASM_COMPONENT_TYPE_U64));
+    assert(turbowasm_component_type_graph_define_scalar(
+        &graph, 1u, TURBOWASM_COMPONENT_TYPE_U32));
+
+    fields[0].name = first_name;
+    fields[0].name_size = 7u;
+    fields[0].type = turbowasm_component_type_ref_indexed(0u);
+    fields[1].name = second_name;
+    fields[1].name_size = 11u;
+    fields[1].type = turbowasm_component_type_ref_indexed(1u);
+    assert(turbowasm_component_type_graph_define_record(
+        &graph, 2u, fields, 2u));
+
+    tuple_elements[0] =
+        turbowasm_component_type_ref_indexed(0u);
+    tuple_elements[1] =
+        turbowasm_component_type_ref_indexed(0u);
+    assert(turbowasm_component_type_graph_define_tuple(
+        &graph, 3u, tuple_elements, 2u));
+
+    assert(turbowasm_component_type_graph_define_string(
+        &graph, 4u));
+    assert(turbowasm_component_type_graph_define_option(
+        &graph, 5u,
+        turbowasm_component_type_ref_indexed(4u)));
+    assert(turbowasm_component_type_graph_define_result(
+        &graph, 6u, false, unit, false, unit));
+    assert(turbowasm_component_type_graph_define_list_ref(
+        &graph, 7u,
+        turbowasm_component_type_ref_indexed(3u)));
+
+    assert(turbowasm_component_type_graph_validate(&graph));
+
+    type = turbowasm_component_type_graph_get(&graph, 2u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_RECORD);
+    assert(type->as.record.count == 2u);
+    assert(type->as.record.fields[0].type.as.indexed == 0u);
+    assert(type->as.record.fields[1].type.as.indexed == 1u);
+
+    type = turbowasm_component_type_graph_get(&graph, 3u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_TUPLE);
+    assert(type->as.tuple.count == 2u);
+
+    type = turbowasm_component_type_graph_get(&graph, 5u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_OPTION);
+    assert(type->as.option.payload.as.indexed == 4u);
+
+    type = turbowasm_component_type_graph_get(&graph, 6u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_RESULT);
+    assert(!type->as.result.has_ok);
+    assert(!type->as.result.has_error);
+
+    turbowasm_component_type_graph_destroy(&graph);
+}
+
+static void test_nested_borrow_result_is_rejected(void) {
+    turbowasm_component_type_graph graph = {0};
+    turbowasm_component_type_ref result;
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 4u));
+    assert(turbowasm_component_type_graph_define_resource_full(
+        &graph, 0u, UINT64_C(0x8001), 0x7fu, false, UINT32_MAX));
+    assert(turbowasm_component_type_graph_define_handle(
+        &graph, 1u, TURBOWASM_COMPONENT_TYPE_BORROW, 0u));
+    assert(turbowasm_component_type_graph_define_option(
+        &graph, 2u,
+        turbowasm_component_type_ref_indexed(1u)));
+    result = turbowasm_component_type_ref_indexed(2u);
+    assert(turbowasm_component_type_graph_define_function(
+        &graph, 3u, NULL, 0u, true, result));
+    assert(!turbowasm_component_type_graph_validate(&graph));
+
+    turbowasm_component_type_graph_destroy(&graph);
+}
+
 int main(void) {
     test_scalar_projection();
     test_indexed_type_graph();
@@ -175,5 +265,7 @@ int main(void) {
     test_invalid_resource_links_fail_closed();
     test_incomplete_graph_fails_closed();
     test_borrow_result_is_rejected();
+    test_composite_type_graph();
+    test_nested_borrow_result_is_rejected();
     return 0;
 }

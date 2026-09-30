@@ -588,6 +588,164 @@ static turbowasm_status decode_component_function_type(
         reader, &component->type_graph, type_index);
 }
 
+static turbowasm_status read_optional_component_type_ref(
+    turbowasm_reader *reader,
+    uint32_t current_type_count,
+    bool *out_present,
+    turbowasm_component_type_ref *out_ref) {
+    uint8_t tag;
+
+    if (reader == NULL || out_present == NULL || out_ref == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_u8(reader, &tag))
+        return TURBOWASM_MALFORMED_MODULE;
+    if (tag == 0u) {
+        *out_present = false;
+        memset(out_ref, 0, sizeof(*out_ref));
+        return TURBOWASM_OK;
+    }
+    if (tag != 1u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    *out_present = true;
+    return read_component_type_ref(
+        reader, current_type_count, out_ref);
+}
+
+static turbowasm_status decode_composite_type_into_graph(
+    turbowasm_reader *reader,
+    turbowasm_component_type_graph *graph,
+    uint32_t type_index,
+    uint8_t opcode) {
+    turbowasm_status status;
+
+    if (reader == NULL || graph == NULL ||
+        type_index >= graph->count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (opcode == 0x70u) {
+        turbowasm_component_type_ref element;
+        status = read_component_type_ref(
+            reader, type_index, &element);
+        if (status != TURBOWASM_OK)
+            return status;
+        return turbowasm_component_type_graph_define_list_ref(
+                   graph, type_index, element)
+            ? TURBOWASM_OK
+            : TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    if (opcode == 0x72u) {
+        turbowasm_component_record_field *fields = NULL;
+        uint32_t count;
+        uint32_t i;
+
+        if (!turbowasm_reader_uleb32(reader, &count) || count == 0u)
+            return TURBOWASM_MALFORMED_MODULE;
+        if ((size_t)count > SIZE_MAX / sizeof(*fields))
+            return TURBOWASM_OUT_OF_MEMORY;
+        fields = (turbowasm_component_record_field *)
+            turbowasm_rt_calloc((size_t)count, sizeof(*fields));
+        if (fields == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+
+        for (i = 0u; i < count; ++i) {
+            turbowasm_component_name name = {0};
+            status = read_component_name(reader, &name);
+            if (status != TURBOWASM_OK)
+                goto record_done;
+            fields[i].name = name.bytes;
+            fields[i].name_size = name.size;
+            status = read_component_type_ref(
+                reader, type_index, &fields[i].type);
+            if (status != TURBOWASM_OK)
+                goto record_done;
+        }
+
+        if (!turbowasm_component_type_graph_define_record(
+                graph, type_index, fields, count))
+            status = TURBOWASM_OUT_OF_MEMORY;
+        else
+            status = TURBOWASM_OK;
+
+record_done:
+        turbowasm_rt_free(fields);
+        return status;
+    }
+
+    if (opcode == 0x6fu) {
+        turbowasm_component_type_ref *elements = NULL;
+        uint32_t count;
+        uint32_t i;
+
+        if (!turbowasm_reader_uleb32(reader, &count) || count == 0u)
+            return TURBOWASM_MALFORMED_MODULE;
+        if ((size_t)count > SIZE_MAX / sizeof(*elements))
+            return TURBOWASM_OUT_OF_MEMORY;
+        elements = (turbowasm_component_type_ref *)
+            turbowasm_rt_calloc((size_t)count, sizeof(*elements));
+        if (elements == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+
+        for (i = 0u; i < count; ++i) {
+            status = read_component_type_ref(
+                reader, type_index, &elements[i]);
+            if (status != TURBOWASM_OK) {
+                turbowasm_rt_free(elements);
+                return status;
+            }
+        }
+
+        if (!turbowasm_component_type_graph_define_tuple(
+                graph, type_index, elements, count))
+            status = TURBOWASM_OUT_OF_MEMORY;
+        else
+            status = TURBOWASM_OK;
+        turbowasm_rt_free(elements);
+        return status;
+    }
+
+    if (opcode == 0x6bu) {
+        turbowasm_component_type_ref payload;
+        status = read_component_type_ref(
+            reader, type_index, &payload);
+        if (status != TURBOWASM_OK)
+            return status;
+        return turbowasm_component_type_graph_define_option(
+                   graph, type_index, payload)
+            ? TURBOWASM_OK
+            : TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    if (opcode == 0x6au) {
+        bool has_ok = false;
+        bool has_error = false;
+        turbowasm_component_type_ref ok;
+        turbowasm_component_type_ref error;
+
+        status = read_optional_component_type_ref(
+            reader, type_index, &has_ok, &ok);
+        if (status != TURBOWASM_OK)
+            return status;
+        status = read_optional_component_type_ref(
+            reader, type_index, &has_error, &error);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        return turbowasm_component_type_graph_define_result(
+                   graph,
+                   type_index,
+                   has_ok,
+                   ok,
+                   has_error,
+                   error)
+            ? TURBOWASM_OK
+            : TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    return TURBOWASM_UNSUPPORTED;
+}
+
 static turbowasm_status decode_core_instance_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
@@ -1124,7 +1282,7 @@ fail_definition:
         : TURBOWASM_MALFORMED_MODULE;
 }
 
-static bool clone_flat_local_type(
+static bool clone_local_type(
     turbowasm_component_type_graph *graph,
     uint32_t destination,
     uint32_t source) {
@@ -1140,10 +1298,48 @@ static bool clone_flat_local_type(
         type->kind <= TURBOWASM_COMPONENT_TYPE_CHAR)
         return turbowasm_component_type_graph_define_scalar(
             graph, destination, type->kind);
-    if (type->kind == TURBOWASM_COMPONENT_TYPE_STRING)
-        return turbowasm_component_type_graph_define_string(
-            graph, destination);
-    return false;
+
+    switch (type->kind) {
+        case TURBOWASM_COMPONENT_TYPE_STRING:
+            return turbowasm_component_type_graph_define_string(
+                graph, destination);
+        case TURBOWASM_COMPONENT_TYPE_LIST:
+            return turbowasm_component_type_graph_define_list_ref(
+                graph, destination, type->as.list.element_type);
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+            return turbowasm_component_type_graph_define_record(
+                graph,
+                destination,
+                type->as.record.fields,
+                type->as.record.count);
+        case TURBOWASM_COMPONENT_TYPE_TUPLE:
+            return turbowasm_component_type_graph_define_tuple(
+                graph,
+                destination,
+                type->as.tuple.elements,
+                type->as.tuple.count);
+        case TURBOWASM_COMPONENT_TYPE_OPTION:
+            return turbowasm_component_type_graph_define_option(
+                graph, destination, type->as.option.payload);
+        case TURBOWASM_COMPONENT_TYPE_RESULT:
+            return turbowasm_component_type_graph_define_result(
+                graph,
+                destination,
+                type->as.result.has_ok,
+                type->as.result.ok,
+                type->as.result.has_error,
+                type->as.result.error);
+        case TURBOWASM_COMPONENT_TYPE_FUNCTION:
+            return turbowasm_component_type_graph_define_function(
+                graph,
+                destination,
+                type->as.function.params,
+                type->as.function.param_count,
+                type->as.function.has_result,
+                type->as.function.result);
+        default:
+            return false;
+    }
 }
 
 static turbowasm_status decode_flat_instance_type(
@@ -1224,10 +1420,22 @@ static turbowasm_status decode_flat_instance_type(
                     next_local_type);
                 if (status != TURBOWASM_OK)
                     goto fail;
+            } else if (opcode == 0x70u ||
+                       opcode == 0x72u ||
+                       opcode == 0x6fu ||
+                       opcode == 0x6bu ||
+                       opcode == 0x6au) {
+                status = decode_composite_type_into_graph(
+                    reader,
+                    &instance_type->type_graph,
+                    next_local_type,
+                    opcode);
+                if (status != TURBOWASM_OK)
+                    goto fail;
             } else {
                 /*
-                 * W2b1 intentionally admits the flat synchronous subset only.
-                 * record/list/tuple/option/result and resources are W2b2.
+                 * Resources/variants/flags/enums/stream/future remain outside
+                 * this retained composite slice.
                  */
                 status = TURBOWASM_UNSUPPORTED;
                 goto fail;
@@ -1301,7 +1509,7 @@ static turbowasm_status decode_flat_instance_type(
                     status = TURBOWASM_MALFORMED_MODULE;
                     goto fail;
                 }
-                if (!clone_flat_local_type(
+                if (!clone_local_type(
                         &instance_type->type_graph,
                         next_local_type,
                         source_type)) {
@@ -1381,15 +1589,18 @@ static turbowasm_status decode_component_type_section(
                            &component->type_graph, id, kind)) {
                 return TURBOWASM_OUT_OF_MEMORY;
             }
-        } else if (opcode == 0x70u) {
-            turbowasm_component_type_ref element;
-            status = read_component_type_ref(
-                &section, id, &element);
+        } else if (opcode == 0x70u ||
+                   opcode == 0x72u ||
+                   opcode == 0x6fu ||
+                   opcode == 0x6bu ||
+                   opcode == 0x6au) {
+            status = decode_composite_type_into_graph(
+                &section,
+                &component->type_graph,
+                id,
+                opcode);
             if (status != TURBOWASM_OK)
                 return status;
-            if (!turbowasm_component_type_graph_define_list_ref(
-                    &component->type_graph, id, element))
-                return TURBOWASM_OUT_OF_MEMORY;
         } else if (opcode == 0x69u || opcode == 0x68u) {
             uint32_t resource_index;
             const turbowasm_component_type *resource;
