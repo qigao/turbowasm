@@ -169,6 +169,17 @@ int turbowasm_wasi02_fs_contract_run(
     expect_unit_ok(&result);
     turbowasm_wasi02_value_destroy(&result);
 
+    /* same path-stat contract on both providers */
+    set_resource(&args[0], preopen);
+    set_flags(&args[1], 0u);
+    set_string(&args[2], "dir");
+    assert(turbowasm_wasi02_filesystem_call(
+               &bridge,
+               "[method]descriptor.stat-at",
+               args, 3u, &result) == TURBOWASM_OK);
+    expect_stat_ok(&result, 3u);
+    turbowasm_wasi02_value_destroy(&result);
+
     set_flags(&args[1], 0u);
     set_string(&args[2], "dir");
     set_flags(&args[3], 2u);  /* open-flags::directory */
