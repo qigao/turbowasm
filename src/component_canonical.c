@@ -332,20 +332,6 @@ static turbowasm_status canonical_layout_inner(
             return TURBOWASM_OK;
         }
 
-        case TURBOWASM_COMPONENT_TYPE_ENUM:
-        case TURBOWASM_COMPONENT_TYPE_FLAGS:
-            if (type == NULL)
-                return TURBOWASM_MALFORMED_MODULE;
-            if ((kind == TURBOWASM_COMPONENT_TYPE_ENUM &&
-                 type->as.enumeration.count == 0u) ||
-                (kind == TURBOWASM_COMPONENT_TYPE_FLAGS &&
-                 (type->as.flags.count == 0u ||
-                  type->as.flags.count > 32u)))
-                return TURBOWASM_MALFORMED_MODULE;
-            out->types[0] = TURBOWASM_COMPONENT_FLAT_I32;
-            out->count = 1u;
-            return TURBOWASM_OK;
-
         case TURBOWASM_COMPONENT_TYPE_RESOURCE:
         case TURBOWASM_COMPONENT_TYPE_FUNCTION:
         case TURBOWASM_COMPONENT_TYPE_INSTANCE:
@@ -555,6 +541,20 @@ static turbowasm_status canonical_flatten_type_inner(
                 return TURBOWASM_UNSUPPORTED;
             return TURBOWASM_OK;
         }
+
+        case TURBOWASM_COMPONENT_TYPE_ENUM:
+        case TURBOWASM_COMPONENT_TYPE_FLAGS:
+            if (type == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+            if ((kind == TURBOWASM_COMPONENT_TYPE_ENUM &&
+                 type->as.enumeration.count == 0u) ||
+                (kind == TURBOWASM_COMPONENT_TYPE_FLAGS &&
+                 (type->as.flags.count == 0u ||
+                  type->as.flags.count > 32u)))
+                return TURBOWASM_MALFORMED_MODULE;
+            out->types[0] = TURBOWASM_COMPONENT_FLAT_I32;
+            out->count = 1u;
+            return TURBOWASM_OK;
 
         case TURBOWASM_COMPONENT_TYPE_RESOURCE:
         case TURBOWASM_COMPONENT_TYPE_FUNCTION:
