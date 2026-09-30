@@ -116,6 +116,49 @@ turbowasm_status turbowasm_wasi02_poll_many(
     turbowasm_component_value *out_result,
     turbowasm_trap *trap);
 
+/*
+ * Internal Component-import callbacks. These remain private to the source-tree
+ * WASI 0.2 implementation and let the streams adapter compose one wasi:io
+ * import boundary without allocating a second pollable table.
+ */
+bool turbowasm_wasi02_poll_import_can_bind(
+    void *context,
+    turbowasm_component_name instance_name,
+    turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type);
+
+turbowasm_status turbowasm_wasi02_poll_import_invoke(
+    void *context,
+    turbowasm_host_call *call,
+    turbowasm_component_name instance_name,
+    turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_value *arguments,
+    size_t argument_count,
+    turbowasm_component_value *out_result,
+    turbowasm_trap *trap);
+
+turbowasm_status turbowasm_wasi02_poll_import_resource_lower(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    const turbowasm_component_value *value,
+    uint32_t *out_handle);
+
+turbowasm_status turbowasm_wasi02_poll_import_resource_lift(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    uint32_t handle,
+    turbowasm_component_value *out);
+
+turbowasm_status turbowasm_wasi02_poll_import_resource_drop(
+    void *context,
+    uint64_t resource_identity,
+    uint32_t handle);
+
 turbowasm_status turbowasm_wasi02_poll_component_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
