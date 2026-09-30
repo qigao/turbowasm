@@ -13,6 +13,8 @@ option(TURBOWASM_BUILD_CONFORMANCE_RUNNER
 option(TURBOWASM_ENABLE_MIR_JIT "Enable optional MIR JIT backend" OFF)
 option(TURBOWASM_ENABLE_COMPONENT
   "Build installed synchronous Component Model façade" ON)
+option(TURBOWASM_ENABLE_WASI02_ADAPTER
+  "Build experimental WASI 0.2 typed Component capability layer" ON)
 option(TURBOWASM_ENABLE_CFLOW_ADAPTER "Build optional CFlow execution adapter" ON)
 option(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER
   "Build optional Salts NativeIO host-wait adapter" ON)
@@ -131,6 +133,30 @@ if(TURBOWASM_ENABLE_COMPONENT)
     target_compile_options(turbowasm_component PRIVATE /W4)
   else()
     target_compile_options(turbowasm_component PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
+if(TURBOWASM_ENABLE_WASI02_ADAPTER)
+  if(NOT TURBOWASM_ENABLE_COMPONENT OR
+     NOT TARGET TurboWasm::Component)
+    message(FATAL_ERROR
+      "TurboWasm WASI 0.2 layer requires TURBOWASM_ENABLE_COMPONENT")
+  endif()
+
+  # W1 stays internal until the descriptor/execution ABI is qualified.
+  add_library(turbowasm_wasi02_core STATIC
+    src/wasi02_descriptor.c)
+  target_compile_features(turbowasm_wasi02_core PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02_core
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(turbowasm_wasi02_core
+    PRIVATE TurboWasm::Component)
+  if(MSVC)
+    target_compile_options(turbowasm_wasi02_core PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_wasi02_core PRIVATE
       -Wall -Wextra -Wpedantic)
   endif()
 endif()
