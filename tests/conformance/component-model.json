@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/WebAssembly/component-model.git",
+  "commit": "a25fc0b372dd21f07f0242c46e98bd0f1ea0c0e1",
+  "files": {
+    "test/binary/binary.wast": {
+      "git_blob_sha1": "3766e0180176889c6eb22198e26ca095c21425c8",
+      "contains": [
+        "(component binary \"\\00asm\\0d\\00\\01\\00\")",
+        "\"\\00\\03\"",
+        "\"\\02hi\""
+      ]
+    },
+    "test/resources/borrows.wast": {
+      "git_blob_sha1": "b68e6369f7bc3ae309b3de80be37cb9c95864e5d"
+    },
+    "test/values/strings.wast": {
+      "git_blob_sha1": "e96f54e97689a32ba70b05e12226e01b8dea024b"
+    },
+    "test/values/realloc.wast": {
+      "git_blob_sha1": "7706e03b2a1e941d2785f580f399cd2b65b08beb"
+    }
+  }
+}

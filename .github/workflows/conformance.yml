@@ -27,6 +27,7 @@ on:
           - extended-const
           - relaxed-simd
           - memory64
+          - component-model
 
 permissions:
   contents: read
@@ -34,8 +35,40 @@ permissions:
 
 env:
   WASM_SPEC_COMMIT: 608711107b7f1edb13efd57b7d79b49477462d36
+  COMPONENT_MODEL_COMMIT: a25fc0b372dd21f07f0242c46e98bd0f1ea0c0e1
 
 jobs:
+  component-model-provenance:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'component-model' }}
+    name: Pinned Component Model fixture provenance
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout TurboWasm
+        uses: actions/checkout@v4
+
+      - name: Materialize pinned Component Model
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/component-model"
+          rm -rf "$root"
+          git init "$root"
+          git -C "$root" remote add origin https://github.com/WebAssembly/component-model.git
+          git -C "$root" fetch --depth=1 origin "$COMPONENT_MODEL_COMMIT"
+          git -C "$root" checkout --detach FETCH_HEAD
+          test "$(git -C "$root" rev-parse HEAD)" = "$COMPONENT_MODEL_COMMIT"
+          echo "COMPONENT_MODEL_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Verify pinned Component Model fixture sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tests/conformance/verify_component_model.py
+          python3 tests/conformance/verify_component_model.py \
+            --manifest tests/conformance/component-model.json \
+            --root "$COMPONENT_MODEL_ROOT"
+
   core:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'core' || inputs.target == 'threads' }}
     name: Pinned core spec smoke
