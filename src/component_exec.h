@@ -87,11 +87,17 @@ typedef struct turbowasm_component_exec_canon_lower_context {
     turbowasm_component_name function_name;
     const turbowasm_component_type_graph *graph;
     turbowasm_component_type_id function_type;
+
+    turbowasm_component_flat_signature flat_signature;
     turbowasm_host_function_type host_type;
     turbowasm_value_kind
         params[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS];
     turbowasm_value_kind
         results[TURBOWASM_COMPONENT_MAX_FLAT_RESULTS];
+
+    bool uses_memory;
+    turbowasm_component_canonical_memory memory;
+    turbowasm_component_exec_realloc_context realloc_context;
 } turbowasm_component_exec_canon_lower_context;
 
 typedef struct turbowasm_component_exec {

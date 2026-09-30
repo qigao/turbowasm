@@ -1114,6 +1114,11 @@ static turbowasm_status decode_canon_section(
             turbowasm_component_canon_lower lower = {0};
             uint8_t sort;
             uint32_t option_count;
+            uint32_t option_index;
+            bool string_encoding_seen = false;
+
+            lower.string_encoding =
+                TURBOWASM_COMPONENT_STRING_UTF8;
 
             if (!turbowasm_reader_u8(&section, &sort) ||
                 sort != 0x00u ||
@@ -1125,12 +1130,59 @@ static turbowasm_status decode_canon_section(
                     &section, &option_count))
                 return TURBOWASM_MALFORMED_MODULE;
 
-            /*
-             * W2b1 is deliberately the flat scalar import slice. Dynamic
-             * values need canonical memory/realloc options and are W2b2.
-             */
-            if (option_count != 0u)
-                return TURBOWASM_UNSUPPORTED;
+            for (option_index = 0u;
+                 option_index < option_count;
+                 ++option_index) {
+                uint8_t option;
+
+                if (!turbowasm_reader_u8(&section, &option))
+                    return TURBOWASM_MALFORMED_MODULE;
+
+                switch (option) {
+                    case 0x00u: /* string-encoding=utf8 */
+                        if (string_encoding_seen)
+                            return TURBOWASM_MALFORMED_MODULE;
+                        string_encoding_seen = true;
+                        lower.string_encoding =
+                            TURBOWASM_COMPONENT_STRING_UTF8;
+                        break;
+
+                    case 0x01u: /* utf16 */
+                    case 0x02u: /* latin1+utf16 */
+                        return TURBOWASM_UNSUPPORTED;
+
+                    case 0x03u: /* memory */
+                        if (lower.has_memory ||
+                            !turbowasm_reader_uleb32(
+                                &section, &lower.memory_index) ||
+                            lower.memory_index >= current_core_memories)
+                            return TURBOWASM_MALFORMED_MODULE;
+                        lower.has_memory = true;
+                        break;
+
+                    case 0x04u: /* realloc */
+                        if (lower.has_realloc ||
+                            !turbowasm_reader_uleb32(
+                                &section,
+                                &lower.realloc_function_index) ||
+                            lower.realloc_function_index >=
+                                *next_core_function_index)
+                            return TURBOWASM_MALFORMED_MODULE;
+                        lower.has_realloc = true;
+                        break;
+
+                    case 0x05u: /* post-return */
+                    case 0x06u: /* async */
+                    case 0x07u: /* callback */
+                        return TURBOWASM_UNSUPPORTED;
+
+                    default:
+                        return TURBOWASM_MALFORMED_MODULE;
+                }
+            }
+
+            if (lower.has_realloc && !lower.has_memory)
+                return TURBOWASM_MALFORMED_MODULE;
 
             lower.core_function_index =
                 *next_core_function_index;
