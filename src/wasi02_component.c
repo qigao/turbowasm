@@ -903,6 +903,7 @@ turbowasm_status turbowasm_wasi02_component_value_from_wasi(
 
 static turbowasm_status wasi02_component_invoke(
     void *context,
+    turbowasm_host_call *call,
     turbowasm_component_name instance_name,
     turbowasm_component_name function_name,
     const turbowasm_component_type_graph *graph,
@@ -922,6 +923,8 @@ static turbowasm_status wasi02_component_invoke(
     turbowasm_runtime_scope scope;
     size_t i;
     turbowasm_status status = TURBOWASM_OK;
+
+    (void)call;
 
     if (provider == NULL || !provider->initialized ||
         graph == NULL || trap == NULL)
