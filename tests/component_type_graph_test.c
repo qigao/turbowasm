@@ -299,6 +299,73 @@ static void test_enum_and_flags_types(void) {
     turbowasm_component_type_graph_destroy(&graph);
 }
 
+static void test_variant_type_graph(void) {
+    turbowasm_component_type_graph graph = {0};
+    static const uint8_t ok_name[] = "ok";
+    static const uint8_t value_name[] = "value";
+    static const uint8_t closed_name[] = "closed";
+    turbowasm_component_variant_case cases[3] = {{0}};
+    const turbowasm_component_type *type;
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 1u));
+    cases[0].name = ok_name;
+    cases[0].name_size = 2u;
+    cases[1].name = value_name;
+    cases[1].name_size = 5u;
+    cases[1].has_payload = true;
+    cases[1].payload =
+        turbowasm_component_type_ref_inline(
+            TURBOWASM_COMPONENT_TYPE_U32);
+    cases[2].name = closed_name;
+    cases[2].name_size = 6u;
+
+    assert(turbowasm_component_type_graph_define_variant(
+        &graph, 0u, cases, 3u));
+    assert(turbowasm_component_type_graph_validate(&graph));
+
+    type = turbowasm_component_type_graph_get(&graph, 0u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_VARIANT);
+    assert(type->as.variant.count == 3u);
+    assert(!type->as.variant.cases[0].has_payload);
+    assert(type->as.variant.cases[1].has_payload);
+    assert(type->as.variant.cases[1].payload.kind ==
+           TURBOWASM_COMPONENT_TYPE_REF_INLINE);
+    assert(type->as.variant.cases[1].payload.as.inline_type ==
+           TURBOWASM_COMPONENT_TYPE_U32);
+    assert(type->as.variant.cases[2].name_size == 6u);
+
+    turbowasm_component_type_graph_destroy(&graph);
+}
+
+static void test_variant_borrow_result_is_rejected(void) {
+    turbowasm_component_type_graph graph = {0};
+    static const uint8_t borrowed_name[] = "borrowed";
+    turbowasm_component_variant_case cases[1] = {{0}};
+    turbowasm_component_type_ref result;
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 4u));
+    assert(turbowasm_component_type_graph_define_resource_full(
+        &graph, 0u, UINT64_C(0x9001), 0x7fu, false, UINT32_MAX));
+    assert(turbowasm_component_type_graph_define_handle(
+        &graph, 1u, TURBOWASM_COMPONENT_TYPE_BORROW, 0u));
+
+    cases[0].name = borrowed_name;
+    cases[0].name_size = 8u;
+    cases[0].has_payload = true;
+    cases[0].payload =
+        turbowasm_component_type_ref_indexed(1u);
+    assert(turbowasm_component_type_graph_define_variant(
+        &graph, 2u, cases, 1u));
+
+    result = turbowasm_component_type_ref_indexed(2u);
+    assert(turbowasm_component_type_graph_define_function(
+        &graph, 3u, NULL, 0u, true, result));
+    assert(!turbowasm_component_type_graph_validate(&graph));
+
+    turbowasm_component_type_graph_destroy(&graph);
+}
+
 int main(void) {
     test_scalar_projection();
     test_indexed_type_graph();
@@ -309,5 +376,7 @@ int main(void) {
     test_composite_type_graph();
     test_nested_borrow_result_is_rejected();
     test_enum_and_flags_types();
+    test_variant_type_graph();
+    test_variant_borrow_result_is_rejected();
     return 0;
 }

@@ -133,6 +133,61 @@ static uint32_t flags_valid_mask(uint32_t count) {
         : ((UINT32_C(1) << count) - UINT32_C(1));
 }
 
+static uint32_t variant_case_count(
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind) {
+    if (type == NULL)
+        return 0u;
+    if (kind == TURBOWASM_COMPONENT_TYPE_VARIANT)
+        return type->as.variant.count;
+    if (kind == TURBOWASM_COMPONENT_TYPE_VARIANT ||
+        kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
+        kind == TURBOWASM_COMPONENT_TYPE_RESULT)
+        return 2u;
+    return 0u;
+}
+
+static turbowasm_status variant_case_ref(
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    uint32_t case_index,
+    bool *out_has_payload,
+    turbowasm_component_type_ref *out_payload) {
+    uint32_t count = variant_case_count(type, kind);
+
+    if (type == NULL || out_has_payload == NULL ||
+        out_payload == NULL || count == 0u ||
+        case_index >= count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_VARIANT) {
+        const turbowasm_component_variant_case *case_desc =
+            &type->as.variant.cases[case_index];
+        *out_has_payload = case_desc->has_payload;
+        if (*out_has_payload)
+            *out_payload = case_desc->payload;
+        return TURBOWASM_OK;
+    }
+    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
+        *out_has_payload = case_index == 1u;
+        if (*out_has_payload)
+            *out_payload = type->as.option.payload;
+        return TURBOWASM_OK;
+    }
+    if (kind == TURBOWASM_COMPONENT_TYPE_RESULT) {
+        *out_has_payload = case_index == 0u
+            ? type->as.result.has_ok
+            : type->as.result.has_error;
+        if (*out_has_payload) {
+            *out_payload = case_index == 0u
+                ? type->as.result.ok
+                : type->as.result.error;
+        }
+        return TURBOWASM_OK;
+    }
+    return TURBOWASM_INVALID_ARGUMENT;
+}
+
 
 static turbowasm_status canonical_layout_inner(
     const turbowasm_component_type_graph *graph,
@@ -243,34 +298,38 @@ static turbowasm_status canonical_layout_inner(
             return TURBOWASM_OK;
         }
 
+        case TURBOWASM_COMPONENT_TYPE_VARIANT:
         case TURBOWASM_COMPONENT_TYPE_OPTION:
         case TURBOWASM_COMPONENT_TYPE_RESULT: {
-            turbowasm_component_type_ref cases[2];
-            bool present[2] = {false, false};
             uint64_t payload_alignment = 1u;
             uint64_t payload_size = 0u;
             uint64_t payload_offset;
+            uint64_t alignment;
+            size_t discriminant_width;
+            uint32_t count;
             uint32_t i;
 
             if (type == NULL)
                 return TURBOWASM_MALFORMED_MODULE;
+            count = variant_case_count(type, kind);
+            discriminant_width = enum_storage_width(count);
+            if (count == 0u || discriminant_width == 0u)
+                return TURBOWASM_MALFORMED_MODULE;
 
-            if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
-                present[1] = true;
-                cases[1] = type->as.option.payload;
-            } else {
-                present[0] = type->as.result.has_ok;
-                cases[0] = type->as.result.ok;
-                present[1] = type->as.result.has_error;
-                cases[1] = type->as.result.error;
-            }
-
-            for (i = 0u; i < 2u; ++i) {
+            for (i = 0u; i < count; ++i) {
+                bool has_payload = false;
+                turbowasm_component_type_ref payload;
                 turbowasm_component_layout case_layout;
-                if (!present[i])
+
+                status = variant_case_ref(
+                    type, kind, i,
+                    &has_payload, &payload);
+                if (status != TURBOWASM_OK)
+                    return status;
+                if (!has_payload)
                     continue;
                 status = canonical_layout_inner(
-                    graph, cases[i], pointer_type,
+                    graph, payload, pointer_type,
                     depth + 1u, &case_layout);
                 if (status != TURBOWASM_OK)
                     return status;
@@ -280,14 +339,19 @@ static turbowasm_status canonical_layout_inner(
                     payload_size = case_layout.size;
             }
 
-            out->alignment = payload_alignment;
+            alignment = payload_alignment >
+                    (uint64_t)discriminant_width
+                ? payload_alignment
+                : (uint64_t)discriminant_width;
+            out->alignment = alignment;
             if (!align_up_u64(
-                    UINT64_C(1), payload_alignment,
+                    (uint64_t)discriminant_width,
+                    payload_alignment,
                     &payload_offset) ||
                 payload_offset > UINT64_MAX - payload_size ||
                 !align_up_u64(
                     payload_offset + payload_size,
-                    out->alignment,
+                    alignment,
                     &out->size))
                 return TURBOWASM_UNSUPPORTED;
             return TURBOWASM_OK;
@@ -492,34 +556,34 @@ static turbowasm_status canonical_flatten_type_inner(
             return TURBOWASM_OK;
         }
 
+        case TURBOWASM_COMPONENT_TYPE_VARIANT:
         case TURBOWASM_COMPONENT_TYPE_OPTION:
         case TURBOWASM_COMPONENT_TYPE_RESULT: {
-            turbowasm_component_type_ref cases[2];
-            bool present[2] = {false, false};
             turbowasm_component_flat_type_list joined = {{0}, 0u};
+            uint32_t count;
             uint32_t i;
 
             if (type == NULL)
                 return TURBOWASM_MALFORMED_MODULE;
+            count = variant_case_count(type, kind);
+            if (count == 0u)
+                return TURBOWASM_MALFORMED_MODULE;
 
-            if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
-                present[1] = true;
-                cases[1] = type->as.option.payload;
-            } else {
-                present[0] = type->as.result.has_ok;
-                cases[0] = type->as.result.ok;
-                present[1] = type->as.result.has_error;
-                cases[1] = type->as.result.error;
-            }
-
-            for (i = 0u; i < 2u; ++i) {
+            for (i = 0u; i < count; ++i) {
+                bool has_payload = false;
+                turbowasm_component_type_ref payload;
                 turbowasm_component_flat_type_list part;
                 uint32_t j;
 
-                if (!present[i])
+                status = variant_case_ref(
+                    type, kind, i,
+                    &has_payload, &payload);
+                if (status != TURBOWASM_OK)
+                    return status;
+                if (!has_payload)
                     continue;
                 status = canonical_flatten_type_inner(
-                    graph, cases[i], pointer_type,
+                    graph, payload, pointer_type,
                     depth + 1u, &part);
                 if (status != TURBOWASM_OK)
                     return status;
@@ -1111,6 +1175,13 @@ void turbowasm_component_value_destroy(
             break;
         case TURBOWASM_COMPONENT_TYPE_TUPLE:
             destroy_value_sequence(&value->as.tuple);
+            break;
+        case TURBOWASM_COMPONENT_TYPE_VARIANT:
+            if (value->as.variant.payload != NULL) {
+                turbowasm_component_value_destroy(
+                    value->as.variant.payload);
+                turbowasm_rt_free(value->as.variant.payload);
+            }
             break;
         case TURBOWASM_COMPONENT_TYPE_OPTION:
             if (value->as.option.payload != NULL) {
@@ -1766,36 +1837,6 @@ static turbowasm_status lower_sequence_value(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status variant_case_ref(
-    const turbowasm_component_type *type,
-    turbowasm_component_type_kind kind,
-    uint32_t case_index,
-    bool *out_has_payload,
-    turbowasm_component_type_ref *out_payload) {
-    if (type == NULL || out_has_payload == NULL ||
-        out_payload == NULL || case_index >= 2u)
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
-        *out_has_payload = case_index == 1u;
-        if (*out_has_payload)
-            *out_payload = type->as.option.payload;
-        return TURBOWASM_OK;
-    }
-    if (kind == TURBOWASM_COMPONENT_TYPE_RESULT) {
-        *out_has_payload = case_index == 0u
-            ? type->as.result.has_ok
-            : type->as.result.has_error;
-        if (*out_has_payload) {
-            *out_payload = case_index == 0u
-                ? type->as.result.ok
-                : type->as.result.error;
-        }
-        return TURBOWASM_OK;
-    }
-    return TURBOWASM_INVALID_ARGUMENT;
-}
-
 static turbowasm_status variant_payload_alignment(
     const turbowasm_component_type_graph *graph,
     const turbowasm_component_type *type,
@@ -1805,9 +1846,11 @@ static turbowasm_status variant_payload_alignment(
     uint64_t alignment = 1u;
     uint32_t i;
 
-    if (out_alignment == NULL)
+    uint32_t count = variant_case_count(type, kind);
+
+    if (out_alignment == NULL || count == 0u)
         return TURBOWASM_INVALID_ARGUMENT;
-    for (i = 0u; i < 2u; ++i) {
+    for (i = 0u; i < count; ++i) {
         bool has_payload = false;
         turbowasm_component_type_ref payload;
         turbowasm_component_layout layout;
@@ -1838,7 +1881,10 @@ static turbowasm_status lift_variant_value(
     uint64_t address,
     uint32_t depth,
     turbowasm_component_value *out) {
-    uint8_t discriminant = 0u;
+    uint8_t bytes[4] = {0};
+    uint32_t discriminant;
+    uint32_t count;
+    size_t discriminant_width;
     uint64_t payload_alignment = 1u;
     uint64_t payload_address;
     bool has_payload = false;
@@ -1846,12 +1892,19 @@ static turbowasm_status lift_variant_value(
     turbowasm_component_value *payload = NULL;
     turbowasm_status status;
 
+    count = variant_case_count(type, kind);
+    discriminant_width = enum_storage_width(count);
+    if (count == 0u || discriminant_width == 0u)
+        return TURBOWASM_MALFORMED_MODULE;
+
     status = read_memory(
         instance, memory->memory_index,
-        address, &discriminant, 1u);
+        address, bytes, discriminant_width);
     if (status != TURBOWASM_OK)
         return status;
-    if (discriminant >= 2u)
+    discriminant = (uint32_t)read_le(
+        bytes, discriminant_width);
+    if (discriminant >= count)
         return TURBOWASM_TRAPPED;
 
     status = variant_case_ref(
@@ -1865,9 +1918,9 @@ static turbowasm_status lift_variant_value(
     if (status != TURBOWASM_OK)
         return status;
 
-    if (address == UINT64_MAX ||
+    if (address > UINT64_MAX - (uint64_t)discriminant_width ||
         !align_up_u64(
-            address + UINT64_C(1),
+            address + (uint64_t)discriminant_width,
             payload_alignment,
             &payload_address))
         return TURBOWASM_TRAPPED;
@@ -1889,7 +1942,10 @@ static turbowasm_status lift_variant_value(
 
     memset(out, 0, sizeof(*out));
     out->kind = kind;
-    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
+    if (kind == TURBOWASM_COMPONENT_TYPE_VARIANT) {
+        out->as.variant.case_index = discriminant;
+        out->as.variant.payload = payload;
+    } else if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
         out->as.option.case_index = discriminant;
         out->as.option.payload = payload;
     } else {
@@ -1909,7 +1965,9 @@ static turbowasm_status lower_variant_value(
     uint32_t depth,
     const turbowasm_component_value *value) {
     const turbowasm_component_value_variant *variant;
-    uint8_t discriminant;
+    uint8_t bytes[4] = {0};
+    uint32_t count;
+    size_t discriminant_width;
     uint64_t payload_alignment = 1u;
     uint64_t payload_address;
     bool has_payload = false;
@@ -1918,10 +1976,18 @@ static turbowasm_status lower_variant_value(
 
     if (value == NULL || value->kind != kind)
         return TURBOWASM_TYPE_MISMATCH;
-    variant = kind == TURBOWASM_COMPONENT_TYPE_OPTION
-        ? &value->as.option
-        : &value->as.result;
-    if (variant->case_index >= 2u)
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_VARIANT)
+        variant = &value->as.variant;
+    else if (kind == TURBOWASM_COMPONENT_TYPE_OPTION)
+        variant = &value->as.option;
+    else
+        variant = &value->as.result;
+
+    count = variant_case_count(type, kind);
+    discriminant_width = enum_storage_width(count);
+    if (count == 0u || discriminant_width == 0u ||
+        variant->case_index >= count)
         return TURBOWASM_TYPE_MISMATCH;
 
     status = variant_case_ref(
@@ -1932,10 +1998,10 @@ static turbowasm_status lower_variant_value(
     if (has_payload != (variant->payload != NULL))
         return TURBOWASM_TYPE_MISMATCH;
 
-    discriminant = (uint8_t)variant->case_index;
+    write_le(bytes, discriminant_width, variant->case_index);
     status = write_memory(
         instance, memory->memory_index,
-        address, &discriminant, 1u);
+        address, bytes, discriminant_width);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -1947,9 +2013,9 @@ static turbowasm_status lower_variant_value(
         &payload_alignment);
     if (status != TURBOWASM_OK)
         return status;
-    if (address == UINT64_MAX ||
+    if (address > UINT64_MAX - (uint64_t)discriminant_width ||
         !align_up_u64(
-            address + UINT64_C(1),
+            address + (uint64_t)discriminant_width,
             payload_alignment,
             &payload_address))
         return TURBOWASM_TRAPPED;
@@ -1996,7 +2062,8 @@ static turbowasm_status lift_value_inner(
         return lift_sequence_value(
             graph, type, kind, memory, instance,
             address, depth, out);
-    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
+    if (kind == TURBOWASM_COMPONENT_TYPE_VARIANT ||
+        kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
         kind == TURBOWASM_COMPONENT_TYPE_RESULT)
         return lift_variant_value(
             graph, type, kind, memory, instance,
@@ -2066,7 +2133,8 @@ static turbowasm_status lower_value_inner(
         return lower_sequence_value(
             graph, type, kind, memory, instance,
             address, depth, value);
-    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
+    if (kind == TURBOWASM_COMPONENT_TYPE_VARIANT ||
+        kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
         kind == TURBOWASM_COMPONENT_TYPE_RESULT)
         return lower_variant_value(
             graph, type, kind, memory, instance,
@@ -2710,10 +2778,13 @@ static turbowasm_status lower_flat_variant(
 
     if (value == NULL || value->kind != kind)
         return TURBOWASM_TYPE_MISMATCH;
-    variant = kind == TURBOWASM_COMPONENT_TYPE_OPTION
-        ? &value->as.option
-        : &value->as.result;
-    if (variant->case_index >= 2u)
+    if (kind == TURBOWASM_COMPONENT_TYPE_VARIANT)
+        variant = &value->as.variant;
+    else if (kind == TURBOWASM_COMPONENT_TYPE_OPTION)
+        variant = &value->as.option;
+    else
+        variant = &value->as.result;
+    if (variant->case_index >= variant_case_count(type, kind))
         return TURBOWASM_TYPE_MISMATCH;
 
     status = canonical_flatten_type_inner(
@@ -2819,7 +2890,7 @@ static turbowasm_status lift_flat_variant(
         return TURBOWASM_TYPE_MISMATCH;
 
     case_index = (uint32_t)values[0].as.i32;
-    if (case_index >= 2u)
+    if (case_index >= variant_case_count(type, kind))
         return TURBOWASM_TRAPPED;
 
     status = variant_case_ref(
@@ -2880,7 +2951,10 @@ static turbowasm_status lift_flat_variant(
 
     memset(out, 0, sizeof(*out));
     out->kind = kind;
-    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
+    if (kind == TURBOWASM_COMPONENT_TYPE_VARIANT) {
+        out->as.variant.case_index = case_index;
+        out->as.variant.payload = payload;
+    } else if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
         out->as.option.case_index = case_index;
         out->as.option.payload = payload;
     } else {
@@ -2934,7 +3008,8 @@ static turbowasm_status lower_flat_value_inner(
             graph, type, kind, memory, value,
             out, out_capacity, depth, out_count);
 
-    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
+    if (kind == TURBOWASM_COMPONENT_TYPE_VARIANT ||
+        kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
         kind == TURBOWASM_COMPONENT_TYPE_RESULT)
         return lower_flat_variant(
             graph, type, kind, ref, memory, value,
@@ -3011,7 +3086,8 @@ static turbowasm_status lift_flat_value_inner(
             graph, type, kind, memory,
             values, value_count, depth, out);
 
-    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
+    if (kind == TURBOWASM_COMPONENT_TYPE_VARIANT ||
+        kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
         kind == TURBOWASM_COMPONENT_TYPE_RESULT)
         return lift_flat_variant(
             graph, type, kind, ref, memory,

@@ -701,6 +701,38 @@ static void test_enum_and_flags_binary_retention(void) {
     turbowasm_component_binary_destroy(&component);
 }
 
+static void test_variant_binary_retention(void) {
+    static const uint8_t bytes[] = {
+        COMPONENT_HEADER,
+        /* type0 = variant { value(u32), closed } */
+        0x07,0x15,0x01,
+          0x71,0x02,
+            0x05,'v','a','l','u','e',0x01,0x79,0x00,
+            0x06,'c','l','o','s','e','d',0x00,0x00
+    };
+    turbowasm_component_binary component = {0};
+    const turbowasm_component_type *type;
+
+    assert(turbowasm_component_binary_load(
+               &component, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(component.type_graph.count == 1u);
+
+    type = turbowasm_component_type_graph_get(
+        &component.type_graph, 0u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_VARIANT);
+    assert(type->as.variant.count == 2u);
+    assert(type->as.variant.cases[0].has_payload);
+    assert(type->as.variant.cases[0].payload.kind ==
+           TURBOWASM_COMPONENT_TYPE_REF_INLINE);
+    assert(type->as.variant.cases[0].payload.as.inline_type ==
+           TURBOWASM_COMPONENT_TYPE_U32);
+    assert(!type->as.variant.cases[1].has_payload);
+    assert(type->as.variant.cases[1].name_size == 6u);
+
+    turbowasm_component_binary_destroy(&component);
+}
+
 static void test_semantic_unsupported_and_invalid_forms(void) {
     static const uint8_t alias[] = {
         COMPONENT_HEADER,
@@ -780,6 +812,7 @@ int main(void) {
     test_named_record_inside_instance_type();
     test_cross_interface_abstract_resource_identity();
     test_enum_and_flags_binary_retention();
+    test_variant_binary_retention();
     test_semantic_unsupported_and_invalid_forms();
     return 0;
 }

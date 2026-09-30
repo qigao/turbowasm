@@ -705,6 +705,59 @@ record_done:
         return status;
     }
 
+    if (opcode == 0x71u) {
+        turbowasm_component_variant_case *cases = NULL;
+        uint32_t count;
+        uint32_t i;
+
+        if (!turbowasm_reader_uleb32(reader, &count) || count == 0u)
+            return TURBOWASM_MALFORMED_MODULE;
+        if ((size_t)count > SIZE_MAX / sizeof(*cases))
+            return TURBOWASM_OUT_OF_MEMORY;
+        cases = (turbowasm_component_variant_case *)
+            turbowasm_rt_calloc((size_t)count, sizeof(*cases));
+        if (cases == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+
+        for (i = 0u; i < count; ++i) {
+            turbowasm_component_name name = {0};
+            uint8_t refines = 0xffu;
+
+            status = read_component_name(reader, &name);
+            if (status != TURBOWASM_OK)
+                goto variant_done;
+            cases[i].name = name.bytes;
+            cases[i].name_size = name.size;
+
+            status = read_optional_component_type_ref(
+                reader,
+                type_index,
+                &cases[i].has_payload,
+                &cases[i].payload);
+            if (status != TURBOWASM_OK)
+                goto variant_done;
+
+            if (!turbowasm_reader_u8(reader, &refines)) {
+                status = TURBOWASM_MALFORMED_MODULE;
+                goto variant_done;
+            }
+            if (refines != 0x00u) {
+                status = TURBOWASM_UNSUPPORTED;
+                goto variant_done;
+            }
+        }
+
+        if (!turbowasm_component_type_graph_define_variant(
+                graph, type_index, cases, count))
+            status = TURBOWASM_MALFORMED_MODULE;
+        else
+            status = TURBOWASM_OK;
+
+variant_done:
+        turbowasm_rt_free(cases);
+        return status;
+    }
+
     if (opcode == 0x6bu) {
         turbowasm_component_type_ref payload;
         status = read_component_type_ref(
@@ -1543,6 +1596,14 @@ static bool clone_type_between_graphs(
                     type->as.tuple.elements,
                     type->as.tuple.count);
 
+        case TURBOWASM_COMPONENT_TYPE_VARIANT:
+            return same_graph &&
+                turbowasm_component_type_graph_define_variant(
+                    destination_graph,
+                    destination,
+                    type->as.variant.cases,
+                    type->as.variant.count);
+
         case TURBOWASM_COMPONENT_TYPE_OPTION:
             return same_graph &&
                 turbowasm_component_type_graph_define_option(
@@ -1690,6 +1751,7 @@ static turbowasm_status decode_flat_instance_type(
                     goto fail;
             } else if (opcode == 0x70u ||
                        opcode == 0x72u ||
+                       opcode == 0x71u ||
                        opcode == 0x6fu ||
                        opcode == 0x6bu ||
                        opcode == 0x6au) {
@@ -1963,6 +2025,7 @@ static turbowasm_status decode_component_type_section(
             }
         } else if (opcode == 0x70u ||
                    opcode == 0x72u ||
+                   opcode == 0x71u ||
                    opcode == 0x6fu ||
                    opcode == 0x6bu ||
                    opcode == 0x6au) {

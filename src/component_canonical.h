@@ -101,6 +101,7 @@ struct turbowasm_component_value {
         turbowasm_component_value_list list;
         turbowasm_component_value_list record;
         turbowasm_component_value_list tuple;
+        turbowasm_component_value_variant variant;
         turbowasm_component_value_variant option;
         turbowasm_component_value_variant result;
         uint32_t enum_index;
