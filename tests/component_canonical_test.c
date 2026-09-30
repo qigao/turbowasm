@@ -400,6 +400,47 @@ static void test_composite_metadata(void) {
     turbowasm_component_type_graph_destroy(&graph);
 }
 
+static void test_composite_flat_limit(void) {
+    turbowasm_component_type_graph graph = {0};
+    turbowasm_component_type_ref elements[17];
+    turbowasm_component_type_ref params[1];
+    turbowasm_component_flat_type_list flat;
+    turbowasm_component_flat_signature sig;
+    uint32_t i;
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 2u));
+    for (i = 0u; i < 17u; ++i)
+        elements[i] = inline_ref(TURBOWASM_COMPONENT_TYPE_U32);
+    assert(turbowasm_component_type_graph_define_tuple(
+        &graph, 0u, elements, 17u));
+
+    params[0] = indexed_ref(0u);
+    assert(turbowasm_component_type_graph_define_function(
+        &graph, 1u, params, 1u, false,
+        inline_ref(TURBOWASM_COMPONENT_TYPE_BOOL)));
+    assert(turbowasm_component_type_graph_validate(&graph));
+
+    assert(turbowasm_component_canonical_flatten_type(
+               &graph, indexed_ref(0u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &flat) == TURBOWASM_OK);
+    assert(flat.count == 17u);
+    for (i = 0u; i < 17u; ++i)
+        assert(flat.types[i] == TURBOWASM_COMPONENT_FLAT_I32);
+
+    assert(turbowasm_component_canonical_flatten_function(
+               &graph, 1u,
+               TURBOWASM_COMPONENT_POINTER_I32,
+               TURBOWASM_COMPONENT_CANONICAL_LIFT,
+               &sig) == TURBOWASM_OK);
+    assert(sig.params_indirect);
+    assert(sig.param_count == 1u);
+    assert(sig.params[0] == TURBOWASM_COMPONENT_FLAT_I32);
+    assert(sig.result_count == 0u);
+
+    turbowasm_component_type_graph_destroy(&graph);
+}
+
 int main(void) {
     turbowasm_component_type_graph graph = {0};
 
@@ -410,5 +451,6 @@ int main(void) {
     turbowasm_component_type_graph_destroy(&graph);
 
     test_composite_metadata();
+    test_composite_flat_limit();
     return 0;
 }
