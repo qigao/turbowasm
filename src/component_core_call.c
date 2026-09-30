@@ -680,7 +680,7 @@ static turbowasm_status parameter_tuple_layout(
             turbowasm_component_canonical_layout(
                 adapter->graph,
                 function->as.function.params[i],
-                adapter->memory.pointer_type,
+                memory->pointer_type,
                 &layout);
         if (status != TURBOWASM_OK)
             return status;
@@ -702,6 +702,7 @@ static turbowasm_status parameter_tuple_layout(
 
 static turbowasm_status lower_indirect_parameters(
     const turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_component_canonical_memory *memory,
     const turbowasm_component_value *arguments,
     uint64_t *out_pointer) {
     const turbowasm_component_type *function;
@@ -713,9 +714,10 @@ static turbowasm_status lower_indirect_parameters(
     uint32_t i;
     turbowasm_status status;
 
-    if (adapter == NULL || arguments == NULL || out_pointer == NULL)
+    if (adapter == NULL || memory == NULL ||
+        arguments == NULL || out_pointer == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (adapter->memory.guest_realloc == NULL)
+    if (memory->guest_realloc == NULL)
         return TURBOWASM_UNSUPPORTED;
 
     function = turbowasm_component_type_graph_get(
@@ -727,8 +729,8 @@ static turbowasm_status lower_indirect_parameters(
     if (status != TURBOWASM_OK)
         return status;
 
-    status = adapter->memory.guest_realloc(
-        adapter->memory.realloc_context,
+    status = memory->guest_realloc(
+        memory->realloc_context,
         0u, 0u, alignment, size, &pointer);
     if (status != TURBOWASM_OK)
         return status;
@@ -737,13 +739,13 @@ static turbowasm_status lower_indirect_parameters(
         return TURBOWASM_TRAPPED;
 
     instance =
-        (turbowasm_instance_impl *)adapter->memory.instance->impl;
+        (turbowasm_instance_impl *)memory->instance->impl;
     if (instance == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     {
         uint8_t *range = NULL;
         status = turbowasm_instance_memory_bounds(
-            instance, adapter->memory.memory_index,
+            instance, memory->memory_index,
             pointer, 0u, (size_t)size, &range);
         if (status != TURBOWASM_OK)
             return status;
@@ -764,7 +766,7 @@ static turbowasm_status lower_indirect_parameters(
         status = turbowasm_component_canonical_lower_value(
             adapter->graph,
             function->as.function.params[i],
-            &adapter->memory,
+            memory,
             pointer + offset,
             &arguments[i]);
         if (status != TURBOWASM_OK)
