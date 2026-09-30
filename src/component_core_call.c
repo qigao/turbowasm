@@ -862,13 +862,16 @@ turbowasm_status turbowasm_component_core_call_adapter_init_with_resources(
         if (type_ref_uses_resources(
                 graph, function->as.function.result, 0u)) {
             uses_resources = true;
-            status = resource_handle_info(
-                graph, function->as.function.result,
-                &result_kind, &result_identity, &result_rep_kind);
-            if (status != TURBOWASM_OK)
-                return status;
-            if (result_kind == TURBOWASM_COMPONENT_TYPE_BORROW)
-                return TURBOWASM_MALFORMED_MODULE;
+            if (type_ref_is_resource_handle(
+                    graph, function->as.function.result)) {
+                status = resource_handle_info(
+                    graph, function->as.function.result,
+                    &result_kind, &result_identity, &result_rep_kind);
+                if (status != TURBOWASM_OK)
+                    return status;
+                if (result_kind == TURBOWASM_COMPONENT_TYPE_BORROW)
+                    return TURBOWASM_MALFORMED_MODULE;
+            }
         }
     }
 
