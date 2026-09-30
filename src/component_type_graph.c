@@ -90,6 +90,16 @@ void turbowasm_component_type_graph_destroy(
                 turbowasm_rt_free(
                     graph->types[index].as.function.params);
                 graph->types[index].as.function.params = NULL;
+            } else if (graph->types[index].kind ==
+                           TURBOWASM_COMPONENT_TYPE_INSTANCE &&
+                       graph->types[index].as.instance != NULL) {
+                turbowasm_component_instance_type *instance_type =
+                    graph->types[index].as.instance;
+                turbowasm_component_type_graph_destroy(
+                    &instance_type->type_graph);
+                turbowasm_rt_free(instance_type->exports);
+                turbowasm_rt_free(instance_type);
+                graph->types[index].as.instance = NULL;
             }
         }
     }
@@ -242,6 +252,24 @@ bool turbowasm_component_type_graph_define_handle(
     return true;
 }
 
+bool turbowasm_component_type_graph_define_instance(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_instance_type *instance_type) {
+    turbowasm_component_type *type = slot(graph, id);
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        instance_type == NULL ||
+        !turbowasm_component_type_graph_validate(
+            &instance_type->type_graph))
+        return false;
+
+    type->kind = TURBOWASM_COMPONENT_TYPE_INSTANCE;
+    type->as.instance = instance_type;
+    return true;
+}
+
 const turbowasm_component_type *
 turbowasm_component_type_graph_get(
     const turbowasm_component_type_graph *graph,
@@ -334,6 +362,38 @@ bool turbowasm_component_type_graph_validate(
                         TURBOWASM_COMPONENT_TYPE_RESOURCE)
                     return false;
                 break;
+
+            case TURBOWASM_COMPONENT_TYPE_INSTANCE: {
+                const turbowasm_component_instance_type *instance_type =
+                    type->as.instance;
+                uint32_t export_index;
+
+                if (instance_type == NULL ||
+                    !turbowasm_component_type_graph_validate(
+                        &instance_type->type_graph))
+                    return false;
+                for (export_index = 0u;
+                     export_index < instance_type->export_count;
+                     ++export_index) {
+                    const turbowasm_component_instance_type_export *export_desc =
+                        &instance_type->exports[export_index];
+                    const turbowasm_component_type *function_type;
+
+                    if (export_desc->function_type >=
+                            instance_type->type_graph.count ||
+                        (export_desc->name_size != 0u &&
+                         export_desc->name == NULL))
+                        return false;
+                    function_type = turbowasm_component_type_graph_get(
+                        &instance_type->type_graph,
+                        export_desc->function_type);
+                    if (function_type == NULL ||
+                        function_type->kind !=
+                            TURBOWASM_COMPONENT_TYPE_FUNCTION)
+                        return false;
+                }
+                break;
+            }
 
             default:
                 if (!scalar_kind(type->kind) &&
