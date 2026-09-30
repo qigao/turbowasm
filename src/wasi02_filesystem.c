@@ -1518,6 +1518,7 @@ done:
 
 static turbowasm_status wasi02_fs_invoke(
     void *context,
+    turbowasm_host_call *call,
     turbowasm_component_name instance_name,
     turbowasm_component_name function_name,
     const turbowasm_component_type_graph *graph,
@@ -1530,6 +1531,8 @@ static turbowasm_status wasi02_fs_invoke(
         (turbowasm_wasi02_filesystem *)context;
     turbowasm_wasi02_value result = {0};
     turbowasm_status status;
+
+    (void)call;
 
     if (filesystem == NULL || !filesystem->initialized ||
         out_result == NULL || trap == NULL ||
