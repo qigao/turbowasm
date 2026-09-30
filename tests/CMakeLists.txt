@@ -234,7 +234,9 @@ if(TARGET turbowasm_wasi02_core)
   add_executable(turbowasm_wasi02_component_exec_test
     wasi02_component_exec_test.c)
   target_link_libraries(turbowasm_wasi02_component_exec_test
-    PRIVATE turbowasm_wasi02_core)
+    PRIVATE
+      turbowasm_wasi02_core
+      TurboWasm::Runtime)
   target_include_directories(turbowasm_wasi02_component_exec_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/src"
