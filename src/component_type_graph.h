@@ -31,7 +31,8 @@ typedef enum turbowasm_component_type_kind {
     TURBOWASM_COMPONENT_TYPE_FUNCTION,
     TURBOWASM_COMPONENT_TYPE_RESOURCE,
     TURBOWASM_COMPONENT_TYPE_OWN,
-    TURBOWASM_COMPONENT_TYPE_BORROW
+    TURBOWASM_COMPONENT_TYPE_BORROW,
+    TURBOWASM_COMPONENT_TYPE_INSTANCE
 } turbowasm_component_type_kind;
 
 typedef enum turbowasm_component_type_ref_kind {
@@ -46,6 +47,9 @@ typedef struct turbowasm_component_type_ref {
         turbowasm_component_type_kind inline_type;
     } as;
 } turbowasm_component_type_ref;
+
+typedef struct turbowasm_component_instance_type
+    turbowasm_component_instance_type;
 
 typedef struct turbowasm_component_type {
     turbowasm_component_type_kind kind;
@@ -68,6 +72,7 @@ typedef struct turbowasm_component_type {
         struct {
             turbowasm_component_type_id resource_type;
         } handle;
+        turbowasm_component_instance_type *instance;
     } as;
 } turbowasm_component_type;
 
@@ -75,6 +80,18 @@ typedef struct turbowasm_component_type_graph {
     turbowasm_component_type *types;
     uint32_t count;
 } turbowasm_component_type_graph;
+
+typedef struct turbowasm_component_instance_type_export {
+    const uint8_t *name;
+    uint32_t name_size;
+    turbowasm_component_type_id function_type;
+} turbowasm_component_instance_type_export;
+
+struct turbowasm_component_instance_type {
+    turbowasm_component_type_graph type_graph;
+    turbowasm_component_instance_type_export *exports;
+    uint32_t export_count;
+};
 
 /*
  * Allocate an exact number of stable type-id slots. The graph owns all nodes
@@ -143,6 +160,15 @@ bool turbowasm_component_type_graph_define_handle(
     turbowasm_component_type_id id,
     turbowasm_component_type_kind kind,
     turbowasm_component_type_id resource_type);
+
+/*
+ * Transfer ownership of a retained instance type into one graph slot.
+ * The nested graph is local to that instance type's declarator scope.
+ */
+bool turbowasm_component_type_graph_define_instance(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_instance_type *instance_type);
 
 const turbowasm_component_type *
 turbowasm_component_type_graph_get(
