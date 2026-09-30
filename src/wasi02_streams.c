@@ -1838,7 +1838,7 @@ static bool stream_identity_conflicts(
     const turbowasm_wasi02_streams *streams,
     uint64_t candidate,
     const uint64_t *target) {
-    if (streams == NULL || target == NULL || candidate == 0u)
+    if (streams == NULL || candidate == 0u)
         return true;
 
     if (target != &streams->input_stream_identity &&
