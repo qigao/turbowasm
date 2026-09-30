@@ -507,11 +507,15 @@ static void test_named_record_inside_instance_type(void) {
     assert(outer->kind == TURBOWASM_COMPONENT_TYPE_INSTANCE);
     assert(outer->as.instance != NULL);
     assert(outer->as.instance->type_graph.count == 3u);
-    assert(outer->as.instance->export_count == 1u);
-    assert(outer->as.instance->exports[0].name_size == 3u);
+    assert(outer->as.instance->export_count == 2u);
+    assert(outer->as.instance->exports[0].name_size == 8u);
     assert(outer->as.instance->exports[0].kind ==
+           TURBOWASM_COMPONENT_INSTANCE_EXPORT_TYPE);
+    assert(outer->as.instance->exports[0].type_index == 1u);
+    assert(outer->as.instance->exports[1].name_size == 3u);
+    assert(outer->as.instance->exports[1].kind ==
            TURBOWASM_COMPONENT_INSTANCE_EXPORT_FUNCTION);
-    assert(outer->as.instance->exports[0].type_index == 2u);
+    assert(outer->as.instance->exports[1].type_index == 2u);
 
     record = turbowasm_component_type_graph_get(
         &outer->as.instance->type_graph, 0u);
