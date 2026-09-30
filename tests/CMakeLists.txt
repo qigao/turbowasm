@@ -221,7 +221,9 @@ if(TARGET turbowasm_wasi02_core)
   target_link_libraries(turbowasm_wasi02_provider_test
     PRIVATE turbowasm_wasi02_core)
   target_include_directories(turbowasm_wasi02_provider_test
-    PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    PRIVATE
+      "${PROJECT_SOURCE_DIR}/src"
+      "${PROJECT_SOURCE_DIR}/include")
   set_target_properties(turbowasm_wasi02_provider_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
