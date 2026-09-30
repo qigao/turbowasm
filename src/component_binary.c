@@ -1390,7 +1390,7 @@ static bool clone_local_type(
                 type->as.function.has_result,
                 type->as.function.result);
         case TURBOWASM_COMPONENT_TYPE_RESOURCE:
-            return turbowasm_component_type_graph_define_resource_full(
+            return turbowasm_component_type_graph_define_resource_alias(
                 graph,
                 destination,
                 type->as.resource.identity,
