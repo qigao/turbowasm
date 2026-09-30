@@ -497,8 +497,6 @@ static turbowasm_status component_canon_lower_host(
     uint32_t i;
     turbowasm_status status = TURBOWASM_OK;
 
-    (void)call;
-
     if (lower_context == NULL ||
         lower_context->exec == NULL ||
         lower_context->exec->imports.invoke == NULL ||
@@ -581,6 +579,7 @@ static turbowasm_status component_canon_lower_host(
 
     status = lower_context->exec->imports.invoke(
         lower_context->exec->imports.context,
+        call,
         lower_context->instance_name,
         lower_context->function_name,
         lower_context->graph,
