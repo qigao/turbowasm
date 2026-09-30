@@ -58,6 +58,19 @@ set_target_properties(turbowasm_component_resource_test PROPERTIES
 add_test(NAME turbowasm_component_resource_test
          COMMAND turbowasm_component_resource_test)
 
+add_executable(turbowasm_component_instance_exec_test
+  component_instance_exec_test.c)
+target_link_libraries(turbowasm_component_instance_exec_test
+  PRIVATE TurboWasm::Runtime)
+target_include_directories(turbowasm_component_instance_exec_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_instance_exec_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_instance_exec_test
+         COMMAND turbowasm_component_instance_exec_test)
+
 add_executable(turbowasm_component_resource_builtin_exec_test
   component_resource_builtin_exec_test.c)
 target_link_libraries(turbowasm_component_resource_builtin_exec_test
