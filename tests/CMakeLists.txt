@@ -303,6 +303,25 @@ if(TARGET turbowasm_wasi02_fs_core)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_wasi02_filesystem_component_exec_test
            COMMAND turbowasm_wasi02_filesystem_component_exec_test)
+
+  add_executable(turbowasm_wasi02_filesystem_method_exec_test
+    wasi02_filesystem_method_exec_test.c)
+  target_link_libraries(turbowasm_wasi02_filesystem_method_exec_test
+    PRIVATE
+      turbowasm_wasi02_fs_core
+      TurboWasm::WASI
+      TurboWasm::Component)
+  target_include_directories(turbowasm_wasi02_filesystem_method_exec_test
+    PRIVATE
+      "${PROJECT_SOURCE_DIR}/src"
+      "${PROJECT_SOURCE_DIR}/include")
+  set_target_properties(
+    turbowasm_wasi02_filesystem_method_exec_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi02_filesystem_method_exec_test
+           COMMAND turbowasm_wasi02_filesystem_method_exec_test)
 endif()
 
 add_executable(turbowasm_runtime_config_test runtime_config_test.c)
