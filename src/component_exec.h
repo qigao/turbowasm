@@ -140,7 +140,15 @@ typedef struct turbowasm_component_exec {
     turbowasm_component_exec_resource_builtin_context
         *resource_builtin_contexts;
 
+    /*
+     * imports is the synthetic router used by existing execution paths.
+     * import_sets is a shallow owned copy of capability descriptors; each
+     * descriptor context remains caller-owned and borrowed.
+     */
     turbowasm_component_exec_imports imports;
+    turbowasm_component_exec_imports *import_sets;
+    uint32_t import_set_count;
+
     turbowasm_component_exec_canon_lower_context
         *canon_lower_contexts;
 
@@ -170,6 +178,17 @@ turbowasm_status turbowasm_component_exec_init_with_imports(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
     const turbowasm_component_exec_imports *imports);
+
+/*
+ * Internal composition boundary for disjoint typed capability providers.
+ * The descriptors are shallow-copied by the exec; descriptor contexts remain
+ * borrowed and must outlive the exec.
+ */
+turbowasm_status turbowasm_component_exec_init_with_import_sets(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary,
+    const turbowasm_component_exec_imports *import_sets,
+    size_t import_set_count);
 
 void turbowasm_component_exec_destroy(
     turbowasm_component_exec *exec);

@@ -1689,6 +1689,7 @@ static void destroy_partial(
                 &exec->core_modules[i - 1u]);
     }
 
+    turbowasm_rt_free(exec->import_sets);
     turbowasm_rt_free(exec->function_adapter_indices);
     turbowasm_rt_free(exec->functions);
     turbowasm_rt_free(exec->realloc_contexts);
@@ -1703,10 +1704,262 @@ static void destroy_partial(
     memset(exec, 0, sizeof(*exec));
 }
 
-turbowasm_status turbowasm_component_exec_init_with_imports(
+static const turbowasm_component_exec_imports *
+component_import_router_select(
+    const turbowasm_component_exec *exec,
+    turbowasm_component_name instance_name,
+    turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type) {
+    const turbowasm_component_exec_imports *selected = NULL;
+    uint32_t i;
+
+    if (exec == NULL)
+        return NULL;
+
+    for (i = 0u; i < exec->import_set_count; ++i) {
+        const turbowasm_component_exec_imports *candidate =
+            &exec->import_sets[i];
+
+        if (!candidate->can_bind(
+                candidate->context,
+                instance_name,
+                function_name,
+                graph,
+                function_type))
+            continue;
+
+        /*
+         * Import ownership is nominal and must be unambiguous. Refuse to make
+         * registration order observable when two capability sets claim the
+         * same imported function.
+         */
+        if (selected != NULL)
+            return NULL;
+        selected = candidate;
+    }
+
+    return selected;
+}
+
+static bool component_import_router_can_bind(
+    void *context,
+    turbowasm_component_name instance_name,
+    turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type) {
+    return component_import_router_select(
+               (const turbowasm_component_exec *)context,
+               instance_name,
+               function_name,
+               graph,
+               function_type) != NULL;
+}
+
+static turbowasm_status component_import_router_invoke(
+    void *context,
+    turbowasm_host_call *call,
+    turbowasm_component_name instance_name,
+    turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_value *arguments,
+    size_t argument_count,
+    turbowasm_component_value *out_result,
+    turbowasm_trap *trap) {
+    turbowasm_component_exec *exec =
+        (turbowasm_component_exec *)context;
+    const turbowasm_component_exec_imports *selected =
+        component_import_router_select(
+            exec,
+            instance_name,
+            function_name,
+            graph,
+            function_type);
+
+    if (selected == NULL)
+        return TURBOWASM_LINK_ERROR;
+
+    return selected->invoke(
+        selected->context,
+        call,
+        instance_name,
+        function_name,
+        graph,
+        function_type,
+        arguments,
+        argument_count,
+        out_result,
+        trap);
+}
+
+static turbowasm_status component_import_router_resource_lower(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    const turbowasm_component_value *value,
+    uint32_t *out_handle) {
+    turbowasm_component_exec *exec =
+        (turbowasm_component_exec *)context;
+    uint32_t i;
+
+    if (exec == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (i = 0u; i < exec->import_set_count; ++i) {
+        const turbowasm_component_exec_imports *candidate =
+            &exec->import_sets[i];
+        turbowasm_status status;
+
+        if (candidate->resource_lower == NULL)
+            continue;
+        status = candidate->resource_lower(
+            candidate->context,
+            graph,
+            type,
+            value,
+            out_handle);
+        if (status == TURBOWASM_TYPE_MISMATCH)
+            continue;
+        return status;
+    }
+
+    return TURBOWASM_TYPE_MISMATCH;
+}
+
+static turbowasm_status component_import_router_resource_lift(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    uint32_t handle,
+    turbowasm_component_value *out) {
+    turbowasm_component_exec *exec =
+        (turbowasm_component_exec *)context;
+    uint32_t i;
+
+    if (exec == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (i = 0u; i < exec->import_set_count; ++i) {
+        const turbowasm_component_exec_imports *candidate =
+            &exec->import_sets[i];
+        turbowasm_status status;
+
+        if (candidate->resource_lift == NULL)
+            continue;
+        status = candidate->resource_lift(
+            candidate->context,
+            graph,
+            type,
+            handle,
+            out);
+        if (status == TURBOWASM_TYPE_MISMATCH)
+            continue;
+        return status;
+    }
+
+    return TURBOWASM_TYPE_MISMATCH;
+}
+
+static turbowasm_status component_import_router_resource_drop(
+    void *context,
+    uint64_t resource_identity,
+    uint32_t handle) {
+    turbowasm_component_exec *exec =
+        (turbowasm_component_exec *)context;
+    uint32_t i;
+
+    if (exec == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (i = 0u; i < exec->import_set_count; ++i) {
+        const turbowasm_component_exec_imports *candidate =
+            &exec->import_sets[i];
+        turbowasm_status status;
+
+        if (candidate->resource_drop == NULL)
+            continue;
+        status = candidate->resource_drop(
+            candidate->context,
+            resource_identity,
+            handle);
+        if (status == TURBOWASM_TYPE_MISMATCH)
+            continue;
+        return status;
+    }
+
+    return TURBOWASM_TYPE_MISMATCH;
+}
+
+static turbowasm_status component_import_router_init(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_exec_imports *import_sets,
+    size_t import_set_count) {
+    size_t i;
+    bool has_resource_lower = false;
+    bool has_resource_lift = false;
+    bool has_resource_drop = false;
+
+    if (exec == NULL ||
+        (import_set_count != 0u && import_sets == NULL) ||
+        import_set_count > UINT32_MAX ||
+        import_set_count >
+            SIZE_MAX / sizeof(*exec->import_sets))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (import_set_count == 0u)
+        return TURBOWASM_OK;
+
+    for (i = 0u; i < import_set_count; ++i) {
+        if (import_sets[i].can_bind == NULL ||
+            import_sets[i].invoke == NULL)
+            return TURBOWASM_INVALID_ARGUMENT;
+        has_resource_lower =
+            has_resource_lower ||
+            import_sets[i].resource_lower != NULL;
+        has_resource_lift =
+            has_resource_lift ||
+            import_sets[i].resource_lift != NULL;
+        has_resource_drop =
+            has_resource_drop ||
+            import_sets[i].resource_drop != NULL;
+    }
+
+    exec->import_sets =
+        (turbowasm_component_exec_imports *)turbowasm_rt_calloc(
+            import_set_count,
+            sizeof(*exec->import_sets));
+    if (exec->import_sets == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    memcpy(
+        exec->import_sets,
+        import_sets,
+        import_set_count * sizeof(*exec->import_sets));
+    exec->import_set_count = (uint32_t)import_set_count;
+
+    memset(&exec->imports, 0, sizeof(exec->imports));
+    exec->imports.context = exec;
+    exec->imports.can_bind = component_import_router_can_bind;
+    exec->imports.invoke = component_import_router_invoke;
+    if (has_resource_lower)
+        exec->imports.resource_lower =
+            component_import_router_resource_lower;
+    if (has_resource_lift)
+        exec->imports.resource_lift =
+            component_import_router_resource_lift;
+    if (has_resource_drop)
+        exec->imports.resource_drop =
+            component_import_router_resource_drop;
+
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_exec_init_with_import_sets(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
-    const turbowasm_component_exec_imports *imports) {
+    const turbowasm_component_exec_imports *import_sets,
+    size_t import_set_count) {
     turbowasm_runtime_scope scope;
     turbowasm_status status = TURBOWASM_OK;
     uint32_t i;
@@ -1716,12 +1969,16 @@ turbowasm_status turbowasm_component_exec_init_with_imports(
         binary->bytes == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
+    if ((import_set_count != 0u && import_sets == NULL) ||
+        import_set_count > UINT32_MAX ||
+        import_set_count >
+            SIZE_MAX / sizeof(*exec->import_sets))
+        return TURBOWASM_INVALID_ARGUMENT;
+
     if (binary->import_count != 0u) {
         uint32_t import_index;
 
-        if (imports == NULL ||
-            imports->can_bind == NULL ||
-            imports->invoke == NULL)
+        if (import_set_count == 0u)
             return TURBOWASM_UNSUPPORTED;
 
         /*
@@ -1735,16 +1992,26 @@ turbowasm_status turbowasm_component_exec_init_with_imports(
                 TURBOWASM_COMPONENT_EXTERN_INSTANCE)
                 return TURBOWASM_UNSUPPORTED;
         }
-    } else if (imports != NULL &&
-               (imports->can_bind == NULL ||
-                imports->invoke == NULL)) {
-        return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    {
+        size_t import_index;
+        for (import_index = 0u;
+             import_index < import_set_count;
+             ++import_index) {
+            if (import_sets[import_index].can_bind == NULL ||
+                import_sets[import_index].invoke == NULL)
+                return TURBOWASM_INVALID_ARGUMENT;
+        }
     }
 
     scope = turbowasm_runtime_scope_enter(&binary->config);
     exec->binary = binary;
-    if (imports != NULL)
-        exec->imports = *imports;
+
+    status = component_import_router_init(
+        exec, import_sets, import_set_count);
+    if (status != TURBOWASM_OK)
+        goto fail;
 
     if (binary->core_module_count != 0u) {
         if ((size_t)binary->core_module_count >
@@ -2151,11 +2418,22 @@ fail:
     return status;
 }
 
+turbowasm_status turbowasm_component_exec_init_with_imports(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary,
+    const turbowasm_component_exec_imports *imports) {
+    return turbowasm_component_exec_init_with_import_sets(
+        exec,
+        binary,
+        imports,
+        imports != NULL ? 1u : 0u);
+}
+
 turbowasm_status turbowasm_component_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary) {
-    return turbowasm_component_exec_init_with_imports(
-        exec, binary, NULL);
+    return turbowasm_component_exec_init_with_import_sets(
+        exec, binary, NULL, 0u);
 }
 
 void turbowasm_component_exec_destroy(
