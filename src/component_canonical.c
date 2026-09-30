@@ -866,20 +866,53 @@ static turbowasm_status lower_value_inner(
     uint32_t depth,
     const turbowasm_component_value *value);
 
-void turbowasm_component_value_destroy(
-    turbowasm_component_value *value) {
+static void destroy_value_sequence(
+    turbowasm_component_value_list *sequence) {
     uint64_t i;
 
+    if (sequence == NULL)
+        return;
+    for (i = 0u; i < sequence->count; ++i)
+        turbowasm_component_value_destroy(&sequence->items[i]);
+    turbowasm_rt_free(sequence->items);
+    sequence->items = NULL;
+    sequence->count = 0u;
+}
+
+void turbowasm_component_value_destroy(
+    turbowasm_component_value *value) {
     if (value == NULL)
         return;
 
-    if (value->kind == TURBOWASM_COMPONENT_TYPE_STRING) {
-        turbowasm_rt_free(value->as.string.data);
-    } else if (value->kind == TURBOWASM_COMPONENT_TYPE_LIST) {
-        for (i = 0u; i < value->as.list.count; ++i)
-            turbowasm_component_value_destroy(
-                &value->as.list.items[i]);
-        turbowasm_rt_free(value->as.list.items);
+    switch (value->kind) {
+        case TURBOWASM_COMPONENT_TYPE_STRING:
+            turbowasm_rt_free(value->as.string.data);
+            break;
+        case TURBOWASM_COMPONENT_TYPE_LIST:
+            destroy_value_sequence(&value->as.list);
+            break;
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+            destroy_value_sequence(&value->as.record);
+            break;
+        case TURBOWASM_COMPONENT_TYPE_TUPLE:
+            destroy_value_sequence(&value->as.tuple);
+            break;
+        case TURBOWASM_COMPONENT_TYPE_OPTION:
+            if (value->as.option.payload != NULL) {
+                turbowasm_component_value_destroy(
+                    value->as.option.payload);
+                turbowasm_rt_free(value->as.option.payload);
+            }
+            break;
+        case TURBOWASM_COMPONENT_TYPE_RESULT:
+            if (value->as.result.payload != NULL) {
+                turbowasm_component_value_destroy(
+                    value->as.result.payload);
+                turbowasm_rt_free(value->as.result.payload);
+            }
+            break;
+        default:
+            break;
     }
 
     memset(value, 0, sizeof(*value));
@@ -1365,6 +1398,352 @@ static turbowasm_status lower_list(
         instance, memory, address + ptr_width, count);
 }
 
+static turbowasm_status composite_sequence_info(
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    uint32_t *out_count) {
+    if (type == NULL || out_count == NULL)
+        return TURBOWASM_MALFORMED_MODULE;
+    if (kind == TURBOWASM_COMPONENT_TYPE_RECORD) {
+        *out_count = type->as.record.count;
+        return *out_count != 0u
+            ? TURBOWASM_OK
+            : TURBOWASM_MALFORMED_MODULE;
+    }
+    if (kind == TURBOWASM_COMPONENT_TYPE_TUPLE) {
+        *out_count = type->as.tuple.count;
+        return *out_count != 0u
+            ? TURBOWASM_OK
+            : TURBOWASM_MALFORMED_MODULE;
+    }
+    return TURBOWASM_INVALID_ARGUMENT;
+}
+
+static turbowasm_component_type_ref composite_sequence_ref(
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    uint32_t index) {
+    return kind == TURBOWASM_COMPONENT_TYPE_RECORD
+        ? type->as.record.fields[index].type
+        : type->as.tuple.elements[index];
+}
+
+static turbowasm_status lift_sequence_value(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    const turbowasm_component_canonical_memory *memory,
+    turbowasm_instance_impl *instance,
+    uint64_t address,
+    uint32_t depth,
+    turbowasm_component_value *out) {
+    turbowasm_component_value *items = NULL;
+    uint32_t count = 0u;
+    uint32_t i;
+    uint64_t cursor = address;
+    turbowasm_status status;
+
+    status = composite_sequence_info(type, kind, &count);
+    if (status != TURBOWASM_OK)
+        return status;
+    if ((size_t)count > SIZE_MAX / sizeof(*items))
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    items = (turbowasm_component_value *)turbowasm_rt_calloc(
+        (size_t)count, sizeof(*items));
+    if (items == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    for (i = 0u; i < count; ++i) {
+        turbowasm_component_type_ref child =
+            composite_sequence_ref(type, kind, i);
+        turbowasm_component_layout layout;
+        uint64_t aligned;
+
+        status = turbowasm_component_canonical_layout(
+            graph, child, memory->pointer_type, &layout);
+        if (status != TURBOWASM_OK)
+            goto fail;
+        if (!align_up_u64(cursor, layout.alignment, &aligned) ||
+            aligned > UINT64_MAX - layout.size) {
+            status = TURBOWASM_TRAPPED;
+            goto fail;
+        }
+
+        status = lift_value_inner(
+            graph, child, memory, instance,
+            aligned, depth + 1u, &items[i]);
+        if (status != TURBOWASM_OK)
+            goto fail;
+        cursor = aligned + layout.size;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = kind;
+    if (kind == TURBOWASM_COMPONENT_TYPE_RECORD) {
+        out->as.record.items = items;
+        out->as.record.count = count;
+    } else {
+        out->as.tuple.items = items;
+        out->as.tuple.count = count;
+    }
+    return TURBOWASM_OK;
+
+fail:
+    while (i != 0u) {
+        --i;
+        turbowasm_component_value_destroy(&items[i]);
+    }
+    turbowasm_rt_free(items);
+    return status;
+}
+
+static turbowasm_status lower_sequence_value(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    const turbowasm_component_canonical_memory *memory,
+    turbowasm_instance_impl *instance,
+    uint64_t address,
+    uint32_t depth,
+    const turbowasm_component_value *value) {
+    const turbowasm_component_value_list *sequence;
+    uint32_t count = 0u;
+    uint32_t i;
+    uint64_t cursor = address;
+    turbowasm_status status;
+
+    if (value == NULL || value->kind != kind)
+        return TURBOWASM_TYPE_MISMATCH;
+    status = composite_sequence_info(type, kind, &count);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    sequence = kind == TURBOWASM_COMPONENT_TYPE_RECORD
+        ? &value->as.record
+        : &value->as.tuple;
+    if (sequence->count != count ||
+        (count != 0u && sequence->items == NULL))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    for (i = 0u; i < count; ++i) {
+        turbowasm_component_type_ref child =
+            composite_sequence_ref(type, kind, i);
+        turbowasm_component_layout layout;
+        uint64_t aligned;
+
+        status = turbowasm_component_canonical_layout(
+            graph, child, memory->pointer_type, &layout);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (!align_up_u64(cursor, layout.alignment, &aligned) ||
+            aligned > UINT64_MAX - layout.size)
+            return TURBOWASM_TRAPPED;
+
+        status = lower_value_inner(
+            graph, child, memory, instance,
+            aligned, depth + 1u, &sequence->items[i]);
+        if (status != TURBOWASM_OK)
+            return status;
+        cursor = aligned + layout.size;
+    }
+
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status variant_case_ref(
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    uint32_t case_index,
+    bool *out_has_payload,
+    turbowasm_component_type_ref *out_payload) {
+    if (type == NULL || out_has_payload == NULL ||
+        out_payload == NULL || case_index >= 2u)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
+        *out_has_payload = case_index == 1u;
+        if (*out_has_payload)
+            *out_payload = type->as.option.payload;
+        return TURBOWASM_OK;
+    }
+    if (kind == TURBOWASM_COMPONENT_TYPE_RESULT) {
+        *out_has_payload = case_index == 0u
+            ? type->as.result.has_ok
+            : type->as.result.has_error;
+        if (*out_has_payload) {
+            *out_payload = case_index == 0u
+                ? type->as.result.ok
+                : type->as.result.error;
+        }
+        return TURBOWASM_OK;
+    }
+    return TURBOWASM_INVALID_ARGUMENT;
+}
+
+static turbowasm_status variant_payload_alignment(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    turbowasm_component_pointer_type pointer_type,
+    uint64_t *out_alignment) {
+    uint64_t alignment = 1u;
+    uint32_t i;
+
+    if (out_alignment == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    for (i = 0u; i < 2u; ++i) {
+        bool has_payload = false;
+        turbowasm_component_type_ref payload;
+        turbowasm_component_layout layout;
+        turbowasm_status status = variant_case_ref(
+            type, kind, i, &has_payload, &payload);
+
+        if (status != TURBOWASM_OK)
+            return status;
+        if (!has_payload)
+            continue;
+        status = turbowasm_component_canonical_layout(
+            graph, payload, pointer_type, &layout);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (layout.alignment > alignment)
+            alignment = layout.alignment;
+    }
+    *out_alignment = alignment;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status lift_variant_value(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    const turbowasm_component_canonical_memory *memory,
+    turbowasm_instance_impl *instance,
+    uint64_t address,
+    uint32_t depth,
+    turbowasm_component_value *out) {
+    uint8_t discriminant = 0u;
+    uint64_t payload_alignment = 1u;
+    uint64_t payload_address;
+    bool has_payload = false;
+    turbowasm_component_type_ref payload_type;
+    turbowasm_component_value *payload = NULL;
+    turbowasm_status status;
+
+    status = read_memory(
+        instance, memory->memory_index,
+        address, &discriminant, 1u);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (discriminant >= 2u)
+        return TURBOWASM_TRAPPED;
+
+    status = variant_case_ref(
+        type, kind, discriminant,
+        &has_payload, &payload_type);
+    if (status != TURBOWASM_OK)
+        return status;
+    status = variant_payload_alignment(
+        graph, type, kind, memory->pointer_type,
+        &payload_alignment);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (address == UINT64_MAX ||
+        !align_up_u64(
+            address + UINT64_C(1),
+            payload_alignment,
+            &payload_address))
+        return TURBOWASM_TRAPPED;
+
+    if (has_payload) {
+        payload = (turbowasm_component_value *)
+            turbowasm_rt_calloc(1u, sizeof(*payload));
+        if (payload == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+        status = lift_value_inner(
+            graph, payload_type, memory, instance,
+            payload_address, depth + 1u, payload);
+        if (status != TURBOWASM_OK) {
+            turbowasm_component_value_destroy(payload);
+            turbowasm_rt_free(payload);
+            return status;
+        }
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = kind;
+    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
+        out->as.option.case_index = discriminant;
+        out->as.option.payload = payload;
+    } else {
+        out->as.result.case_index = discriminant;
+        out->as.result.payload = payload;
+    }
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status lower_variant_value(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    const turbowasm_component_canonical_memory *memory,
+    turbowasm_instance_impl *instance,
+    uint64_t address,
+    uint32_t depth,
+    const turbowasm_component_value *value) {
+    const turbowasm_component_value_variant *variant;
+    uint8_t discriminant;
+    uint64_t payload_alignment = 1u;
+    uint64_t payload_address;
+    bool has_payload = false;
+    turbowasm_component_type_ref payload_type;
+    turbowasm_status status;
+
+    if (value == NULL || value->kind != kind)
+        return TURBOWASM_TYPE_MISMATCH;
+    variant = kind == TURBOWASM_COMPONENT_TYPE_OPTION
+        ? &value->as.option
+        : &value->as.result;
+    if (variant->case_index >= 2u)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    status = variant_case_ref(
+        type, kind, variant->case_index,
+        &has_payload, &payload_type);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (has_payload != (variant->payload != NULL))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    discriminant = (uint8_t)variant->case_index;
+    status = write_memory(
+        instance, memory->memory_index,
+        address, &discriminant, 1u);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (!has_payload)
+        return TURBOWASM_OK;
+
+    status = variant_payload_alignment(
+        graph, type, kind, memory->pointer_type,
+        &payload_alignment);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (address == UINT64_MAX ||
+        !align_up_u64(
+            address + UINT64_C(1),
+            payload_alignment,
+            &payload_address))
+        return TURBOWASM_TRAPPED;
+
+    return lower_value_inner(
+        graph, payload_type, memory, instance,
+        payload_address, depth + 1u, variant->payload);
+}
+
 static turbowasm_status lift_value_inner(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
@@ -1396,6 +1775,16 @@ static turbowasm_status lift_value_inner(
     if (kind == TURBOWASM_COMPONENT_TYPE_LIST)
         return lift_list(
             graph, type, memory, instance,
+            address, depth, out);
+    if (kind == TURBOWASM_COMPONENT_TYPE_RECORD ||
+        kind == TURBOWASM_COMPONENT_TYPE_TUPLE)
+        return lift_sequence_value(
+            graph, type, kind, memory, instance,
+            address, depth, out);
+    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
+        kind == TURBOWASM_COMPONENT_TYPE_RESULT)
+        return lift_variant_value(
+            graph, type, kind, memory, instance,
             address, depth, out);
 
     if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
@@ -1451,6 +1840,16 @@ static turbowasm_status lower_value_inner(
     if (kind == TURBOWASM_COMPONENT_TYPE_LIST)
         return lower_list(
             graph, type, memory, instance,
+            address, depth, value);
+    if (kind == TURBOWASM_COMPONENT_TYPE_RECORD ||
+        kind == TURBOWASM_COMPONENT_TYPE_TUPLE)
+        return lower_sequence_value(
+            graph, type, kind, memory, instance,
+            address, depth, value);
+    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
+        kind == TURBOWASM_COMPONENT_TYPE_RESULT)
+        return lower_variant_value(
+            graph, type, kind, memory, instance,
             address, depth, value);
 
     if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
@@ -1676,7 +2075,8 @@ turbowasm_status turbowasm_component_canonical_lower_flat_value(
     turbowasm_component_type_ref ref,
     const turbowasm_component_canonical_memory *memory,
     const turbowasm_component_value *value,
-    turbowasm_value out[2],
+    turbowasm_value *out,
+    uint32_t out_capacity,
     uint32_t *out_count) {
     turbowasm_component_type_kind kind;
     const turbowasm_component_type *type;
@@ -1686,11 +2086,12 @@ turbowasm_status turbowasm_component_canonical_lower_flat_value(
     uint64_t length;
 
     if (graph == NULL || value == NULL ||
-        out == NULL || out_count == NULL)
+        out == NULL || out_count == NULL ||
+        out_capacity == 0u)
         return TURBOWASM_INVALID_ARGUMENT;
 
     *out_count = 0u;
-    memset(out, 0, 2u * sizeof(*out));
+    memset(out, 0, (size_t)out_capacity * sizeof(*out));
 
     status = resolved_kind(graph, ref, &kind, &type);
     if (status != TURBOWASM_OK)
@@ -1698,6 +2099,8 @@ turbowasm_status turbowasm_component_canonical_lower_flat_value(
 
     if (kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
         kind <= TURBOWASM_COMPONENT_TYPE_CHAR) {
+        if (out_capacity < 1u)
+            return TURBOWASM_INVALID_ARGUMENT;
         status = lower_flat_scalar(kind, value, &out[0]);
         if (status == TURBOWASM_OK)
             *out_count = 1u;
@@ -1722,6 +2125,9 @@ turbowasm_status turbowasm_component_canonical_lower_flat_value(
     }
     if (status != TURBOWASM_OK)
         return status;
+
+    if (out_capacity < 2u)
+        return TURBOWASM_INVALID_ARGUMENT;
 
     status = flat_pointer_value(
         memory->pointer_type, pointer, &out[0]);

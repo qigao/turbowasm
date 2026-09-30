@@ -77,6 +77,11 @@ typedef struct turbowasm_component_value_list {
     uint64_t count;
 } turbowasm_component_value_list;
 
+typedef struct turbowasm_component_value_variant {
+    uint32_t case_index;
+    turbowasm_component_value *payload;
+} turbowasm_component_value_variant;
+
 struct turbowasm_component_value {
     turbowasm_component_type_kind kind;
     union {
@@ -94,6 +99,10 @@ struct turbowasm_component_value {
         uint32_t character;
         turbowasm_component_owned_bytes string;
         turbowasm_component_value_list list;
+        turbowasm_component_value_list record;
+        turbowasm_component_value_list tuple;
+        turbowasm_component_value_variant option;
+        turbowasm_component_value_variant result;
         /*
          * Abstract Component resource value. Canonical Core handles are
          * created/consumed only at a resource-table boundary.
@@ -171,7 +180,8 @@ turbowasm_status turbowasm_component_canonical_lower_flat_value(
     turbowasm_component_type_ref type,
     const turbowasm_component_canonical_memory *memory,
     const turbowasm_component_value *value,
-    turbowasm_value out[2],
+    turbowasm_value *out,
+    uint32_t out_capacity,
     uint32_t *out_count);
 
 turbowasm_status turbowasm_component_canonical_lift_flat_value(

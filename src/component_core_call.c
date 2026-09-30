@@ -1027,7 +1027,8 @@ turbowasm_status turbowasm_component_core_call_invoke(
             }
 
             {
-                turbowasm_value flat[2] = {{0}};
+                turbowasm_value
+                    flat[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS] = {{0}};
                 uint32_t flat_count = 0u;
 
                 status =
@@ -1039,6 +1040,7 @@ turbowasm_status turbowasm_component_core_call_invoke(
                             : NULL,
                         &arguments[i],
                         flat,
+                        TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS,
                         &flat_count);
                 if (status != TURBOWASM_OK)
                     goto lowering_failed;

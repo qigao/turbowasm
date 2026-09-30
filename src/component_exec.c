@@ -483,6 +483,7 @@ static turbowasm_status component_canon_lower_host(
             NULL,
             &component_result,
             results,
+            (uint32_t)result_capacity,
             &flat_count);
         if (status != TURBOWASM_OK)
             goto done;
