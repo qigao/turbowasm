@@ -41,8 +41,8 @@ turbowasm_status turbowasm_wasi02_exec_init(
     }
 
     if (capabilities->streams != NULL) {
-        if (capabilities->streams->poll != NULL &&
-            capabilities->poll != NULL &&
+        if (capabilities->poll == NULL ||
+            capabilities->streams->poll == NULL ||
             capabilities->streams->poll !=
                 capabilities->poll)
             return TURBOWASM_INVALID_ARGUMENT;
