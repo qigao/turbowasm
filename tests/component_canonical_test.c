@@ -238,6 +238,168 @@ static void test_function_flatten(
     assert(sig.results_indirect);
 }
 
+static void test_composite_metadata(void) {
+    turbowasm_component_type_graph graph = {0};
+    turbowasm_component_record_field fields[2];
+    turbowasm_component_type_ref tuple_elements[2];
+    turbowasm_component_type_ref no_payload = {0};
+    turbowasm_component_layout layout;
+    turbowasm_component_flat_type_list flat;
+    turbowasm_component_flat_signature sig;
+    static const uint8_t seconds[] = "seconds";
+    static const uint8_t nanoseconds[] = "nanoseconds";
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 10u));
+    assert(turbowasm_component_type_graph_define_scalar(
+        &graph, 0u, TURBOWASM_COMPONENT_TYPE_U64));
+    assert(turbowasm_component_type_graph_define_scalar(
+        &graph, 1u, TURBOWASM_COMPONENT_TYPE_U32));
+
+    fields[0].name = seconds;
+    fields[0].name_size = 7u;
+    fields[0].type = indexed_ref(0u);
+    fields[1].name = nanoseconds;
+    fields[1].name_size = 11u;
+    fields[1].type = indexed_ref(1u);
+    assert(turbowasm_component_type_graph_define_record(
+        &graph, 2u, fields, 2u));
+
+    tuple_elements[0] = indexed_ref(0u);
+    tuple_elements[1] = indexed_ref(0u);
+    assert(turbowasm_component_type_graph_define_tuple(
+        &graph, 3u, tuple_elements, 2u));
+
+    assert(turbowasm_component_type_graph_define_string(
+        &graph, 4u));
+    assert(turbowasm_component_type_graph_define_option(
+        &graph, 5u, indexed_ref(4u)));
+    assert(turbowasm_component_type_graph_define_result(
+        &graph, 6u, false, no_payload, false, no_payload));
+    assert(turbowasm_component_type_graph_define_result(
+        &graph, 7u,
+        true, inline_ref(TURBOWASM_COMPONENT_TYPE_U32),
+        true, inline_ref(TURBOWASM_COMPONENT_TYPE_F64)));
+
+    assert(turbowasm_component_type_graph_define_function(
+        &graph, 8u, NULL, 0u, true, indexed_ref(2u)));
+    assert(turbowasm_component_type_graph_define_function(
+        &graph, 9u, NULL, 0u, true, indexed_ref(5u)));
+    assert(turbowasm_component_type_graph_validate(&graph));
+
+    /* datetime = record { u64, u32 } => align 8, padded size 16. */
+    assert(turbowasm_component_canonical_layout(
+               &graph, indexed_ref(2u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &layout) == TURBOWASM_OK);
+    assert(layout.alignment == 8u);
+    assert(layout.size == 16u);
+    assert(turbowasm_component_canonical_flatten_type(
+               &graph, indexed_ref(2u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &flat) == TURBOWASM_OK);
+    assert(flat.count == 2u);
+    assert(flat.types[0] == TURBOWASM_COMPONENT_FLAT_I64);
+    assert(flat.types[1] == TURBOWASM_COMPONENT_FLAT_I32);
+
+    /* insecure-seed tuple<u64,u64>. */
+    assert(turbowasm_component_canonical_layout(
+               &graph, indexed_ref(3u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &layout) == TURBOWASM_OK);
+    assert(layout.alignment == 8u);
+    assert(layout.size == 16u);
+    assert(turbowasm_component_canonical_flatten_type(
+               &graph, indexed_ref(3u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &flat) == TURBOWASM_OK);
+    assert(flat.count == 2u);
+    assert(flat.types[0] == TURBOWASM_COMPONENT_FLAT_I64);
+    assert(flat.types[1] == TURBOWASM_COMPONENT_FLAT_I64);
+
+    /* option<string> is a 2-case variant with an aligned string payload. */
+    assert(turbowasm_component_canonical_layout(
+               &graph, indexed_ref(5u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &layout) == TURBOWASM_OK);
+    assert(layout.alignment == 4u);
+    assert(layout.size == 12u);
+    assert(turbowasm_component_canonical_layout(
+               &graph, indexed_ref(5u),
+               TURBOWASM_COMPONENT_POINTER_I64,
+               &layout) == TURBOWASM_OK);
+    assert(layout.alignment == 8u);
+    assert(layout.size == 24u);
+    assert(turbowasm_component_canonical_flatten_type(
+               &graph, indexed_ref(5u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &flat) == TURBOWASM_OK);
+    assert(flat.count == 3u);
+    assert(flat.types[0] == TURBOWASM_COMPONENT_FLAT_I32);
+    assert(flat.types[1] == TURBOWASM_COMPONENT_FLAT_I32);
+    assert(flat.types[2] == TURBOWASM_COMPONENT_FLAT_I32);
+
+    /* result<(),()> has only the u8 discriminant in memory / i32 flat. */
+    assert(turbowasm_component_canonical_layout(
+               &graph, indexed_ref(6u),
+               TURBOWASM_COMPONENT_POINTER_I64,
+               &layout) == TURBOWASM_OK);
+    assert(layout.alignment == 1u);
+    assert(layout.size == 1u);
+    assert(turbowasm_component_canonical_flatten_type(
+               &graph, indexed_ref(6u),
+               TURBOWASM_COMPONENT_POINTER_I64,
+               &flat) == TURBOWASM_OK);
+    assert(flat.count == 1u);
+    assert(flat.types[0] == TURBOWASM_COMPONENT_FLAT_I32);
+
+    /* Variant payload joining: u32 + f64 => joined i64 carrier. */
+    assert(turbowasm_component_canonical_layout(
+               &graph, indexed_ref(7u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &layout) == TURBOWASM_OK);
+    assert(layout.alignment == 8u);
+    assert(layout.size == 16u);
+    assert(turbowasm_component_canonical_flatten_type(
+               &graph, indexed_ref(7u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &flat) == TURBOWASM_OK);
+    assert(flat.count == 2u);
+    assert(flat.types[0] == TURBOWASM_COMPONENT_FLAT_I32);
+    assert(flat.types[1] == TURBOWASM_COMPONENT_FLAT_I64);
+
+    /* Two-carrier records/results cross the 1-result indirect threshold. */
+    assert(turbowasm_component_canonical_flatten_function(
+               &graph, 8u,
+               TURBOWASM_COMPONENT_POINTER_I32,
+               TURBOWASM_COMPONENT_CANONICAL_LIFT,
+               &sig) == TURBOWASM_OK);
+    assert(sig.results_indirect);
+    assert(sig.result_count == 1u);
+    assert(sig.results[0] == TURBOWASM_COMPONENT_FLAT_I32);
+
+    assert(turbowasm_component_canonical_flatten_function(
+               &graph, 8u,
+               TURBOWASM_COMPONENT_POINTER_I32,
+               TURBOWASM_COMPONENT_CANONICAL_LOWER,
+               &sig) == TURBOWASM_OK);
+    assert(sig.results_indirect);
+    assert(sig.param_count == 1u);
+    assert(sig.params[0] == TURBOWASM_COMPONENT_FLAT_I32);
+    assert(sig.result_count == 0u);
+
+    assert(turbowasm_component_canonical_flatten_function(
+               &graph, 9u,
+               TURBOWASM_COMPONENT_POINTER_I64,
+               TURBOWASM_COMPONENT_CANONICAL_LOWER,
+               &sig) == TURBOWASM_OK);
+    assert(sig.results_indirect);
+    assert(sig.param_count == 1u);
+    assert(sig.params[0] == TURBOWASM_COMPONENT_FLAT_I64);
+    assert(sig.result_count == 0u);
+
+    turbowasm_component_type_graph_destroy(&graph);
+}
+
 int main(void) {
     turbowasm_component_type_graph graph = {0};
 
@@ -246,5 +408,7 @@ int main(void) {
     test_flat_types(&graph);
     test_function_flatten(&graph);
     turbowasm_component_type_graph_destroy(&graph);
+
+    test_composite_metadata();
     return 0;
 }
