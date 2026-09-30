@@ -226,6 +226,21 @@ static bool value_matches_type_depth(
             return value->as.result.value != NULL &&
                    value_matches_type_depth(
                        arm, value->as.result.value, depth + 1u);
+        case TURBOWASM_WASI02_TYPE_ENUM:
+            return value->kind == TURBOWASM_WASI02_VALUE_ENUM &&
+                   type->as.enumeration.labels != NULL &&
+                   type->as.enumeration.count != 0u &&
+                   value->as.enum_index < type->as.enumeration.count;
+        case TURBOWASM_WASI02_TYPE_FLAGS:
+            return value->kind == TURBOWASM_WASI02_VALUE_FLAGS &&
+                   type->as.flags.labels != NULL &&
+                   type->as.flags.count != 0u &&
+                   type->as.flags.count <= 32u &&
+                   (value->as.flags &
+                    ~(type->as.flags.count == 32u
+                        ? UINT32_MAX
+                        : ((UINT32_C(1) << type->as.flags.count) -
+                           UINT32_C(1)))) == 0u;
         case TURBOWASM_WASI02_TYPE_RESOURCE:
             return value->kind == TURBOWASM_WASI02_VALUE_RESOURCE;
         default:

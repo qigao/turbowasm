@@ -220,6 +220,43 @@ static bool component_type_matches_wasi_depth(
                 return false;
             return true;
 
+        case TURBOWASM_WASI02_TYPE_ENUM:
+        case TURBOWASM_WASI02_TYPE_FLAGS: {
+            const turbowasm_component_label *labels;
+            const char *const *wasi_labels;
+            uint32_t count;
+            if (base->kind == TURBOWASM_WASI02_TYPE_ENUM) {
+                if (component_type->kind != TURBOWASM_COMPONENT_TYPE_ENUM)
+                    return false;
+                labels = component_type->as.enumeration.labels;
+                count = component_type->as.enumeration.count;
+                wasi_labels = base->as.enumeration.labels;
+                if (count != base->as.enumeration.count)
+                    return false;
+            } else {
+                if (component_type->kind != TURBOWASM_COMPONENT_TYPE_FLAGS)
+                    return false;
+                labels = component_type->as.flags.labels;
+                count = component_type->as.flags.count;
+                wasi_labels = base->as.flags.labels;
+                if (count != base->as.flags.count)
+                    return false;
+            }
+            if (labels == NULL || wasi_labels == NULL || count == 0u)
+                return false;
+            for (i = 0u; i < count; ++i) {
+                size_t name_size;
+                if (wasi_labels[i] == NULL)
+                    return false;
+                name_size = strlen(wasi_labels[i]);
+                if (name_size != labels[i].name_size ||
+                    labels[i].name == NULL ||
+                    memcmp(labels[i].name, wasi_labels[i], name_size) != 0)
+                    return false;
+            }
+            return true;
+        }
+
         case TURBOWASM_WASI02_TYPE_UNIT:
         case TURBOWASM_WASI02_TYPE_RESOURCE:
         case TURBOWASM_WASI02_TYPE_ALIAS:
@@ -548,6 +585,30 @@ static turbowasm_status component_to_wasi_value(
             return status;
         }
 
+        case TURBOWASM_WASI02_TYPE_ENUM:
+            if (value->kind != TURBOWASM_COMPONENT_TYPE_ENUM ||
+                value->as.enum_index >= base->as.enumeration.count)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->kind = TURBOWASM_WASI02_VALUE_ENUM;
+            out->as.enum_index = value->as.enum_index;
+            return TURBOWASM_OK;
+
+        case TURBOWASM_WASI02_TYPE_FLAGS: {
+            uint32_t count = base->as.flags.count;
+            uint32_t mask = count >= 32u
+                ? UINT32_MAX
+                : (count == 0u
+                    ? 0u
+                    : ((UINT32_C(1) << count) - UINT32_C(1)));
+            if (value->kind != TURBOWASM_COMPONENT_TYPE_FLAGS ||
+                count == 0u || count > 32u ||
+                (value->as.flags & ~mask) != 0u)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->kind = TURBOWASM_WASI02_VALUE_FLAGS;
+            out->as.flags = value->as.flags;
+            return TURBOWASM_OK;
+        }
+
         default:
             return TURBOWASM_UNSUPPORTED;
     }
@@ -773,6 +834,33 @@ static turbowasm_status wasi_to_component_value(
             if (status != TURBOWASM_OK)
                 turbowasm_component_value_destroy(out);
             return status;
+        }
+
+        case TURBOWASM_WASI02_TYPE_ENUM:
+            if (value->kind != TURBOWASM_WASI02_VALUE_ENUM ||
+                base->as.enumeration.labels == NULL ||
+                base->as.enumeration.count == 0u ||
+                value->as.enum_index >= base->as.enumeration.count)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->kind = TURBOWASM_COMPONENT_TYPE_ENUM;
+            out->as.enum_index = value->as.enum_index;
+            return TURBOWASM_OK;
+
+        case TURBOWASM_WASI02_TYPE_FLAGS: {
+            uint32_t count = base->as.flags.count;
+            uint32_t mask = count == 32u
+                ? UINT32_MAX
+                : (count == 0u
+                    ? 0u
+                    : ((UINT32_C(1) << count) - UINT32_C(1)));
+            if (value->kind != TURBOWASM_WASI02_VALUE_FLAGS ||
+                base->as.flags.labels == NULL ||
+                count == 0u || count > 32u ||
+                (value->as.flags & ~mask) != 0u)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->kind = TURBOWASM_COMPONENT_TYPE_FLAGS;
+            out->as.flags = value->as.flags;
+            return TURBOWASM_OK;
         }
 
         default:

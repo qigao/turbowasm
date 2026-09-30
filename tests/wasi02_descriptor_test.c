@@ -225,10 +225,122 @@ static void test_filesystem_preopens(void) {
            TURBOWASM_WASI02_TYPE_STRING);
 }
 
+static void test_filesystem_types_surface(void) {
+    const turbowasm_wasi02_interface_desc *types =
+        turbowasm_wasi02_find_interface(
+            "wasi:filesystem", "types");
+    const turbowasm_wasi02_function_desc *stat;
+    const turbowasm_wasi02_function_desc *stat_at;
+    const turbowasm_wasi02_function_desc *open_at;
+    const turbowasm_wasi02_function_desc *create_dir;
+    const turbowasm_wasi02_function_desc *remove_dir;
+    const turbowasm_wasi02_function_desc *unlink_file;
+    const turbowasm_wasi02_type_desc *stat_result;
+    const turbowasm_wasi02_type_desc *stat_record;
+    const turbowasm_wasi02_type_desc *error_code;
+    const turbowasm_wasi02_type_desc *path_flags;
+    const turbowasm_wasi02_type_desc *open_flags;
+    const turbowasm_wasi02_type_desc *descriptor_flags;
+
+    assert(types != NULL);
+    assert_v028(types->version);
+    assert(strcmp(
+        types->source_commit,
+        "971b11617b50e7496bea85f36e60141bda172964") == 0);
+    assert(types->function_count == 6u);
+
+    stat = turbowasm_wasi02_find_function(
+        types, "[method]descriptor.stat");
+    stat_at = turbowasm_wasi02_find_function(
+        types, "[method]descriptor.stat-at");
+    open_at = turbowasm_wasi02_find_function(
+        types, "[method]descriptor.open-at");
+    create_dir = turbowasm_wasi02_find_function(
+        types, "[method]descriptor.create-directory-at");
+    remove_dir = turbowasm_wasi02_find_function(
+        types, "[method]descriptor.remove-directory-at");
+    unlink_file = turbowasm_wasi02_find_function(
+        types, "[method]descriptor.unlink-file-at");
+
+    assert(stat != NULL);
+    assert(stat->param_count == 1u);
+    assert(strcmp(stat->params[0].name, "self") == 0);
+    assert(stat->params[0].type->kind ==
+           TURBOWASM_WASI02_TYPE_RESOURCE);
+
+    stat_result = stat->result;
+    assert(stat_result != NULL);
+    assert(stat_result->kind == TURBOWASM_WASI02_TYPE_RESULT);
+    stat_record = stat_result->as.result.ok;
+    error_code = stat_result->as.result.error;
+    assert(stat_record != NULL);
+    assert(stat_record->kind == TURBOWASM_WASI02_TYPE_RECORD);
+    assert(strcmp(stat_record->name, "descriptor-stat") == 0);
+    assert(stat_record->as.record.count == 6u);
+    assert(strcmp(
+        stat_record->as.record.fields[0].name, "type") == 0);
+    assert(stat_record->as.record.fields[0].type->kind ==
+           TURBOWASM_WASI02_TYPE_ENUM);
+    assert(stat_record->as.record.fields[0]
+               .type->as.enumeration.count == 8u);
+    assert(strcmp(
+        stat_record->as.record.fields[0]
+            .type->as.enumeration.labels[6],
+        "regular-file") == 0);
+
+    assert(error_code != NULL);
+    assert(error_code->kind == TURBOWASM_WASI02_TYPE_ENUM);
+    assert(strcmp(error_code->name, "error-code") == 0);
+    assert(error_code->as.enumeration.count == 37u);
+    assert(strcmp(
+        error_code->as.enumeration.labels[31],
+        "not-permitted") == 0);
+    assert(strcmp(
+        error_code->as.enumeration.labels[36],
+        "cross-device") == 0);
+
+    assert(stat_at != NULL);
+    assert(stat_at->param_count == 3u);
+    path_flags = stat_at->params[1].type;
+    assert(path_flags->kind == TURBOWASM_WASI02_TYPE_FLAGS);
+    assert(path_flags->as.flags.count == 1u);
+    assert(strcmp(path_flags->as.flags.labels[0],
+                  "symlink-follow") == 0);
+
+    assert(open_at != NULL);
+    assert(open_at->param_count == 5u);
+    open_flags = open_at->params[3].type;
+    descriptor_flags = open_at->params[4].type;
+    assert(open_flags->kind == TURBOWASM_WASI02_TYPE_FLAGS);
+    assert(open_flags->as.flags.count == 4u);
+    assert(strcmp(open_flags->as.flags.labels[3],
+                  "truncate") == 0);
+    assert(descriptor_flags->kind ==
+           TURBOWASM_WASI02_TYPE_FLAGS);
+    assert(descriptor_flags->as.flags.count == 6u);
+    assert(strcmp(descriptor_flags->as.flags.labels[5],
+                  "mutate-directory") == 0);
+    assert(open_at->result->kind ==
+           TURBOWASM_WASI02_TYPE_RESULT);
+    assert(open_at->result->as.result.ok->kind ==
+           TURBOWASM_WASI02_TYPE_RESOURCE);
+    assert(open_at->result->as.result.error == error_code);
+
+    assert(create_dir != NULL);
+    assert(remove_dir != NULL);
+    assert(unlink_file != NULL);
+    assert(create_dir->result->kind ==
+           TURBOWASM_WASI02_TYPE_RESULT);
+    assert(create_dir->result->as.result.ok == NULL);
+    assert(create_dir->result->as.result.error == error_code);
+    assert(remove_dir->param_count == 2u);
+    assert(unlink_file->param_count == 2u);
+}
+
 int main(void) {
     size_t i;
 
-    assert(turbowasm_wasi02_interface_count() == 8u);
+    assert(turbowasm_wasi02_interface_count() == 9u);
     for (i = 0u; i < turbowasm_wasi02_interface_count(); ++i) {
         const turbowasm_wasi02_interface_desc *iface =
             turbowasm_wasi02_interface_at(i);
@@ -247,5 +359,6 @@ int main(void) {
     test_random();
     test_cli();
     test_filesystem_preopens();
+    test_filesystem_types_surface();
     return 0;
 }
