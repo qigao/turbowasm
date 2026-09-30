@@ -1,6 +1,7 @@
 #include "wasi02_streams.h"
 
 #include "runtime_alloc.h"
+#include "wasi02_component.h"
 #include "wasi02_descriptor.h"
 
 #include <limits.h>
@@ -1751,4 +1752,931 @@ turbowasm_status turbowasm_wasi02_streams_call(
         arguments,
         argument_count,
         out_result);
+}
+
+
+static bool stream_component_name_is(
+    turbowasm_component_name name,
+    const char *text) {
+    size_t size;
+
+    if (text == NULL || (name.size != 0u && name.bytes == NULL))
+        return false;
+    size = strlen(text);
+    return size == name.size &&
+           (size == 0u || memcmp(name.bytes, text, size) == 0);
+}
+
+static const turbowasm_wasi02_type_desc *stream_wasi_type_base(
+    const turbowasm_wasi02_type_desc *type) {
+    uint32_t depth = 0u;
+
+    while (type != NULL &&
+           type->kind == TURBOWASM_WASI02_TYPE_ALIAS) {
+        if (++depth > 32u)
+            return NULL;
+        type = type->as.alias.target;
+    }
+    return type;
+}
+
+static bool stream_ref_kind(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    turbowasm_component_type_kind *out_kind,
+    const turbowasm_component_type **out_type) {
+    if (graph == NULL || out_kind == NULL || out_type == NULL)
+        return false;
+
+    *out_type = NULL;
+    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE) {
+        *out_kind = ref.as.inline_type;
+        return true;
+    }
+    if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return false;
+
+    *out_type = turbowasm_component_type_graph_get(
+        graph, ref.as.indexed);
+    if (*out_type == NULL)
+        return false;
+    *out_kind = (*out_type)->kind;
+    return true;
+}
+
+static bool stream_resource_desc_is(
+    const turbowasm_wasi02_type_desc *type,
+    const char *interface_name,
+    const char *resource_name) {
+    const turbowasm_wasi02_type_desc *base =
+        stream_wasi_type_base(type);
+
+    return base != NULL &&
+           base->kind == TURBOWASM_WASI02_TYPE_RESOURCE &&
+           base->as.resource.package_name != NULL &&
+           base->as.resource.interface_name != NULL &&
+           base->as.resource.resource_name != NULL &&
+           strcmp(base->as.resource.package_name, "wasi:io") == 0 &&
+           strcmp(base->as.resource.interface_name, interface_name) == 0 &&
+           strcmp(base->as.resource.resource_name, resource_name) == 0;
+}
+
+static bool stream_bind_identity_value(
+    uint64_t *identity,
+    bool *bound,
+    uint64_t candidate) {
+    if (identity == NULL || bound == NULL || candidate == 0u)
+        return false;
+    if (*bound)
+        return *identity == candidate;
+    *identity = candidate;
+    *bound = true;
+    return true;
+}
+
+static bool stream_identity_conflicts(
+    const turbowasm_wasi02_streams *streams,
+    uint64_t candidate,
+    const uint64_t *target) {
+    if (streams == NULL || target == NULL || candidate == 0u)
+        return true;
+
+    if (target != &streams->input_stream_identity &&
+        streams->input_stream_identity_bound &&
+        streams->input_stream_identity == candidate)
+        return true;
+    if (target != &streams->output_stream_identity &&
+        streams->output_stream_identity_bound &&
+        streams->output_stream_identity == candidate)
+        return true;
+    if (target != &streams->error_identity &&
+        streams->error_identity_bound &&
+        streams->error_identity == candidate)
+        return true;
+    if (streams->poll != NULL &&
+        streams->poll->pollable_identity_bound &&
+        streams->poll->pollable_identity == candidate)
+        return true;
+    return false;
+}
+
+static bool stream_bind_resource_identity(
+    turbowasm_wasi02_streams *streams,
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *handle_type,
+    const turbowasm_wasi02_type_desc *wasi_type,
+    turbowasm_component_type_kind expected_handle_kind) {
+    const turbowasm_component_type *resource_type;
+    uint64_t identity;
+
+    if (streams == NULL || graph == NULL ||
+        handle_type == NULL || wasi_type == NULL ||
+        handle_type->kind != expected_handle_kind)
+        return false;
+
+    resource_type = turbowasm_component_type_graph_get(
+        graph, handle_type->as.handle.resource_type);
+    if (resource_type == NULL ||
+        resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE ||
+        resource_type->as.resource.identity == 0u)
+        return false;
+    identity = resource_type->as.resource.identity;
+
+    if (stream_resource_desc_is(
+            wasi_type, "streams", "input-stream")) {
+        if (stream_identity_conflicts(
+                streams, identity,
+                &streams->input_stream_identity))
+            return false;
+        return stream_bind_identity_value(
+            &streams->input_stream_identity,
+            &streams->input_stream_identity_bound,
+            identity);
+    }
+
+    if (stream_resource_desc_is(
+            wasi_type, "streams", "output-stream")) {
+        if (stream_identity_conflicts(
+                streams, identity,
+                &streams->output_stream_identity))
+            return false;
+        return stream_bind_identity_value(
+            &streams->output_stream_identity,
+            &streams->output_stream_identity_bound,
+            identity);
+    }
+
+    if (stream_resource_desc_is(
+            wasi_type, "error", "error")) {
+        if (stream_identity_conflicts(
+                streams, identity,
+                &streams->error_identity))
+            return false;
+        return stream_bind_identity_value(
+            &streams->error_identity,
+            &streams->error_identity_bound,
+            identity);
+    }
+
+    if (stream_resource_desc_is(
+            wasi_type, "poll", "pollable")) {
+        turbowasm_wasi02_poll *poll = streams->poll;
+
+        if (poll == NULL || !poll->initialized ||
+            stream_identity_conflicts(streams, identity, NULL))
+            return false;
+        if (poll->pollable_identity_bound &&
+            poll->pollable_identity != identity)
+            return false;
+        poll->pollable_identity = identity;
+        poll->pollable_identity_bound = true;
+        return true;
+    }
+
+    return false;
+}
+
+static bool stream_component_type_matches_wasi(
+    turbowasm_wasi02_streams *streams,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_wasi02_type_desc *wasi_type,
+    turbowasm_component_type_kind resource_handle_kind,
+    uint32_t depth) {
+    const turbowasm_wasi02_type_desc *base;
+    const turbowasm_component_type *type;
+    turbowasm_component_type_kind kind;
+    uint32_t i;
+
+    if (depth > 64u)
+        return false;
+    base = stream_wasi_type_base(wasi_type);
+    if (base == NULL ||
+        !stream_ref_kind(graph, ref, &kind, &type))
+        return false;
+
+    switch (base->kind) {
+        case TURBOWASM_WASI02_TYPE_BOOL:
+            return kind == TURBOWASM_COMPONENT_TYPE_BOOL;
+        case TURBOWASM_WASI02_TYPE_U8:
+            return kind == TURBOWASM_COMPONENT_TYPE_U8;
+        case TURBOWASM_WASI02_TYPE_U32:
+            return kind == TURBOWASM_COMPONENT_TYPE_U32;
+        case TURBOWASM_WASI02_TYPE_U64:
+            return kind == TURBOWASM_COMPONENT_TYPE_U64;
+        case TURBOWASM_WASI02_TYPE_STRING:
+            return kind == TURBOWASM_COMPONENT_TYPE_STRING;
+
+        case TURBOWASM_WASI02_TYPE_LIST:
+            return kind == TURBOWASM_COMPONENT_TYPE_LIST &&
+                   type != NULL &&
+                   stream_component_type_matches_wasi(
+                       streams, graph,
+                       type->as.list.element_type,
+                       base->as.list.element,
+                       resource_handle_kind,
+                       depth + 1u);
+
+        case TURBOWASM_WASI02_TYPE_TUPLE:
+            if (kind != TURBOWASM_COMPONENT_TYPE_TUPLE ||
+                type == NULL ||
+                type->as.tuple.count != base->as.tuple.count)
+                return false;
+            for (i = 0u; i < base->as.tuple.count; ++i) {
+                if (!stream_component_type_matches_wasi(
+                        streams, graph,
+                        type->as.tuple.elements[i],
+                        base->as.tuple.elements[i],
+                        resource_handle_kind,
+                        depth + 1u))
+                    return false;
+            }
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_RECORD:
+            if (kind != TURBOWASM_COMPONENT_TYPE_RECORD ||
+                type == NULL ||
+                type->as.record.count != base->as.record.count)
+                return false;
+            for (i = 0u; i < base->as.record.count; ++i) {
+                const turbowasm_component_record_field *field =
+                    &type->as.record.fields[i];
+                const turbowasm_wasi02_record_field *expected =
+                    &base->as.record.fields[i];
+                size_t name_size;
+
+                if (expected->name == NULL)
+                    return false;
+                name_size = strlen(expected->name);
+                if (name_size != field->name_size ||
+                    field->name == NULL ||
+                    memcmp(
+                        field->name,
+                        expected->name,
+                        name_size) != 0 ||
+                    !stream_component_type_matches_wasi(
+                        streams, graph,
+                        field->type,
+                        expected->type,
+                        resource_handle_kind,
+                        depth + 1u))
+                    return false;
+            }
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_OPTION:
+            return kind == TURBOWASM_COMPONENT_TYPE_OPTION &&
+                   type != NULL &&
+                   stream_component_type_matches_wasi(
+                       streams, graph,
+                       type->as.option.payload,
+                       base->as.option.payload,
+                       resource_handle_kind,
+                       depth + 1u);
+
+        case TURBOWASM_WASI02_TYPE_RESULT:
+            if (kind != TURBOWASM_COMPONENT_TYPE_RESULT ||
+                type == NULL ||
+                type->as.result.has_ok !=
+                    (base->as.result.ok != NULL) ||
+                type->as.result.has_error !=
+                    (base->as.result.error != NULL))
+                return false;
+            if (type->as.result.has_ok &&
+                !stream_component_type_matches_wasi(
+                    streams, graph,
+                    type->as.result.ok,
+                    base->as.result.ok,
+                    resource_handle_kind,
+                    depth + 1u))
+                return false;
+            if (type->as.result.has_error &&
+                !stream_component_type_matches_wasi(
+                    streams, graph,
+                    type->as.result.error,
+                    base->as.result.error,
+                    resource_handle_kind,
+                    depth + 1u))
+                return false;
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_VARIANT:
+            if (kind != TURBOWASM_COMPONENT_TYPE_VARIANT ||
+                type == NULL ||
+                type->as.variant.cases == NULL ||
+                base->as.variant.cases == NULL ||
+                type->as.variant.count != base->as.variant.count ||
+                base->as.variant.count == 0u)
+                return false;
+            for (i = 0u; i < base->as.variant.count; ++i) {
+                const turbowasm_component_variant_case *ccase =
+                    &type->as.variant.cases[i];
+                const turbowasm_wasi02_variant_case *wcase =
+                    &base->as.variant.cases[i];
+                size_t name_size;
+
+                if (wcase->name == NULL)
+                    return false;
+                name_size = strlen(wcase->name);
+                if (ccase->name == NULL ||
+                    ccase->name_size != name_size ||
+                    memcmp(
+                        ccase->name,
+                        wcase->name,
+                        name_size) != 0 ||
+                    ccase->has_payload !=
+                        (wcase->payload != NULL))
+                    return false;
+                if (ccase->has_payload &&
+                    !stream_component_type_matches_wasi(
+                        streams, graph,
+                        ccase->payload,
+                        wcase->payload,
+                        resource_handle_kind,
+                        depth + 1u))
+                    return false;
+            }
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_ENUM:
+        case TURBOWASM_WASI02_TYPE_FLAGS: {
+            const turbowasm_component_label *labels;
+            const char *const *expected_labels;
+            uint32_t count;
+
+            if (type == NULL)
+                return false;
+            if (base->kind == TURBOWASM_WASI02_TYPE_ENUM) {
+                if (kind != TURBOWASM_COMPONENT_TYPE_ENUM)
+                    return false;
+                labels = type->as.enumeration.labels;
+                count = type->as.enumeration.count;
+                expected_labels = base->as.enumeration.labels;
+                if (count != base->as.enumeration.count)
+                    return false;
+            } else {
+                if (kind != TURBOWASM_COMPONENT_TYPE_FLAGS)
+                    return false;
+                labels = type->as.flags.labels;
+                count = type->as.flags.count;
+                expected_labels = base->as.flags.labels;
+                if (count != base->as.flags.count)
+                    return false;
+            }
+
+            if (labels == NULL || expected_labels == NULL ||
+                count == 0u)
+                return false;
+            for (i = 0u; i < count; ++i) {
+                size_t name_size;
+
+                if (expected_labels[i] == NULL)
+                    return false;
+                name_size = strlen(expected_labels[i]);
+                if (labels[i].name == NULL ||
+                    labels[i].name_size != name_size ||
+                    memcmp(
+                        labels[i].name,
+                        expected_labels[i],
+                        name_size) != 0)
+                    return false;
+            }
+            return true;
+        }
+
+        case TURBOWASM_WASI02_TYPE_RESOURCE:
+            return type != NULL &&
+                   stream_bind_resource_identity(
+                       streams, graph, type,
+                       base, resource_handle_kind);
+
+        case TURBOWASM_WASI02_TYPE_UNIT:
+        case TURBOWASM_WASI02_TYPE_ALIAS:
+        default:
+            return false;
+    }
+}
+
+static const turbowasm_wasi02_interface_desc *
+stream_interface_by_component_name(
+    turbowasm_component_name instance_name) {
+    if (stream_component_name_is(
+            instance_name,
+            "wasi:io/streams@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:io", "streams");
+    if (stream_component_name_is(
+            instance_name,
+            "wasi:io/error@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:io", "error");
+    return NULL;
+}
+
+static const turbowasm_wasi02_function_desc *
+stream_function_by_component_name(
+    const turbowasm_wasi02_interface_desc *iface,
+    turbowasm_component_name function_name) {
+    uint32_t i;
+
+    if (iface == NULL ||
+        (function_name.size != 0u &&
+         function_name.bytes == NULL))
+        return NULL;
+
+    for (i = 0u; i < iface->function_count; ++i) {
+        const turbowasm_wasi02_function_desc *function =
+            &iface->functions[i];
+        size_t size = strlen(function->name);
+
+        if (size == function_name.size &&
+            (size == 0u ||
+             memcmp(
+                 function_name.bytes,
+                 function->name,
+                 size) == 0))
+            return function;
+    }
+    return NULL;
+}
+
+static bool stream_bind_function_shape(
+    turbowasm_wasi02_streams *streams,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type_index,
+    const turbowasm_wasi02_function_desc *function) {
+    const turbowasm_component_type *function_type;
+    uint32_t i;
+
+    if (streams == NULL || graph == NULL ||
+        function == NULL)
+        return false;
+
+    function_type = turbowasm_component_type_graph_get(
+        graph, function_type_index);
+    if (function_type == NULL ||
+        function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
+        function_type->as.function.param_count !=
+            function->param_count ||
+        function_type->as.function.has_result !=
+            (function->result != NULL))
+        return false;
+
+    for (i = 0u; i < function->param_count; ++i) {
+        if (!stream_component_type_matches_wasi(
+                streams,
+                graph,
+                function_type->as.function.params[i],
+                function->params[i].type,
+                TURBOWASM_COMPONENT_TYPE_BORROW,
+                0u))
+            return false;
+    }
+
+    if (function->result != NULL &&
+        !stream_component_type_matches_wasi(
+            streams,
+            graph,
+            function_type->as.function.result,
+            function->result,
+            TURBOWASM_COMPONENT_TYPE_OWN,
+            0u))
+        return false;
+
+    return true;
+}
+
+static bool wasi02_io_import_can_bind(
+    void *context,
+    turbowasm_component_name instance_name,
+    turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type) {
+    turbowasm_wasi02_streams *streams =
+        (turbowasm_wasi02_streams *)context;
+    const turbowasm_wasi02_interface_desc *iface;
+    const turbowasm_wasi02_function_desc *function;
+
+    if (streams == NULL || !streams->initialized)
+        return false;
+
+    if (stream_component_name_is(
+            instance_name,
+            "wasi:io/poll@0.2.8"))
+        return streams->poll != NULL &&
+               turbowasm_wasi02_poll_import_can_bind(
+                   streams->poll,
+                   instance_name,
+                   function_name,
+                   graph,
+                   function_type);
+
+    iface = stream_interface_by_component_name(
+        instance_name);
+    function = stream_function_by_component_name(
+        iface, function_name);
+    return stream_bind_function_shape(
+        streams, graph, function_type, function);
+}
+
+static bool stream_component_resource_info(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    turbowasm_component_type_kind *out_kind,
+    uint64_t *out_identity) {
+    const turbowasm_component_type *handle_type;
+    const turbowasm_component_type *resource_type;
+
+    if (graph == NULL || out_kind == NULL ||
+        out_identity == NULL ||
+        type.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return false;
+
+    handle_type = turbowasm_component_type_graph_get(
+        graph, type.as.indexed);
+    if (handle_type == NULL ||
+        (handle_type->kind != TURBOWASM_COMPONENT_TYPE_OWN &&
+         handle_type->kind != TURBOWASM_COMPONENT_TYPE_BORROW))
+        return false;
+
+    resource_type = turbowasm_component_type_graph_get(
+        graph, handle_type->as.handle.resource_type);
+    if (resource_type == NULL ||
+        resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE ||
+        resource_type->as.resource.identity == 0u)
+        return false;
+
+    *out_kind = handle_type->kind;
+    *out_identity = resource_type->as.resource.identity;
+    return true;
+}
+
+static bool stream_kind_for_component_identity(
+    const turbowasm_wasi02_streams *streams,
+    uint64_t identity,
+    turbowasm_wasi02_stream_slot_kind *out_kind) {
+    if (streams == NULL || out_kind == NULL)
+        return false;
+
+    if (streams->input_stream_identity_bound &&
+        streams->input_stream_identity == identity) {
+        *out_kind = TURBOWASM_WASI02_STREAM_SLOT_INPUT;
+        return true;
+    }
+    if (streams->output_stream_identity_bound &&
+        streams->output_stream_identity == identity) {
+        *out_kind = TURBOWASM_WASI02_STREAM_SLOT_OUTPUT;
+        return true;
+    }
+    if (streams->error_identity_bound &&
+        streams->error_identity == identity) {
+        *out_kind = TURBOWASM_WASI02_STREAM_SLOT_ERROR;
+        return true;
+    }
+    return false;
+}
+
+static turbowasm_status wasi02_io_resource_lower(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    const turbowasm_component_value *value,
+    uint32_t *out_handle) {
+    turbowasm_wasi02_streams *streams =
+        (turbowasm_wasi02_streams *)context;
+    turbowasm_component_type_kind component_kind;
+    turbowasm_wasi02_stream_slot_kind stream_kind;
+    turbowasm_wasi02_stream_slot *slot;
+    uint64_t identity;
+    uint32_t handle;
+    turbowasm_status status;
+
+    if (streams == NULL || !streams->initialized ||
+        value == NULL || out_handle == NULL ||
+        !stream_component_resource_info(
+            graph, type, &component_kind, &identity) ||
+        value->kind != component_kind ||
+        value->as.resource_rep.kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    if (!stream_kind_for_component_identity(
+            streams, identity, &stream_kind)) {
+        if (streams->poll == NULL)
+            return TURBOWASM_TYPE_MISMATCH;
+        return turbowasm_wasi02_poll_import_resource_lower(
+            streams->poll,
+            graph,
+            type,
+            value,
+            out_handle);
+    }
+
+    handle = (uint32_t)value->as.resource_rep.as.i32;
+    status = slot_from_resource(
+        streams, handle, stream_kind, &slot);
+    if (status != TURBOWASM_OK)
+        return TURBOWASM_TRAPPED;
+    (void)slot;
+
+    *out_handle = handle;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status wasi02_io_resource_lift(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    uint32_t handle,
+    turbowasm_component_value *out) {
+    turbowasm_wasi02_streams *streams =
+        (turbowasm_wasi02_streams *)context;
+    turbowasm_component_type_kind component_kind;
+    turbowasm_wasi02_stream_slot_kind stream_kind;
+    turbowasm_wasi02_stream_slot *slot;
+    uint64_t identity;
+
+    if (streams == NULL || !streams->initialized ||
+        out == NULL ||
+        !stream_component_resource_info(
+            graph, type, &component_kind, &identity))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    if (!stream_kind_for_component_identity(
+            streams, identity, &stream_kind)) {
+        if (streams->poll == NULL)
+            return TURBOWASM_TYPE_MISMATCH;
+        return turbowasm_wasi02_poll_import_resource_lift(
+            streams->poll,
+            graph,
+            type,
+            handle,
+            out);
+    }
+
+    if (slot_from_resource(
+            streams, handle, stream_kind, &slot) !=
+        TURBOWASM_OK)
+        return TURBOWASM_TRAPPED;
+    (void)slot;
+
+    memset(out, 0, sizeof(*out));
+    out->kind = component_kind;
+    out->as.resource_rep.kind = TURBOWASM_VALUE_I32;
+    out->as.resource_rep.as.i32 = (int32_t)handle;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status wasi02_io_resource_drop(
+    void *context,
+    uint64_t resource_identity,
+    uint32_t handle) {
+    turbowasm_wasi02_streams *streams =
+        (turbowasm_wasi02_streams *)context;
+    turbowasm_wasi02_stream_slot_kind stream_kind;
+
+    if (streams == NULL || !streams->initialized)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (stream_kind_for_component_identity(
+            streams, resource_identity, &stream_kind))
+        return turbowasm_wasi02_stream_resource_drop(
+            streams, handle);
+
+    if (streams->poll != NULL)
+        return turbowasm_wasi02_poll_import_resource_drop(
+            streams->poll,
+            resource_identity,
+            handle);
+
+    return TURBOWASM_TYPE_MISMATCH;
+}
+
+static void rollback_wasi02_io_resources(
+    turbowasm_wasi02_streams *streams,
+    const turbowasm_wasi02_type_desc *type,
+    turbowasm_wasi02_value *value) {
+    const turbowasm_wasi02_type_desc *base;
+    size_t i;
+
+    if (streams == NULL || type == NULL || value == NULL)
+        return;
+
+    base = stream_wasi_type_base(type);
+    if (base == NULL)
+        return;
+
+    switch (base->kind) {
+        case TURBOWASM_WASI02_TYPE_RESOURCE:
+            if (value->kind != TURBOWASM_WASI02_VALUE_RESOURCE)
+                return;
+            if (stream_resource_desc_is(
+                    base, "poll", "pollable")) {
+                if (streams->poll != NULL)
+                    (void)turbowasm_wasi02_pollable_drop(
+                        streams->poll,
+                        value->as.resource);
+            } else {
+                (void)turbowasm_wasi02_stream_resource_drop(
+                    streams,
+                    value->as.resource);
+            }
+            return;
+
+        case TURBOWASM_WASI02_TYPE_LIST:
+            if (value->kind != TURBOWASM_WASI02_VALUE_LIST)
+                return;
+            for (i = 0u; i < value->as.list.count; ++i)
+                rollback_wasi02_io_resources(
+                    streams,
+                    base->as.list.element,
+                    &value->as.list.items[i]);
+            return;
+
+        case TURBOWASM_WASI02_TYPE_TUPLE:
+            if (value->kind != TURBOWASM_WASI02_VALUE_TUPLE)
+                return;
+            for (i = 0u;
+                 i < value->as.tuple.count &&
+                 i < base->as.tuple.count;
+                 ++i)
+                rollback_wasi02_io_resources(
+                    streams,
+                    base->as.tuple.elements[i],
+                    &value->as.tuple.items[i]);
+            return;
+
+        case TURBOWASM_WASI02_TYPE_RECORD:
+            if (value->kind != TURBOWASM_WASI02_VALUE_RECORD)
+                return;
+            for (i = 0u;
+                 i < value->as.record.count &&
+                 i < base->as.record.count;
+                 ++i)
+                rollback_wasi02_io_resources(
+                    streams,
+                    base->as.record.fields[i].type,
+                    &value->as.record.items[i]);
+            return;
+
+        case TURBOWASM_WASI02_TYPE_OPTION:
+            if (value->kind == TURBOWASM_WASI02_VALUE_OPTION &&
+                value->as.option.has_value &&
+                value->as.option.value != NULL)
+                rollback_wasi02_io_resources(
+                    streams,
+                    base->as.option.payload,
+                    value->as.option.value);
+            return;
+
+        case TURBOWASM_WASI02_TYPE_RESULT:
+            if (value->kind != TURBOWASM_WASI02_VALUE_RESULT ||
+                value->as.result.value == NULL)
+                return;
+            rollback_wasi02_io_resources(
+                streams,
+                value->as.result.is_error
+                    ? base->as.result.error
+                    : base->as.result.ok,
+                value->as.result.value);
+            return;
+
+        case TURBOWASM_WASI02_TYPE_VARIANT:
+            if (value->kind != TURBOWASM_WASI02_VALUE_VARIANT ||
+                value->as.variant.value == NULL ||
+                value->as.variant.case_index >=
+                    base->as.variant.count)
+                return;
+            rollback_wasi02_io_resources(
+                streams,
+                base->as.variant.cases[
+                    value->as.variant.case_index].payload,
+                value->as.variant.value);
+            return;
+
+        default:
+            return;
+    }
+}
+
+static turbowasm_status wasi02_io_import_invoke(
+    void *context,
+    turbowasm_host_call *call,
+    turbowasm_component_name instance_name,
+    turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_value *arguments,
+    size_t argument_count,
+    turbowasm_component_value *out_result,
+    turbowasm_trap *trap) {
+    turbowasm_wasi02_streams *streams =
+        (turbowasm_wasi02_streams *)context;
+    const turbowasm_wasi02_interface_desc *iface;
+    const turbowasm_wasi02_function_desc *function;
+    turbowasm_wasi02_value
+        wasi_arguments[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {{0}};
+    turbowasm_wasi02_value wasi_result = {0};
+    size_t i;
+    turbowasm_status status = TURBOWASM_OK;
+
+    if (streams == NULL || !streams->initialized ||
+        graph == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (stream_component_name_is(
+            instance_name,
+            "wasi:io/poll@0.2.8")) {
+        if (streams->poll == NULL)
+            return TURBOWASM_UNSUPPORTED;
+        return turbowasm_wasi02_poll_import_invoke(
+            streams->poll,
+            call,
+            instance_name,
+            function_name,
+            graph,
+            function_type,
+            arguments,
+            argument_count,
+            out_result,
+            trap);
+    }
+
+    iface = stream_interface_by_component_name(
+        instance_name);
+    function = stream_function_by_component_name(
+        iface, function_name);
+    if (!stream_bind_function_shape(
+            streams, graph, function_type, function))
+        return TURBOWASM_TYPE_MISMATCH;
+    if (argument_count != function->param_count ||
+        argument_count > TURBOWASM_COMPONENT_MAX_FLAT_PARAMS ||
+        (argument_count != 0u && arguments == NULL))
+        return TURBOWASM_TYPE_MISMATCH;
+    if (function->result != NULL && out_result == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *trap = TURBOWASM_TRAP_NONE;
+
+    for (i = 0u; i < argument_count; ++i) {
+        status = turbowasm_wasi02_component_value_to_wasi(
+            function->params[i].type,
+            &arguments[i],
+            &wasi_arguments[i]);
+        if (status != TURBOWASM_OK)
+            goto done;
+    }
+
+    status = turbowasm_wasi02_streams_call_with_host(
+        streams,
+        call,
+        iface->interface_name,
+        function->name,
+        wasi_arguments,
+        argument_count,
+        function->result != NULL ? &wasi_result : NULL);
+    if (status != TURBOWASM_OK)
+        goto done;
+
+    if (function->result != NULL) {
+        status = turbowasm_wasi02_component_value_from_wasi(
+            function->result,
+            &wasi_result,
+            out_result);
+        if (status != TURBOWASM_OK)
+            rollback_wasi02_io_resources(
+                streams,
+                function->result,
+                &wasi_result);
+    }
+
+done:
+    for (i = 0u; i < argument_count; ++i)
+        turbowasm_wasi02_value_destroy(
+            &wasi_arguments[i]);
+    turbowasm_wasi02_value_destroy(&wasi_result);
+    return status;
+}
+
+turbowasm_status turbowasm_wasi02_streams_component_exec_init(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary,
+    turbowasm_wasi02_streams *streams) {
+    turbowasm_component_exec_imports imports;
+
+    if (exec == NULL || binary == NULL ||
+        streams == NULL || !streams->initialized ||
+        streams->poll == NULL ||
+        !streams->poll->initialized)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memset(&imports, 0, sizeof(imports));
+    imports.context = streams;
+    imports.can_bind = wasi02_io_import_can_bind;
+    imports.invoke = wasi02_io_import_invoke;
+    imports.resource_lower = wasi02_io_resource_lower;
+    imports.resource_lift = wasi02_io_resource_lift;
+    imports.resource_drop = wasi02_io_resource_drop;
+
+    return turbowasm_component_exec_init_with_imports(
+        exec, binary, &imports);
 }
