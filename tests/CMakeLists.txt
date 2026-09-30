@@ -249,6 +249,25 @@ if(TARGET turbowasm_wasi02_core)
            COMMAND turbowasm_wasi02_component_exec_test)
 endif()
 
+if(TARGET turbowasm_wasi02_poll_core)
+  add_executable(turbowasm_wasi02_poll_test
+    wasi02_poll_test.c)
+  target_link_libraries(turbowasm_wasi02_poll_test
+    PRIVATE
+      turbowasm_wasi02_poll_core
+      TurboWasm::Component)
+  target_include_directories(turbowasm_wasi02_poll_test
+    PRIVATE
+      "${PROJECT_SOURCE_DIR}/src"
+      "${PROJECT_SOURCE_DIR}/include")
+  set_target_properties(turbowasm_wasi02_poll_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi02_poll_test
+           COMMAND turbowasm_wasi02_poll_test)
+endif()
+
 if(TARGET turbowasm_wasi02_fs_core)
   add_executable(turbowasm_wasi02_filesystem_test
     wasi02_filesystem_test.c)
