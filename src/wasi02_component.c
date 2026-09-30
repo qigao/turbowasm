@@ -1,5 +1,7 @@
 #include "wasi02_component.h"
 
+#include "runtime_alloc.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -62,32 +64,20 @@ find_function_by_component_name(
     return NULL;
 }
 
-static const turbowasm_wasi02_type_desc *
-wasi02_scalar_base(const turbowasm_wasi02_type_desc *type) {
+static const turbowasm_wasi02_type_desc *wasi_type_base(
+    const turbowasm_wasi02_type_desc *type) {
     uint32_t depth = 0u;
 
     while (type != NULL &&
            type->kind == TURBOWASM_WASI02_TYPE_ALIAS) {
-        if (++depth > 16u)
+        if (++depth > 32u)
             return NULL;
         type = type->as.alias.target;
     }
-
-    if (type == NULL)
-        return NULL;
-    switch (type->kind) {
-        case TURBOWASM_WASI02_TYPE_BOOL:
-        case TURBOWASM_WASI02_TYPE_U8:
-        case TURBOWASM_WASI02_TYPE_U32:
-        case TURBOWASM_WASI02_TYPE_U64:
-            return type;
-        default:
-            return NULL;
-    }
+    return type;
 }
 
-static const turbowasm_component_type *
-component_scalar_base(
+static const turbowasm_component_type *component_type_from_ref(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
     turbowasm_component_type *inline_storage) {
@@ -99,25 +89,28 @@ component_scalar_base(
         inline_storage->kind = ref.as.inline_type;
         return inline_storage;
     }
-
     if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
         return NULL;
     return turbowasm_component_type_graph_get(
         graph, ref.as.indexed);
 }
 
-static bool scalar_types_match(
+static bool component_type_matches_wasi_depth(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref component_ref,
-    const turbowasm_wasi02_type_desc *wasi_type) {
+    const turbowasm_wasi02_type_desc *wasi_type,
+    uint32_t depth) {
     turbowasm_component_type inline_storage;
-    const turbowasm_component_type *component_type =
-        component_scalar_base(
-            graph, component_ref, &inline_storage);
-    const turbowasm_wasi02_type_desc *base =
-        wasi02_scalar_base(wasi_type);
+    const turbowasm_component_type *component_type;
+    const turbowasm_wasi02_type_desc *base;
+    uint32_t i;
 
-    if (component_type == NULL || base == NULL)
+    if (depth > 64u)
+        return false;
+    base = wasi_type_base(wasi_type);
+    component_type = component_type_from_ref(
+        graph, component_ref, &inline_storage);
+    if (base == NULL || component_type == NULL)
         return false;
 
     switch (base->kind) {
@@ -133,6 +126,103 @@ static bool scalar_types_match(
         case TURBOWASM_WASI02_TYPE_U64:
             return component_type->kind ==
                    TURBOWASM_COMPONENT_TYPE_U64;
+        case TURBOWASM_WASI02_TYPE_STRING:
+            return component_type->kind ==
+                   TURBOWASM_COMPONENT_TYPE_STRING;
+
+        case TURBOWASM_WASI02_TYPE_LIST:
+            return component_type->kind ==
+                       TURBOWASM_COMPONENT_TYPE_LIST &&
+                   component_type_matches_wasi_depth(
+                       graph,
+                       component_type->as.list.element_type,
+                       base->as.list.element,
+                       depth + 1u);
+
+        case TURBOWASM_WASI02_TYPE_TUPLE:
+            if (component_type->kind !=
+                    TURBOWASM_COMPONENT_TYPE_TUPLE ||
+                component_type->as.tuple.count !=
+                    base->as.tuple.count)
+                return false;
+            for (i = 0u; i < base->as.tuple.count; ++i) {
+                if (!component_type_matches_wasi_depth(
+                        graph,
+                        component_type->as.tuple.elements[i],
+                        base->as.tuple.elements[i],
+                        depth + 1u))
+                    return false;
+            }
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_RECORD:
+            if (component_type->kind !=
+                    TURBOWASM_COMPONENT_TYPE_RECORD ||
+                component_type->as.record.count !=
+                    base->as.record.count)
+                return false;
+            for (i = 0u; i < base->as.record.count; ++i) {
+                const turbowasm_component_record_field *field =
+                    &component_type->as.record.fields[i];
+                const turbowasm_wasi02_record_field *wasi_field =
+                    &base->as.record.fields[i];
+                size_t name_size;
+
+                if (wasi_field->name == NULL)
+                    return false;
+                name_size = strlen(wasi_field->name);
+                if (name_size != field->name_size ||
+                    (name_size != 0u &&
+                     (field->name == NULL ||
+                      memcmp(
+                          field->name,
+                          wasi_field->name,
+                          name_size) != 0)) ||
+                    !component_type_matches_wasi_depth(
+                        graph,
+                        field->type,
+                        wasi_field->type,
+                        depth + 1u))
+                    return false;
+            }
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_OPTION:
+            return component_type->kind ==
+                       TURBOWASM_COMPONENT_TYPE_OPTION &&
+                   component_type_matches_wasi_depth(
+                       graph,
+                       component_type->as.option.payload,
+                       base->as.option.payload,
+                       depth + 1u);
+
+        case TURBOWASM_WASI02_TYPE_RESULT:
+            if (component_type->kind !=
+                    TURBOWASM_COMPONENT_TYPE_RESULT ||
+                component_type->as.result.has_ok !=
+                    (base->as.result.ok != NULL) ||
+                component_type->as.result.has_error !=
+                    (base->as.result.error != NULL))
+                return false;
+            if (component_type->as.result.has_ok &&
+                !component_type_matches_wasi_depth(
+                    graph,
+                    component_type->as.result.ok,
+                    base->as.result.ok,
+                    depth + 1u))
+                return false;
+            if (component_type->as.result.has_error &&
+                !component_type_matches_wasi_depth(
+                    graph,
+                    component_type->as.result.error,
+                    base->as.result.error,
+                    depth + 1u))
+                return false;
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_UNIT:
+        case TURBOWASM_WASI02_TYPE_RESOURCE:
+        case TURBOWASM_WASI02_TYPE_ALIAS:
         default:
             return false;
     }
@@ -159,18 +249,20 @@ static bool binding_matches_descriptor(
         return false;
 
     for (i = 0u; i < function->param_count; ++i) {
-        if (!scalar_types_match(
+        if (!component_type_matches_wasi_depth(
                 graph,
                 function_type->as.function.params[i],
-                function->params[i].type))
+                function->params[i].type,
+                0u))
             return false;
     }
 
     if (function->result != NULL &&
-        !scalar_types_match(
+        !component_type_matches_wasi_depth(
             graph,
             function_type->as.function.result,
-            function->result))
+            function->result,
+            0u))
         return false;
 
     return true;
@@ -197,17 +289,109 @@ static bool wasi02_component_can_bind(
         graph, function_type, function);
 }
 
-static turbowasm_status component_to_wasi_scalar(
+static turbowasm_status copy_bytes(
+    const uint8_t *data,
+    size_t size,
+    uint8_t **out) {
+    uint8_t *copy = NULL;
+
+    if (out == NULL || (size != 0u && data == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (size != 0u) {
+        copy = (uint8_t *)turbowasm_rt_malloc(size);
+        if (copy == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+        memcpy(copy, data, size);
+    }
+    *out = copy;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status component_to_wasi_value(
+    const turbowasm_wasi02_type_desc *type,
+    const turbowasm_component_value *value,
+    turbowasm_wasi02_value *out);
+
+static turbowasm_status wasi_to_component_value(
+    const turbowasm_wasi02_type_desc *type,
+    const turbowasm_wasi02_value *value,
+    turbowasm_component_value *out);
+
+static turbowasm_status component_sequence_to_wasi(
+    const turbowasm_wasi02_type_desc *base,
+    const turbowasm_component_value_list *sequence,
+    turbowasm_wasi02_value_kind kind,
+    turbowasm_wasi02_value *out) {
+    turbowasm_wasi02_value *items = NULL;
+    uint32_t expected_count = 0u;
+    uint64_t i;
+    turbowasm_status status;
+
+    if (base == NULL || sequence == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (kind == TURBOWASM_WASI02_VALUE_TUPLE)
+        expected_count = base->as.tuple.count;
+    else if (kind == TURBOWASM_WASI02_VALUE_RECORD)
+        expected_count = base->as.record.count;
+    else
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (sequence->count != expected_count ||
+        (sequence->count != 0u && sequence->items == NULL))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    if (sequence->count != 0u) {
+        if (sequence->count >
+            (uint64_t)SIZE_MAX / sizeof(*items))
+            return TURBOWASM_OUT_OF_MEMORY;
+        items = (turbowasm_wasi02_value *)turbowasm_rt_calloc(
+            (size_t)sequence->count, sizeof(*items));
+        if (items == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    for (i = 0u; i < sequence->count; ++i) {
+        const turbowasm_wasi02_type_desc *child =
+            kind == TURBOWASM_WASI02_VALUE_TUPLE
+                ? base->as.tuple.elements[i]
+                : base->as.record.fields[i].type;
+        status = component_to_wasi_value(
+            child, &sequence->items[i], &items[i]);
+        if (status != TURBOWASM_OK) {
+            while (i != 0u) {
+                --i;
+                turbowasm_wasi02_value_destroy(&items[i]);
+            }
+            turbowasm_rt_free(items);
+            return status;
+        }
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = kind;
+    if (kind == TURBOWASM_WASI02_VALUE_TUPLE) {
+        out->as.tuple.items = items;
+        out->as.tuple.count = (size_t)sequence->count;
+    } else {
+        out->as.record.items = items;
+        out->as.record.count = (size_t)sequence->count;
+    }
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status component_to_wasi_value(
     const turbowasm_wasi02_type_desc *type,
     const turbowasm_component_value *value,
     turbowasm_wasi02_value *out) {
     const turbowasm_wasi02_type_desc *base =
-        wasi02_scalar_base(type);
+        wasi_type_base(type);
+    turbowasm_status status;
 
     if (base == NULL || value == NULL || out == NULL)
         return TURBOWASM_TYPE_MISMATCH;
-
     memset(out, 0, sizeof(*out));
+
     switch (base->kind) {
         case TURBOWASM_WASI02_TYPE_BOOL:
             if (value->kind != TURBOWASM_COMPONENT_TYPE_BOOL)
@@ -215,40 +399,229 @@ static turbowasm_status component_to_wasi_scalar(
             out->kind = TURBOWASM_WASI02_VALUE_BOOL;
             out->as.boolean = value->as.boolean;
             return TURBOWASM_OK;
+
         case TURBOWASM_WASI02_TYPE_U8:
             if (value->kind != TURBOWASM_COMPONENT_TYPE_U8)
                 return TURBOWASM_TYPE_MISMATCH;
             out->kind = TURBOWASM_WASI02_VALUE_U8;
             out->as.u8 = value->as.u8;
             return TURBOWASM_OK;
+
         case TURBOWASM_WASI02_TYPE_U32:
             if (value->kind != TURBOWASM_COMPONENT_TYPE_U32)
                 return TURBOWASM_TYPE_MISMATCH;
             out->kind = TURBOWASM_WASI02_VALUE_U32;
             out->as.u32 = value->as.u32;
             return TURBOWASM_OK;
+
         case TURBOWASM_WASI02_TYPE_U64:
             if (value->kind != TURBOWASM_COMPONENT_TYPE_U64)
                 return TURBOWASM_TYPE_MISMATCH;
             out->kind = TURBOWASM_WASI02_VALUE_U64;
             out->as.u64 = value->as.u64;
             return TURBOWASM_OK;
+
+        case TURBOWASM_WASI02_TYPE_STRING:
+            if (value->kind != TURBOWASM_COMPONENT_TYPE_STRING)
+                return TURBOWASM_TYPE_MISMATCH;
+            status = copy_bytes(
+                value->as.string.data,
+                value->as.string.size,
+                &out->as.string.data);
+            if (status != TURBOWASM_OK)
+                return status;
+            out->kind = TURBOWASM_WASI02_VALUE_STRING;
+            out->as.string.size = value->as.string.size;
+            return TURBOWASM_OK;
+
+        case TURBOWASM_WASI02_TYPE_LIST: {
+            uint64_t i;
+            turbowasm_wasi02_value *items = NULL;
+
+            if (value->kind != TURBOWASM_COMPONENT_TYPE_LIST ||
+                (value->as.list.count != 0u &&
+                 value->as.list.items == NULL))
+                return TURBOWASM_TYPE_MISMATCH;
+            if (value->as.list.count >
+                (uint64_t)SIZE_MAX / sizeof(*items))
+                return TURBOWASM_OUT_OF_MEMORY;
+            if (value->as.list.count != 0u) {
+                items = (turbowasm_wasi02_value *)
+                    turbowasm_rt_calloc(
+                        (size_t)value->as.list.count,
+                        sizeof(*items));
+                if (items == NULL)
+                    return TURBOWASM_OUT_OF_MEMORY;
+            }
+            for (i = 0u; i < value->as.list.count; ++i) {
+                status = component_to_wasi_value(
+                    base->as.list.element,
+                    &value->as.list.items[i],
+                    &items[i]);
+                if (status != TURBOWASM_OK) {
+                    while (i != 0u) {
+                        --i;
+                        turbowasm_wasi02_value_destroy(&items[i]);
+                    }
+                    turbowasm_rt_free(items);
+                    return status;
+                }
+            }
+            out->kind = TURBOWASM_WASI02_VALUE_LIST;
+            out->as.list.items = items;
+            out->as.list.count = (size_t)value->as.list.count;
+            return TURBOWASM_OK;
+        }
+
+        case TURBOWASM_WASI02_TYPE_TUPLE:
+            if (value->kind != TURBOWASM_COMPONENT_TYPE_TUPLE)
+                return TURBOWASM_TYPE_MISMATCH;
+            return component_sequence_to_wasi(
+                base, &value->as.tuple,
+                TURBOWASM_WASI02_VALUE_TUPLE, out);
+
+        case TURBOWASM_WASI02_TYPE_RECORD:
+            if (value->kind != TURBOWASM_COMPONENT_TYPE_RECORD)
+                return TURBOWASM_TYPE_MISMATCH;
+            return component_sequence_to_wasi(
+                base, &value->as.record,
+                TURBOWASM_WASI02_VALUE_RECORD, out);
+
+        case TURBOWASM_WASI02_TYPE_OPTION:
+            if (value->kind != TURBOWASM_COMPONENT_TYPE_OPTION ||
+                value->as.option.case_index >= 2u)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->kind = TURBOWASM_WASI02_VALUE_OPTION;
+            out->as.option.has_value =
+                value->as.option.case_index == 1u;
+            if (!out->as.option.has_value)
+                return value->as.option.payload == NULL
+                    ? TURBOWASM_OK
+                    : TURBOWASM_TYPE_MISMATCH;
+            if (value->as.option.payload == NULL)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->as.option.value =
+                (turbowasm_wasi02_value *)turbowasm_rt_calloc(
+                    1u, sizeof(*out->as.option.value));
+            if (out->as.option.value == NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+            status = component_to_wasi_value(
+                base->as.option.payload,
+                value->as.option.payload,
+                out->as.option.value);
+            if (status != TURBOWASM_OK)
+                turbowasm_wasi02_value_destroy(out);
+            return status;
+
+        case TURBOWASM_WASI02_TYPE_RESULT: {
+            uint32_t case_index;
+            const turbowasm_wasi02_type_desc *arm;
+
+            if (value->kind != TURBOWASM_COMPONENT_TYPE_RESULT ||
+                value->as.result.case_index >= 2u)
+                return TURBOWASM_TYPE_MISMATCH;
+            case_index = value->as.result.case_index;
+            arm = case_index == 0u
+                ? base->as.result.ok
+                : base->as.result.error;
+            out->kind = TURBOWASM_WASI02_VALUE_RESULT;
+            out->as.result.is_error = case_index != 0u;
+
+            if (arm == NULL)
+                return value->as.result.payload == NULL
+                    ? TURBOWASM_OK
+                    : TURBOWASM_TYPE_MISMATCH;
+            if (value->as.result.payload == NULL)
+                return TURBOWASM_TYPE_MISMATCH;
+
+            out->as.result.value =
+                (turbowasm_wasi02_value *)turbowasm_rt_calloc(
+                    1u, sizeof(*out->as.result.value));
+            if (out->as.result.value == NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+            status = component_to_wasi_value(
+                arm,
+                value->as.result.payload,
+                out->as.result.value);
+            if (status != TURBOWASM_OK)
+                turbowasm_wasi02_value_destroy(out);
+            return status;
+        }
+
         default:
             return TURBOWASM_UNSUPPORTED;
     }
 }
 
-static turbowasm_status wasi_to_component_scalar(
+static turbowasm_status wasi_sequence_to_component(
+    const turbowasm_wasi02_type_desc *base,
+    const turbowasm_wasi02_value_sequence *sequence,
+    turbowasm_component_type_kind kind,
+    turbowasm_component_value *out) {
+    turbowasm_component_value *items = NULL;
+    uint32_t expected_count;
+    size_t i;
+    turbowasm_status status;
+
+    if (base == NULL || sequence == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    expected_count = kind == TURBOWASM_COMPONENT_TYPE_TUPLE
+        ? base->as.tuple.count
+        : base->as.record.count;
+    if (sequence->count != expected_count ||
+        (sequence->count != 0u && sequence->items == NULL))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    if (sequence->count != 0u) {
+        if (sequence->count > SIZE_MAX / sizeof(*items))
+            return TURBOWASM_OUT_OF_MEMORY;
+        items = (turbowasm_component_value *)turbowasm_rt_calloc(
+            sequence->count, sizeof(*items));
+        if (items == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+    }
+
+    for (i = 0u; i < sequence->count; ++i) {
+        const turbowasm_wasi02_type_desc *child =
+            kind == TURBOWASM_COMPONENT_TYPE_TUPLE
+                ? base->as.tuple.elements[i]
+                : base->as.record.fields[i].type;
+        status = wasi_to_component_value(
+            child, &sequence->items[i], &items[i]);
+        if (status != TURBOWASM_OK) {
+            while (i != 0u) {
+                --i;
+                turbowasm_component_value_destroy(&items[i]);
+            }
+            turbowasm_rt_free(items);
+            return status;
+        }
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = kind;
+    if (kind == TURBOWASM_COMPONENT_TYPE_TUPLE) {
+        out->as.tuple.items = items;
+        out->as.tuple.count = sequence->count;
+    } else {
+        out->as.record.items = items;
+        out->as.record.count = sequence->count;
+    }
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status wasi_to_component_value(
     const turbowasm_wasi02_type_desc *type,
     const turbowasm_wasi02_value *value,
     turbowasm_component_value *out) {
     const turbowasm_wasi02_type_desc *base =
-        wasi02_scalar_base(type);
+        wasi_type_base(type);
+    turbowasm_status status;
 
     if (base == NULL || value == NULL || out == NULL)
         return TURBOWASM_TYPE_MISMATCH;
-
     memset(out, 0, sizeof(*out));
+
     switch (base->kind) {
         case TURBOWASM_WASI02_TYPE_BOOL:
             if (value->kind != TURBOWASM_WASI02_VALUE_BOOL)
@@ -256,24 +629,152 @@ static turbowasm_status wasi_to_component_scalar(
             out->kind = TURBOWASM_COMPONENT_TYPE_BOOL;
             out->as.boolean = value->as.boolean;
             return TURBOWASM_OK;
+
         case TURBOWASM_WASI02_TYPE_U8:
             if (value->kind != TURBOWASM_WASI02_VALUE_U8)
                 return TURBOWASM_TYPE_MISMATCH;
             out->kind = TURBOWASM_COMPONENT_TYPE_U8;
             out->as.u8 = value->as.u8;
             return TURBOWASM_OK;
+
         case TURBOWASM_WASI02_TYPE_U32:
             if (value->kind != TURBOWASM_WASI02_VALUE_U32)
                 return TURBOWASM_TYPE_MISMATCH;
             out->kind = TURBOWASM_COMPONENT_TYPE_U32;
             out->as.u32 = value->as.u32;
             return TURBOWASM_OK;
+
         case TURBOWASM_WASI02_TYPE_U64:
             if (value->kind != TURBOWASM_WASI02_VALUE_U64)
                 return TURBOWASM_TYPE_MISMATCH;
             out->kind = TURBOWASM_COMPONENT_TYPE_U64;
             out->as.u64 = value->as.u64;
             return TURBOWASM_OK;
+
+        case TURBOWASM_WASI02_TYPE_STRING:
+            if (value->kind != TURBOWASM_WASI02_VALUE_STRING)
+                return TURBOWASM_TYPE_MISMATCH;
+            status = copy_bytes(
+                value->as.string.data,
+                value->as.string.size,
+                &out->as.string.data);
+            if (status != TURBOWASM_OK)
+                return status;
+            out->kind = TURBOWASM_COMPONENT_TYPE_STRING;
+            out->as.string.size = value->as.string.size;
+            return TURBOWASM_OK;
+
+        case TURBOWASM_WASI02_TYPE_LIST: {
+            turbowasm_component_value *items = NULL;
+            size_t i;
+
+            if (value->kind != TURBOWASM_WASI02_VALUE_LIST ||
+                (value->as.list.count != 0u &&
+                 value->as.list.items == NULL))
+                return TURBOWASM_TYPE_MISMATCH;
+            if (value->as.list.count != 0u) {
+                if (value->as.list.count >
+                    SIZE_MAX / sizeof(*items))
+                    return TURBOWASM_OUT_OF_MEMORY;
+                items = (turbowasm_component_value *)
+                    turbowasm_rt_calloc(
+                        value->as.list.count,
+                        sizeof(*items));
+                if (items == NULL)
+                    return TURBOWASM_OUT_OF_MEMORY;
+            }
+            for (i = 0u; i < value->as.list.count; ++i) {
+                status = wasi_to_component_value(
+                    base->as.list.element,
+                    &value->as.list.items[i],
+                    &items[i]);
+                if (status != TURBOWASM_OK) {
+                    while (i != 0u) {
+                        --i;
+                        turbowasm_component_value_destroy(&items[i]);
+                    }
+                    turbowasm_rt_free(items);
+                    return status;
+                }
+            }
+            out->kind = TURBOWASM_COMPONENT_TYPE_LIST;
+            out->as.list.items = items;
+            out->as.list.count = value->as.list.count;
+            return TURBOWASM_OK;
+        }
+
+        case TURBOWASM_WASI02_TYPE_TUPLE:
+            if (value->kind != TURBOWASM_WASI02_VALUE_TUPLE)
+                return TURBOWASM_TYPE_MISMATCH;
+            return wasi_sequence_to_component(
+                base, &value->as.tuple,
+                TURBOWASM_COMPONENT_TYPE_TUPLE, out);
+
+        case TURBOWASM_WASI02_TYPE_RECORD:
+            if (value->kind != TURBOWASM_WASI02_VALUE_RECORD)
+                return TURBOWASM_TYPE_MISMATCH;
+            return wasi_sequence_to_component(
+                base, &value->as.record,
+                TURBOWASM_COMPONENT_TYPE_RECORD, out);
+
+        case TURBOWASM_WASI02_TYPE_OPTION:
+            if (value->kind != TURBOWASM_WASI02_VALUE_OPTION)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->kind = TURBOWASM_COMPONENT_TYPE_OPTION;
+            out->as.option.case_index =
+                value->as.option.has_value ? 1u : 0u;
+            if (!value->as.option.has_value)
+                return value->as.option.value == NULL
+                    ? TURBOWASM_OK
+                    : TURBOWASM_TYPE_MISMATCH;
+            if (value->as.option.value == NULL)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->as.option.payload =
+                (turbowasm_component_value *)turbowasm_rt_calloc(
+                    1u, sizeof(*out->as.option.payload));
+            if (out->as.option.payload == NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+            status = wasi_to_component_value(
+                base->as.option.payload,
+                value->as.option.value,
+                out->as.option.payload);
+            if (status != TURBOWASM_OK)
+                turbowasm_component_value_destroy(out);
+            return status;
+
+        case TURBOWASM_WASI02_TYPE_RESULT: {
+            const turbowasm_wasi02_type_desc *arm =
+                value->as.result.is_error
+                    ? base->as.result.error
+                    : base->as.result.ok;
+
+            if (value->kind != TURBOWASM_WASI02_VALUE_RESULT)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->kind = TURBOWASM_COMPONENT_TYPE_RESULT;
+            out->as.result.case_index =
+                value->as.result.is_error ? 1u : 0u;
+
+            if (arm == NULL)
+                return value->as.result.value == NULL
+                    ? TURBOWASM_OK
+                    : TURBOWASM_TYPE_MISMATCH;
+            if (value->as.result.value == NULL)
+                return TURBOWASM_TYPE_MISMATCH;
+
+            out->as.result.payload =
+                (turbowasm_component_value *)turbowasm_rt_calloc(
+                    1u, sizeof(*out->as.result.payload));
+            if (out->as.result.payload == NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+            status = wasi_to_component_value(
+                arm,
+                value->as.result.value,
+                out->as.result.payload);
+            if (status != TURBOWASM_OK)
+                turbowasm_component_value_destroy(out);
+            return status;
+        }
+
         default:
             return TURBOWASM_UNSUPPORTED;
     }
@@ -297,8 +798,9 @@ static turbowasm_status wasi02_component_invoke(
     turbowasm_wasi02_value
         wasi_arguments[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {{0}};
     turbowasm_wasi02_value wasi_result = {0};
+    turbowasm_runtime_scope scope;
     size_t i;
-    turbowasm_status status;
+    turbowasm_status status = TURBOWASM_OK;
 
     if (provider == NULL || !provider->initialized ||
         graph == NULL || trap == NULL)
@@ -320,9 +822,11 @@ static turbowasm_status wasi02_component_invoke(
         return TURBOWASM_TYPE_MISMATCH;
 
     *trap = TURBOWASM_TRAP_NONE;
+    scope = turbowasm_runtime_scope_enter(
+        &provider->runtime_config);
 
     for (i = 0u; i < argument_count; ++i) {
-        status = component_to_wasi_scalar(
+        status = component_to_wasi_value(
             function->params[i].type,
             &arguments[i],
             &wasi_arguments[i]);
@@ -346,7 +850,7 @@ static turbowasm_status wasi02_component_invoke(
             status = TURBOWASM_INVALID_ARGUMENT;
             goto done;
         }
-        status = wasi_to_component_scalar(
+        status = wasi_to_component_value(
             function->result,
             &wasi_result,
             out_result);
@@ -356,6 +860,7 @@ done:
     for (i = 0u; i < argument_count; ++i)
         turbowasm_wasi02_value_destroy(&wasi_arguments[i]);
     turbowasm_wasi02_value_destroy(&wasi_result);
+    turbowasm_runtime_scope_leave(scope);
     return status;
 }
 
