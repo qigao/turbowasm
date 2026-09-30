@@ -1087,6 +1087,228 @@ fail_definition:
         : TURBOWASM_MALFORMED_MODULE;
 }
 
+static bool clone_flat_local_type(
+    turbowasm_component_type_graph *graph,
+    uint32_t destination,
+    uint32_t source) {
+    const turbowasm_component_type *type;
+
+    if (graph == NULL || source >= destination)
+        return false;
+    type = turbowasm_component_type_graph_get(graph, source);
+    if (type == NULL)
+        return false;
+
+    if (type->kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
+        type->kind <= TURBOWASM_COMPONENT_TYPE_CHAR)
+        return turbowasm_component_type_graph_define_scalar(
+            graph, destination, type->kind);
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_STRING)
+        return turbowasm_component_type_graph_define_string(
+            graph, destination);
+    return false;
+}
+
+static turbowasm_status decode_flat_instance_type(
+    turbowasm_reader *reader,
+    turbowasm_component_type_graph *outer_graph,
+    uint32_t outer_type_index) {
+    turbowasm_component_instance_type *instance_type = NULL;
+    uint32_t declaration_count;
+    uint32_t next_local_type = 0u;
+    uint32_t export_capacity = 0u;
+    uint32_t i;
+    turbowasm_status status = TURBOWASM_OK;
+
+    if (reader == NULL || outer_graph == NULL ||
+        outer_type_index >= outer_graph->count)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_uleb32(reader, &declaration_count))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    instance_type = (turbowasm_component_instance_type *)
+        turbowasm_rt_calloc(1u, sizeof(*instance_type));
+    if (instance_type == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    /*
+     * Every supported declaration introduces at most one local type index.
+     * Allocate the declaration count as stable construction capacity, then
+     * trim the visible graph count to the indices actually introduced.
+     */
+    if (!turbowasm_component_type_graph_allocate(
+            &instance_type->type_graph, declaration_count)) {
+        status = TURBOWASM_OUT_OF_MEMORY;
+        goto fail;
+    }
+
+    for (i = 0u; i < declaration_count; ++i) {
+        uint8_t declaration;
+
+        if (!turbowasm_reader_u8(reader, &declaration)) {
+            status = TURBOWASM_MALFORMED_MODULE;
+            goto fail;
+        }
+
+        if (declaration == 0x01u) {
+            uint8_t opcode;
+            turbowasm_component_type_kind kind;
+
+            if (next_local_type >= declaration_count ||
+                !turbowasm_reader_u8(reader, &opcode)) {
+                status = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+
+            if (opcode >= 0x73u && opcode <= 0x7fu) {
+                int32_t sleb = (int32_t)opcode - 0x80;
+                if (!primitive_kind_from_sleb(sleb, &kind)) {
+                    status = TURBOWASM_UNSUPPORTED;
+                    goto fail;
+                }
+                if (kind == TURBOWASM_COMPONENT_TYPE_STRING) {
+                    if (!turbowasm_component_type_graph_define_string(
+                            &instance_type->type_graph,
+                            next_local_type)) {
+                        status = TURBOWASM_OUT_OF_MEMORY;
+                        goto fail;
+                    }
+                } else if (!turbowasm_component_type_graph_define_scalar(
+                               &instance_type->type_graph,
+                               next_local_type,
+                               kind)) {
+                    status = TURBOWASM_OUT_OF_MEMORY;
+                    goto fail;
+                }
+            } else if (opcode == 0x40u) {
+                status = decode_function_type_into_graph(
+                    reader,
+                    &instance_type->type_graph,
+                    next_local_type);
+                if (status != TURBOWASM_OK)
+                    goto fail;
+            } else {
+                /*
+                 * W2b1 intentionally admits the flat synchronous subset only.
+                 * record/list/tuple/option/result and resources are W2b2.
+                 */
+                status = TURBOWASM_UNSUPPORTED;
+                goto fail;
+            }
+            ++next_local_type;
+        } else if (declaration == 0x04u) {
+            turbowasm_component_name name = {0};
+            uint8_t external_kind;
+
+            status = read_name_attributes(reader, &name);
+            if (status != TURBOWASM_OK)
+                goto fail;
+            if (!turbowasm_reader_u8(reader, &external_kind)) {
+                status = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+
+            if (external_kind == 0x01u) {
+                uint32_t function_type;
+                turbowasm_component_instance_type_export *export_desc;
+
+                if (!turbowasm_reader_uleb32(
+                        reader, &function_type) ||
+                    function_type >= next_local_type) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail;
+                }
+                {
+                    const turbowasm_component_type *type =
+                        turbowasm_component_type_graph_get(
+                            &instance_type->type_graph,
+                            function_type);
+                    if (type == NULL ||
+                        type->kind !=
+                            TURBOWASM_COMPONENT_TYPE_FUNCTION) {
+                        status = TURBOWASM_MALFORMED_MODULE;
+                        goto fail;
+                    }
+                }
+
+                if (!reserve_array(
+                        (void **)&instance_type->exports,
+                        &export_capacity,
+                        instance_type->export_count + 1u,
+                        sizeof(*instance_type->exports))) {
+                    status = TURBOWASM_OUT_OF_MEMORY;
+                    goto fail;
+                }
+                export_desc =
+                    &instance_type->exports[
+                        instance_type->export_count++];
+                export_desc->name = name.bytes;
+                export_desc->name_size = name.size;
+                export_desc->function_type = function_type;
+            } else if (external_kind == 0x03u) {
+                uint8_t bound;
+                uint32_t source_type;
+
+                if (!turbowasm_reader_u8(reader, &bound)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail;
+                }
+                if (bound != 0x00u) {
+                    status = TURBOWASM_UNSUPPORTED;
+                    goto fail;
+                }
+                if (!turbowasm_reader_uleb32(
+                        reader, &source_type) ||
+                    source_type >= next_local_type ||
+                    next_local_type >= declaration_count) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail;
+                }
+                if (!clone_flat_local_type(
+                        &instance_type->type_graph,
+                        next_local_type,
+                        source_type)) {
+                    status = TURBOWASM_UNSUPPORTED;
+                    goto fail;
+                }
+                ++next_local_type;
+            } else {
+                status = TURBOWASM_UNSUPPORTED;
+                goto fail;
+            }
+        } else {
+            /* core type / alias declarations are deferred to richer WIT. */
+            status = TURBOWASM_UNSUPPORTED;
+            goto fail;
+        }
+    }
+
+    instance_type->type_graph.count = next_local_type;
+    if (!turbowasm_component_type_graph_define_instance(
+            outer_graph, outer_type_index, instance_type)) {
+        status = TURBOWASM_MALFORMED_MODULE;
+        goto fail;
+    }
+
+    return TURBOWASM_OK;
+
+fail:
+    if (instance_type != NULL) {
+        /*
+         * Restore construction count so every defined slot is visited by the
+         * recursive destroy path after a partial parse.
+         */
+        if (instance_type->type_graph.types != NULL &&
+            instance_type->type_graph.count < next_local_type)
+            instance_type->type_graph.count = next_local_type;
+        turbowasm_component_type_graph_destroy(
+            &instance_type->type_graph);
+        turbowasm_rt_free(instance_type->exports);
+        turbowasm_rt_free(instance_type);
+    }
+    return status;
+}
+
 static turbowasm_status decode_component_type_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
