@@ -819,16 +819,19 @@ static turbowasm_status call_subscribe(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status wait_input_once(
+static turbowasm_status wait_stream_once(
     turbowasm_wasi02_streams *streams,
     turbowasm_host_call *call,
-    uint32_t stream_resource) {
+    uint32_t stream_resource,
+    turbowasm_wasi02_stream_slot_kind kind) {
     turbowasm_wasi02_stream_slot *slot;
     uint32_t pollable_resource = 0u;
     turbowasm_status status;
     turbowasm_status cleanup_status;
 
-    if (streams == NULL)
+    if (streams == NULL ||
+        (kind != TURBOWASM_WASI02_STREAM_SLOT_INPUT &&
+         kind != TURBOWASM_WASI02_STREAM_SLOT_OUTPUT))
         return TURBOWASM_INVALID_ARGUMENT;
 
     /*
@@ -841,7 +844,7 @@ static turbowasm_status wait_input_once(
     status = slot_from_resource(
         streams,
         stream_resource,
-        TURBOWASM_WASI02_STREAM_SLOT_INPUT,
+        kind,
         &slot);
     if (status != TURBOWASM_OK)
         return status;
@@ -853,7 +856,7 @@ static turbowasm_status wait_input_once(
     status = create_subscription_resource(
         streams,
         stream_resource,
-        TURBOWASM_WASI02_STREAM_SLOT_INPUT,
+        kind,
         &pollable_resource);
     if (status != TURBOWASM_OK)
         return status;
@@ -953,10 +956,11 @@ static turbowasm_status call_input_blocking(
 
     turbowasm_wasi02_value_destroy(out);
 
-    status = wait_input_once(
+    status = wait_stream_once(
         streams,
         call,
-        arguments[0].as.resource);
+        arguments[0].as.resource,
+        TURBOWASM_WASI02_STREAM_SLOT_INPUT);
     if (status != TURBOWASM_OK)
         return status;
 
