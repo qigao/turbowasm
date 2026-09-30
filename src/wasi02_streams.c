@@ -1256,6 +1256,215 @@ static turbowasm_status call_output_blocking_write(
         streams, call, arguments, out);
 }
 
+static void clear_output_write_permit(
+    turbowasm_wasi02_stream_slot *slot) {
+    if (slot == NULL)
+        return;
+    slot->write_permit_valid = false;
+    slot->write_permit = 0u;
+}
+
+static turbowasm_status call_output_splice(
+    turbowasm_wasi02_streams *streams,
+    const turbowasm_wasi02_value *arguments,
+    turbowasm_wasi02_value *out) {
+    turbowasm_wasi02_stream_slot *output_slot;
+    turbowasm_wasi02_stream_slot *input_slot;
+    turbowasm_wasi02_value check_args[1] = {{0}};
+    turbowasm_wasi02_value check_result = {0};
+    turbowasm_wasi02_value read_args[2] = {{0}};
+    turbowasm_wasi02_value read_result = {0};
+    turbowasm_wasi02_value write_args[2] = {{0}};
+    turbowasm_wasi02_value write_result = {0};
+    turbowasm_wasi02_value *read_bytes;
+    uint64_t permit = 0u;
+    uint64_t requested = arguments[2].as.u64;
+    uint64_t read_limit;
+    uint64_t transferred;
+    bool is_error = false;
+    turbowasm_status status;
+
+    /*
+     * Splice is a pure composition of the already-qualified operations. Check
+     * the whole provider/resource boundary before the first provider call so
+     * an unsupported adapter cannot leave a hidden check-write permit behind.
+     */
+    if (streams->provider.output_check_write == NULL ||
+        streams->provider.input_read == NULL ||
+        streams->provider.output_write == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    status = slot_from_resource(
+        streams,
+        arguments[0].as.resource,
+        TURBOWASM_WASI02_STREAM_SLOT_OUTPUT,
+        &output_slot);
+    if (status != TURBOWASM_OK)
+        return status;
+    status = slot_from_resource(
+        streams,
+        arguments[1].as.resource,
+        TURBOWASM_WASI02_STREAM_SLOT_INPUT,
+        &input_slot);
+    if (status != TURBOWASM_OK)
+        return status;
+    (void)input_slot;
+
+    check_args[0] = arguments[0];
+    status = call_output_check_write(
+        streams, check_args, &check_result);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (!stream_result_u64_state(
+            &check_result, &is_error, &permit)) {
+        turbowasm_wasi02_value_destroy(&check_result);
+        clear_output_write_permit(output_slot);
+        return TURBOWASM_MALFORMED_MODULE;
+    }
+    if (is_error) {
+        *out = check_result;
+        return TURBOWASM_OK;
+    }
+    turbowasm_wasi02_value_destroy(&check_result);
+
+    read_limit = permit < requested ? permit : requested;
+    read_args[0] = arguments[1];
+    read_args[1].kind = TURBOWASM_WASI02_VALUE_U64;
+    read_args[1].as.u64 = read_limit;
+
+    status = call_input_read(
+        streams, read_args, &read_result);
+    if (status != TURBOWASM_OK) {
+        clear_output_write_permit(output_slot);
+        return status;
+    }
+    if (!stream_result_error_state(
+            &read_result, &is_error)) {
+        turbowasm_wasi02_value_destroy(&read_result);
+        clear_output_write_permit(output_slot);
+        return TURBOWASM_MALFORMED_MODULE;
+    }
+    if (is_error) {
+        clear_output_write_permit(output_slot);
+        *out = read_result;
+        return TURBOWASM_OK;
+    }
+
+    read_bytes = read_result.as.result.value;
+    if (read_bytes == NULL ||
+        read_bytes->kind != TURBOWASM_WASI02_VALUE_LIST ||
+        (read_bytes->as.list.count != 0u &&
+         read_bytes->as.list.items == NULL)) {
+        turbowasm_wasi02_value_destroy(&read_result);
+        clear_output_write_permit(output_slot);
+        return TURBOWASM_MALFORMED_MODULE;
+    }
+    transferred = (uint64_t)read_bytes->as.list.count;
+    if (transferred > read_limit) {
+        turbowasm_wasi02_value_destroy(&read_result);
+        clear_output_write_permit(output_slot);
+        return TURBOWASM_TRAPPED;
+    }
+
+    write_args[0] = arguments[0];
+    write_args[1] = *read_bytes;
+    status = call_output_write(
+        streams, write_args, false, &write_result);
+    if (status != TURBOWASM_OK) {
+        turbowasm_wasi02_value_destroy(&read_result);
+        clear_output_write_permit(output_slot);
+        return status;
+    }
+    if (!stream_result_error_state(
+            &write_result, &is_error)) {
+        turbowasm_wasi02_value_destroy(&write_result);
+        turbowasm_wasi02_value_destroy(&read_result);
+        clear_output_write_permit(output_slot);
+        return TURBOWASM_MALFORMED_MODULE;
+    }
+
+    turbowasm_wasi02_value_destroy(&read_result);
+    if (is_error) {
+        *out = write_result;
+        return TURBOWASM_OK;
+    }
+
+    turbowasm_wasi02_value_destroy(&write_result);
+    return make_result_u64_ok(transferred, out);
+}
+
+static turbowasm_status blocking_splice_preflight(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_host_call *call,
+    const turbowasm_wasi02_value *arguments) {
+    turbowasm_wasi02_stream_slot *slot;
+
+    if (streams == NULL || streams->poll == NULL ||
+        streams->provider.output_check_write == NULL ||
+        streams->provider.output_write == NULL ||
+        streams->provider.input_read == NULL ||
+        streams->provider.output_subscribe == NULL ||
+        streams->provider.input_subscribe == NULL)
+        return TURBOWASM_UNSUPPORTED;
+    if (call == NULL ||
+        !turbowasm_host_call_can_wait(call))
+        return TURBOWASM_UNSUPPORTED;
+    if (streams->poll->provider.arm == NULL &&
+        streams->poll->provider.arm_routed == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    if (slot_from_resource(
+            streams,
+            arguments[0].as.resource,
+            TURBOWASM_WASI02_STREAM_SLOT_OUTPUT,
+            &slot) != TURBOWASM_OK)
+        return TURBOWASM_TRAPPED;
+    if (slot_from_resource(
+            streams,
+            arguments[1].as.resource,
+            TURBOWASM_WASI02_STREAM_SLOT_INPUT,
+            &slot) != TURBOWASM_OK)
+        return TURBOWASM_TRAPPED;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status call_output_blocking_splice(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_host_call *call,
+    const turbowasm_wasi02_value *arguments,
+    turbowasm_wasi02_value *out) {
+    turbowasm_status status;
+
+    /*
+     * The WIT contract requires both sides to be ready before performing the
+     * ordinary splice sequence. Readiness is represented only by child
+     * pollables; no provider-side blocking splice or scheduler is introduced.
+     */
+    status = blocking_splice_preflight(
+        streams, call, arguments);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = wait_stream_once(
+        streams,
+        call,
+        arguments[0].as.resource,
+        TURBOWASM_WASI02_STREAM_SLOT_OUTPUT);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = wait_stream_once(
+        streams,
+        call,
+        arguments[1].as.resource,
+        TURBOWASM_WASI02_STREAM_SLOT_INPUT);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    return call_output_splice(
+        streams, arguments, out);
+}
+
 static turbowasm_status call_error_debug(
     turbowasm_wasi02_streams *streams,
     const turbowasm_wasi02_value *arguments,
@@ -1347,6 +1556,16 @@ turbowasm_status turbowasm_wasi02_streams_call_with_host(
                 streams, arguments,
                 TURBOWASM_WASI02_STREAM_SLOT_INPUT,
                 out_result);
+        } else if (strcmp(
+                       function_name,
+                       "[method]output-stream.blocking-splice") == 0) {
+            status = call_output_blocking_splice(
+                streams, call, arguments, out_result);
+        } else if (strcmp(
+                       function_name,
+                       "[method]output-stream.splice") == 0) {
+            status = call_output_splice(
+                streams, arguments, out_result);
         } else if (strcmp(
                        function_name,
                        "[method]output-stream.blocking-write-and-flush") == 0) {
