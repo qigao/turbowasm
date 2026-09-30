@@ -1672,23 +1672,37 @@ static turbowasm_status wasi02_fs_resource_drop(
         filesystem, handle);
 }
 
+turbowasm_status turbowasm_wasi02_filesystem_imports(
+    turbowasm_wasi02_filesystem *filesystem,
+    turbowasm_component_exec_imports *out_imports) {
+    if (filesystem == NULL || !filesystem->initialized ||
+        out_imports == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memset(out_imports, 0, sizeof(*out_imports));
+    out_imports->context = filesystem;
+    out_imports->can_bind = wasi02_fs_can_bind;
+    out_imports->invoke = wasi02_fs_invoke;
+    out_imports->resource_lower = wasi02_fs_resource_lower;
+    out_imports->resource_lift = wasi02_fs_resource_lift;
+    out_imports->resource_drop = wasi02_fs_resource_drop;
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_wasi02_filesystem_component_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
     turbowasm_wasi02_filesystem *filesystem) {
     turbowasm_component_exec_imports imports;
+    turbowasm_status status;
 
-    if (exec == NULL || binary == NULL ||
-        filesystem == NULL || !filesystem->initialized)
+    if (exec == NULL || binary == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    memset(&imports, 0, sizeof(imports));
-    imports.context = filesystem;
-    imports.can_bind = wasi02_fs_can_bind;
-    imports.invoke = wasi02_fs_invoke;
-    imports.resource_lower = wasi02_fs_resource_lower;
-    imports.resource_lift = wasi02_fs_resource_lift;
-    imports.resource_drop = wasi02_fs_resource_drop;
+    status = turbowasm_wasi02_filesystem_imports(
+        filesystem, &imports);
+    if (status != TURBOWASM_OK)
+        return status;
 
     return turbowasm_component_exec_init_with_imports(
         exec, binary, &imports);
