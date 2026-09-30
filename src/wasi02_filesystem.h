@@ -81,6 +81,10 @@ turbowasm_status turbowasm_wasi02_filesystem_call(
  * Instantiate the real W3 preopens import path through Component canonical ABI.
  * The bridge is borrowed and must outlive the executable.
  */
+turbowasm_status turbowasm_wasi02_filesystem_imports(
+    turbowasm_wasi02_filesystem *filesystem,
+    turbowasm_component_exec_imports *out_imports);
+
 turbowasm_status turbowasm_wasi02_filesystem_component_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
