@@ -108,6 +108,45 @@ if(TARGET TurboWasm::Component)
            COMMAND turbowasm_installed_component_cpp_consumer)
 endif()
 
+if(TARGET TurboWasm::WASI02)
+  get_target_property(_turbowasm_wasi02_links
+    TurboWasm::WASI02 INTERFACE_LINK_LIBRARIES)
+  if(NOT "TurboWasm::Component" IN_LIST _turbowasm_wasi02_links)
+    message(FATAL_ERROR
+      "TurboWasm::WASI02 must expose TurboWasm::Component")
+  endif()
+  if("Salts::CFlow" IN_LIST _turbowasm_wasi02_links OR
+     "Salts::NativeIO" IN_LIST _turbowasm_wasi02_links OR
+     "TurboWasm::NativeIO" IN_LIST _turbowasm_wasi02_links)
+    message(FATAL_ERROR
+      "TurboWasm::WASI02 public link interface must remain CFlow/NativeIO-free")
+  endif()
+
+  add_executable(turbowasm_installed_wasi02_consumer
+    wasi02_main.c)
+  target_link_libraries(turbowasm_installed_wasi02_consumer
+    PRIVATE TurboWasm::WASI02)
+  set_target_properties(
+    turbowasm_installed_wasi02_consumer PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi02_consumer
+           COMMAND turbowasm_installed_wasi02_consumer)
+
+  add_executable(turbowasm_installed_wasi02_cpp_consumer
+    wasi02_cpp_main.cpp)
+  target_link_libraries(turbowasm_installed_wasi02_cpp_consumer
+    PRIVATE TurboWasm::WASI02)
+  set_target_properties(
+    turbowasm_installed_wasi02_cpp_consumer PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi02_cpp_consumer
+           COMMAND turbowasm_installed_wasi02_cpp_consumer)
+endif()
+
 if(TARGET TurboWasm::CFlow)
   add_executable(turbowasm_installed_cflow_consumer cflow_main.c)
   target_link_libraries(turbowasm_installed_cflow_consumer
