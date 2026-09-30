@@ -6,6 +6,7 @@
 #include "component_resource_binding.h"
 
 #include <turbowasm/instance.h>
+#include <turbowasm/link.h>
 #include <turbowasm/module.h>
 #include <turbowasm/status.h>
 
@@ -16,7 +17,8 @@
 typedef enum turbowasm_component_exec_core_function_kind {
     TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INVALID = 0,
     TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INSTANCE,
-    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_RESOURCE_BUILTIN
+    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_RESOURCE_BUILTIN,
+    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_CANON_LOWER
 } turbowasm_component_exec_core_function_kind;
 
 typedef struct turbowasm_component_exec_core_function {
@@ -24,6 +26,7 @@ typedef struct turbowasm_component_exec_core_function {
     uint32_t instance_index;
     uint32_t function_index;
     uint32_t resource_builtin_index;
+    uint32_t canon_lower_index;
 } turbowasm_component_exec_core_function;
 
 typedef struct turbowasm_component_exec_core_memory {
@@ -46,6 +49,50 @@ typedef struct turbowasm_component_exec_resource_builtin_context {
     turbowasm_component_resource_binding *binding;
     turbowasm_component_resource_builtin_kind kind;
 } turbowasm_component_exec_resource_builtin_context;
+
+/*
+ * Internal typed Component-import execution boundary.
+ *
+ * The generic Component layer owns import/index-space and canonical-ABI
+ * semantics. Capability layers such as WASI 0.2 supply callbacks here without
+ * teaching Core Runtime or the Component parser any capability-specific name.
+ */
+typedef bool (*turbowasm_component_import_can_bind_fn)(
+    void *context,
+    turbowasm_component_name instance_name,
+    turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type);
+
+typedef turbowasm_status (*turbowasm_component_import_invoke_fn)(
+    void *context,
+    turbowasm_component_name instance_name,
+    turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_value *arguments,
+    size_t argument_count,
+    turbowasm_component_value *out_result,
+    turbowasm_trap *trap);
+
+typedef struct turbowasm_component_exec_imports {
+    void *context;
+    turbowasm_component_import_can_bind_fn can_bind;
+    turbowasm_component_import_invoke_fn invoke;
+} turbowasm_component_exec_imports;
+
+typedef struct turbowasm_component_exec_canon_lower_context {
+    struct turbowasm_component_exec *exec;
+    turbowasm_component_name instance_name;
+    turbowasm_component_name function_name;
+    const turbowasm_component_type_graph *graph;
+    turbowasm_component_type_id function_type;
+    turbowasm_host_function_type host_type;
+    turbowasm_value_kind
+        params[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS];
+    turbowasm_value_kind
+        results[TURBOWASM_COMPONENT_MAX_FLAT_RESULTS];
+} turbowasm_component_exec_canon_lower_context;
 
 typedef struct turbowasm_component_exec {
     const turbowasm_component_binary *binary;
@@ -72,6 +119,10 @@ typedef struct turbowasm_component_exec {
     turbowasm_component_exec_resource_builtin_context
         *resource_builtin_contexts;
 
+    turbowasm_component_exec_imports imports;
+    turbowasm_component_exec_canon_lower_context
+        *canon_lower_contexts;
+
     turbowasm_component_core_call_adapter *functions;
     uint32_t adapter_count;
 
@@ -93,6 +144,11 @@ typedef struct turbowasm_component_exec {
 turbowasm_status turbowasm_component_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary);
+
+turbowasm_status turbowasm_component_exec_init_with_imports(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary,
+    const turbowasm_component_exec_imports *imports);
 
 void turbowasm_component_exec_destroy(
     turbowasm_component_exec *exec);

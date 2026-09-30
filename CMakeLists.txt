@@ -141,6 +141,7 @@ if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
    TARGET TurboWasm::Component)
   # W1 stays internal until the descriptor/execution ABI is qualified.
   add_library(turbowasm_wasi02_core STATIC
+    src/wasi02_component.c
     src/wasi02_descriptor.c
     src/wasi02_provider.c)
   target_compile_features(turbowasm_wasi02_core PUBLIC c_std_11)

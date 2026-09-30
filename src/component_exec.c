@@ -401,6 +401,106 @@ static bool resource_builtin_host_type(
     }
 }
 
+static turbowasm_status component_canon_lower_host(
+    void *context,
+    turbowasm_host_call *call,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    turbowasm_component_exec_canon_lower_context *lower_context =
+        (turbowasm_component_exec_canon_lower_context *)context;
+    const turbowasm_component_type *function_type;
+    turbowasm_component_value
+        component_arguments[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {{0}};
+    turbowasm_component_value component_result = {0};
+    size_t i;
+    turbowasm_status status = TURBOWASM_OK;
+
+    (void)call;
+
+    if (lower_context == NULL ||
+        lower_context->exec == NULL ||
+        lower_context->exec->imports.invoke == NULL ||
+        lower_context->graph == NULL ||
+        result_count == NULL ||
+        trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    function_type = turbowasm_component_type_graph_get(
+        lower_context->graph, lower_context->function_type);
+    if (function_type == NULL ||
+        function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
+        function_type->as.function.param_count >
+            TURBOWASM_COMPONENT_MAX_FLAT_PARAMS ||
+        argument_count != function_type->as.function.param_count ||
+        (argument_count != 0u && arguments == NULL))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    *trap = TURBOWASM_TRAP_NONE;
+    *result_count = 0u;
+
+    for (i = 0u; i < argument_count; ++i) {
+        status = turbowasm_component_canonical_lift_flat_value(
+            lower_context->graph,
+            function_type->as.function.params[i],
+            NULL,
+            &arguments[i],
+            1u,
+            &component_arguments[i]);
+        if (status != TURBOWASM_OK)
+            goto done;
+    }
+
+    status = lower_context->exec->imports.invoke(
+        lower_context->exec->imports.context,
+        lower_context->instance_name,
+        lower_context->function_name,
+        lower_context->graph,
+        lower_context->function_type,
+        component_arguments,
+        argument_count,
+        function_type->as.function.has_result
+            ? &component_result
+            : NULL,
+        trap);
+    if (status != TURBOWASM_OK || *trap != TURBOWASM_TRAP_NONE)
+        goto done;
+
+    if (function_type->as.function.has_result) {
+        uint32_t flat_count = 0u;
+
+        if (results == NULL || result_capacity < 1u) {
+            status = TURBOWASM_INVALID_ARGUMENT;
+            goto done;
+        }
+
+        status = turbowasm_component_canonical_lower_flat_value(
+            lower_context->graph,
+            function_type->as.function.result,
+            NULL,
+            &component_result,
+            results,
+            &flat_count);
+        if (status != TURBOWASM_OK)
+            goto done;
+        if (flat_count != 1u) {
+            status = TURBOWASM_TYPE_MISMATCH;
+            goto done;
+        }
+        *result_count = 1u;
+    }
+
+done:
+    for (i = 0u; i < argument_count; ++i)
+        turbowasm_component_value_destroy(
+            &component_arguments[i]);
+    turbowasm_component_value_destroy(&component_result);
+    return status;
+}
+
 static const turbowasm_component_core_inline_export *
 find_inline_core_export(
     const turbowasm_component_core_instance_def *definition,
@@ -446,8 +546,9 @@ static turbowasm_status define_inline_provider(
         const turbowasm_component_core_inline_export *export_desc =
             &definition->exports[i];
         const turbowasm_component_exec_core_function *function;
-        const turbowasm_component_exec_resource_builtin_context *context;
         turbowasm_host_function_type type;
+        turbowasm_host_function_fn host_function;
+        void *host_context;
         turbowasm_name name;
 
         if (export_desc->sort != 0x00u ||
@@ -455,17 +556,41 @@ static turbowasm_status define_inline_provider(
             return TURBOWASM_UNSUPPORTED;
 
         function = &exec->core_functions[export_desc->item_index];
-        if (function->kind !=
-                TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_RESOURCE_BUILTIN ||
-            function->resource_builtin_index >=
-                binary->resource_builtin_count)
-            return TURBOWASM_UNSUPPORTED;
+        memset(&type, 0, sizeof(type));
+        host_function = NULL;
+        host_context = NULL;
 
-        context =
-            &exec->resource_builtin_contexts[
-                function->resource_builtin_index];
-        if (!resource_builtin_host_type(context, &type))
-            return TURBOWASM_MALFORMED_MODULE;
+        if (function->kind ==
+                TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_RESOURCE_BUILTIN) {
+            const turbowasm_component_exec_resource_builtin_context *context;
+
+            if (function->resource_builtin_index >=
+                    binary->resource_builtin_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            context =
+                &exec->resource_builtin_contexts[
+                    function->resource_builtin_index];
+            if (!resource_builtin_host_type(context, &type))
+                return TURBOWASM_MALFORMED_MODULE;
+            host_function = component_resource_builtin_host;
+            host_context = (void *)context;
+        } else if (function->kind ==
+                       TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_CANON_LOWER) {
+            turbowasm_component_exec_canon_lower_context *context;
+
+            if (function->canon_lower_index >=
+                    binary->canon_lower_count ||
+                exec->canon_lower_contexts == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+            context =
+                &exec->canon_lower_contexts[
+                    function->canon_lower_index];
+            type = context->host_type;
+            host_function = component_canon_lower_host;
+            host_context = context;
+        } else {
+            return TURBOWASM_UNSUPPORTED;
+        }
 
         name.bytes = export_desc->name.bytes;
         name.size = export_desc->name.size;
@@ -477,8 +602,8 @@ static turbowasm_status define_inline_provider(
                     module_name,
                     name,
                     &type,
-                    component_resource_builtin_host,
-                    (void *)context);
+                    host_function,
+                    host_context);
             if (status != TURBOWASM_OK)
                 return status;
         }
@@ -799,6 +924,259 @@ find_component_instance_export(
     return NULL;
 }
 
+static const turbowasm_component_import *
+find_component_instance_import(
+    const turbowasm_component_binary *binary,
+    uint32_t instance_index) {
+    uint32_t i;
+
+    if (binary == NULL)
+        return NULL;
+    for (i = 0u; i < binary->import_count; ++i) {
+        const turbowasm_component_import *import_desc =
+            &binary->imports[i];
+        if (import_desc->kind == TURBOWASM_COMPONENT_EXTERN_INSTANCE &&
+            import_desc->item_index == instance_index)
+            return import_desc;
+    }
+    return NULL;
+}
+
+static const turbowasm_component_instance_def *
+find_component_instance_definition(
+    const turbowasm_component_binary *binary,
+    uint32_t instance_index) {
+    uint32_t i;
+
+    if (binary == NULL)
+        return NULL;
+    for (i = 0u; i < binary->component_instance_count; ++i) {
+        if (binary->component_instances[i].component_instance_index ==
+            instance_index)
+            return &binary->component_instances[i];
+    }
+    return NULL;
+}
+
+static const turbowasm_component_instance_type_export *
+find_instance_type_function_export(
+    const turbowasm_component_instance_type *instance_type,
+    turbowasm_component_name name) {
+    uint32_t i;
+
+    if (instance_type == NULL)
+        return NULL;
+    for (i = 0u; i < instance_type->export_count; ++i) {
+        const turbowasm_component_instance_type_export *export_desc =
+            &instance_type->exports[i];
+        if (export_desc->name_size == name.size &&
+            (name.size == 0u ||
+             (export_desc->name != NULL &&
+              name.bytes != NULL &&
+              memcmp(export_desc->name, name.bytes, name.size) == 0)))
+            return export_desc;
+    }
+    return NULL;
+}
+
+static const turbowasm_component_function_alias *
+find_component_function_alias(
+    const turbowasm_component_binary *binary,
+    uint32_t function_index) {
+    uint32_t i;
+
+    if (binary == NULL)
+        return NULL;
+    for (i = 0u; i < binary->component_function_alias_count; ++i) {
+        if (binary->component_function_aliases[i]
+                .component_function_index == function_index)
+            return &binary->component_function_aliases[i];
+    }
+    return NULL;
+}
+
+static bool flat_kind_to_value_kind(
+    turbowasm_component_flat_type flat,
+    turbowasm_value_kind *out) {
+    if (out == NULL)
+        return false;
+    switch (flat) {
+        case TURBOWASM_COMPONENT_FLAT_I32:
+            *out = TURBOWASM_VALUE_I32;
+            return true;
+        case TURBOWASM_COMPONENT_FLAT_I64:
+            *out = TURBOWASM_VALUE_I64;
+            return true;
+        case TURBOWASM_COMPONENT_FLAT_F32:
+            *out = TURBOWASM_VALUE_F32;
+            return true;
+        case TURBOWASM_COMPONENT_FLAT_F64:
+            *out = TURBOWASM_VALUE_F64;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static turbowasm_status initialize_canon_lower_state(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary) {
+    uint32_t i;
+
+    if (exec == NULL || binary == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (binary->canon_lower_count == 0u)
+        return TURBOWASM_OK;
+    if (exec->imports.can_bind == NULL ||
+        exec->imports.invoke == NULL)
+        return TURBOWASM_UNSUPPORTED;
+    if ((size_t)binary->canon_lower_count >
+        SIZE_MAX / sizeof(*exec->canon_lower_contexts))
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    exec->canon_lower_contexts =
+        (turbowasm_component_exec_canon_lower_context *)
+            turbowasm_rt_calloc(
+                binary->canon_lower_count,
+                sizeof(*exec->canon_lower_contexts));
+    if (exec->canon_lower_contexts == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    for (i = 0u; i < binary->canon_lower_count; ++i) {
+        const turbowasm_component_canon_lower *lower =
+            &binary->canon_lowers[i];
+        const turbowasm_component_function_alias *alias;
+        const turbowasm_component_import *instance_import;
+        const turbowasm_component_type *outer_instance_type;
+        const turbowasm_component_instance_type_export *function_export;
+        const turbowasm_component_type *function_type;
+        turbowasm_component_exec_canon_lower_context *context =
+            &exec->canon_lower_contexts[i];
+        turbowasm_component_flat_signature signature;
+        uint32_t j;
+
+        if (lower->core_function_index >=
+                exec->core_function_count ||
+            lower->component_function_index >=
+                binary->component_function_count)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        alias = find_component_function_alias(
+            binary, lower->component_function_index);
+        if (alias == NULL)
+            return TURBOWASM_UNSUPPORTED;
+
+        instance_import = find_component_instance_import(
+            binary, alias->instance_index);
+        if (instance_import == NULL)
+            return TURBOWASM_UNSUPPORTED;
+
+        outer_instance_type =
+            turbowasm_component_type_graph_get(
+                &binary->type_graph,
+                instance_import->type_index);
+        if (outer_instance_type == NULL ||
+            outer_instance_type->kind !=
+                TURBOWASM_COMPONENT_TYPE_INSTANCE ||
+            outer_instance_type->as.instance == NULL)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        function_export = find_instance_type_function_export(
+            outer_instance_type->as.instance, alias->name);
+        if (function_export == NULL)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        function_type = turbowasm_component_type_graph_get(
+            &outer_instance_type->as.instance->type_graph,
+            function_export->function_type);
+        if (function_type == NULL ||
+            function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        memset(&signature, 0, sizeof(signature));
+        {
+            turbowasm_status status =
+                turbowasm_component_canonical_flatten_function(
+                    &outer_instance_type->as.instance->type_graph,
+                    function_export->function_type,
+                    TURBOWASM_COMPONENT_POINTER_I32,
+                    TURBOWASM_COMPONENT_CANONICAL_LOWER,
+                    &signature);
+            if (status != TURBOWASM_OK)
+                return status;
+        }
+
+        /*
+         * W2b2 is the no-memory flat-scalar slice. Requiring one carrier per
+         * Component parameter/result rejects strings/lists/resources and all
+         * indirect canonical shapes until memory-bearing lowers are added.
+         */
+        if (signature.params_indirect ||
+            signature.results_indirect ||
+            signature.param_count !=
+                function_type->as.function.param_count ||
+            signature.param_count >
+                TURBOWASM_COMPONENT_MAX_FLAT_PARAMS ||
+            signature.result_count >
+                TURBOWASM_COMPONENT_MAX_FLAT_RESULTS ||
+            signature.result_count !=
+                (function_type->as.function.has_result ? 1u : 0u))
+            return TURBOWASM_UNSUPPORTED;
+
+        context->exec = exec;
+        context->instance_name = instance_import->name;
+        context->function_name = alias->name;
+        context->graph =
+            &outer_instance_type->as.instance->type_graph;
+        context->function_type = function_export->function_type;
+
+        for (j = 0u; j < signature.param_count; ++j) {
+            if (!flat_kind_to_value_kind(
+                    signature.params[j],
+                    &context->params[j]))
+                return TURBOWASM_UNSUPPORTED;
+        }
+        for (j = 0u; j < signature.result_count; ++j) {
+            if (!flat_kind_to_value_kind(
+                    signature.results[j],
+                    &context->results[j]))
+                return TURBOWASM_UNSUPPORTED;
+        }
+
+        context->host_type.params =
+            signature.param_count != 0u
+                ? context->params
+                : NULL;
+        context->host_type.param_count = signature.param_count;
+        context->host_type.results =
+            signature.result_count != 0u
+                ? context->results
+                : NULL;
+        context->host_type.result_count = signature.result_count;
+
+        if (!exec->imports.can_bind(
+                exec->imports.context,
+                context->instance_name,
+                context->function_name,
+                context->graph,
+                context->function_type))
+            return TURBOWASM_LINK_ERROR;
+
+        if (exec->core_functions[
+                lower->core_function_index].kind !=
+            TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INVALID)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        exec->core_functions[
+            lower->core_function_index].kind =
+                TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_CANON_LOWER;
+        exec->core_functions[
+            lower->core_function_index].canon_lower_index = i;
+    }
+
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status resolve_component_function_aliases(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary) {
@@ -819,14 +1197,23 @@ static turbowasm_status resolve_component_function_aliases(
         const turbowasm_component_inline_export *export_desc;
         uint32_t source_adapter;
 
-        if (alias->component_function_index >=
-                exec->function_count ||
-            alias->instance_index >=
-                binary->component_instance_count)
+        if (alias->component_function_index >= exec->function_count)
             return TURBOWASM_MALFORMED_MODULE;
 
-        instance =
-            &binary->component_instances[alias->instance_index];
+        /*
+         * Imported-instance functions are consumed by canon lower and do not
+         * have a Core-call lift adapter. Their execution mapping was qualified
+         * by initialize_canon_lower_state().
+         */
+        if (find_component_instance_import(
+                binary, alias->instance_index) != NULL)
+            continue;
+
+        instance = find_component_instance_definition(
+            binary, alias->instance_index);
+        if (instance == NULL)
+            return TURBOWASM_MALFORMED_MODULE;
+
         export_desc = find_component_instance_export(
             instance, alias->name);
         if (export_desc == NULL ||
@@ -896,6 +1283,7 @@ static void destroy_partial(
     turbowasm_rt_free(exec->functions);
     turbowasm_rt_free(exec->realloc_contexts);
     turbowasm_rt_free(exec->resource_builtin_contexts);
+    turbowasm_rt_free(exec->canon_lower_contexts);
     turbowasm_rt_free(exec->resource_contexts);
     turbowasm_rt_free(exec->resource_bindings);
     turbowasm_rt_free(exec->core_memories);
@@ -905,9 +1293,10 @@ static void destroy_partial(
     memset(exec, 0, sizeof(*exec));
 }
 
-turbowasm_status turbowasm_component_exec_init(
+turbowasm_status turbowasm_component_exec_init_with_imports(
     turbowasm_component_exec *exec,
-    const turbowasm_component_binary *binary) {
+    const turbowasm_component_binary *binary,
+    const turbowasm_component_exec_imports *imports) {
     turbowasm_runtime_scope scope;
     turbowasm_status status = TURBOWASM_OK;
     uint32_t i;
@@ -917,15 +1306,35 @@ turbowasm_status turbowasm_component_exec_init(
         binary->bytes == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    /*
-     * Component import binding is still C6/public-surface work. The
-     * executable subset therefore remains closed at the Component level.
-     */
-    if (binary->import_count != 0u)
-        return TURBOWASM_UNSUPPORTED;
+    if (binary->import_count != 0u) {
+        uint32_t import_index;
+
+        if (imports == NULL ||
+            imports->can_bind == NULL ||
+            imports->invoke == NULL)
+            return TURBOWASM_UNSUPPORTED;
+
+        /*
+         * W2b2 admits interface-instance imports only. Direct Component
+         * function/value/type/component imports stay fail-closed.
+         */
+        for (import_index = 0u;
+             import_index < binary->import_count;
+             ++import_index) {
+            if (binary->imports[import_index].kind !=
+                TURBOWASM_COMPONENT_EXTERN_INSTANCE)
+                return TURBOWASM_UNSUPPORTED;
+        }
+    } else if (imports != NULL &&
+               (imports->can_bind == NULL ||
+                imports->invoke == NULL)) {
+        return TURBOWASM_INVALID_ARGUMENT;
+    }
 
     scope = turbowasm_runtime_scope_enter(&binary->config);
     exec->binary = binary;
+    if (imports != NULL)
+        exec->imports = *imports;
 
     if (binary->core_module_count != 0u) {
         if ((size_t)binary->core_module_count >
@@ -992,6 +1401,10 @@ turbowasm_status turbowasm_component_exec_init(
     }
 
     status = initialize_resource_state(exec, binary);
+    if (status != TURBOWASM_OK)
+        goto fail;
+
+    status = initialize_canon_lower_state(exec, binary);
     if (status != TURBOWASM_OK)
         goto fail;
 
@@ -1317,6 +1730,13 @@ fail:
     destroy_partial(exec);
     turbowasm_runtime_scope_leave(scope);
     return status;
+}
+
+turbowasm_status turbowasm_component_exec_init(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary) {
+    return turbowasm_component_exec_init_with_imports(
+        exec, binary, NULL);
 }
 
 void turbowasm_component_exec_destroy(
