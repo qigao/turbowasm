@@ -137,13 +137,8 @@ if(TURBOWASM_ENABLE_COMPONENT)
   endif()
 endif()
 
-if(TURBOWASM_ENABLE_WASI02_ADAPTER)
-  if(NOT TURBOWASM_ENABLE_COMPONENT OR
-     NOT TARGET TurboWasm::Component)
-    message(FATAL_ERROR
-      "TurboWasm WASI 0.2 layer requires TURBOWASM_ENABLE_COMPONENT")
-  endif()
-
+if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
+   TARGET TurboWasm::Component)
   # W1 stays internal until the descriptor/execution ABI is qualified.
   add_library(turbowasm_wasi02_core STATIC
     src/wasi02_descriptor.c)
