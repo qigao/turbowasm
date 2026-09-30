@@ -2290,15 +2290,36 @@ static turbowasm_status wasi02_streams_resource_drop(
     uint32_t handle) {
     turbowasm_wasi02_streams *streams =
         (turbowasm_wasi02_streams *)context;
+    turbowasm_wasi02_stream_slot_kind slot_kind;
+    turbowasm_wasi02_stream_slot *slot;
+    uint64_t internal_identity;
 
     if (streams == NULL || !streams->initialized)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!stream_component_identity_kind(
-            streams, resource_identity, NULL))
+            streams, resource_identity, &slot_kind))
         return TURBOWASM_TYPE_MISMATCH;
 
-    return turbowasm_wasi02_stream_resource_drop(
-        streams, handle);
+    /*
+     * Component nominal identity must agree with the internal stream kind.
+     * Do not scan other kinds here: an output identity carrying an input
+     * handle is a stale/type-confused resource and must trap.
+     */
+    if (slot_from_resource(
+            streams,
+            handle,
+            slot_kind,
+            &slot) != TURBOWASM_OK)
+        return TURBOWASM_TRAPPED;
+    (void)slot;
+
+    internal_identity = identity_for_kind(slot_kind);
+    return turbowasm_component_resource_drop(
+        &streams->resources,
+        handle,
+        internal_identity,
+        resource_destructor,
+        streams);
 }
 
 static turbowasm_status wasi02_streams_invoke(
