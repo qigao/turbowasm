@@ -416,6 +416,122 @@ static void test_flat_instance_import_alias_and_lower(void) {
     turbowasm_component_binary_destroy(&component);
 }
 
+static void test_composite_type_binary_retention(void) {
+    static const uint8_t bytes[] = {
+        COMPONENT_HEADER,
+        /* type0 tuple<u64,u64>; type1 list<string>;
+         * type2 option<string>; type3 result<(),()> */
+        0x07,0x0c,0x04,
+          0x6f,0x02,0x77,0x77,
+          0x70,0x73,
+          0x6b,0x73,
+          0x6a,0x00,0x00
+    };
+    turbowasm_component_binary component = {0};
+    const turbowasm_component_type *type;
+
+    assert(turbowasm_component_binary_load(
+               &component, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(component.type_graph.count == 4u);
+
+    type = turbowasm_component_type_graph_get(
+        &component.type_graph, 0u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_TUPLE);
+    assert(type->as.tuple.count == 2u);
+    assert(type->as.tuple.elements[0].kind ==
+           TURBOWASM_COMPONENT_TYPE_REF_INLINE);
+    assert(type->as.tuple.elements[0].as.inline_type ==
+           TURBOWASM_COMPONENT_TYPE_U64);
+
+    type = turbowasm_component_type_graph_get(
+        &component.type_graph, 1u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_LIST);
+    assert(type->as.list.element_type.as.inline_type ==
+           TURBOWASM_COMPONENT_TYPE_STRING);
+
+    type = turbowasm_component_type_graph_get(
+        &component.type_graph, 2u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_OPTION);
+    assert(type->as.option.payload.as.inline_type ==
+           TURBOWASM_COMPONENT_TYPE_STRING);
+
+    type = turbowasm_component_type_graph_get(
+        &component.type_graph, 3u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_RESULT);
+    assert(!type->as.result.has_ok);
+    assert(!type->as.result.has_error);
+
+    turbowasm_component_binary_destroy(&component);
+}
+
+static void test_named_record_inside_instance_type(void) {
+    static const uint8_t bytes[] = {
+        COMPONENT_HEADER,
+        /*
+         * type0 = instance {
+         *   type0 = record { seconds: u64, nanoseconds: u32 };
+         *   export "datetime" type eq0 -> local type1;
+         *   type2 = func() -> type1;
+         *   export "now" func type2;
+         * }
+         */
+        0x07,0x37,0x01,
+          0x42,0x04,
+            0x01,0x72,0x02,
+              0x07,'s','e','c','o','n','d','s',0x77,
+              0x0b,'n','a','n','o','s','e','c','o','n','d','s',0x79,
+            0x04,0x00,0x08,'d','a','t','e','t','i','m','e',
+              0x03,0x00,0x00,
+            0x01,0x40,0x00,0x00,0x01,
+            0x04,0x00,0x03,'n','o','w',0x01,0x02
+    };
+    turbowasm_component_binary component = {0};
+    const turbowasm_component_type *outer;
+    const turbowasm_component_type *record;
+    const turbowasm_component_type *clone;
+    const turbowasm_component_type *function;
+
+    assert(turbowasm_component_binary_load(
+               &component, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(component.type_graph.count == 1u);
+
+    outer = turbowasm_component_type_graph_get(
+        &component.type_graph, 0u);
+    assert(outer != NULL);
+    assert(outer->kind == TURBOWASM_COMPONENT_TYPE_INSTANCE);
+    assert(outer->as.instance != NULL);
+    assert(outer->as.instance->type_graph.count == 3u);
+    assert(outer->as.instance->export_count == 1u);
+    assert(outer->as.instance->exports[0].name_size == 3u);
+    assert(outer->as.instance->exports[0].function_type == 2u);
+
+    record = turbowasm_component_type_graph_get(
+        &outer->as.instance->type_graph, 0u);
+    clone = turbowasm_component_type_graph_get(
+        &outer->as.instance->type_graph, 1u);
+    function = turbowasm_component_type_graph_get(
+        &outer->as.instance->type_graph, 2u);
+
+    assert(record != NULL);
+    assert(record->kind == TURBOWASM_COMPONENT_TYPE_RECORD);
+    assert(record->as.record.count == 2u);
+    assert(clone != NULL);
+    assert(clone->kind == TURBOWASM_COMPONENT_TYPE_RECORD);
+    assert(clone->as.record.count == 2u);
+    assert(function != NULL);
+    assert(function->kind == TURBOWASM_COMPONENT_TYPE_FUNCTION);
+    assert(function->as.function.has_result);
+    assert(function->as.function.result.kind ==
+           TURBOWASM_COMPONENT_TYPE_REF_INDEXED);
+    assert(function->as.function.result.as.indexed == 1u);
+
+    turbowasm_component_binary_destroy(&component);
+}
+
 static void test_semantic_unsupported_and_invalid_forms(void) {
     static const uint8_t alias[] = {
         COMPONENT_HEADER,
@@ -491,6 +607,8 @@ int main(void) {
     test_type_import_export_semantics();
     test_repeated_type_sections_preserve_index_space();
     test_flat_instance_import_alias_and_lower();
+    test_composite_type_binary_retention();
+    test_named_record_inside_instance_type();
     test_semantic_unsupported_and_invalid_forms();
     return 0;
 }

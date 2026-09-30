@@ -91,6 +91,16 @@ void turbowasm_component_type_graph_destroy(
                     graph->types[index].as.function.params);
                 graph->types[index].as.function.params = NULL;
             } else if (graph->types[index].kind ==
+                           TURBOWASM_COMPONENT_TYPE_RECORD) {
+                turbowasm_rt_free(
+                    graph->types[index].as.record.fields);
+                graph->types[index].as.record.fields = NULL;
+            } else if (graph->types[index].kind ==
+                           TURBOWASM_COMPONENT_TYPE_TUPLE) {
+                turbowasm_rt_free(
+                    graph->types[index].as.tuple.elements);
+                graph->types[index].as.tuple.elements = NULL;
+            } else if (graph->types[index].kind ==
                            TURBOWASM_COMPONENT_TYPE_INSTANCE &&
                        graph->types[index].as.instance != NULL) {
                 turbowasm_component_instance_type *instance_type =
@@ -167,6 +177,120 @@ bool turbowasm_component_type_graph_define_list(
     return turbowasm_component_type_graph_define_list_ref(
         graph, id,
         turbowasm_component_type_ref_indexed(element_type));
+}
+
+static bool retained_ref_in_range(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref) {
+    if (graph == NULL)
+        return false;
+    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE)
+        return inline_kind(ref.as.inline_type);
+    return ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INDEXED &&
+           ref.as.indexed < graph->count;
+}
+
+bool turbowasm_component_type_graph_define_record(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_record_field *fields,
+    uint32_t field_count) {
+    turbowasm_component_type *type = slot(graph, id);
+    turbowasm_component_record_field *copy = NULL;
+    uint32_t i;
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        field_count == 0u || fields == NULL)
+        return false;
+
+    for (i = 0u; i < field_count; ++i) {
+        if ((fields[i].name_size != 0u && fields[i].name == NULL) ||
+            !retained_ref_in_range(graph, fields[i].type))
+            return false;
+    }
+    if ((size_t)field_count > SIZE_MAX / sizeof(*copy))
+        return false;
+    copy = (turbowasm_component_record_field *)turbowasm_rt_malloc(
+        (size_t)field_count * sizeof(*copy));
+    if (copy == NULL)
+        return false;
+    memcpy(copy, fields, (size_t)field_count * sizeof(*copy));
+
+    type->kind = TURBOWASM_COMPONENT_TYPE_RECORD;
+    type->as.record.fields = copy;
+    type->as.record.count = field_count;
+    return true;
+}
+
+bool turbowasm_component_type_graph_define_tuple(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_type_ref *elements,
+    uint32_t element_count) {
+    turbowasm_component_type *type = slot(graph, id);
+    turbowasm_component_type_ref *copy = NULL;
+    uint32_t i;
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        element_count == 0u || elements == NULL)
+        return false;
+
+    for (i = 0u; i < element_count; ++i) {
+        if (!retained_ref_in_range(graph, elements[i]))
+            return false;
+    }
+    if ((size_t)element_count > SIZE_MAX / sizeof(*copy))
+        return false;
+    copy = (turbowasm_component_type_ref *)turbowasm_rt_malloc(
+        (size_t)element_count * sizeof(*copy));
+    if (copy == NULL)
+        return false;
+    memcpy(copy, elements, (size_t)element_count * sizeof(*copy));
+
+    type->kind = TURBOWASM_COMPONENT_TYPE_TUPLE;
+    type->as.tuple.elements = copy;
+    type->as.tuple.count = element_count;
+    return true;
+}
+
+bool turbowasm_component_type_graph_define_option(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_type_ref payload) {
+    turbowasm_component_type *type = slot(graph, id);
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        !retained_ref_in_range(graph, payload))
+        return false;
+    type->kind = TURBOWASM_COMPONENT_TYPE_OPTION;
+    type->as.option.payload = payload;
+    return true;
+}
+
+bool turbowasm_component_type_graph_define_result(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    bool has_ok,
+    turbowasm_component_type_ref ok,
+    bool has_error,
+    turbowasm_component_type_ref error) {
+    turbowasm_component_type *type = slot(graph, id);
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        (has_ok && !retained_ref_in_range(graph, ok)) ||
+        (has_error && !retained_ref_in_range(graph, error)))
+        return false;
+
+    type->kind = TURBOWASM_COMPONENT_TYPE_RESULT;
+    type->as.result.has_ok = has_ok;
+    type->as.result.ok = ok;
+    type->as.result.has_error = has_error;
+    type->as.result.error = error;
+    return true;
 }
 
 bool turbowasm_component_type_graph_define_function(
@@ -299,6 +423,38 @@ static bool type_ref_contains_borrow(
     if (type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
         return type_ref_contains_borrow(
             graph, type->as.list.element_type, depth + 1u);
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_RECORD) {
+        uint32_t i;
+        for (i = 0u; i < type->as.record.count; ++i) {
+            if (type_ref_contains_borrow(
+                    graph,
+                    type->as.record.fields[i].type,
+                    depth + 1u))
+                return true;
+        }
+        return false;
+    }
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_TUPLE) {
+        uint32_t i;
+        for (i = 0u; i < type->as.tuple.count; ++i) {
+            if (type_ref_contains_borrow(
+                    graph,
+                    type->as.tuple.elements[i],
+                    depth + 1u))
+                return true;
+        }
+        return false;
+    }
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_OPTION)
+        return type_ref_contains_borrow(
+            graph, type->as.option.payload, depth + 1u);
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_RESULT)
+        return (type->as.result.has_ok &&
+                type_ref_contains_borrow(
+                    graph, type->as.result.ok, depth + 1u)) ||
+               (type->as.result.has_error &&
+                type_ref_contains_borrow(
+                    graph, type->as.result.error, depth + 1u));
     return false;
 }
 
@@ -320,6 +476,70 @@ bool turbowasm_component_type_graph_validate(
             case TURBOWASM_COMPONENT_TYPE_LIST:
                 if (!turbowasm_component_type_ref_validate(
                         graph, type->as.list.element_type))
+                    return false;
+                break;
+
+            case TURBOWASM_COMPONENT_TYPE_RECORD: {
+                uint32_t field_index;
+                if (type->as.record.count == 0u ||
+                    type->as.record.fields == NULL)
+                    return false;
+                for (field_index = 0u;
+                     field_index < type->as.record.count;
+                     ++field_index) {
+                    uint32_t previous;
+                    const turbowasm_component_record_field *field =
+                        &type->as.record.fields[field_index];
+                    if ((field->name_size != 0u && field->name == NULL) ||
+                        !turbowasm_component_type_ref_validate(
+                            graph, field->type))
+                        return false;
+                    for (previous = 0u;
+                         previous < field_index;
+                         ++previous) {
+                        const turbowasm_component_record_field *other =
+                            &type->as.record.fields[previous];
+                        if (other->name_size == field->name_size &&
+                            (field->name_size == 0u ||
+                             memcmp(
+                                 other->name,
+                                 field->name,
+                                 field->name_size) == 0))
+                            return false;
+                    }
+                }
+                break;
+            }
+
+            case TURBOWASM_COMPONENT_TYPE_TUPLE: {
+                uint32_t element_index;
+                if (type->as.tuple.count == 0u ||
+                    type->as.tuple.elements == NULL)
+                    return false;
+                for (element_index = 0u;
+                     element_index < type->as.tuple.count;
+                     ++element_index) {
+                    if (!turbowasm_component_type_ref_validate(
+                            graph,
+                            type->as.tuple.elements[element_index]))
+                        return false;
+                }
+                break;
+            }
+
+            case TURBOWASM_COMPONENT_TYPE_OPTION:
+                if (!turbowasm_component_type_ref_validate(
+                        graph, type->as.option.payload))
+                    return false;
+                break;
+
+            case TURBOWASM_COMPONENT_TYPE_RESULT:
+                if ((type->as.result.has_ok &&
+                     !turbowasm_component_type_ref_validate(
+                         graph, type->as.result.ok)) ||
+                    (type->as.result.has_error &&
+                     !turbowasm_component_type_ref_validate(
+                         graph, type->as.result.error)))
                     return false;
                 break;
 
