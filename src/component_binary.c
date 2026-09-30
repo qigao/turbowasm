@@ -1668,6 +1668,7 @@ static turbowasm_status decode_component_semantics(
     uint32_t next_core_function_index = 0u;
     uint32_t next_core_memory_index = 0u;
     uint32_t next_component_function_index = 0u;
+    uint32_t next_component_instance_index = 0u;
     uint32_t i;
 
     if (component == NULL)
@@ -1716,13 +1717,14 @@ static turbowasm_status decode_component_semantics(
             status = decode_component_instance_section(
                 reader,
                 component,
-                next_component_function_index);
+                next_component_function_index,
+                &next_component_instance_index);
         } else if (section->id == 6u) {
             status = decode_alias_section(
                 reader,
                 component,
                 component->core_instance_count,
-                component->component_instance_count,
+                next_component_instance_index,
                 &next_core_function_index,
                 &next_core_memory_index,
                 &next_component_function_index);
@@ -1741,16 +1743,12 @@ static turbowasm_status decode_component_semantics(
                 next_core_memory_index,
                 &next_component_function_index);
         } else if (section->id == 10u) {
-            uint32_t before = component->import_count;
             status = decode_component_import_section(
-                reader, component, current_types);
-            if (status == TURBOWASM_OK) {
-                uint32_t added = component->import_count - before;
-                if (added > UINT32_MAX -
-                        next_component_function_index)
-                    return TURBOWASM_OUT_OF_MEMORY;
-                next_component_function_index += added;
-            }
+                reader,
+                component,
+                current_types,
+                &next_component_function_index,
+                &next_component_instance_index);
         } else if (section->id == 11u) {
             status = decode_component_export_section(
                 reader,
@@ -1772,6 +1770,8 @@ static turbowasm_status decode_component_semantics(
     component->core_function_count = next_core_function_index;
     component->component_function_count =
         next_component_function_index;
+    component->component_instance_index_count =
+        next_component_instance_index;
     return TURBOWASM_OK;
 }
 
