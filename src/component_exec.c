@@ -518,7 +518,9 @@ static turbowasm_status component_canon_lower_host(
 
     component_param_count =
         function_type->as.function.param_count;
-    if (lower_context->uses_memory)
+    if (lower_context->uses_memory ||
+        lower_context->memory.resource_lower != NULL ||
+        lower_context->memory.resource_lift != NULL)
         memory = &lower_context->memory;
 
     *trap = TURBOWASM_TRAP_NONE;
