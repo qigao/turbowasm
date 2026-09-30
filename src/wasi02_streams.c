@@ -819,16 +819,19 @@ static turbowasm_status call_subscribe(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status wait_input_once(
+static turbowasm_status wait_stream_once(
     turbowasm_wasi02_streams *streams,
     turbowasm_host_call *call,
-    uint32_t stream_resource) {
+    uint32_t stream_resource,
+    turbowasm_wasi02_stream_slot_kind kind) {
     turbowasm_wasi02_stream_slot *slot;
     uint32_t pollable_resource = 0u;
     turbowasm_status status;
     turbowasm_status cleanup_status;
 
-    if (streams == NULL)
+    if (streams == NULL ||
+        (kind != TURBOWASM_WASI02_STREAM_SLOT_INPUT &&
+         kind != TURBOWASM_WASI02_STREAM_SLOT_OUTPUT))
         return TURBOWASM_INVALID_ARGUMENT;
 
     /*
@@ -841,7 +844,7 @@ static turbowasm_status wait_input_once(
     status = slot_from_resource(
         streams,
         stream_resource,
-        TURBOWASM_WASI02_STREAM_SLOT_INPUT,
+        kind,
         &slot);
     if (status != TURBOWASM_OK)
         return status;
@@ -853,7 +856,7 @@ static turbowasm_status wait_input_once(
     status = create_subscription_resource(
         streams,
         stream_resource,
-        TURBOWASM_WASI02_STREAM_SLOT_INPUT,
+        kind,
         &pollable_resource);
     if (status != TURBOWASM_OK)
         return status;
@@ -953,10 +956,11 @@ static turbowasm_status call_input_blocking(
 
     turbowasm_wasi02_value_destroy(out);
 
-    status = wait_input_once(
+    status = wait_stream_once(
         streams,
         call,
-        arguments[0].as.resource);
+        arguments[0].as.resource,
+        TURBOWASM_WASI02_STREAM_SLOT_INPUT);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -986,6 +990,270 @@ static turbowasm_status call_input_blocking(
     }
 
     return TURBOWASM_OK;
+}
+
+static bool stream_result_error_state(
+    const turbowasm_wasi02_value *result,
+    bool *out_error) {
+    if (result == NULL || out_error == NULL ||
+        result->kind != TURBOWASM_WASI02_VALUE_RESULT)
+        return false;
+    *out_error = result->as.result.is_error;
+    return true;
+}
+
+static bool stream_result_u64_state(
+    const turbowasm_wasi02_value *result,
+    bool *out_error,
+    uint64_t *out_value) {
+    if (!stream_result_error_state(result, out_error) ||
+        out_value == NULL)
+        return false;
+    if (*out_error) {
+        *out_value = 0u;
+        return true;
+    }
+    if (result->as.result.value == NULL ||
+        result->as.result.value->kind !=
+            TURBOWASM_WASI02_VALUE_U64)
+        return false;
+    *out_value = result->as.result.value->as.u64;
+    return true;
+}
+
+static turbowasm_status blocking_output_preflight(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_host_call *call) {
+    if (streams == NULL || streams->poll == NULL ||
+        streams->provider.output_check_write == NULL ||
+        streams->provider.output_flush == NULL ||
+        streams->provider.output_subscribe == NULL)
+        return TURBOWASM_UNSUPPORTED;
+    if (call == NULL ||
+        !turbowasm_host_call_can_wait(call))
+        return TURBOWASM_UNSUPPORTED;
+    if (streams->poll->provider.arm == NULL &&
+        streams->poll->provider.arm_routed == NULL)
+        return TURBOWASM_UNSUPPORTED;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status blocking_output_check_ready(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_host_call *call,
+    const turbowasm_wasi02_value *arguments,
+    turbowasm_wasi02_stream_slot *slot,
+    uint64_t *out_permit,
+    bool *out_error,
+    turbowasm_wasi02_value *out) {
+    turbowasm_status status;
+
+    if (slot == NULL || out_permit == NULL ||
+        out_error == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = call_output_check_write(
+        streams, arguments, out);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (!stream_result_u64_state(
+            out, out_error, out_permit)) {
+        turbowasm_wasi02_value_destroy(out);
+        return TURBOWASM_MALFORMED_MODULE;
+    }
+    if (*out_error || *out_permit != 0u)
+        return TURBOWASM_OK;
+
+    /*
+     * A zero permit means the output stream is not ready. Do not leak the
+     * internal permit across a failed wait attempt.
+     */
+    turbowasm_wasi02_value_destroy(out);
+    slot->write_permit_valid = false;
+    slot->write_permit = 0u;
+
+    status = wait_stream_once(
+        streams,
+        call,
+        arguments[0].as.resource,
+        TURBOWASM_WASI02_STREAM_SLOT_OUTPUT);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = call_output_check_write(
+        streams, arguments, out);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (!stream_result_u64_state(
+            out, out_error, out_permit)) {
+        turbowasm_wasi02_value_destroy(out);
+        return TURBOWASM_MALFORMED_MODULE;
+    }
+    if (!*out_error && *out_permit == 0u) {
+        /*
+         * A ready output subscription promises a positive permit or an error.
+         * Returning zero again is a provider readiness contract violation.
+         */
+        turbowasm_wasi02_value_destroy(out);
+        slot->write_permit_valid = false;
+        slot->write_permit = 0u;
+        return TURBOWASM_TRAPPED;
+    }
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status call_output_blocking_flush(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_host_call *call,
+    const turbowasm_wasi02_value *arguments,
+    turbowasm_wasi02_value *out) {
+    turbowasm_wasi02_stream_slot *slot;
+    uint64_t permit = 0u;
+    bool is_error = false;
+    turbowasm_status status;
+
+    status = slot_from_resource(
+        streams,
+        arguments[0].as.resource,
+        TURBOWASM_WASI02_STREAM_SLOT_OUTPUT,
+        &slot);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = blocking_output_preflight(streams, call);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = call_output_flush(
+        streams, arguments, out);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (!stream_result_error_state(out, &is_error)) {
+        turbowasm_wasi02_value_destroy(out);
+        return TURBOWASM_MALFORMED_MODULE;
+    }
+    if (is_error)
+        return TURBOWASM_OK;
+
+    turbowasm_wasi02_value_destroy(out);
+
+    status = blocking_output_check_ready(
+        streams,
+        call,
+        arguments,
+        slot,
+        &permit,
+        &is_error,
+        out);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (is_error)
+        return TURBOWASM_OK;
+
+    turbowasm_wasi02_value_destroy(out);
+    slot->write_permit_valid = false;
+    slot->write_permit = 0u;
+    return make_result_unit_ok(out);
+}
+
+static turbowasm_status call_output_blocking_write(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_host_call *call,
+    const turbowasm_wasi02_value *arguments,
+    bool zeroes,
+    turbowasm_wasi02_value *out) {
+    turbowasm_wasi02_stream_slot *slot;
+    uint64_t requested;
+    uint64_t offset = 0u;
+    turbowasm_status status;
+
+    if (zeroes) {
+        requested = arguments[1].as.u64;
+    } else {
+        if (arguments[1].kind != TURBOWASM_WASI02_VALUE_LIST ||
+            (arguments[1].as.list.count != 0u &&
+             arguments[1].as.list.items == NULL))
+            return TURBOWASM_TYPE_MISMATCH;
+        requested = (uint64_t)arguments[1].as.list.count;
+    }
+
+    if (requested > 4096u)
+        return TURBOWASM_TRAPPED;
+
+    status = slot_from_resource(
+        streams,
+        arguments[0].as.resource,
+        TURBOWASM_WASI02_STREAM_SLOT_OUTPUT,
+        &slot);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = blocking_output_preflight(streams, call);
+    if (status != TURBOWASM_OK)
+        return status;
+    if ((zeroes &&
+         streams->provider.output_write_zeroes == NULL) ||
+        (!zeroes &&
+         streams->provider.output_write == NULL))
+        return TURBOWASM_UNSUPPORTED;
+
+    while (offset < requested) {
+        turbowasm_wasi02_value check_result = {0};
+        turbowasm_wasi02_value write_args[2] = {{0}};
+        uint64_t permit = 0u;
+        uint64_t chunk;
+        bool is_error = false;
+
+        status = blocking_output_check_ready(
+            streams,
+            call,
+            arguments,
+            slot,
+            &permit,
+            &is_error,
+            &check_result);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (is_error) {
+            *out = check_result;
+            return TURBOWASM_OK;
+        }
+
+        turbowasm_wasi02_value_destroy(&check_result);
+        chunk = permit < (requested - offset)
+            ? permit
+            : (requested - offset);
+        if (chunk == 0u)
+            return TURBOWASM_TRAPPED;
+
+        write_args[0] = arguments[0];
+        if (zeroes) {
+            write_args[1].kind = TURBOWASM_WASI02_VALUE_U64;
+            write_args[1].as.u64 = chunk;
+        } else {
+            write_args[1].kind = TURBOWASM_WASI02_VALUE_LIST;
+            write_args[1].as.list.items =
+                arguments[1].as.list.items + (size_t)offset;
+            write_args[1].as.list.count = (size_t)chunk;
+        }
+
+        status = call_output_write(
+            streams, write_args, zeroes, out);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (!stream_result_error_state(out, &is_error)) {
+            turbowasm_wasi02_value_destroy(out);
+            return TURBOWASM_MALFORMED_MODULE;
+        }
+        if (is_error)
+            return TURBOWASM_OK;
+
+        turbowasm_wasi02_value_destroy(out);
+        offset += chunk;
+    }
+
+    return call_output_blocking_flush(
+        streams, call, arguments, out);
 }
 
 static turbowasm_status call_error_debug(
@@ -1079,6 +1347,21 @@ turbowasm_status turbowasm_wasi02_streams_call_with_host(
                 streams, arguments,
                 TURBOWASM_WASI02_STREAM_SLOT_INPUT,
                 out_result);
+        } else if (strcmp(
+                       function_name,
+                       "[method]output-stream.blocking-write-and-flush") == 0) {
+            status = call_output_blocking_write(
+                streams, call, arguments, false, out_result);
+        } else if (strcmp(
+                       function_name,
+                       "[method]output-stream.blocking-flush") == 0) {
+            status = call_output_blocking_flush(
+                streams, call, arguments, out_result);
+        } else if (strcmp(
+                       function_name,
+                       "[method]output-stream.blocking-write-zeroes-and-flush") == 0) {
+            status = call_output_blocking_write(
+                streams, call, arguments, true, out_result);
         } else if (strcmp(
                        function_name,
                        "[method]output-stream.check-write") == 0) {

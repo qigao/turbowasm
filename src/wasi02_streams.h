@@ -167,7 +167,8 @@ turbowasm_status turbowasm_wasi02_stream_resource_drop(
  * subscribe is available when a poll bridge is attached and the provider
  * supplies the corresponding subscribe callback.
  *
- * blocking methods and splice remain unsupported here.
+ * blocking input/output methods are layered over the attached poll bridge and
+ * restartable Runtime host-wait. Splice remains unsupported here.
  */
 turbowasm_status turbowasm_wasi02_streams_call_with_host(
     turbowasm_wasi02_streams *streams,
