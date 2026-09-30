@@ -73,6 +73,14 @@ typedef struct turbowasm_component_core_memory_alias {
 typedef struct turbowasm_component_canon_lower {
     uint32_t core_function_index;
     uint32_t component_function_index;
+
+    bool has_memory;
+    uint32_t memory_index;
+
+    bool has_realloc;
+    uint32_t realloc_function_index;
+
+    turbowasm_component_string_encoding string_encoding;
 } turbowasm_component_canon_lower;
 
 typedef struct turbowasm_component_canon_lift {

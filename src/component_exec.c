@@ -79,18 +79,14 @@ static turbowasm_value_kind pointer_value_kind(
         : TURBOWASM_VALUE_I32;
 }
 
-static bool core_function_has_pointer_signature(
-    const turbowasm_instance *instance,
+static bool core_module_function_has_pointer_signature(
+    const turbowasm_module *module,
     uint32_t function_index,
     turbowasm_component_pointer_type pointer_type) {
-    const turbowasm_module *module;
     turbowasm_function_signature signature;
     const cmeta_type_desc *expected;
     uint32_t i;
 
-    if (instance == NULL)
-        return false;
-    module = turbowasm_instance_module(instance);
     if (module == NULL ||
         !turbowasm_module_function_signature_get(
             module, function_index, &signature) ||
@@ -118,6 +114,18 @@ static bool core_function_has_pointer_signature(
         return actual != NULL &&
                cmeta_type_equal(actual, expected);
     }
+}
+
+static bool core_function_has_pointer_signature(
+    const turbowasm_instance *instance,
+    uint32_t function_index,
+    turbowasm_component_pointer_type pointer_type) {
+    if (instance == NULL)
+        return false;
+    return core_module_function_has_pointer_signature(
+        turbowasm_instance_module(instance),
+        function_index,
+        pointer_type);
 }
 
 static turbowasm_status pointer_argument(
@@ -401,6 +409,28 @@ static bool resource_builtin_host_type(
     }
 }
 
+static turbowasm_status core_pointer_read(
+    turbowasm_component_pointer_type pointer_type,
+    const turbowasm_value *value,
+    uint64_t *out) {
+    if (value == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (pointer_type == TURBOWASM_COMPONENT_POINTER_I32) {
+        if (value->kind != TURBOWASM_VALUE_I32)
+            return TURBOWASM_TYPE_MISMATCH;
+        *out = (uint32_t)value->as.i32;
+        return TURBOWASM_OK;
+    }
+    if (pointer_type == TURBOWASM_COMPONENT_POINTER_I64) {
+        if (value->kind != TURBOWASM_VALUE_I64)
+            return TURBOWASM_TYPE_MISMATCH;
+        *out = (uint64_t)value->as.i64;
+        return TURBOWASM_OK;
+    }
+    return TURBOWASM_INVALID_ARGUMENT;
+}
+
 static turbowasm_status component_canon_lower_host(
     void *context,
     turbowasm_host_call *call,
@@ -413,10 +443,14 @@ static turbowasm_status component_canon_lower_host(
     turbowasm_component_exec_canon_lower_context *lower_context =
         (turbowasm_component_exec_canon_lower_context *)context;
     const turbowasm_component_type *function_type;
+    const turbowasm_component_canonical_memory *memory = NULL;
     turbowasm_component_value
         component_arguments[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {{0}};
     turbowasm_component_value component_result = {0};
-    size_t i;
+    uint32_t component_param_count;
+    uint32_t core_cursor = 0u;
+    uint64_t result_pointer = 0u;
+    uint32_t i;
     turbowasm_status status = TURBOWASM_OK;
 
     (void)call;
@@ -435,23 +469,70 @@ static turbowasm_status component_canon_lower_host(
         function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
         function_type->as.function.param_count >
             TURBOWASM_COMPONENT_MAX_FLAT_PARAMS ||
-        argument_count != function_type->as.function.param_count ||
+        argument_count !=
+            lower_context->flat_signature.param_count ||
         (argument_count != 0u && arguments == NULL))
         return TURBOWASM_TYPE_MISMATCH;
+
+    component_param_count =
+        function_type->as.function.param_count;
+    if (lower_context->uses_memory)
+        memory = &lower_context->memory;
 
     *trap = TURBOWASM_TRAP_NONE;
     *result_count = 0u;
 
-    for (i = 0u; i < argument_count; ++i) {
+    for (i = 0u; i < component_param_count; ++i) {
+        turbowasm_component_flat_type_list flat;
+        turbowasm_component_pointer_type pointer_type =
+            memory != NULL
+                ? memory->pointer_type
+                : TURBOWASM_COMPONENT_POINTER_I32;
+
+        status = turbowasm_component_canonical_flatten_type(
+            lower_context->graph,
+            function_type->as.function.params[i],
+            pointer_type,
+            &flat);
+        if (status != TURBOWASM_OK)
+            goto done;
+        if (core_cursor > argument_count ||
+            flat.count >
+                (uint32_t)argument_count - core_cursor) {
+            status = TURBOWASM_TYPE_MISMATCH;
+            goto done;
+        }
+
         status = turbowasm_component_canonical_lift_flat_value(
             lower_context->graph,
             function_type->as.function.params[i],
-            NULL,
-            &arguments[i],
-            1u,
+            memory,
+            &arguments[core_cursor],
+            flat.count,
             &component_arguments[i]);
         if (status != TURBOWASM_OK)
             goto done;
+        core_cursor += flat.count;
+    }
+
+    if (lower_context->flat_signature.results_indirect) {
+        if (memory == NULL ||
+            core_cursor >= argument_count) {
+            status = TURBOWASM_TYPE_MISMATCH;
+            goto done;
+        }
+        status = core_pointer_read(
+            memory->pointer_type,
+            &arguments[core_cursor],
+            &result_pointer);
+        if (status != TURBOWASM_OK)
+            goto done;
+        ++core_cursor;
+    }
+
+    if (core_cursor != argument_count) {
+        status = TURBOWASM_TYPE_MISMATCH;
+        goto done;
     }
 
     status = lower_context->exec->imports.invoke(
@@ -461,41 +542,59 @@ static turbowasm_status component_canon_lower_host(
         lower_context->graph,
         lower_context->function_type,
         component_arguments,
-        argument_count,
+        component_param_count,
         function_type->as.function.has_result
             ? &component_result
             : NULL,
         trap);
-    if (status != TURBOWASM_OK || *trap != TURBOWASM_TRAP_NONE)
+    if (status != TURBOWASM_OK ||
+        *trap != TURBOWASM_TRAP_NONE)
         goto done;
 
     if (function_type->as.function.has_result) {
-        uint32_t flat_count = 0u;
+        if (lower_context->flat_signature.results_indirect) {
+            status = turbowasm_component_canonical_lower_value(
+                lower_context->graph,
+                function_type->as.function.result,
+                memory,
+                result_pointer,
+                &component_result);
+            if (status != TURBOWASM_OK)
+                goto done;
+            *result_count = 0u;
+        } else {
+            uint32_t flat_count = 0u;
 
-        if (results == NULL || result_capacity < 1u) {
-            status = TURBOWASM_INVALID_ARGUMENT;
-            goto done;
-        }
+            if (lower_context->flat_signature.result_count >
+                    result_capacity ||
+                (lower_context->flat_signature.result_count != 0u &&
+                 results == NULL)) {
+                status = TURBOWASM_INVALID_ARGUMENT;
+                goto done;
+            }
 
-        status = turbowasm_component_canonical_lower_flat_value(
-            lower_context->graph,
-            function_type->as.function.result,
-            NULL,
-            &component_result,
-            results,
-            (uint32_t)result_capacity,
-            &flat_count);
-        if (status != TURBOWASM_OK)
-            goto done;
-        if (flat_count != 1u) {
-            status = TURBOWASM_TYPE_MISMATCH;
-            goto done;
+            status =
+                turbowasm_component_canonical_lower_flat_value(
+                    lower_context->graph,
+                    function_type->as.function.result,
+                    memory,
+                    &component_result,
+                    results,
+                    (uint32_t)result_capacity,
+                    &flat_count);
+            if (status != TURBOWASM_OK)
+                goto done;
+            if (flat_count !=
+                lower_context->flat_signature.result_count) {
+                status = TURBOWASM_TYPE_MISMATCH;
+                goto done;
+            }
+            *result_count = flat_count;
         }
-        *result_count = 1u;
     }
 
 done:
-    for (i = 0u; i < argument_count; ++i)
+    for (i = 0u; i < component_param_count; ++i)
         turbowasm_component_value_destroy(
             &component_arguments[i]);
     turbowasm_component_value_destroy(&component_result);
@@ -996,6 +1095,198 @@ find_component_function_alias(
     return NULL;
 }
 
+static const turbowasm_component_core_memory_alias *
+find_core_memory_alias_by_index(
+    const turbowasm_component_binary *binary,
+    uint32_t memory_index) {
+    uint32_t i;
+
+    if (binary == NULL)
+        return NULL;
+    for (i = 0u; i < binary->core_memory_alias_count; ++i) {
+        if (binary->core_memory_aliases[i].core_memory_index ==
+            memory_index)
+            return &binary->core_memory_aliases[i];
+    }
+    return NULL;
+}
+
+static const turbowasm_component_core_function_alias *
+find_core_function_alias_by_index(
+    const turbowasm_component_binary *binary,
+    uint32_t function_index) {
+    uint32_t i;
+
+    if (binary == NULL)
+        return NULL;
+    for (i = 0u; i < binary->core_function_alias_count; ++i) {
+        if (binary->core_function_aliases[i].core_function_index ==
+            function_index)
+            return &binary->core_function_aliases[i];
+    }
+    return NULL;
+}
+
+static bool type_ref_contains_dynamic_memory(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    uint32_t depth) {
+    const turbowasm_component_type *type;
+    uint32_t i;
+
+    if (graph == NULL || depth > 64u)
+        return true;
+    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE)
+        return ref.as.inline_type ==
+               TURBOWASM_COMPONENT_TYPE_STRING;
+    if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return true;
+
+    type = turbowasm_component_type_graph_get(
+        graph, ref.as.indexed);
+    if (type == NULL)
+        return true;
+
+    switch (type->kind) {
+        case TURBOWASM_COMPONENT_TYPE_STRING:
+        case TURBOWASM_COMPONENT_TYPE_LIST:
+            return true;
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+            for (i = 0u; i < type->as.record.count; ++i) {
+                if (type_ref_contains_dynamic_memory(
+                        graph,
+                        type->as.record.fields[i].type,
+                        depth + 1u))
+                    return true;
+            }
+            return false;
+        case TURBOWASM_COMPONENT_TYPE_TUPLE:
+            for (i = 0u; i < type->as.tuple.count; ++i) {
+                if (type_ref_contains_dynamic_memory(
+                        graph,
+                        type->as.tuple.elements[i],
+                        depth + 1u))
+                    return true;
+            }
+            return false;
+        case TURBOWASM_COMPONENT_TYPE_OPTION:
+            return type_ref_contains_dynamic_memory(
+                graph, type->as.option.payload, depth + 1u);
+        case TURBOWASM_COMPONENT_TYPE_RESULT:
+            return (type->as.result.has_ok &&
+                    type_ref_contains_dynamic_memory(
+                        graph,
+                        type->as.result.ok,
+                        depth + 1u)) ||
+                   (type->as.result.has_error &&
+                    type_ref_contains_dynamic_memory(
+                        graph,
+                        type->as.result.error,
+                        depth + 1u));
+        default:
+            return false;
+    }
+}
+
+static turbowasm_status configure_canon_lower_memory(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary,
+    const turbowasm_component_canon_lower *lower,
+    turbowasm_component_exec_canon_lower_context *context) {
+    const turbowasm_component_core_memory_alias *memory_alias;
+    const turbowasm_component_core_instance_def *provider;
+    const turbowasm_module *module;
+    const turbowasm_export_desc *export_desc;
+    turbowasm_memory_desc memory_desc;
+
+    if (exec == NULL || binary == NULL ||
+        lower == NULL || context == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!lower->has_memory)
+        return TURBOWASM_OK;
+
+    memory_alias = find_core_memory_alias_by_index(
+        binary, lower->memory_index);
+    if (memory_alias == NULL ||
+        memory_alias->instance_index >=
+            binary->core_instance_count)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    provider =
+        &binary->core_instances[memory_alias->instance_index];
+    if (provider->kind !=
+            TURBOWASM_COMPONENT_CORE_INSTANCE_INSTANTIATE ||
+        provider->module_index >= exec->core_module_count)
+        return TURBOWASM_UNSUPPORTED;
+
+    module = &exec->core_modules[provider->module_index];
+    export_desc = find_core_memory_export(
+        module, memory_alias->name);
+    if (export_desc == NULL ||
+        !turbowasm_module_memory_at(
+            module, export_desc->item_index,
+            &memory_desc))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    context->uses_memory = true;
+    context->memory.instance =
+        &exec->core_instances[memory_alias->instance_index];
+    context->memory.memory_index = export_desc->item_index;
+    context->memory.pointer_type = memory_desc.memory64
+        ? TURBOWASM_COMPONENT_POINTER_I64
+        : TURBOWASM_COMPONENT_POINTER_I32;
+    context->memory.string_encoding = lower->string_encoding;
+
+    if (lower->has_realloc) {
+        const turbowasm_component_core_function_alias *function_alias;
+        const turbowasm_component_core_instance_def *function_provider;
+        const turbowasm_module *function_module;
+        const turbowasm_export_desc *function_export;
+
+        function_alias = find_core_function_alias_by_index(
+            binary, lower->realloc_function_index);
+        if (function_alias == NULL ||
+            function_alias->instance_index >=
+                binary->core_instance_count)
+            return TURBOWASM_UNSUPPORTED;
+
+        function_provider =
+            &binary->core_instances[
+                function_alias->instance_index];
+        if (function_provider->kind !=
+                TURBOWASM_COMPONENT_CORE_INSTANCE_INSTANTIATE ||
+            function_provider->module_index >=
+                exec->core_module_count)
+            return TURBOWASM_UNSUPPORTED;
+
+        function_module =
+            &exec->core_modules[
+                function_provider->module_index];
+        function_export = find_core_function_export(
+            function_module, function_alias->name);
+        if (function_export == NULL ||
+            !core_module_function_has_pointer_signature(
+                function_module,
+                function_export->item_index,
+                context->memory.pointer_type))
+            return TURBOWASM_TYPE_MISMATCH;
+
+        context->realloc_context.instance =
+            &exec->core_instances[
+                function_alias->instance_index];
+        context->realloc_context.function_index =
+            function_export->item_index;
+        context->realloc_context.pointer_type =
+            context->memory.pointer_type;
+        context->memory.guest_realloc =
+            component_guest_realloc;
+        context->memory.realloc_context =
+            &context->realloc_context;
+    }
+
+    return TURBOWASM_OK;
+}
+
 static bool flat_kind_to_value_kind(
     turbowasm_component_flat_type flat,
     turbowasm_value_kind *out) {
@@ -1094,13 +1385,35 @@ static turbowasm_status initialize_canon_lower_state(
             function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
             return TURBOWASM_MALFORMED_MODULE;
 
-        memset(&signature, 0, sizeof(signature));
+        context->exec = exec;
+        context->instance_name = instance_import->name;
+        context->function_name = alias->name;
+        context->graph =
+            &outer_instance_type->as.instance->type_graph;
+        context->function_type = function_export->function_type;
+
+        if (lower->has_realloc && !lower->has_memory)
+            return TURBOWASM_MALFORMED_MODULE;
+
         {
             turbowasm_status status =
+                configure_canon_lower_memory(
+                    exec, binary, lower, context);
+            if (status != TURBOWASM_OK)
+                return status;
+        }
+
+        memset(&signature, 0, sizeof(signature));
+        {
+            turbowasm_component_pointer_type pointer_type =
+                context->uses_memory
+                    ? context->memory.pointer_type
+                    : TURBOWASM_COMPONENT_POINTER_I32;
+            turbowasm_status status =
                 turbowasm_component_canonical_flatten_function(
-                    &outer_instance_type->as.instance->type_graph,
-                    function_export->function_type,
-                    TURBOWASM_COMPONENT_POINTER_I32,
+                    context->graph,
+                    context->function_type,
+                    pointer_type,
                     TURBOWASM_COMPONENT_CANONICAL_LOWER,
                     &signature);
             if (status != TURBOWASM_OK)
@@ -1108,28 +1421,39 @@ static turbowasm_status initialize_canon_lower_state(
         }
 
         /*
-         * W2b2 is the no-memory flat-scalar slice. Requiring one carrier per
-         * Component parameter/result rejects strings/lists/resources and all
-         * indirect canonical shapes until memory-bearing lowers are added.
+         * W2b3c keeps >16-parameter tuple passing fail-closed, but admits the
+         * standard synchronous indirect-result out-pointer shape.
          */
         if (signature.params_indirect ||
-            signature.results_indirect ||
-            signature.param_count !=
-                function_type->as.function.param_count ||
             signature.param_count >
-                TURBOWASM_COMPONENT_MAX_FLAT_PARAMS ||
+                TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS ||
             signature.result_count >
-                TURBOWASM_COMPONENT_MAX_FLAT_RESULTS ||
-            signature.result_count !=
-                (function_type->as.function.has_result ? 1u : 0u))
+                TURBOWASM_COMPONENT_MAX_FLAT_RESULTS)
             return TURBOWASM_UNSUPPORTED;
 
-        context->exec = exec;
-        context->instance_name = instance_import->name;
-        context->function_name = alias->name;
-        context->graph =
-            &outer_instance_type->as.instance->type_graph;
-        context->function_type = function_export->function_type;
+        if (signature.results_indirect && !context->uses_memory)
+            return TURBOWASM_UNSUPPORTED;
+
+        for (j = 0u;
+             j < function_type->as.function.param_count;
+             ++j) {
+            if (type_ref_contains_dynamic_memory(
+                    context->graph,
+                    function_type->as.function.params[j],
+                    0u) &&
+                !context->uses_memory)
+                return TURBOWASM_UNSUPPORTED;
+        }
+
+        if (function_type->as.function.has_result &&
+            type_ref_contains_dynamic_memory(
+                context->graph,
+                function_type->as.function.result,
+                0u) &&
+            !lower->has_realloc)
+            return TURBOWASM_UNSUPPORTED;
+
+        context->flat_signature = signature;
 
         for (j = 0u; j < signature.param_count; ++j) {
             if (!flat_kind_to_value_kind(

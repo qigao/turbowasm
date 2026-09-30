@@ -5,12 +5,13 @@
 #include "wasi02_provider.h"
 
 /*
- * Instantiate the W2b flat-scalar Component-import slice through a W2a
- * provider. The provider is borrowed and must outlive the executable.
+ * Instantiate the retained synchronous WASI 0.2 Component-import slice
+ * through a W2a provider. The provider is borrowed and must outlive the
+ * executable.
  *
- * Only W1 interfaces/functions whose retained Component type is a direct
- * scalar canonical shape are admitted here. Memory-bearing record/list/string
- * and resource shapes remain fail-closed for W2b3/W3/W4.
+ * W2b3 admits the retained scalar/string/list/record/tuple/option/result
+ * shapes with pinned canonical memory/realloc semantics. Resource-valued
+ * pollables remain fail-closed for W4.
  */
 turbowasm_status turbowasm_wasi02_component_exec_init(
     turbowasm_component_exec *exec,
