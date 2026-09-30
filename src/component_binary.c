@@ -1389,6 +1389,21 @@ static bool clone_local_type(
                 type->as.function.param_count,
                 type->as.function.has_result,
                 type->as.function.result);
+        case TURBOWASM_COMPONENT_TYPE_RESOURCE:
+            return turbowasm_component_type_graph_define_resource_full(
+                graph,
+                destination,
+                type->as.resource.identity,
+                type->as.resource.rep_type,
+                type->as.resource.has_destructor,
+                type->as.resource.destructor_index);
+        case TURBOWASM_COMPONENT_TYPE_OWN:
+        case TURBOWASM_COMPONENT_TYPE_BORROW:
+            return turbowasm_component_type_graph_define_handle(
+                graph,
+                destination,
+                type->kind,
+                type->as.handle.resource_type);
         default:
             return false;
     }
