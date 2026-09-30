@@ -30,6 +30,7 @@ typedef enum turbowasm_component_type_kind {
     TURBOWASM_COMPONENT_TYPE_LIST,
     TURBOWASM_COMPONENT_TYPE_RECORD,
     TURBOWASM_COMPONENT_TYPE_TUPLE,
+    TURBOWASM_COMPONENT_TYPE_VARIANT,
     TURBOWASM_COMPONENT_TYPE_OPTION,
     TURBOWASM_COMPONENT_TYPE_RESULT,
     TURBOWASM_COMPONENT_TYPE_ENUM,
@@ -68,6 +69,13 @@ typedef struct turbowasm_component_label {
     uint32_t name_size;
 } turbowasm_component_label;
 
+typedef struct turbowasm_component_variant_case {
+    const uint8_t *name;
+    uint32_t name_size;
+    bool has_payload;
+    turbowasm_component_type_ref payload;
+} turbowasm_component_variant_case;
+
 typedef struct turbowasm_component_type {
     turbowasm_component_type_kind kind;
     union {
@@ -82,6 +90,10 @@ typedef struct turbowasm_component_type {
             turbowasm_component_type_ref *elements;
             uint32_t count;
         } tuple;
+        struct {
+            turbowasm_component_variant_case *cases;
+            uint32_t count;
+        } variant;
         struct {
             turbowasm_component_type_ref payload;
         } option;
@@ -184,6 +196,12 @@ bool turbowasm_component_type_graph_define_tuple(
     turbowasm_component_type_id id,
     const turbowasm_component_type_ref *elements,
     uint32_t element_count);
+
+bool turbowasm_component_type_graph_define_variant(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_variant_case *cases,
+    uint32_t case_count);
 
 bool turbowasm_component_type_graph_define_option(
     turbowasm_component_type_graph *graph,

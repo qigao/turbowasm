@@ -93,8 +93,20 @@ static void build_graph(turbowasm_component_type_graph *graph) {
     turbowasm_component_label flag_labels[2] = {
         {flag_r, 1u}, {flag_w, 1u}
     };
+    static const uint8_t variant_value[] = "value";
+    static const uint8_t variant_closed[] = "closed";
+    turbowasm_component_variant_case variant_cases[2] = {
+        {
+            variant_value, 5u, true,
+            {TURBOWASM_COMPONENT_TYPE_REF_INDEXED, {.indexed = 2u}}
+        },
+        {
+            variant_closed, 6u, false,
+            {TURBOWASM_COMPONENT_TYPE_REF_INDEXED, {.indexed = 0u}}
+        }
+    };
 
-    assert(turbowasm_component_type_graph_allocate(graph, 10u));
+    assert(turbowasm_component_type_graph_allocate(graph, 11u));
     assert(turbowasm_component_type_graph_define_string(graph, 0u));
     assert(turbowasm_component_type_graph_define_list_ref(
         graph, 1u, inline_ref(TURBOWASM_COMPONENT_TYPE_STRING)));
@@ -125,6 +137,8 @@ static void build_graph(turbowasm_component_type_graph *graph) {
         graph, 8u, enum_labels, 3u));
     assert(turbowasm_component_type_graph_define_flags(
         graph, 9u, flag_labels, 2u));
+    assert(turbowasm_component_type_graph_define_variant(
+        graph, 10u, variant_cases, 2u));
     assert(turbowasm_component_type_graph_validate(graph));
 }
 
@@ -242,6 +256,65 @@ static void test_enum_flags_round_trip(
                graph,
                turbowasm_component_type_ref_indexed(9u),
                memory, 55u, &out) == TURBOWASM_TRAPPED);
+}
+
+static void test_variant_round_trip(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_canonical_memory *memory) {
+    turbowasm_component_value payload = {0};
+    turbowasm_component_value in = {0};
+    turbowasm_component_value out = {0};
+    turbowasm_instance_impl *impl =
+        (turbowasm_instance_impl *)memory->instance->impl;
+    uint8_t invalid_case = 2u;
+
+    payload.kind = TURBOWASM_COMPONENT_TYPE_U64;
+    payload.as.u64 = UINT64_C(0x1122334455667788);
+    in.kind = TURBOWASM_COMPONENT_TYPE_VARIANT;
+    in.as.variant.case_index = 0u;
+    in.as.variant.payload = &payload;
+
+    assert(turbowasm_component_canonical_lower_value(
+               graph,
+               turbowasm_component_type_ref_indexed(10u),
+               memory, 80u, &in) == TURBOWASM_OK);
+    assert(turbowasm_component_canonical_lift_value(
+               graph,
+               turbowasm_component_type_ref_indexed(10u),
+               memory, 80u, &out) == TURBOWASM_OK);
+    assert(out.kind == TURBOWASM_COMPONENT_TYPE_VARIANT);
+    assert(out.as.variant.case_index == 0u);
+    assert(out.as.variant.payload != NULL);
+    assert(out.as.variant.payload->kind ==
+           TURBOWASM_COMPONENT_TYPE_U64);
+    assert(out.as.variant.payload->as.u64 ==
+           UINT64_C(0x1122334455667788));
+    turbowasm_component_value_destroy(&out);
+
+    memset(&in, 0, sizeof(in));
+    in.kind = TURBOWASM_COMPONENT_TYPE_VARIANT;
+    in.as.variant.case_index = 1u;
+    in.as.variant.payload = NULL;
+    assert(turbowasm_component_canonical_lower_value(
+               graph,
+               turbowasm_component_type_ref_indexed(10u),
+               memory, 96u, &in) == TURBOWASM_OK);
+    assert(turbowasm_component_canonical_lift_value(
+               graph,
+               turbowasm_component_type_ref_indexed(10u),
+               memory, 96u, &out) == TURBOWASM_OK);
+    assert(out.kind == TURBOWASM_COMPONENT_TYPE_VARIANT);
+    assert(out.as.variant.case_index == 1u);
+    assert(out.as.variant.payload == NULL);
+    turbowasm_component_value_destroy(&out);
+
+    assert(turbowasm_instance_memory_write_bytes(
+               impl, 0u, 112u, 0u,
+               &invalid_case, 1u) == TURBOWASM_OK);
+    assert(turbowasm_component_canonical_lift_value(
+               graph,
+               turbowasm_component_type_ref_indexed(10u),
+               memory, 112u, &out) == TURBOWASM_TRAPPED);
 }
 
 static void test_string_round_trip(
@@ -498,6 +571,7 @@ static void run_memory_suite(
         &module, &instance, &memory, &allocator);
 
     test_scalar_round_trip(&graph, &memory);
+    test_variant_round_trip(&graph, &memory);
     test_string_round_trip(&graph, &memory);
     test_nested_list_round_trip(&graph, &memory);
     test_composite_round_trip(&graph, &memory);

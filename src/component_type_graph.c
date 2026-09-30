@@ -101,6 +101,11 @@ void turbowasm_component_type_graph_destroy(
                     graph->types[index].as.tuple.elements);
                 graph->types[index].as.tuple.elements = NULL;
             } else if (graph->types[index].kind ==
+                           TURBOWASM_COMPONENT_TYPE_VARIANT) {
+                turbowasm_rt_free(
+                    graph->types[index].as.variant.cases);
+                graph->types[index].as.variant.cases = NULL;
+            } else if (graph->types[index].kind ==
                            TURBOWASM_COMPONENT_TYPE_ENUM) {
                 turbowasm_rt_free(
                     graph->types[index].as.enumeration.labels);
@@ -262,6 +267,51 @@ bool turbowasm_component_type_graph_define_tuple(
     type->kind = TURBOWASM_COMPONENT_TYPE_TUPLE;
     type->as.tuple.elements = copy;
     type->as.tuple.count = element_count;
+    return true;
+}
+
+bool turbowasm_component_type_graph_define_variant(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_variant_case *cases,
+    uint32_t case_count) {
+    turbowasm_component_type *type = slot(graph, id);
+    turbowasm_component_variant_case *copy;
+    uint32_t i;
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        cases == NULL || case_count == 0u)
+        return false;
+
+    for (i = 0u; i < case_count; ++i) {
+        uint32_t previous;
+        if (cases[i].name == NULL ||
+            cases[i].name_size == 0u ||
+            (cases[i].has_payload &&
+             !retained_ref_in_range(graph, cases[i].payload)))
+            return false;
+        for (previous = 0u; previous < i; ++previous) {
+            if (cases[previous].name_size == cases[i].name_size &&
+                memcmp(
+                    cases[previous].name,
+                    cases[i].name,
+                    cases[i].name_size) == 0)
+                return false;
+        }
+    }
+
+    if ((size_t)case_count > SIZE_MAX / sizeof(*copy))
+        return false;
+    copy = (turbowasm_component_variant_case *)turbowasm_rt_malloc(
+        (size_t)case_count * sizeof(*copy));
+    if (copy == NULL)
+        return false;
+    memcpy(copy, cases, (size_t)case_count * sizeof(*copy));
+
+    type->kind = TURBOWASM_COMPONENT_TYPE_VARIANT;
+    type->as.variant.cases = copy;
+    type->as.variant.count = case_count;
     return true;
 }
 
@@ -551,6 +601,18 @@ static bool type_ref_contains_borrow(
         }
         return false;
     }
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_VARIANT) {
+        uint32_t i;
+        for (i = 0u; i < type->as.variant.count; ++i) {
+            if (type->as.variant.cases[i].has_payload &&
+                type_ref_contains_borrow(
+                    graph,
+                    type->as.variant.cases[i].payload,
+                    depth + 1u))
+                return true;
+        }
+        return false;
+    }
     if (type->kind == TURBOWASM_COMPONENT_TYPE_OPTION)
         return type_ref_contains_borrow(
             graph, type->as.option.payload, depth + 1u);
@@ -629,6 +691,39 @@ bool turbowasm_component_type_graph_validate(
                             graph,
                             type->as.tuple.elements[element_index]))
                         return false;
+                }
+                break;
+            }
+
+            case TURBOWASM_COMPONENT_TYPE_VARIANT: {
+                uint32_t case_index;
+                if (type->as.variant.count == 0u ||
+                    type->as.variant.cases == NULL)
+                    return false;
+                for (case_index = 0u;
+                     case_index < type->as.variant.count;
+                     ++case_index) {
+                    const turbowasm_component_variant_case *case_desc =
+                        &type->as.variant.cases[case_index];
+                    uint32_t previous;
+                    if (case_desc->name == NULL ||
+                        case_desc->name_size == 0u ||
+                        (case_desc->has_payload &&
+                         !turbowasm_component_type_ref_validate(
+                             graph, case_desc->payload)))
+                        return false;
+                    for (previous = 0u;
+                         previous < case_index;
+                         ++previous) {
+                        const turbowasm_component_variant_case *other =
+                            &type->as.variant.cases[previous];
+                        if (other->name_size == case_desc->name_size &&
+                            memcmp(
+                                other->name,
+                                case_desc->name,
+                                case_desc->name_size) == 0)
+                            return false;
+                    }
                 }
                 break;
             }
