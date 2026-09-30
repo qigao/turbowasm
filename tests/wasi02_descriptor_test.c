@@ -397,10 +397,194 @@ static void test_io_poll_surface(void) {
            TURBOWASM_WASI02_TYPE_U32);
 }
 
+static void test_io_streams_surface(void) {
+    const turbowasm_wasi02_interface_desc *error_iface =
+        turbowasm_wasi02_find_interface(
+            "wasi:io", "error");
+    const turbowasm_wasi02_interface_desc *streams =
+        turbowasm_wasi02_find_interface(
+            "wasi:io", "streams");
+    const turbowasm_wasi02_function_desc *debug;
+    const turbowasm_wasi02_function_desc *read;
+    const turbowasm_wasi02_function_desc *blocking_read;
+    const turbowasm_wasi02_function_desc *skip;
+    const turbowasm_wasi02_function_desc *subscribe_in;
+    const turbowasm_wasi02_function_desc *check_write;
+    const turbowasm_wasi02_function_desc *write;
+    const turbowasm_wasi02_function_desc *blocking_write;
+    const turbowasm_wasi02_function_desc *flush;
+    const turbowasm_wasi02_function_desc *blocking_flush;
+    const turbowasm_wasi02_function_desc *subscribe_out;
+    const turbowasm_wasi02_function_desc *write_zeroes;
+    const turbowasm_wasi02_function_desc *blocking_zeroes;
+    const turbowasm_wasi02_function_desc *splice;
+    const turbowasm_wasi02_function_desc *blocking_splice;
+    const turbowasm_wasi02_type_desc *input_stream;
+    const turbowasm_wasi02_type_desc *output_stream;
+    const turbowasm_wasi02_type_desc *stream_error;
+    const turbowasm_wasi02_type_desc *io_error;
+    const turbowasm_wasi02_type_desc *pollable;
+
+    assert(error_iface != NULL);
+    assert_v028(error_iface->version);
+    assert(strcmp(
+        error_iface->source_commit,
+        "3983fe1feab6b3a3b4e5c47c8b13daaf22266f00") == 0);
+    assert(error_iface->function_count == 1u);
+
+    debug = turbowasm_wasi02_find_function(
+        error_iface, "[method]error.to-debug-string");
+    assert(debug != NULL);
+    assert(debug->param_count == 1u);
+    io_error = debug->params[0].type;
+    assert(io_error != NULL);
+    assert(io_error->kind == TURBOWASM_WASI02_TYPE_RESOURCE);
+    assert(strcmp(io_error->as.resource.package_name, "wasi:io") == 0);
+    assert(strcmp(io_error->as.resource.interface_name, "error") == 0);
+    assert(strcmp(io_error->as.resource.resource_name, "error") == 0);
+    assert(debug->result != NULL);
+    assert(debug->result->kind == TURBOWASM_WASI02_TYPE_STRING);
+
+    assert(streams != NULL);
+    assert_v028(streams->version);
+    assert(strcmp(
+        streams->source_commit,
+        "3983fe1feab6b3a3b4e5c47c8b13daaf22266f00") == 0);
+    assert(streams->function_count == 15u);
+
+    read = turbowasm_wasi02_find_function(
+        streams, "[method]input-stream.read");
+    blocking_read = turbowasm_wasi02_find_function(
+        streams, "[method]input-stream.blocking-read");
+    skip = turbowasm_wasi02_find_function(
+        streams, "[method]input-stream.skip");
+    subscribe_in = turbowasm_wasi02_find_function(
+        streams, "[method]input-stream.subscribe");
+    check_write = turbowasm_wasi02_find_function(
+        streams, "[method]output-stream.check-write");
+    write = turbowasm_wasi02_find_function(
+        streams, "[method]output-stream.write");
+    blocking_write = turbowasm_wasi02_find_function(
+        streams, "[method]output-stream.blocking-write-and-flush");
+    flush = turbowasm_wasi02_find_function(
+        streams, "[method]output-stream.flush");
+    blocking_flush = turbowasm_wasi02_find_function(
+        streams, "[method]output-stream.blocking-flush");
+    subscribe_out = turbowasm_wasi02_find_function(
+        streams, "[method]output-stream.subscribe");
+    write_zeroes = turbowasm_wasi02_find_function(
+        streams, "[method]output-stream.write-zeroes");
+    blocking_zeroes = turbowasm_wasi02_find_function(
+        streams, "[method]output-stream.blocking-write-zeroes-and-flush");
+    splice = turbowasm_wasi02_find_function(
+        streams, "[method]output-stream.splice");
+    blocking_splice = turbowasm_wasi02_find_function(
+        streams, "[method]output-stream.blocking-splice");
+
+    assert(read != NULL);
+    assert(blocking_read != NULL);
+    assert(skip != NULL);
+    assert(subscribe_in != NULL);
+    assert(check_write != NULL);
+    assert(write != NULL);
+    assert(blocking_write != NULL);
+    assert(flush != NULL);
+    assert(blocking_flush != NULL);
+    assert(subscribe_out != NULL);
+    assert(write_zeroes != NULL);
+    assert(blocking_zeroes != NULL);
+    assert(splice != NULL);
+    assert(blocking_splice != NULL);
+
+    input_stream = read->params[0].type;
+    assert(input_stream != NULL);
+    assert(input_stream->kind == TURBOWASM_WASI02_TYPE_RESOURCE);
+    assert(strcmp(
+        input_stream->as.resource.interface_name,
+        "streams") == 0);
+    assert(strcmp(
+        input_stream->as.resource.resource_name,
+        "input-stream") == 0);
+    assert(read->params[1].type->kind ==
+           TURBOWASM_WASI02_TYPE_U64);
+
+    assert(read->result != NULL);
+    assert(read->result->kind == TURBOWASM_WASI02_TYPE_RESULT);
+    assert(read->result->as.result.ok != NULL);
+    assert(read->result->as.result.ok->kind ==
+           TURBOWASM_WASI02_TYPE_LIST);
+    assert(read->result->as.result.ok->as.list.element->kind ==
+           TURBOWASM_WASI02_TYPE_U8);
+
+    stream_error = read->result->as.result.error;
+    assert(stream_error != NULL);
+    assert(stream_error->kind == TURBOWASM_WASI02_TYPE_VARIANT);
+    assert(strcmp(stream_error->name, "stream-error") == 0);
+    assert(stream_error->as.variant.count == 2u);
+    assert(strcmp(
+        stream_error->as.variant.cases[0].name,
+        "last-operation-failed") == 0);
+    assert(stream_error->as.variant.cases[0].payload == io_error);
+    assert(strcmp(
+        stream_error->as.variant.cases[1].name,
+        "closed") == 0);
+    assert(stream_error->as.variant.cases[1].payload == NULL);
+
+    assert(blocking_read->result == read->result);
+    assert(skip->result->kind == TURBOWASM_WASI02_TYPE_RESULT);
+    assert(skip->result->as.result.ok->kind ==
+           TURBOWASM_WASI02_TYPE_U64);
+    assert(skip->result->as.result.error == stream_error);
+
+    pollable = subscribe_in->result;
+    assert(pollable != NULL);
+    assert(pollable->kind == TURBOWASM_WASI02_TYPE_RESOURCE);
+    assert(strcmp(
+        pollable->as.resource.interface_name,
+        "poll") == 0);
+    assert(strcmp(
+        pollable->as.resource.resource_name,
+        "pollable") == 0);
+
+    output_stream = check_write->params[0].type;
+    assert(output_stream != NULL);
+    assert(output_stream->kind == TURBOWASM_WASI02_TYPE_RESOURCE);
+    assert(strcmp(
+        output_stream->as.resource.resource_name,
+        "output-stream") == 0);
+    assert(check_write->result->as.result.ok->kind ==
+           TURBOWASM_WASI02_TYPE_U64);
+    assert(check_write->result->as.result.error == stream_error);
+
+    assert(write->params[1].type->kind ==
+           TURBOWASM_WASI02_TYPE_LIST);
+    assert(write->params[1].type->as.list.element->kind ==
+           TURBOWASM_WASI02_TYPE_U8);
+    assert(write->result->as.result.ok == NULL);
+    assert(write->result->as.result.error == stream_error);
+    assert(blocking_write->result == write->result);
+    assert(flush->result == write->result);
+    assert(blocking_flush->result == write->result);
+    assert(subscribe_out->result == pollable);
+    assert(write_zeroes->params[1].type->kind ==
+           TURBOWASM_WASI02_TYPE_U64);
+    assert(blocking_zeroes->result == write->result);
+
+    assert(splice->param_count == 3u);
+    assert(splice->params[0].type == output_stream);
+    assert(splice->params[1].type == input_stream);
+    assert(splice->params[2].type->kind ==
+           TURBOWASM_WASI02_TYPE_U64);
+    assert(splice->result->as.result.ok->kind ==
+           TURBOWASM_WASI02_TYPE_U64);
+    assert(splice->result->as.result.error == stream_error);
+    assert(blocking_splice->result == splice->result);
+}
+
 int main(void) {
     size_t i;
 
-    assert(turbowasm_wasi02_interface_count() == 10u);
+    assert(turbowasm_wasi02_interface_count() == 12u);
     for (i = 0u; i < turbowasm_wasi02_interface_count(); ++i) {
         const turbowasm_wasi02_interface_desc *iface =
             turbowasm_wasi02_interface_at(i);
@@ -421,5 +605,6 @@ int main(void) {
     test_filesystem_preopens();
     test_filesystem_types_surface();
     test_io_poll_surface();
+    test_io_streams_surface();
     return 0;
 }
