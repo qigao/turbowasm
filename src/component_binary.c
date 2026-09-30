@@ -502,9 +502,9 @@ static bool core_resource_rep_type_supported(uint8_t type) {
     }
 }
 
-static turbowasm_status decode_component_function_type(
+static turbowasm_status decode_function_type_into_graph(
     turbowasm_reader *reader,
-    turbowasm_component_binary *component,
+    turbowasm_component_type_graph *graph,
     uint32_t type_index) {
     uint32_t param_count;
     turbowasm_component_type_ref *params = NULL;
@@ -516,6 +516,9 @@ static turbowasm_status decode_component_function_type(
     uint8_t result_tag;
     turbowasm_status status = TURBOWASM_OK;
 
+    if (reader == NULL || graph == NULL ||
+        type_index >= graph->count)
+        return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(reader, &param_count))
         return TURBOWASM_MALFORMED_MODULE;
 
@@ -562,7 +565,7 @@ static turbowasm_status decode_component_function_type(
     }
 
     if (!turbowasm_component_type_graph_define_function(
-            &component->type_graph,
+            graph,
             type_index,
             params,
             param_count,
@@ -573,6 +576,16 @@ static turbowasm_status decode_component_function_type(
 done:
     turbowasm_rt_free(params);
     return status;
+}
+
+static turbowasm_status decode_component_function_type(
+    turbowasm_reader *reader,
+    turbowasm_component_binary *component,
+    uint32_t type_index) {
+    if (component == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return decode_function_type_into_graph(
+        reader, &component->type_graph, type_index);
 }
 
 static turbowasm_status decode_core_instance_section(
