@@ -230,6 +230,26 @@ bool turbowasm_wasi_fs_descriptor_info_get(
     uint32_t guest_fd,
     turbowasm_wasi_fs_descriptor_info *out_info);
 
+bool turbowasm_wasi_fs_retained_descriptor_info_get(
+    const turbowasm_wasi_fs *filesystem,
+    turbowasm_wasi_fs_descriptor descriptor,
+    turbowasm_wasi_fs_descriptor_info *out_info);
+
+/*
+ * Enumerate current preopen capabilities without assuming guest-fd numbering.
+ *
+ * preopen_at uses dense preopen ordinals [0, count). The returned guest_path
+ * pointer is borrowed from the filesystem table and remains valid until that
+ * descriptor is closed or the filesystem is destroyed.
+ */
+size_t turbowasm_wasi_fs_preopen_count(
+    const turbowasm_wasi_fs *filesystem);
+
+bool turbowasm_wasi_fs_preopen_at(
+    const turbowasm_wasi_fs *filesystem,
+    size_t preopen_index,
+    turbowasm_wasi_fs_descriptor_info *out_info);
+
 /* Generation-safe close for retained async/internal descriptor identities. */
 uint32_t turbowasm_wasi_fs_close_descriptor(
     turbowasm_wasi_fs *filesystem,

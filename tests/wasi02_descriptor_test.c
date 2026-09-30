@@ -178,10 +178,57 @@ static void test_cli(void) {
                exit_iface, "exit-with-code") == NULL);
 }
 
+static void test_filesystem_preopens(void) {
+    const turbowasm_wasi02_interface_desc *preopens =
+        turbowasm_wasi02_find_interface(
+            "wasi:filesystem", "preopens");
+    const turbowasm_wasi02_function_desc *get_directories;
+    const turbowasm_wasi02_type_desc *pair;
+    const turbowasm_wasi02_type_desc *descriptor;
+
+    assert(preopens != NULL);
+    assert_v028(preopens->version);
+    assert(strcmp(
+        preopens->source_commit,
+        "971b11617b50e7496bea85f36e60141bda172964") == 0);
+    assert(preopens->function_count == 1u);
+
+    get_directories = turbowasm_wasi02_find_function(
+        preopens, "get-directories");
+    assert(get_directories != NULL);
+    assert(get_directories->param_count == 0u);
+    assert(get_directories->result != NULL);
+    assert(get_directories->result->kind ==
+           TURBOWASM_WASI02_TYPE_LIST);
+
+    pair = get_directories->result->as.list.element;
+    assert(pair != NULL);
+    assert(pair->kind == TURBOWASM_WASI02_TYPE_TUPLE);
+    assert(pair->as.tuple.count == 2u);
+
+    descriptor = pair->as.tuple.elements[0];
+    assert(descriptor != NULL);
+    assert(descriptor->kind ==
+           TURBOWASM_WASI02_TYPE_RESOURCE);
+    assert(strcmp(
+        descriptor->as.resource.package_name,
+        "wasi:filesystem") == 0);
+    assert(strcmp(
+        descriptor->as.resource.interface_name,
+        "types") == 0);
+    assert(strcmp(
+        descriptor->as.resource.resource_name,
+        "descriptor") == 0);
+    assert_v028(descriptor->as.resource.version);
+
+    assert(pair->as.tuple.elements[1]->kind ==
+           TURBOWASM_WASI02_TYPE_STRING);
+}
+
 int main(void) {
     size_t i;
 
-    assert(turbowasm_wasi02_interface_count() == 7u);
+    assert(turbowasm_wasi02_interface_count() == 8u);
     for (i = 0u; i < turbowasm_wasi02_interface_count(); ++i) {
         const turbowasm_wasi02_interface_desc *iface =
             turbowasm_wasi02_interface_at(i);
@@ -199,5 +246,6 @@ int main(void) {
     test_monotonic_pollable();
     test_random();
     test_cli();
+    test_filesystem_preopens();
     return 0;
 }
