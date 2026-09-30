@@ -34,8 +34,9 @@ if ([string]::IsNullOrWhiteSpace($SaltsRid)) {
   }
 }
 
-$requestedVersion = if ($env:SALTS_SDK_VERSION) { $env:SALTS_SDK_VERSION } else { "*" }
-$versionSpec = if ($requestedVersion -eq "*") { "*" } else { "[$requestedVersion]" }
+if ($env:SALTS_SDK_VERSION) {
+  throw "SALTS_SDK_VERSION is forbidden; GitHub Packages dependencies must resolve latest"
+}
 $packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $env:RUNNER_TEMP "qigao-nuget" }
 $config = Join-Path $env:RUNNER_TEMP "qigao-nuget.config"
 $project = Join-Path $env:RUNNER_TEMP "turbowasm-salts-sdk-restore.csproj"
@@ -60,14 +61,14 @@ $saltsUtilsReference = if ($WithSaltsUtils) {
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="$versionSpec" />
+    <PackageReference Include="Salts.Native" Version="*" />
 $saltsUtilsReference
   </ItemGroup>
 </Project>
 "@ | Set-Content -LiteralPath $project
 
 dotnet restore $project --packages $packages --configfile $config --no-cache
-if ($LASTEXITCODE -ne 0) { throw "failed to restore Salts.Native $requestedVersion" }
+if ($LASTEXITCODE -ne 0) { throw "failed to restore latest Salts.Native" }
 
 $assetsPath = Join-Path $env:RUNNER_TEMP "obj/project.assets.json"
 if (-not (Test-Path -LiteralPath $assetsPath -PathType Leaf)) {
