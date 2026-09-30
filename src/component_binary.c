@@ -1334,30 +1334,31 @@ fail_definition:
         : TURBOWASM_MALFORMED_MODULE;
 }
 
-static bool clone_local_type(
-    turbowasm_component_type_graph *graph,
+static bool clone_type_between_graphs(
+    turbowasm_component_type_graph *destination_graph,
     uint32_t destination,
+    const turbowasm_component_type_graph *source_graph,
     uint32_t source) {
     const turbowasm_component_type *type;
 
-    if (graph == NULL || source >= destination)
+    if (destination_graph == NULL || source_graph == NULL)
         return false;
-    type = turbowasm_component_type_graph_get(graph, source);
+    type = turbowasm_component_type_graph_get(source_graph, source);
     if (type == NULL)
         return false;
 
     if (type->kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
         type->kind <= TURBOWASM_COMPONENT_TYPE_CHAR)
         return turbowasm_component_type_graph_define_scalar(
-            graph, destination, type->kind);
+            destination_graph, destination, type->kind);
 
     switch (type->kind) {
         case TURBOWASM_COMPONENT_TYPE_STRING:
             return turbowasm_component_type_graph_define_string(
-                graph, destination);
+                destination_graph, destination);
         case TURBOWASM_COMPONENT_TYPE_LIST:
             return turbowasm_component_type_graph_define_list_ref(
-                graph, destination, type->as.list.element_type);
+                destination_graph, destination, type->as.list.element_type);
         case TURBOWASM_COMPONENT_TYPE_RECORD:
             return turbowasm_component_type_graph_define_record(
                 graph,
@@ -1372,7 +1373,7 @@ static bool clone_local_type(
                 type->as.tuple.count);
         case TURBOWASM_COMPONENT_TYPE_OPTION:
             return turbowasm_component_type_graph_define_option(
-                graph, destination, type->as.option.payload);
+                destination_graph, destination, type->as.option.payload);
         case TURBOWASM_COMPONENT_TYPE_RESULT:
             return turbowasm_component_type_graph_define_result(
                 graph,
@@ -1409,10 +1410,21 @@ static bool clone_local_type(
     }
 }
 
+static bool clone_local_type(
+    turbowasm_component_type_graph *graph,
+    uint32_t destination,
+    uint32_t source) {
+    if (graph == NULL || source >= destination)
+        return false;
+    return clone_type_between_graphs(
+        graph, destination, graph, source);
+}
+
 static turbowasm_status decode_flat_instance_type(
     turbowasm_reader *reader,
     turbowasm_component_type_graph *outer_graph,
-    uint32_t outer_type_index) {
+    uint32_t outer_type_index,
+    uint64_t *next_resource_identity) {
     turbowasm_component_instance_type *instance_type = NULL;
     uint32_t declaration_count;
     uint32_t next_local_type = 0u;
@@ -1421,6 +1433,7 @@ static turbowasm_status decode_flat_instance_type(
     turbowasm_status status = TURBOWASM_OK;
 
     if (reader == NULL || outer_graph == NULL ||
+        next_resource_identity == NULL ||
         outer_type_index >= outer_graph->count)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(reader, &declaration_count))
@@ -1499,6 +1512,30 @@ static turbowasm_status decode_flat_instance_type(
                     opcode);
                 if (status != TURBOWASM_OK)
                     goto fail;
+            } else if (opcode == 0x69u || opcode == 0x68u) {
+                uint32_t resource_index;
+                const turbowasm_component_type *resource;
+
+                if (!turbowasm_reader_uleb32(
+                        reader, &resource_index) ||
+                    resource_index >= next_local_type) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail;
+                }
+                resource = turbowasm_component_type_graph_get(
+                    &instance_type->type_graph, resource_index);
+                if (resource == NULL ||
+                    resource->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE ||
+                    !turbowasm_component_type_graph_define_handle(
+                        &instance_type->type_graph,
+                        next_local_type,
+                        opcode == 0x69u
+                            ? TURBOWASM_COMPONENT_TYPE_OWN
+                            : TURBOWASM_COMPONENT_TYPE_BORROW,
+                        resource_index)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail;
+                }
             } else {
                 /*
                  * Resources/variants/flags/enums/stream/future remain outside
@@ -1556,40 +1593,108 @@ static turbowasm_status decode_flat_instance_type(
                         instance_type->export_count++];
                 export_desc->name = name.bytes;
                 export_desc->name_size = name.size;
-                export_desc->function_type = function_type;
+                export_desc->kind =
+                    TURBOWASM_COMPONENT_INSTANCE_EXPORT_FUNCTION;
+                export_desc->type_index = function_type;
             } else if (external_kind == 0x03u) {
                 uint8_t bound;
-                uint32_t source_type;
+                uint32_t exported_type;
+                turbowasm_component_instance_type_export *export_desc;
 
-                if (!turbowasm_reader_u8(reader, &bound)) {
-                    status = TURBOWASM_MALFORMED_MODULE;
-                    goto fail;
-                }
-                if (bound != 0x00u) {
-                    status = TURBOWASM_UNSUPPORTED;
-                    goto fail;
-                }
-                if (!turbowasm_reader_uleb32(
-                        reader, &source_type) ||
-                    source_type >= next_local_type ||
+                if (!turbowasm_reader_u8(reader, &bound) ||
                     next_local_type >= declaration_count) {
                     status = TURBOWASM_MALFORMED_MODULE;
                     goto fail;
                 }
-                if (!clone_local_type(
-                        &instance_type->type_graph,
-                        next_local_type,
-                        source_type)) {
-                    status = TURBOWASM_UNSUPPORTED;
+
+                exported_type = next_local_type;
+                if (bound == 0x00u) {
+                    uint32_t source_type;
+                    if (!turbowasm_reader_uleb32(
+                            reader, &source_type) ||
+                        source_type >= next_local_type) {
+                        status = TURBOWASM_MALFORMED_MODULE;
+                        goto fail;
+                    }
+                    if (!clone_local_type(
+                            &instance_type->type_graph,
+                            next_local_type,
+                            source_type)) {
+                        status = TURBOWASM_UNSUPPORTED;
+                        goto fail;
+                    }
+                } else if (bound == 0x01u) {
+                    if (*next_resource_identity == 0u ||
+                        *next_resource_identity == UINT64_MAX ||
+                        !turbowasm_component_type_graph_define_resource_full(
+                            &instance_type->type_graph,
+                            next_local_type,
+                            *next_resource_identity,
+                            0x7fu,
+                            false,
+                            UINT32_MAX)) {
+                        status = TURBOWASM_OUT_OF_MEMORY;
+                        goto fail;
+                    }
+                    ++*next_resource_identity;
+                } else {
+                    status = TURBOWASM_MALFORMED_MODULE;
                     goto fail;
                 }
                 ++next_local_type;
+
+                if (!reserve_array(
+                        (void **)&instance_type->exports,
+                        &export_capacity,
+                        instance_type->export_count + 1u,
+                        sizeof(*instance_type->exports))) {
+                    status = TURBOWASM_OUT_OF_MEMORY;
+                    goto fail;
+                }
+                export_desc =
+                    &instance_type->exports[
+                        instance_type->export_count++];
+                export_desc->name = name.bytes;
+                export_desc->name_size = name.size;
+                export_desc->kind =
+                    TURBOWASM_COMPONENT_INSTANCE_EXPORT_TYPE;
+                export_desc->type_index = exported_type;
             } else {
                 status = TURBOWASM_UNSUPPORTED;
                 goto fail;
             }
+        } else if (declaration == 0x02u) {
+            uint8_t sort;
+            uint8_t alias_kind;
+            uint32_t component_depth;
+            uint32_t source_type;
+
+            if (next_local_type >= declaration_count ||
+                !turbowasm_reader_u8(reader, &sort) ||
+                sort != 0x03u ||
+                !turbowasm_reader_u8(reader, &alias_kind) ||
+                alias_kind != 0x02u ||
+                !turbowasm_reader_uleb32(
+                    reader, &component_depth) ||
+                component_depth != 1u ||
+                !turbowasm_reader_uleb32(
+                    reader, &source_type) ||
+                source_type >= outer_type_index) {
+                status = TURBOWASM_UNSUPPORTED;
+                goto fail;
+            }
+
+            if (!clone_type_between_graphs(
+                    &instance_type->type_graph,
+                    next_local_type,
+                    outer_graph,
+                    source_type)) {
+                status = TURBOWASM_UNSUPPORTED;
+                goto fail;
+            }
+            ++next_local_type;
         } else {
-            /* core type / alias declarations are deferred to richer WIT. */
+            /* core type declarations remain outside the W3 synchronous subset. */
             status = TURBOWASM_UNSUPPORTED;
             goto fail;
         }
@@ -1625,11 +1730,13 @@ static turbowasm_status decode_component_type_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
     uint32_t current_core_functions,
-    uint32_t *next_type_index) {
+    uint32_t *next_type_index,
+    uint64_t *next_resource_identity) {
     uint32_t count;
     uint32_t i;
 
-    if (component == NULL || next_type_index == NULL)
+    if (component == NULL || next_type_index == NULL ||
+        next_resource_identity == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(&section, &count))
         return TURBOWASM_MALFORMED_MODULE;
@@ -1722,7 +1829,8 @@ static turbowasm_status decode_component_type_section(
                 return status;
         } else if (opcode == 0x42u) {
             status = decode_flat_instance_type(
-                &section, &component->type_graph, id);
+                &section, &component->type_graph, id,
+                next_resource_identity);
             if (status != TURBOWASM_OK)
                 return status;
         } else if (opcode == 0x43u) {
@@ -1957,6 +2065,7 @@ static turbowasm_status decode_component_semantics(
     uint32_t next_core_memory_index = 0u;
     uint32_t next_component_function_index = 0u;
     uint32_t next_component_instance_index = 0u;
+    uint64_t next_resource_identity = 1u;
     uint32_t i;
 
     if (component == NULL)
@@ -1977,6 +2086,10 @@ static turbowasm_status decode_component_semantics(
             total_types += count;
         }
     }
+
+    next_resource_identity = (uint64_t)total_types + UINT64_C(1);
+    if (next_resource_identity == 0u)
+        return TURBOWASM_OUT_OF_MEMORY;
 
     if (!turbowasm_component_type_graph_allocate(
             &component->type_graph, total_types))
@@ -2021,7 +2134,8 @@ static turbowasm_status decode_component_semantics(
                 reader,
                 component,
                 next_core_function_index,
-                &current_types);
+                &current_types,
+                &next_resource_identity);
         } else if (section->id == 8u) {
             status = decode_canon_section(
                 reader,
