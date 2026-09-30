@@ -304,14 +304,44 @@ static turbowasm_status component_resource_builtin_host(
     (void)call;
 
     if (builtin_context == NULL ||
-        builtin_context->binding == NULL ||
-        !builtin_context->binding->initialized ||
         result_count == NULL ||
         trap == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     *trap = TURBOWASM_TRAP_NONE;
     *result_count = 0u;
+
+    if (builtin_context->external) {
+        const turbowasm_component_type *resource_type;
+
+        if (builtin_context->exec == NULL ||
+            builtin_context->exec->binary == NULL ||
+            builtin_context->exec->imports.resource_drop == NULL ||
+            builtin_context->resource_type >=
+                builtin_context->exec->binary->type_graph.count ||
+            builtin_context->kind !=
+                TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP ||
+            arguments == NULL ||
+            argument_count != 1u ||
+            arguments[0].kind != TURBOWASM_VALUE_I32)
+            return TURBOWASM_UNSUPPORTED;
+
+        resource_type = turbowasm_component_type_graph_get(
+            &builtin_context->exec->binary->type_graph,
+            builtin_context->resource_type);
+        if (resource_type == NULL ||
+            resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        return builtin_context->exec->imports.resource_drop(
+            builtin_context->exec->imports.context,
+            resource_type->as.resource.identity,
+            (uint32_t)arguments[0].as.i32);
+    }
+
+    if (builtin_context->binding == NULL ||
+        !builtin_context->binding->initialized)
+        return TURBOWASM_INVALID_ARGUMENT;
 
     switch (builtin_context->kind) {
         case TURBOWASM_COMPONENT_RESOURCE_BUILTIN_NEW:
@@ -378,11 +408,25 @@ static bool resource_builtin_host_type(
         TURBOWASM_VALUE_I32
     };
 
-    if (context == NULL || context->binding == NULL ||
-        !context->binding->initialized || out == NULL)
+    if (context == NULL || out == NULL)
         return false;
 
     memset(out, 0, sizeof(*out));
+
+    if (context->external) {
+        if (context->kind !=
+                TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP ||
+            context->exec == NULL ||
+            context->exec->imports.resource_drop == NULL)
+            return false;
+        out->params = i32_param;
+        out->param_count = 1u;
+        return true;
+    }
+
+    if (context->binding == NULL ||
+        !context->binding->initialized)
+        return false;
 
     switch (context->kind) {
         case TURBOWASM_COMPONENT_RESOURCE_BUILTIN_NEW:
@@ -962,6 +1006,32 @@ static turbowasm_status initialize_resource_state(
         resource_context =
             &exec->resource_contexts[builtin->resource_type];
 
+        if (resource_type->as.resource.identity_alias) {
+            turbowasm_component_exec_resource_builtin_context *builtin_context =
+                &exec->resource_builtin_contexts[i];
+
+            if (builtin->kind !=
+                    TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP ||
+                exec->imports.resource_drop == NULL)
+                return TURBOWASM_UNSUPPORTED;
+
+            builtin_context->exec = exec;
+            builtin_context->binding = NULL;
+            builtin_context->kind = builtin->kind;
+            builtin_context->resource_type = builtin->resource_type;
+            builtin_context->external = true;
+
+            core_function =
+                &exec->core_functions[builtin->core_function_index];
+            if (core_function->kind !=
+                    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INVALID)
+                return TURBOWASM_MALFORMED_MODULE;
+            core_function->kind =
+                TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_RESOURCE_BUILTIN;
+            core_function->resource_builtin_index = i;
+            continue;
+        }
+
         if (!binding->initialized) {
             resource_context->exec = exec;
             resource_context->resource_type =
@@ -982,8 +1052,12 @@ static turbowasm_status initialize_resource_state(
                 return status;
         }
 
+        exec->resource_builtin_contexts[i].exec = exec;
         exec->resource_builtin_contexts[i].binding = binding;
         exec->resource_builtin_contexts[i].kind = builtin->kind;
+        exec->resource_builtin_contexts[i].resource_type =
+            builtin->resource_type;
+        exec->resource_builtin_contexts[i].external = false;
 
         core_function =
             &exec->core_functions[builtin->core_function_index];
@@ -1284,6 +1358,16 @@ static turbowasm_status configure_canon_lower_memory(
             component_guest_realloc;
         context->memory.realloc_context =
             &context->realloc_context;
+    }
+
+    if (exec->imports.resource_lower != NULL ||
+        exec->imports.resource_lift != NULL) {
+        context->memory.resource_lower =
+            exec->imports.resource_lower;
+        context->memory.resource_lift =
+            exec->imports.resource_lift;
+        context->memory.resource_context =
+            exec->imports.context;
     }
 
     return TURBOWASM_OK;

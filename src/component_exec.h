@@ -46,8 +46,11 @@ typedef struct turbowasm_component_exec_resource_context {
 } turbowasm_component_exec_resource_context;
 
 typedef struct turbowasm_component_exec_resource_builtin_context {
+    struct turbowasm_component_exec *exec;
     turbowasm_component_resource_binding *binding;
     turbowasm_component_resource_builtin_kind kind;
+    uint32_t resource_type;
+    bool external;
 } turbowasm_component_exec_resource_builtin_context;
 
 /*
@@ -75,10 +78,21 @@ typedef turbowasm_status (*turbowasm_component_import_invoke_fn)(
     turbowasm_component_value *out_result,
     turbowasm_trap *trap);
 
+typedef turbowasm_status
+(*turbowasm_component_import_resource_drop_fn)(
+    void *context,
+    uint64_t resource_identity,
+    uint32_t handle);
+
 typedef struct turbowasm_component_exec_imports {
     void *context;
     turbowasm_component_import_can_bind_fn can_bind;
     turbowasm_component_import_invoke_fn invoke;
+
+    /* Optional imported-resource canonical boundary. */
+    turbowasm_component_resource_lower_fn resource_lower;
+    turbowasm_component_resource_lift_fn resource_lift;
+    turbowasm_component_import_resource_drop_fn resource_drop;
 } turbowasm_component_exec_imports;
 
 typedef struct turbowasm_component_exec_canon_lower_context {
