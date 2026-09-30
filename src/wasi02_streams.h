@@ -67,6 +67,14 @@ typedef turbowasm_status (*turbowasm_wasi02_stream_subscribe_fn)(
     turbowasm_value stream_rep,
     turbowasm_value *out_pollable_rep);
 
+/*
+ * Produce a fresh provider-owned stdio stream identity. The resulting logical
+ * WASI stream resource owns one matching input/output drop callback.
+ */
+typedef turbowasm_status (*turbowasm_wasi02_stream_factory_fn)(
+    void *context,
+    turbowasm_value *out_stream_rep);
+
 typedef turbowasm_status (*turbowasm_wasi02_error_debug_fn)(
     void *context,
     turbowasm_value error_rep,
@@ -78,6 +86,10 @@ typedef void (*turbowasm_wasi02_stream_drop_fn)(
 
 typedef struct turbowasm_wasi02_stream_provider {
     void *context;
+
+    turbowasm_wasi02_stream_factory_fn stdin_stream;
+    turbowasm_wasi02_stream_factory_fn stdout_stream;
+    turbowasm_wasi02_stream_factory_fn stderr_stream;
 
     turbowasm_wasi02_input_read_fn input_read;
     turbowasm_wasi02_input_skip_fn input_skip;
