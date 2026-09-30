@@ -114,6 +114,8 @@ typedef struct turbowasm_component_import {
     turbowasm_component_name name;
     turbowasm_component_external_kind kind;
     uint32_t type_index;
+    /* Index introduced into the sort-specific Component index space. */
+    uint32_t item_index;
 } turbowasm_component_import;
 
 typedef struct turbowasm_component_export {
