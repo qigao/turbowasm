@@ -104,6 +104,20 @@ typedef turbowasm_status (*turbowasm_component_realloc_fn)(
     uint64_t new_size,
     uint64_t *out_pointer);
 
+typedef turbowasm_status (*turbowasm_component_resource_lower_fn)(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    const turbowasm_component_value *value,
+    uint32_t *out_handle);
+
+typedef turbowasm_status (*turbowasm_component_resource_lift_fn)(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    uint32_t handle,
+    turbowasm_component_value *out);
+
 typedef struct turbowasm_component_canonical_memory {
     turbowasm_instance *instance;
     uint32_t memory_index;
@@ -111,6 +125,14 @@ typedef struct turbowasm_component_canonical_memory {
     turbowasm_component_string_encoding string_encoding;
     turbowasm_component_realloc_fn guest_realloc;
     void *realloc_context;
+
+    /*
+     * Optional C5 resource boundary. C3-only callers leave these NULL and
+     * resource-valued memory representations remain unsupported.
+     */
+    turbowasm_component_resource_lower_fn resource_lower;
+    turbowasm_component_resource_lift_fn resource_lift;
+    void *resource_context;
 } turbowasm_component_canonical_memory;
 
 turbowasm_status turbowasm_component_canonical_layout(
@@ -157,7 +179,8 @@ turbowasm_status turbowasm_component_canonical_lift_flat_value(
 /*
  * Lift/lower the canonical in-memory representation of the retained
  * scalar/string/list subset. String lowering currently implements the pinned
- * UTF-8 canonical option. Resource handles remain C4.
+ * UTF-8 canonical option. Resource handles are supported only when explicit
+ * resource callbacks are attached by the C5 composition layer.
  */
 turbowasm_status turbowasm_component_canonical_lift_value(
     const turbowasm_component_type_graph *graph,
