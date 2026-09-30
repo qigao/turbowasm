@@ -696,7 +696,7 @@ static turbowasm_status parameter_tuple_layout(
             turbowasm_component_canonical_layout(
                 adapter->graph,
                 function->as.function.params[i],
-                memory->pointer_type,
+                adapter->memory.pointer_type,
                 &layout);
         if (status != TURBOWASM_OK)
             return status;
