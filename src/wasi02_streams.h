@@ -125,6 +125,20 @@ typedef struct turbowasm_wasi02_streams {
     uint32_t free_count;
 
     turbowasm_wasi02_poll *poll;
+
+    /*
+     * Component nominal identities are learned from the retained imported
+     * type graph. They are distinct from the private table identity constants
+     * above: canonical lowering/lifting uses these graph identities to route
+     * own/borrow handles into the correct bounded table.
+     */
+    uint64_t input_stream_identity;
+    uint64_t output_stream_identity;
+    uint64_t error_identity;
+    bool input_stream_identity_bound;
+    bool output_stream_identity_bound;
+    bool error_identity_bound;
+
     bool initialized;
 } turbowasm_wasi02_streams;
 
@@ -188,5 +202,16 @@ turbowasm_status turbowasm_wasi02_streams_call(
     const turbowasm_wasi02_value *arguments,
     size_t argument_count,
     turbowasm_wasi02_value *out_result);
+
+/*
+ * Instantiate a Component executable with one coherent wasi:io boundary:
+ * streams/error use this bridge and poll imports delegate to the attached
+ * turbowasm_wasi02_poll. Subscribe results therefore remain in the same
+ * pollable resource table consumed by wasi:io/poll.
+ */
+turbowasm_status turbowasm_wasi02_streams_component_exec_init(
+    turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary,
+    turbowasm_wasi02_streams *streams);
 
 #endif /* TURBOWASM_WASI02_STREAMS_H */
