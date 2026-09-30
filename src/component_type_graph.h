@@ -32,6 +32,8 @@ typedef enum turbowasm_component_type_kind {
     TURBOWASM_COMPONENT_TYPE_TUPLE,
     TURBOWASM_COMPONENT_TYPE_OPTION,
     TURBOWASM_COMPONENT_TYPE_RESULT,
+    TURBOWASM_COMPONENT_TYPE_ENUM,
+    TURBOWASM_COMPONENT_TYPE_FLAGS,
     TURBOWASM_COMPONENT_TYPE_FUNCTION,
     TURBOWASM_COMPONENT_TYPE_RESOURCE,
     TURBOWASM_COMPONENT_TYPE_OWN,
@@ -61,6 +63,11 @@ typedef struct turbowasm_component_record_field {
     turbowasm_component_type_ref type;
 } turbowasm_component_record_field;
 
+typedef struct turbowasm_component_label {
+    const uint8_t *name;
+    uint32_t name_size;
+} turbowasm_component_label;
+
 typedef struct turbowasm_component_type {
     turbowasm_component_type_kind kind;
     union {
@@ -84,6 +91,14 @@ typedef struct turbowasm_component_type {
             bool has_error;
             turbowasm_component_type_ref error;
         } result;
+        struct {
+            turbowasm_component_label *labels;
+            uint32_t count;
+        } enumeration;
+        struct {
+            turbowasm_component_label *labels;
+            uint32_t count;
+        } flags;
         struct {
             turbowasm_component_type_ref *params;
             uint32_t param_count;
@@ -182,6 +197,18 @@ bool turbowasm_component_type_graph_define_result(
     turbowasm_component_type_ref ok,
     bool has_error,
     turbowasm_component_type_ref error);
+
+bool turbowasm_component_type_graph_define_enum(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_label *labels,
+    uint32_t label_count);
+
+bool turbowasm_component_type_graph_define_flags(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_label *labels,
+    uint32_t label_count);
 
 bool turbowasm_component_type_graph_define_function(
     turbowasm_component_type_graph *graph,

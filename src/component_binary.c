@@ -746,6 +746,58 @@ record_done:
     return TURBOWASM_UNSUPPORTED;
 }
 
+static turbowasm_status decode_label_type_into_graph(
+    turbowasm_reader *reader,
+    turbowasm_component_type_graph *graph,
+    uint32_t type_index,
+    turbowasm_component_type_kind kind) {
+    turbowasm_component_label *labels = NULL;
+    uint32_t count;
+    uint32_t i;
+    turbowasm_status status = TURBOWASM_OK;
+
+    if (reader == NULL || graph == NULL ||
+        type_index >= graph->count ||
+        (kind != TURBOWASM_COMPONENT_TYPE_ENUM &&
+         kind != TURBOWASM_COMPONENT_TYPE_FLAGS))
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_uleb32(reader, &count) ||
+        count == 0u ||
+        (kind == TURBOWASM_COMPONENT_TYPE_FLAGS && count > 32u))
+        return TURBOWASM_MALFORMED_MODULE;
+    if ((size_t)count > SIZE_MAX / sizeof(*labels))
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    labels = (turbowasm_component_label *)turbowasm_rt_calloc(
+        count, sizeof(*labels));
+    if (labels == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    for (i = 0u; i < count; ++i) {
+        turbowasm_component_name name = {0};
+        status = read_component_name(reader, &name);
+        if (status != TURBOWASM_OK)
+            goto done;
+        labels[i].name = name.bytes;
+        labels[i].name_size = name.size;
+    }
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_ENUM) {
+        if (!turbowasm_component_type_graph_define_enum(
+                graph, type_index, labels, count))
+            status = TURBOWASM_MALFORMED_MODULE;
+    } else {
+        if (!turbowasm_component_type_graph_define_flags(
+                graph, type_index, labels, count))
+            status = TURBOWASM_MALFORMED_MODULE;
+    }
+
+done:
+    turbowasm_rt_free(labels);
+    return status;
+}
+
+
 static turbowasm_status decode_core_instance_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
@@ -1508,6 +1560,20 @@ static bool clone_type_between_graphs(
                     type->as.result.has_error,
                     type->as.result.error);
 
+        case TURBOWASM_COMPONENT_TYPE_ENUM:
+            return turbowasm_component_type_graph_define_enum(
+                destination_graph,
+                destination,
+                type->as.enumeration.labels,
+                type->as.enumeration.count);
+
+        case TURBOWASM_COMPONENT_TYPE_FLAGS:
+            return turbowasm_component_type_graph_define_flags(
+                destination_graph,
+                destination,
+                type->as.flags.labels,
+                type->as.flags.count);
+
         case TURBOWASM_COMPONENT_TYPE_FUNCTION:
             return same_graph &&
                 turbowasm_component_type_graph_define_function(
@@ -1632,6 +1698,16 @@ static turbowasm_status decode_flat_instance_type(
                     &instance_type->type_graph,
                     next_local_type,
                     opcode);
+                if (status != TURBOWASM_OK)
+                    goto fail;
+            } else if (opcode == 0x6du || opcode == 0x6eu) {
+                status = decode_label_type_into_graph(
+                    reader,
+                    &instance_type->type_graph,
+                    next_local_type,
+                    opcode == 0x6du
+                        ? TURBOWASM_COMPONENT_TYPE_ENUM
+                        : TURBOWASM_COMPONENT_TYPE_FLAGS);
                 if (status != TURBOWASM_OK)
                     goto fail;
             } else if (opcode == 0x69u || opcode == 0x68u) {
@@ -1895,6 +1971,16 @@ static turbowasm_status decode_component_type_section(
                 &component->type_graph,
                 id,
                 opcode);
+            if (status != TURBOWASM_OK)
+                return status;
+        } else if (opcode == 0x6du || opcode == 0x6eu) {
+            status = decode_label_type_into_graph(
+                &section,
+                &component->type_graph,
+                id,
+                opcode == 0x6du
+                    ? TURBOWASM_COMPONENT_TYPE_ENUM
+                    : TURBOWASM_COMPONENT_TYPE_FLAGS);
             if (status != TURBOWASM_OK)
                 return status;
         } else if (opcode == 0x69u || opcode == 0x68u) {

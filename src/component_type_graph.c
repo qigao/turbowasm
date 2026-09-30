@@ -101,6 +101,16 @@ void turbowasm_component_type_graph_destroy(
                     graph->types[index].as.tuple.elements);
                 graph->types[index].as.tuple.elements = NULL;
             } else if (graph->types[index].kind ==
+                           TURBOWASM_COMPONENT_TYPE_ENUM) {
+                turbowasm_rt_free(
+                    graph->types[index].as.enumeration.labels);
+                graph->types[index].as.enumeration.labels = NULL;
+            } else if (graph->types[index].kind ==
+                           TURBOWASM_COMPONENT_TYPE_FLAGS) {
+                turbowasm_rt_free(
+                    graph->types[index].as.flags.labels);
+                graph->types[index].as.flags.labels = NULL;
+            } else if (graph->types[index].kind ==
                            TURBOWASM_COMPONENT_TYPE_INSTANCE &&
                        graph->types[index].as.instance != NULL) {
                 turbowasm_component_instance_type *instance_type =
@@ -291,6 +301,78 @@ bool turbowasm_component_type_graph_define_result(
     type->as.result.has_error = has_error;
     type->as.result.error = error;
     return true;
+}
+
+static bool define_labels(
+    turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    const turbowasm_component_label *labels,
+    uint32_t label_count) {
+    turbowasm_component_label *copy;
+    uint32_t i;
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        labels == NULL || label_count == 0u ||
+        (kind == TURBOWASM_COMPONENT_TYPE_FLAGS &&
+         label_count > 32u))
+        return false;
+
+    for (i = 0u; i < label_count; ++i) {
+        uint32_t j;
+        if (labels[i].name == NULL || labels[i].name_size == 0u)
+            return false;
+        for (j = 0u; j < i; ++j) {
+            if (labels[j].name_size == labels[i].name_size &&
+                memcmp(
+                    labels[j].name,
+                    labels[i].name,
+                    labels[i].name_size) == 0)
+                return false;
+        }
+    }
+
+    if ((size_t)label_count > SIZE_MAX / sizeof(*copy))
+        return false;
+    copy = (turbowasm_component_label *)turbowasm_rt_malloc(
+        (size_t)label_count * sizeof(*copy));
+    if (copy == NULL)
+        return false;
+    memcpy(copy, labels, (size_t)label_count * sizeof(*copy));
+
+    type->kind = kind;
+    if (kind == TURBOWASM_COMPONENT_TYPE_ENUM) {
+        type->as.enumeration.labels = copy;
+        type->as.enumeration.count = label_count;
+    } else {
+        type->as.flags.labels = copy;
+        type->as.flags.count = label_count;
+    }
+    return true;
+}
+
+bool turbowasm_component_type_graph_define_enum(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_label *labels,
+    uint32_t label_count) {
+    return define_labels(
+        slot(graph, id),
+        TURBOWASM_COMPONENT_TYPE_ENUM,
+        labels,
+        label_count);
+}
+
+bool turbowasm_component_type_graph_define_flags(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_label *labels,
+    uint32_t label_count) {
+    return define_labels(
+        slot(graph, id),
+        TURBOWASM_COMPONENT_TYPE_FLAGS,
+        labels,
+        label_count);
 }
 
 bool turbowasm_component_type_graph_define_function(
@@ -566,6 +648,43 @@ bool turbowasm_component_type_graph_validate(
                          graph, type->as.result.error)))
                     return false;
                 break;
+
+            case TURBOWASM_COMPONENT_TYPE_ENUM:
+            case TURBOWASM_COMPONENT_TYPE_FLAGS: {
+                const turbowasm_component_label *labels =
+                    type->kind == TURBOWASM_COMPONENT_TYPE_ENUM
+                        ? type->as.enumeration.labels
+                        : type->as.flags.labels;
+                uint32_t count =
+                    type->kind == TURBOWASM_COMPONENT_TYPE_ENUM
+                        ? type->as.enumeration.count
+                        : type->as.flags.count;
+                uint32_t label_index;
+                if (labels == NULL || count == 0u ||
+                    (type->kind == TURBOWASM_COMPONENT_TYPE_FLAGS &&
+                     count > 32u))
+                    return false;
+                for (label_index = 0u;
+                     label_index < count;
+                     ++label_index) {
+                    uint32_t previous;
+                    if (labels[label_index].name == NULL ||
+                        labels[label_index].name_size == 0u)
+                        return false;
+                    for (previous = 0u;
+                         previous < label_index;
+                         ++previous) {
+                        if (labels[previous].name_size ==
+                                labels[label_index].name_size &&
+                            memcmp(
+                                labels[previous].name,
+                                labels[label_index].name,
+                                labels[label_index].name_size) == 0)
+                            return false;
+                    }
+                }
+                break;
+            }
 
             case TURBOWASM_COMPONENT_TYPE_FUNCTION: {
                 uint32_t param_index;

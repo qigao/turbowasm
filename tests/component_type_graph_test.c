@@ -258,6 +258,47 @@ static void test_nested_borrow_result_is_rejected(void) {
     turbowasm_component_type_graph_destroy(&graph);
 }
 
+static void test_enum_and_flags_types(void) {
+    turbowasm_component_type_graph graph = {0};
+    static const uint8_t a[] = "a";
+    static const uint8_t b[] = "b";
+    static const uint8_t c[] = "c";
+    turbowasm_component_label enum_labels[3] = {
+        {a, 1u}, {b, 1u}, {c, 1u}
+    };
+    turbowasm_component_label flag_labels[2] = {
+        {a, 1u}, {b, 1u}
+    };
+    turbowasm_component_label duplicate[2] = {
+        {a, 1u}, {a, 1u}
+    };
+    const turbowasm_component_type *type;
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 2u));
+    assert(turbowasm_component_type_graph_define_enum(
+        &graph, 0u, enum_labels, 3u));
+    assert(turbowasm_component_type_graph_define_flags(
+        &graph, 1u, flag_labels, 2u));
+    assert(turbowasm_component_type_graph_validate(&graph));
+
+    type = turbowasm_component_type_graph_get(&graph, 0u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_ENUM);
+    assert(type->as.enumeration.count == 3u);
+
+    type = turbowasm_component_type_graph_get(&graph, 1u);
+    assert(type != NULL);
+    assert(type->kind == TURBOWASM_COMPONENT_TYPE_FLAGS);
+    assert(type->as.flags.count == 2u);
+
+    turbowasm_component_type_graph_destroy(&graph);
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 1u));
+    assert(!turbowasm_component_type_graph_define_enum(
+        &graph, 0u, duplicate, 2u));
+    turbowasm_component_type_graph_destroy(&graph);
+}
+
 int main(void) {
     test_scalar_projection();
     test_indexed_type_graph();
@@ -267,5 +308,6 @@ int main(void) {
     test_borrow_result_is_rejected();
     test_composite_type_graph();
     test_nested_borrow_result_is_rejected();
+    test_enum_and_flags_types();
     return 0;
 }

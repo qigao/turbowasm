@@ -604,6 +604,113 @@ static void test_composite_flat_value_codec(void) {
     (void)unit;
 }
 
+static void test_enum_and_flags_canonical(void) {
+    turbowasm_component_type_graph graph = {0};
+    uint8_t enum_names[8];
+    uint8_t flag_names[6];
+    turbowasm_component_label enum_labels[8];
+    turbowasm_component_label flag_labels[6];
+    turbowasm_component_layout layout;
+    turbowasm_component_flat_type_list flat_type;
+    turbowasm_component_value in = {0};
+    turbowasm_component_value out = {0};
+    turbowasm_value flat[1] = {{0}};
+    uint32_t flat_count = 0u;
+    uint32_t i;
+
+    for (i = 0u; i < 8u; ++i) {
+        enum_names[i] = (uint8_t)('a' + i);
+        enum_labels[i].name = &enum_names[i];
+        enum_labels[i].name_size = 1u;
+    }
+    for (i = 0u; i < 6u; ++i) {
+        flag_names[i] = (uint8_t)('A' + i);
+        flag_labels[i].name = &flag_names[i];
+        flag_labels[i].name_size = 1u;
+    }
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 2u));
+    assert(turbowasm_component_type_graph_define_enum(
+        &graph, 0u, enum_labels, 8u));
+    assert(turbowasm_component_type_graph_define_flags(
+        &graph, 1u, flag_labels, 6u));
+    assert(turbowasm_component_type_graph_validate(&graph));
+
+    assert(turbowasm_component_canonical_layout(
+               &graph, indexed_ref(0u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &layout) == TURBOWASM_OK);
+    assert(layout.alignment == 1u);
+    assert(layout.size == 1u);
+    assert(turbowasm_component_canonical_layout(
+               &graph, indexed_ref(1u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &layout) == TURBOWASM_OK);
+    assert(layout.alignment == 1u);
+    assert(layout.size == 1u);
+
+    assert(turbowasm_component_canonical_flatten_type(
+               &graph, indexed_ref(0u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &flat_type) == TURBOWASM_OK);
+    assert(flat_type.count == 1u);
+    assert(flat_type.types[0] == TURBOWASM_COMPONENT_FLAT_I32);
+    assert(turbowasm_component_canonical_flatten_type(
+               &graph, indexed_ref(1u),
+               TURBOWASM_COMPONENT_POINTER_I32,
+               &flat_type) == TURBOWASM_OK);
+    assert(flat_type.count == 1u);
+    assert(flat_type.types[0] == TURBOWASM_COMPONENT_FLAT_I32);
+
+    in.kind = TURBOWASM_COMPONENT_TYPE_ENUM;
+    in.as.enum_index = 6u;
+    assert(turbowasm_component_canonical_lower_flat_value(
+               &graph, indexed_ref(0u), NULL, &in,
+               flat, 1u, &flat_count) == TURBOWASM_OK);
+    assert(flat_count == 1u);
+    assert(flat[0].kind == TURBOWASM_VALUE_I32);
+    assert((uint32_t)flat[0].as.i32 == 6u);
+    assert(turbowasm_component_canonical_lift_flat_value(
+               &graph, indexed_ref(0u), NULL,
+               flat, 1u, &out) == TURBOWASM_OK);
+    assert(out.kind == TURBOWASM_COMPONENT_TYPE_ENUM);
+    assert(out.as.enum_index == 6u);
+    turbowasm_component_value_destroy(&out);
+
+    in.kind = TURBOWASM_COMPONENT_TYPE_FLAGS;
+    in.as.flags = UINT32_C(0x25);
+    assert(turbowasm_component_canonical_lower_flat_value(
+               &graph, indexed_ref(1u), NULL, &in,
+               flat, 1u, &flat_count) == TURBOWASM_OK);
+    assert((uint32_t)flat[0].as.i32 == UINT32_C(0x25));
+    assert(turbowasm_component_canonical_lift_flat_value(
+               &graph, indexed_ref(1u), NULL,
+               flat, 1u, &out) == TURBOWASM_OK);
+    assert(out.kind == TURBOWASM_COMPONENT_TYPE_FLAGS);
+    assert(out.as.flags == UINT32_C(0x25));
+    turbowasm_component_value_destroy(&out);
+
+    in.kind = TURBOWASM_COMPONENT_TYPE_ENUM;
+    in.as.enum_index = 8u;
+    assert(turbowasm_component_canonical_lower_flat_value(
+               &graph, indexed_ref(0u), NULL, &in,
+               flat, 1u, &flat_count) == TURBOWASM_TYPE_MISMATCH);
+
+    flat[0].kind = TURBOWASM_VALUE_I32;
+    flat[0].as.i32 = 8;
+    assert(turbowasm_component_canonical_lift_flat_value(
+               &graph, indexed_ref(0u), NULL,
+               flat, 1u, &out) == TURBOWASM_TRAPPED);
+
+    in.kind = TURBOWASM_COMPONENT_TYPE_FLAGS;
+    in.as.flags = UINT32_C(0x40);
+    assert(turbowasm_component_canonical_lower_flat_value(
+               &graph, indexed_ref(1u), NULL, &in,
+               flat, 1u, &flat_count) == TURBOWASM_TYPE_MISMATCH);
+
+    turbowasm_component_type_graph_destroy(&graph);
+}
+
 int main(void) {
     turbowasm_component_type_graph graph = {0};
 
@@ -616,5 +723,6 @@ int main(void) {
     test_composite_metadata();
     test_composite_flat_limit();
     test_composite_flat_value_codec();
+    test_enum_and_flags_canonical();
     return 0;
 }

@@ -105,6 +105,35 @@ static bool align_up_u64(
     return true;
 }
 
+static size_t enum_storage_width(uint32_t count) {
+    if (count == 0u)
+        return 0u;
+    if (count <= 256u)
+        return 1u;
+    if (count <= 65536u)
+        return 2u;
+    return 4u;
+}
+
+static size_t flags_storage_width(uint32_t count) {
+    if (count == 0u || count > 32u)
+        return 0u;
+    if (count <= 8u)
+        return 1u;
+    if (count <= 16u)
+        return 2u;
+    return 4u;
+}
+
+static uint32_t flags_valid_mask(uint32_t count) {
+    if (count >= 32u)
+        return UINT32_MAX;
+    return count == 0u
+        ? 0u
+        : ((UINT32_C(1) << count) - UINT32_C(1));
+}
+
+
 static turbowasm_status canonical_layout_inner(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
@@ -264,6 +293,30 @@ static turbowasm_status canonical_layout_inner(
             return TURBOWASM_OK;
         }
 
+        case TURBOWASM_COMPONENT_TYPE_ENUM: {
+            size_t width;
+            if (type == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+            width = enum_storage_width(type->as.enumeration.count);
+            if (width == 0u)
+                return TURBOWASM_MALFORMED_MODULE;
+            out->alignment = (uint64_t)width;
+            out->size = (uint64_t)width;
+            return TURBOWASM_OK;
+        }
+
+        case TURBOWASM_COMPONENT_TYPE_FLAGS: {
+            size_t width;
+            if (type == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+            width = flags_storage_width(type->as.flags.count);
+            if (width == 0u)
+                return TURBOWASM_MALFORMED_MODULE;
+            out->alignment = (uint64_t)width;
+            out->size = (uint64_t)width;
+            return TURBOWASM_OK;
+        }
+
         case TURBOWASM_COMPONENT_TYPE_OWN:
         case TURBOWASM_COMPONENT_TYPE_BORROW: {
             const turbowasm_component_type *resource;
@@ -278,6 +331,20 @@ static turbowasm_status canonical_layout_inner(
             out->size = 4u;
             return TURBOWASM_OK;
         }
+
+        case TURBOWASM_COMPONENT_TYPE_ENUM:
+        case TURBOWASM_COMPONENT_TYPE_FLAGS:
+            if (type == NULL)
+                return TURBOWASM_MALFORMED_MODULE;
+            if ((kind == TURBOWASM_COMPONENT_TYPE_ENUM &&
+                 type->as.enumeration.count == 0u) ||
+                (kind == TURBOWASM_COMPONENT_TYPE_FLAGS &&
+                 (type->as.flags.count == 0u ||
+                  type->as.flags.count > 32u)))
+                return TURBOWASM_MALFORMED_MODULE;
+            out->types[0] = TURBOWASM_COMPONENT_FLAT_I32;
+            out->count = 1u;
+            return TURBOWASM_OK;
 
         case TURBOWASM_COMPONENT_TYPE_RESOURCE:
         case TURBOWASM_COMPONENT_TYPE_FUNCTION:
@@ -846,6 +913,154 @@ static turbowasm_status scalar_width(
         default:
             return TURBOWASM_UNSUPPORTED;
     }
+}
+
+static turbowasm_status lift_label_value(
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint64_t address,
+    turbowasm_component_value *out) {
+    uint8_t bytes[4] = {0};
+    size_t width;
+    uint32_t bits;
+    uint32_t count;
+    turbowasm_status status;
+
+    if (type == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (kind == TURBOWASM_COMPONENT_TYPE_ENUM) {
+        count = type->as.enumeration.count;
+        width = enum_storage_width(count);
+    } else if (kind == TURBOWASM_COMPONENT_TYPE_FLAGS) {
+        count = type->as.flags.count;
+        width = flags_storage_width(count);
+    } else {
+        return TURBOWASM_INVALID_ARGUMENT;
+    }
+    if (width == 0u)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    status = read_memory(
+        instance, memory_index, address, bytes, width);
+    if (status != TURBOWASM_OK)
+        return status;
+    bits = (uint32_t)read_le(bytes, width);
+
+    memset(out, 0, sizeof(*out));
+    out->kind = kind;
+    if (kind == TURBOWASM_COMPONENT_TYPE_ENUM) {
+        if (bits >= count)
+            return TURBOWASM_TRAPPED;
+        out->as.enum_index = bits;
+    } else {
+        if ((bits & ~flags_valid_mask(count)) != 0u)
+            return TURBOWASM_TRAPPED;
+        out->as.flags = bits;
+    }
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status lower_label_value(
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    turbowasm_instance_impl *instance,
+    uint32_t memory_index,
+    uint64_t address,
+    const turbowasm_component_value *value) {
+    uint8_t bytes[4] = {0};
+    size_t width;
+    uint32_t bits;
+    uint32_t count;
+
+    if (type == NULL || value == NULL || value->kind != kind)
+        return TURBOWASM_TYPE_MISMATCH;
+    if (kind == TURBOWASM_COMPONENT_TYPE_ENUM) {
+        count = type->as.enumeration.count;
+        width = enum_storage_width(count);
+        bits = value->as.enum_index;
+        if (width == 0u || bits >= count)
+            return TURBOWASM_TYPE_MISMATCH;
+    } else if (kind == TURBOWASM_COMPONENT_TYPE_FLAGS) {
+        count = type->as.flags.count;
+        width = flags_storage_width(count);
+        bits = value->as.flags;
+        if (width == 0u ||
+            (bits & ~flags_valid_mask(count)) != 0u)
+            return TURBOWASM_TYPE_MISMATCH;
+    } else {
+        return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    write_le(bytes, width, bits);
+    return write_memory(
+        instance, memory_index, address, bytes, width);
+}
+
+static turbowasm_status lower_flat_label_value(
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    const turbowasm_component_value *value,
+    turbowasm_value *out) {
+    uint32_t bits;
+    uint32_t count;
+
+    if (type == NULL || value == NULL || out == NULL ||
+        value->kind != kind)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_ENUM) {
+        count = type->as.enumeration.count;
+        bits = value->as.enum_index;
+        if (count == 0u || bits >= count)
+            return TURBOWASM_TYPE_MISMATCH;
+    } else if (kind == TURBOWASM_COMPONENT_TYPE_FLAGS) {
+        count = type->as.flags.count;
+        bits = value->as.flags;
+        if (count == 0u || count > 32u ||
+            (bits & ~flags_valid_mask(count)) != 0u)
+            return TURBOWASM_TYPE_MISMATCH;
+    } else {
+        return TURBOWASM_INVALID_ARGUMENT;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = TURBOWASM_VALUE_I32;
+    out->as.i32 = (int32_t)bits;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status lift_flat_label_value(
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    const turbowasm_value *input,
+    turbowasm_component_value *out) {
+    uint32_t bits;
+    uint32_t count;
+
+    if (type == NULL || input == NULL || out == NULL ||
+        input->kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_TYPE_MISMATCH;
+    bits = (uint32_t)input->as.i32;
+
+    memset(out, 0, sizeof(*out));
+    out->kind = kind;
+    if (kind == TURBOWASM_COMPONENT_TYPE_ENUM) {
+        count = type->as.enumeration.count;
+        if (count == 0u || bits >= count)
+            return TURBOWASM_TRAPPED;
+        out->as.enum_index = bits;
+    } else if (kind == TURBOWASM_COMPONENT_TYPE_FLAGS) {
+        count = type->as.flags.count;
+        if (count == 0u || count > 32u ||
+            (bits & ~flags_valid_mask(count)) != 0u)
+            return TURBOWASM_TRAPPED;
+        out->as.flags = bits;
+    } else {
+        return TURBOWASM_INVALID_ARGUMENT;
+    }
+    return TURBOWASM_OK;
 }
 
 static turbowasm_status lift_value_inner(
@@ -1786,6 +2001,11 @@ static turbowasm_status lift_value_inner(
         return lift_variant_value(
             graph, type, kind, memory, instance,
             address, depth, out);
+    if (kind == TURBOWASM_COMPONENT_TYPE_ENUM ||
+        kind == TURBOWASM_COMPONENT_TYPE_FLAGS)
+        return lift_label_value(
+            type, kind, instance, memory->memory_index,
+            address, out);
 
     if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
         kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
@@ -1851,6 +2071,11 @@ static turbowasm_status lower_value_inner(
         return lower_variant_value(
             graph, type, kind, memory, instance,
             address, depth, value);
+    if (kind == TURBOWASM_COMPONENT_TYPE_ENUM ||
+        kind == TURBOWASM_COMPONENT_TYPE_FLAGS)
+        return lower_label_value(
+            type, kind, instance, memory->memory_index,
+            address, value);
 
     if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
         kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
@@ -2715,6 +2940,17 @@ static turbowasm_status lower_flat_value_inner(
             graph, type, kind, ref, memory, value,
             out, out_capacity, depth, out_count);
 
+    if (kind == TURBOWASM_COMPONENT_TYPE_ENUM ||
+        kind == TURBOWASM_COMPONENT_TYPE_FLAGS) {
+        if (out_capacity < 1u)
+            return TURBOWASM_INVALID_ARGUMENT;
+        status = lower_flat_label_value(
+            type, kind, value, &out[0]);
+        if (status == TURBOWASM_OK)
+            *out_count = 1u;
+        return status;
+    }
+
     return TURBOWASM_UNSUPPORTED;
 }
 
@@ -2762,6 +2998,14 @@ static turbowasm_status lift_flat_value_inner(
         return lift_flat_variant(
             graph, type, kind, ref, memory,
             values, value_count, depth, out);
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_ENUM ||
+        kind == TURBOWASM_COMPONENT_TYPE_FLAGS) {
+        if (value_count != 1u)
+            return TURBOWASM_TYPE_MISMATCH;
+        return lift_flat_label_value(
+            type, kind, &values[0], out);
+    }
 
     return TURBOWASM_UNSUPPORTED;
 }
