@@ -307,6 +307,16 @@ static void test_stream_and_poll_nominal_routing(void) {
                pollable_resource) == TURBOWASM_OK);
     assert(probe.poll_drop_calls == 1u);
 
+    /*
+     * A valid stream handle under the wrong nominal identity must not be
+     * silently accepted by the internal multi-kind table.
+     */
+    assert(stream_imports.resource_drop(
+               stream_imports.context,
+               UINT64_C(0x303),
+               input_resource) == TURBOWASM_TRAPPED);
+    assert(probe.input_drop_calls == 0u);
+
     assert(stream_imports.resource_drop(
                stream_imports.context,
                UINT64_C(0x101),
