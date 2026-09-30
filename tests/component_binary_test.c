@@ -372,6 +372,12 @@ static void test_semantic_unsupported_and_invalid_forms(void) {
         0x00,0x01,'t',
         0x03,0x01
     };
+    static const uint8_t forward_resource_destructor[] = {
+        COMPONENT_HEADER,
+        /* resource(rep i32, dtor corefunc0) before any Core function exists */
+        0x07,0x05,0x01,
+        0x3f,0x7f,0x01,0x00
+    };
     turbowasm_component_binary component = {0};
 
     assert(turbowasm_component_binary_load(
@@ -389,6 +395,11 @@ static void test_semantic_unsupported_and_invalid_forms(void) {
     assert(turbowasm_component_binary_load(
                &component,type_import,sizeof(type_import)) ==
            TURBOWASM_UNSUPPORTED);
+    assert(turbowasm_component_binary_load(
+               &component,
+               forward_resource_destructor,
+               sizeof(forward_resource_destructor)) ==
+           TURBOWASM_MALFORMED_MODULE);
 }
 
 int main(void) {
