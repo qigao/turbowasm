@@ -314,6 +314,15 @@ static const turbowasm_wasi02_function_desc environment_functions[] = {
     {"get-arguments", NULL, 0u, &type_arguments},
     {"initial-cwd", NULL, 0u, &type_optional_string}
 };
+static const turbowasm_wasi02_function_desc stdin_functions[] = {
+    {"get-stdin", NULL, 0u, &type_input_stream}
+};
+static const turbowasm_wasi02_function_desc stdout_functions[] = {
+    {"get-stdout", NULL, 0u, &type_output_stream}
+};
+static const turbowasm_wasi02_function_desc stderr_functions[] = {
+    {"get-stderr", NULL, 0u, &type_output_stream}
+};
 static const turbowasm_wasi02_param_desc exit_params[] = {
     {"status", &type_unit_result}
 };
@@ -479,6 +488,24 @@ static const turbowasm_wasi02_interface_desc interfaces[] = {
         "https://github.com/WebAssembly/wasi-cli",
         "e922fd7bd137cd284a5e6c4815a5a630d32fdd01",
         environment_functions, 3u
+    },
+    {
+        "wasi:cli", "stdin", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-cli",
+        "e922fd7bd137cd284a5e6c4815a5a630d32fdd01",
+        stdin_functions, 1u
+    },
+    {
+        "wasi:cli", "stdout", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-cli",
+        "e922fd7bd137cd284a5e6c4815a5a630d32fdd01",
+        stdout_functions, 1u
+    },
+    {
+        "wasi:cli", "stderr", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-cli",
+        "e922fd7bd137cd284a5e6c4815a5a630d32fdd01",
+        stderr_functions, 1u
     },
     {
         "wasi:cli", "exit", TW_WASI02_V028,
