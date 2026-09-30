@@ -49,6 +49,56 @@ static const turbowasm_wasi02_type_desc type_pollable = {
     }}
 };
 
+static const turbowasm_wasi02_type_desc type_io_error = {
+    TURBOWASM_WASI02_TYPE_RESOURCE,
+    "error",
+    {.resource = {
+        "wasi:io", "error", TW_WASI02_V028, "error"
+    }}
+};
+
+static const turbowasm_wasi02_type_desc type_input_stream = {
+    TURBOWASM_WASI02_TYPE_RESOURCE,
+    "input-stream",
+    {.resource = {
+        "wasi:io", "streams", TW_WASI02_V028, "input-stream"
+    }}
+};
+
+static const turbowasm_wasi02_type_desc type_output_stream = {
+    TURBOWASM_WASI02_TYPE_RESOURCE,
+    "output-stream",
+    {.resource = {
+        "wasi:io", "streams", TW_WASI02_V028, "output-stream"
+    }}
+};
+
+static const turbowasm_wasi02_variant_case stream_error_cases[] = {
+    {"last-operation-failed", &type_io_error},
+    {"closed", NULL}
+};
+static const turbowasm_wasi02_type_desc type_stream_error = {
+    TURBOWASM_WASI02_TYPE_VARIANT,
+    "stream-error",
+    {.variant = {stream_error_cases, 2u}}
+};
+
+static const turbowasm_wasi02_type_desc type_stream_result_bytes = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_list_u8, &type_stream_error}}
+};
+static const turbowasm_wasi02_type_desc type_stream_result_u64 = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_u64, &type_stream_error}}
+};
+static const turbowasm_wasi02_type_desc type_stream_result_unit = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {NULL, &type_stream_error}}
+};
+
 static const turbowasm_wasi02_type_desc type_fs_descriptor = {
     TURBOWASM_WASI02_TYPE_RESOURCE,
     "descriptor",
@@ -328,6 +378,71 @@ static const turbowasm_wasi02_function_desc poll_functions[] = {
      poll_list_param, 1u, &type_list_u32}
 };
 
+static const turbowasm_wasi02_param_desc io_error_self_param[] = {
+    {"self", &type_io_error}
+};
+static const turbowasm_wasi02_function_desc io_error_functions[] = {
+    {"[method]error.to-debug-string",
+     io_error_self_param, 1u, &type_string}
+};
+
+static const turbowasm_wasi02_param_desc input_len_params[] = {
+    {"self", &type_input_stream},
+    {"len", &type_u64}
+};
+static const turbowasm_wasi02_param_desc input_self_param[] = {
+    {"self", &type_input_stream}
+};
+static const turbowasm_wasi02_param_desc output_self_param[] = {
+    {"self", &type_output_stream}
+};
+static const turbowasm_wasi02_param_desc output_contents_params[] = {
+    {"self", &type_output_stream},
+    {"contents", &type_list_u8}
+};
+static const turbowasm_wasi02_param_desc output_len_params[] = {
+    {"self", &type_output_stream},
+    {"len", &type_u64}
+};
+static const turbowasm_wasi02_param_desc output_splice_params[] = {
+    {"self", &type_output_stream},
+    {"src", &type_input_stream},
+    {"len", &type_u64}
+};
+
+static const turbowasm_wasi02_function_desc streams_functions[] = {
+    {"[method]input-stream.read",
+     input_len_params, 2u, &type_stream_result_bytes},
+    {"[method]input-stream.blocking-read",
+     input_len_params, 2u, &type_stream_result_bytes},
+    {"[method]input-stream.skip",
+     input_len_params, 2u, &type_stream_result_u64},
+    {"[method]input-stream.blocking-skip",
+     input_len_params, 2u, &type_stream_result_u64},
+    {"[method]input-stream.subscribe",
+     input_self_param, 1u, &type_pollable},
+    {"[method]output-stream.check-write",
+     output_self_param, 1u, &type_stream_result_u64},
+    {"[method]output-stream.write",
+     output_contents_params, 2u, &type_stream_result_unit},
+    {"[method]output-stream.blocking-write-and-flush",
+     output_contents_params, 2u, &type_stream_result_unit},
+    {"[method]output-stream.flush",
+     output_self_param, 1u, &type_stream_result_unit},
+    {"[method]output-stream.blocking-flush",
+     output_self_param, 1u, &type_stream_result_unit},
+    {"[method]output-stream.subscribe",
+     output_self_param, 1u, &type_pollable},
+    {"[method]output-stream.write-zeroes",
+     output_len_params, 2u, &type_stream_result_unit},
+    {"[method]output-stream.blocking-write-zeroes-and-flush",
+     output_len_params, 2u, &type_stream_result_unit},
+    {"[method]output-stream.splice",
+     output_splice_params, 3u, &type_stream_result_u64},
+    {"[method]output-stream.blocking-splice",
+     output_splice_params, 3u, &type_stream_result_u64}
+};
+
 static const turbowasm_wasi02_interface_desc interfaces[] = {
     {
         "wasi:clocks", "wall-clock", TW_WASI02_V028,
@@ -388,6 +503,18 @@ static const turbowasm_wasi02_interface_desc interfaces[] = {
         "https://github.com/WebAssembly/wasi-io",
         "3983fe1feab6b3a3b4e5c47c8b13daaf22266f00",
         poll_functions, 3u
+    },
+    {
+        "wasi:io", "error", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-io",
+        "3983fe1feab6b3a3b4e5c47c8b13daaf22266f00",
+        io_error_functions, 1u
+    },
+    {
+        "wasi:io", "streams", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-io",
+        "3983fe1feab6b3a3b4e5c47c8b13daaf22266f00",
+        streams_functions, 15u
     }
 };
 

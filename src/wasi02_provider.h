@@ -22,6 +22,7 @@ typedef enum turbowasm_wasi02_value_kind {
     TURBOWASM_WASI02_VALUE_RECORD,
     TURBOWASM_WASI02_VALUE_OPTION,
     TURBOWASM_WASI02_VALUE_RESULT,
+    TURBOWASM_WASI02_VALUE_VARIANT,
     TURBOWASM_WASI02_VALUE_ENUM,
     TURBOWASM_WASI02_VALUE_FLAGS,
     TURBOWASM_WASI02_VALUE_RESOURCE
@@ -56,6 +57,10 @@ struct turbowasm_wasi02_value {
             bool is_error;
             turbowasm_wasi02_value *value;
         } result;
+        struct {
+            uint32_t case_index;
+            turbowasm_wasi02_value *value;
+        } variant;
         uint32_t enum_index;
         uint32_t flags;
         uint32_t resource;

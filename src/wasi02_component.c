@@ -220,6 +220,41 @@ static bool component_type_matches_wasi_depth(
                 return false;
             return true;
 
+        case TURBOWASM_WASI02_TYPE_VARIANT:
+            if (component_type->kind !=
+                    TURBOWASM_COMPONENT_TYPE_VARIANT ||
+                component_type->as.variant.cases == NULL ||
+                base->as.variant.cases == NULL ||
+                component_type->as.variant.count !=
+                    base->as.variant.count ||
+                base->as.variant.count == 0u)
+                return false;
+            for (i = 0u; i < base->as.variant.count; ++i) {
+                const turbowasm_component_variant_case *ccase =
+                    &component_type->as.variant.cases[i];
+                const turbowasm_wasi02_variant_case *wcase =
+                    &base->as.variant.cases[i];
+                size_t name_size;
+
+                if (wcase->name == NULL)
+                    return false;
+                name_size = strlen(wcase->name);
+                if (ccase->name == NULL ||
+                    ccase->name_size != name_size ||
+                    memcmp(ccase->name, wcase->name, name_size) != 0 ||
+                    ccase->has_payload !=
+                        (wcase->payload != NULL))
+                    return false;
+                if (ccase->has_payload &&
+                    !component_type_matches_wasi_depth(
+                        graph,
+                        ccase->payload,
+                        wcase->payload,
+                        depth + 1u))
+                    return false;
+            }
+            return true;
+
         case TURBOWASM_WASI02_TYPE_ENUM:
         case TURBOWASM_WASI02_TYPE_FLAGS: {
             const turbowasm_component_label *labels;
@@ -585,6 +620,44 @@ static turbowasm_status component_to_wasi_value(
             return status;
         }
 
+        case TURBOWASM_WASI02_TYPE_VARIANT: {
+            const turbowasm_wasi02_variant_case *variant_case;
+
+            if (value->kind != TURBOWASM_COMPONENT_TYPE_VARIANT ||
+                base->as.variant.cases == NULL ||
+                base->as.variant.count == 0u ||
+                value->as.variant.case_index >=
+                    base->as.variant.count)
+                return TURBOWASM_TYPE_MISMATCH;
+
+            variant_case =
+                &base->as.variant.cases[
+                    value->as.variant.case_index];
+            out->kind = TURBOWASM_WASI02_VALUE_VARIANT;
+            out->as.variant.case_index =
+                value->as.variant.case_index;
+
+            if (variant_case->payload == NULL)
+                return value->as.variant.payload == NULL
+                    ? TURBOWASM_OK
+                    : TURBOWASM_TYPE_MISMATCH;
+            if (value->as.variant.payload == NULL)
+                return TURBOWASM_TYPE_MISMATCH;
+
+            out->as.variant.value =
+                (turbowasm_wasi02_value *)turbowasm_rt_calloc(
+                    1u, sizeof(*out->as.variant.value));
+            if (out->as.variant.value == NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+            status = component_to_wasi_value(
+                variant_case->payload,
+                value->as.variant.payload,
+                out->as.variant.value);
+            if (status != TURBOWASM_OK)
+                turbowasm_wasi02_value_destroy(out);
+            return status;
+        }
+
         case TURBOWASM_WASI02_TYPE_ENUM:
             if (value->kind != TURBOWASM_COMPONENT_TYPE_ENUM ||
                 value->as.enum_index >= base->as.enumeration.count)
@@ -841,6 +914,44 @@ static turbowasm_status wasi_to_component_value(
                 arm,
                 value->as.result.value,
                 out->as.result.payload);
+            if (status != TURBOWASM_OK)
+                turbowasm_component_value_destroy(out);
+            return status;
+        }
+
+        case TURBOWASM_WASI02_TYPE_VARIANT: {
+            const turbowasm_wasi02_variant_case *variant_case;
+
+            if (value->kind != TURBOWASM_WASI02_VALUE_VARIANT ||
+                base->as.variant.cases == NULL ||
+                base->as.variant.count == 0u ||
+                value->as.variant.case_index >=
+                    base->as.variant.count)
+                return TURBOWASM_TYPE_MISMATCH;
+
+            variant_case =
+                &base->as.variant.cases[
+                    value->as.variant.case_index];
+            out->kind = TURBOWASM_COMPONENT_TYPE_VARIANT;
+            out->as.variant.case_index =
+                value->as.variant.case_index;
+
+            if (variant_case->payload == NULL)
+                return value->as.variant.value == NULL
+                    ? TURBOWASM_OK
+                    : TURBOWASM_TYPE_MISMATCH;
+            if (value->as.variant.value == NULL)
+                return TURBOWASM_TYPE_MISMATCH;
+
+            out->as.variant.payload =
+                (turbowasm_component_value *)turbowasm_rt_calloc(
+                    1u, sizeof(*out->as.variant.payload));
+            if (out->as.variant.payload == NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+            status = wasi_to_component_value(
+                variant_case->payload,
+                value->as.variant.value,
+                out->as.variant.payload);
             if (status != TURBOWASM_OK)
                 turbowasm_component_value_destroy(out);
             return status;

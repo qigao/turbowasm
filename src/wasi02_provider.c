@@ -134,6 +134,13 @@ void turbowasm_wasi02_value_destroy(
                 turbowasm_rt_free(value->as.result.value);
             }
             break;
+        case TURBOWASM_WASI02_VALUE_VARIANT:
+            if (value->as.variant.value != NULL) {
+                turbowasm_wasi02_value_destroy(
+                    value->as.variant.value);
+                turbowasm_rt_free(value->as.variant.value);
+            }
+            break;
         default:
             break;
     }
@@ -226,6 +233,25 @@ static bool value_matches_type_depth(
             return value->as.result.value != NULL &&
                    value_matches_type_depth(
                        arm, value->as.result.value, depth + 1u);
+        case TURBOWASM_WASI02_TYPE_VARIANT: {
+            const turbowasm_wasi02_variant_case *variant_case;
+            if (value->kind != TURBOWASM_WASI02_VALUE_VARIANT ||
+                type->as.variant.cases == NULL ||
+                type->as.variant.count == 0u ||
+                value->as.variant.case_index >=
+                    type->as.variant.count)
+                return false;
+            variant_case =
+                &type->as.variant.cases[
+                    value->as.variant.case_index];
+            if (variant_case->payload == NULL)
+                return value->as.variant.value == NULL;
+            return value->as.variant.value != NULL &&
+                   value_matches_type_depth(
+                       variant_case->payload,
+                       value->as.variant.value,
+                       depth + 1u);
+        }
         case TURBOWASM_WASI02_TYPE_ENUM:
             return value->kind == TURBOWASM_WASI02_VALUE_ENUM &&
                    type->as.enumeration.labels != NULL &&
