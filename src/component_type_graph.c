@@ -346,6 +346,30 @@ bool turbowasm_component_type_graph_define_resource_full(
     type->as.resource.identity = nominal_identity;
     type->as.resource.rep_type = rep_type;
     type->as.resource.has_destructor = has_destructor;
+    type->as.resource.identity_alias = false;
+    type->as.resource.destructor_index = destructor_index;
+    return true;
+}
+
+bool turbowasm_component_type_graph_define_resource_alias(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    uint64_t nominal_identity,
+    uint8_t rep_type,
+    bool has_destructor,
+    uint32_t destructor_index) {
+    turbowasm_component_type *type = slot(graph, id);
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        nominal_identity == 0u)
+        return false;
+
+    type->kind = TURBOWASM_COMPONENT_TYPE_RESOURCE;
+    type->as.resource.identity = nominal_identity;
+    type->as.resource.rep_type = rep_type;
+    type->as.resource.has_destructor = has_destructor;
+    type->as.resource.identity_alias = true;
     type->as.resource.destructor_index = destructor_index;
     return true;
 }
@@ -566,12 +590,15 @@ bool turbowasm_component_type_graph_validate(
             case TURBOWASM_COMPONENT_TYPE_RESOURCE:
                 if (type->as.resource.identity == 0u)
                     return false;
-                for (j = 0u; j < i; ++j) {
-                    if (graph->types[j].kind ==
-                            TURBOWASM_COMPONENT_TYPE_RESOURCE &&
-                        graph->types[j].as.resource.identity ==
-                            type->as.resource.identity)
-                        return false;
+                if (!type->as.resource.identity_alias) {
+                    for (j = 0u; j < i; ++j) {
+                        if (graph->types[j].kind ==
+                                TURBOWASM_COMPONENT_TYPE_RESOURCE &&
+                            !graph->types[j].as.resource.identity_alias &&
+                            graph->types[j].as.resource.identity ==
+                                type->as.resource.identity)
+                            return false;
+                    }
                 }
                 break;
 
