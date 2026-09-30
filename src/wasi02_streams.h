@@ -5,96 +5,12 @@
 #include "wasi02_provider.h"
 #include "wasi02_poll.h"
 
-#include <turbowasm/status.h>
-#include <turbowasm/value.h>
+#include <turbowasm/wasi02.h>
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-typedef enum turbowasm_wasi02_stream_error_kind {
-    TURBOWASM_WASI02_STREAM_ERROR_NONE = 0,
-    TURBOWASM_WASI02_STREAM_ERROR_LAST_OPERATION_FAILED,
-    TURBOWASM_WASI02_STREAM_ERROR_CLOSED
-} turbowasm_wasi02_stream_error_kind;
-
-typedef struct turbowasm_wasi02_stream_error {
-    turbowasm_wasi02_stream_error_kind kind;
-    turbowasm_value error_rep;
-} turbowasm_wasi02_stream_error;
-
-typedef turbowasm_status (*turbowasm_wasi02_input_read_fn)(
-    void *context,
-    turbowasm_value stream_rep,
-    uint64_t max_bytes,
-    const uint8_t **out_data,
-    size_t *out_size,
-    turbowasm_wasi02_stream_error *out_error);
-
-typedef turbowasm_status (*turbowasm_wasi02_input_skip_fn)(
-    void *context,
-    turbowasm_value stream_rep,
-    uint64_t max_bytes,
-    uint64_t *out_skipped,
-    turbowasm_wasi02_stream_error *out_error);
-
-typedef turbowasm_status (*turbowasm_wasi02_output_check_write_fn)(
-    void *context,
-    turbowasm_value stream_rep,
-    uint64_t *out_permit,
-    turbowasm_wasi02_stream_error *out_error);
-
-typedef turbowasm_status (*turbowasm_wasi02_output_write_fn)(
-    void *context,
-    turbowasm_value stream_rep,
-    const uint8_t *data,
-    size_t size,
-    turbowasm_wasi02_stream_error *out_error);
-
-typedef turbowasm_status (*turbowasm_wasi02_output_flush_fn)(
-    void *context,
-    turbowasm_value stream_rep,
-    turbowasm_wasi02_stream_error *out_error);
-
-typedef turbowasm_status (*turbowasm_wasi02_output_write_zeroes_fn)(
-    void *context,
-    turbowasm_value stream_rep,
-    uint64_t size,
-    turbowasm_wasi02_stream_error *out_error);
-
-typedef turbowasm_status (*turbowasm_wasi02_stream_subscribe_fn)(
-    void *context,
-    turbowasm_value stream_rep,
-    turbowasm_value *out_pollable_rep);
-
-typedef turbowasm_status (*turbowasm_wasi02_error_debug_fn)(
-    void *context,
-    turbowasm_value error_rep,
-    turbowasm_wasi02_string_view *out_debug);
-
-typedef void (*turbowasm_wasi02_stream_drop_fn)(
-    void *context,
-    turbowasm_value rep);
-
-typedef struct turbowasm_wasi02_stream_provider {
-    void *context;
-
-    turbowasm_wasi02_input_read_fn input_read;
-    turbowasm_wasi02_input_skip_fn input_skip;
-    turbowasm_wasi02_stream_subscribe_fn input_subscribe;
-
-    turbowasm_wasi02_output_check_write_fn output_check_write;
-    turbowasm_wasi02_output_write_fn output_write;
-    turbowasm_wasi02_output_flush_fn output_flush;
-    turbowasm_wasi02_output_write_zeroes_fn output_write_zeroes;
-    turbowasm_wasi02_stream_subscribe_fn output_subscribe;
-
-    turbowasm_wasi02_error_debug_fn error_debug;
-
-    turbowasm_wasi02_stream_drop_fn input_drop;
-    turbowasm_wasi02_stream_drop_fn output_drop;
-    turbowasm_wasi02_stream_drop_fn error_drop;
-} turbowasm_wasi02_stream_provider;
 
 typedef enum turbowasm_wasi02_stream_slot_kind {
     TURBOWASM_WASI02_STREAM_SLOT_NONE = 0,
