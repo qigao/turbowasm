@@ -103,6 +103,8 @@ struct turbowasm_component_value {
         turbowasm_component_value_list tuple;
         turbowasm_component_value_variant option;
         turbowasm_component_value_variant result;
+        uint32_t enum_index;
+        uint32_t flags;
         /*
          * Abstract Component resource value. Canonical Core handles are
          * created/consumed only at a resource-table boundary.

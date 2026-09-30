@@ -666,6 +666,41 @@ static void test_cross_interface_abstract_resource_identity(void) {
     turbowasm_component_binary_destroy(&component);
 }
 
+static void test_enum_and_flags_binary_retention(void) {
+    static const uint8_t bytes[] = {
+        COMPONENT_HEADER,
+        0x07,0x0f,0x02,
+          0x6d,0x03,
+            0x01,'a',0x01,'b',0x01,'c',
+          0x6e,0x02,
+            0x01,'r',0x01,'w'
+    };
+    turbowasm_component_binary component = {0};
+    const turbowasm_component_type *enumeration;
+    const turbowasm_component_type *flags;
+
+    assert(turbowasm_component_binary_load(
+               &component, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(component.type_graph.count == 2u);
+
+    enumeration = turbowasm_component_type_graph_get(
+        &component.type_graph, 0u);
+    assert(enumeration != NULL);
+    assert(enumeration->kind == TURBOWASM_COMPONENT_TYPE_ENUM);
+    assert(enumeration->as.enumeration.count == 3u);
+    assert(enumeration->as.enumeration.labels[2].name_size == 1u);
+    assert(enumeration->as.enumeration.labels[2].name[0] == (uint8_t)'c');
+
+    flags = turbowasm_component_type_graph_get(
+        &component.type_graph, 1u);
+    assert(flags != NULL);
+    assert(flags->kind == TURBOWASM_COMPONENT_TYPE_FLAGS);
+    assert(flags->as.flags.count == 2u);
+    assert(flags->as.flags.labels[0].name[0] == (uint8_t)'r');
+
+    turbowasm_component_binary_destroy(&component);
+}
+
 static void test_semantic_unsupported_and_invalid_forms(void) {
     static const uint8_t alias[] = {
         COMPONENT_HEADER,
@@ -744,6 +779,7 @@ int main(void) {
     test_composite_type_binary_retention();
     test_named_record_inside_instance_type();
     test_cross_interface_abstract_resource_identity();
+    test_enum_and_flags_binary_retention();
     test_semantic_unsupported_and_invalid_forms();
     return 0;
 }

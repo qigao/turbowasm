@@ -82,8 +82,19 @@ static void build_graph(turbowasm_component_type_graph *graph) {
     turbowasm_component_type_ref unit = {0};
     static const uint8_t seconds[] = "seconds";
     static const uint8_t nanoseconds[] = "nanoseconds";
+    static const uint8_t enum_a[] = "a";
+    static const uint8_t enum_b[] = "b";
+    static const uint8_t enum_c[] = "c";
+    static const uint8_t flag_r[] = "r";
+    static const uint8_t flag_w[] = "w";
+    turbowasm_component_label enum_labels[3] = {
+        {enum_a, 1u}, {enum_b, 1u}, {enum_c, 1u}
+    };
+    turbowasm_component_label flag_labels[2] = {
+        {flag_r, 1u}, {flag_w, 1u}
+    };
 
-    assert(turbowasm_component_type_graph_allocate(graph, 8u));
+    assert(turbowasm_component_type_graph_allocate(graph, 10u));
     assert(turbowasm_component_type_graph_define_string(graph, 0u));
     assert(turbowasm_component_type_graph_define_list_ref(
         graph, 1u, inline_ref(TURBOWASM_COMPONENT_TYPE_STRING)));
@@ -110,6 +121,10 @@ static void build_graph(turbowasm_component_type_graph *graph) {
         graph, 6u, turbowasm_component_type_ref_indexed(0u)));
     assert(turbowasm_component_type_graph_define_result(
         graph, 7u, false, unit, false, unit));
+    assert(turbowasm_component_type_graph_define_enum(
+        graph, 8u, enum_labels, 3u));
+    assert(turbowasm_component_type_graph_define_flags(
+        graph, 9u, flag_labels, 2u));
     assert(turbowasm_component_type_graph_validate(graph));
 }
 
@@ -172,6 +187,61 @@ static void test_scalar_round_trip(
     assert(out.kind == TURBOWASM_COMPONENT_TYPE_F64);
     assert(out.as.f64 == 3.5);
     turbowasm_component_value_destroy(&out);
+}
+
+static void test_enum_flags_round_trip(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_canonical_memory *memory) {
+    turbowasm_component_value in = {0};
+    turbowasm_component_value out = {0};
+    uint8_t bad_enum = 3u;
+    uint8_t bad_flags = 4u;
+    turbowasm_instance_impl *impl =
+        (turbowasm_instance_impl *)memory->instance->impl;
+
+    in.kind = TURBOWASM_COMPONENT_TYPE_ENUM;
+    in.as.enum_index = 2u;
+    assert(turbowasm_component_canonical_lower_value(
+               graph,
+               turbowasm_component_type_ref_indexed(8u),
+               memory, 52u, &in) == TURBOWASM_OK);
+    assert(turbowasm_component_canonical_lift_value(
+               graph,
+               turbowasm_component_type_ref_indexed(8u),
+               memory, 52u, &out) == TURBOWASM_OK);
+    assert(out.kind == TURBOWASM_COMPONENT_TYPE_ENUM);
+    assert(out.as.enum_index == 2u);
+    turbowasm_component_value_destroy(&out);
+
+    in.kind = TURBOWASM_COMPONENT_TYPE_FLAGS;
+    in.as.flags = UINT32_C(0x3);
+    assert(turbowasm_component_canonical_lower_value(
+               graph,
+               turbowasm_component_type_ref_indexed(9u),
+               memory, 53u, &in) == TURBOWASM_OK);
+    assert(turbowasm_component_canonical_lift_value(
+               graph,
+               turbowasm_component_type_ref_indexed(9u),
+               memory, 53u, &out) == TURBOWASM_OK);
+    assert(out.kind == TURBOWASM_COMPONENT_TYPE_FLAGS);
+    assert(out.as.flags == UINT32_C(0x3));
+    turbowasm_component_value_destroy(&out);
+
+    assert(turbowasm_instance_memory_write_bytes(
+               impl, 0u, 54u, 0u,
+               &bad_enum, 1u) == TURBOWASM_OK);
+    assert(turbowasm_component_canonical_lift_value(
+               graph,
+               turbowasm_component_type_ref_indexed(8u),
+               memory, 54u, &out) == TURBOWASM_TRAPPED);
+
+    assert(turbowasm_instance_memory_write_bytes(
+               impl, 0u, 55u, 0u,
+               &bad_flags, 1u) == TURBOWASM_OK);
+    assert(turbowasm_component_canonical_lift_value(
+               graph,
+               turbowasm_component_type_ref_indexed(9u),
+               memory, 55u, &out) == TURBOWASM_TRAPPED);
 }
 
 static void test_string_round_trip(
