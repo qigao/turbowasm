@@ -236,6 +236,28 @@ if(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)
   endif()
 endif()
 
+if(TARGET turbowasm_wasi02_poll_core AND TARGET TurboWasm::NativeIO)
+  # W4b3 NativeIO completion routing remains internal until stream/poll
+  # qualification is complete. It never submits I/O or exposes native handles.
+  add_library(turbowasm_wasi02_poll_native_io_core STATIC
+    src/wasi02_poll_native_io.c)
+  target_compile_features(turbowasm_wasi02_poll_native_io_core PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02_poll_native_io_core
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(turbowasm_wasi02_poll_native_io_core
+    PRIVATE
+      turbowasm_wasi02_poll_core
+      TurboWasm::NativeIO)
+  if(MSVC)
+    target_compile_options(turbowasm_wasi02_poll_native_io_core PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_wasi02_poll_native_io_core PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
 if(TURBOWASM_ENABLE_WASI_ADAPTER)
   add_library(turbowasm_wasi
     src/wasi_preview1.c
