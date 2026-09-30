@@ -259,14 +259,6 @@ jobs:
         with:
           mode: read
 
-      - name: Bind vcpkg profiles to shared cache contract
-        shell: bash
-        run: |
-          set -euxo pipefail
-          python3 "$GITHUB_WORKSPACE/cmake/ci/materialize-vcpkg-profiles.py" \
-            "$GITHUB_WORKSPACE/cmake/vcpkg/mir" \
-            "$VCPKG_CACHE_REPOSITORY_ROOT"
-
       - name: Restore MIR from shared cache only
         shell: bash
         run: |
@@ -346,14 +338,6 @@ jobs:
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
-
-      - name: Bind vcpkg profiles to shared cache contract
-        shell: bash
-        run: |
-          set -euxo pipefail
-          python3 "$GITHUB_WORKSPACE/cmake/ci/materialize-vcpkg-profiles.py" \
-            "$GITHUB_WORKSPACE/cmake/vcpkg/mir" \
-            "$VCPKG_CACHE_REPOSITORY_ROOT"
 
       - name: Restore MIR from shared cache only
         shell: bash
