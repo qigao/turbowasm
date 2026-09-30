@@ -1,6 +1,8 @@
 #include "component_core_call.h"
 
 #include "instance_internal.h"
+#include "module_internal.h"
+#include "runtime_alloc.h"
 
 #include <cmeta/cmeta.h>
 
@@ -56,7 +58,7 @@ static bool type_ref_supported(
             graph, type->as.list.element_type, depth + 1u);
     if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
         kind == TURBOWASM_COMPONENT_TYPE_BORROW)
-        return depth == 0u;
+        return true;
 
     return false;
 }
@@ -238,61 +240,270 @@ static turbowasm_status lift_owned_result(
     return TURBOWASM_OK;
 }
 
-static void rollback_created_handles(
-    const turbowasm_component_core_call_adapter *adapter,
-    const turbowasm_component_resource_handle *handles,
-    const uint64_t *identities,
-    const bool *borrowed,
-    uint32_t count) {
+typedef struct turbowasm_component_call_resource_entry {
+    turbowasm_component_resource_handle handle;
+    uint64_t identity;
+    bool borrowed;
+} turbowasm_component_call_resource_entry;
+
+typedef struct turbowasm_component_call_resource_scope {
+    const turbowasm_component_core_call_adapter *adapter;
+    turbowasm_component_call_resource_entry *entries;
+    uint32_t count;
+    uint32_t capacity;
+} turbowasm_component_call_resource_scope;
+
+typedef struct turbowasm_component_resource_codec_context {
+    const turbowasm_component_core_call_adapter *adapter;
+    turbowasm_component_call_resource_scope *scope;
+} turbowasm_component_resource_codec_context;
+
+static const turbowasm_runtime_config *adapter_runtime_config(
+    const turbowasm_component_core_call_adapter *adapter) {
+    const turbowasm_module *module;
+    const turbowasm_module_impl *impl;
+
+    if (adapter == NULL || adapter->instance == NULL)
+        return NULL;
+    module = turbowasm_instance_module(adapter->instance);
+    impl = turbowasm_module_impl_get(module);
+    return impl != NULL ? &impl->config : NULL;
+}
+
+static turbowasm_status resource_scope_reserve(
+    turbowasm_component_call_resource_scope *scope,
+    uint32_t required) {
+    const turbowasm_runtime_config *config;
+    turbowasm_runtime_scope alloc_scope;
+    turbowasm_component_call_resource_entry *grown;
+    uint32_t next;
+
+    if (scope == NULL || scope->adapter == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (required <= scope->capacity)
+        return TURBOWASM_OK;
+
+    next = scope->capacity == 0u ? 8u : scope->capacity;
+    while (next < required) {
+        if (next > UINT32_MAX / 2u) {
+            next = required;
+            break;
+        }
+        next *= 2u;
+    }
+    if ((size_t)next > SIZE_MAX / sizeof(*grown))
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    config = adapter_runtime_config(scope->adapter);
+    if (config == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    alloc_scope = turbowasm_runtime_scope_enter(config);
+    grown = (turbowasm_component_call_resource_entry *)
+        turbowasm_rt_realloc(
+            scope->entries, (size_t)next * sizeof(*grown));
+    turbowasm_runtime_scope_leave(alloc_scope);
+    if (grown == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    scope->entries = grown;
+    scope->capacity = next;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status resource_scope_record(
+    turbowasm_component_call_resource_scope *scope,
+    turbowasm_component_resource_handle handle,
+    uint64_t identity,
+    bool borrowed) {
+    turbowasm_status status;
+
+    if (scope == NULL || handle == 0u || identity == 0u)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (scope->count == UINT32_MAX)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    status = resource_scope_reserve(scope, scope->count + 1u);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    scope->entries[scope->count].handle = handle;
+    scope->entries[scope->count].identity = identity;
+    scope->entries[scope->count].borrowed = borrowed;
+    ++scope->count;
+    return TURBOWASM_OK;
+}
+
+static void resource_scope_rollback(
+    turbowasm_component_call_resource_scope *scope) {
     uint32_t i;
 
-    if (adapter == NULL || adapter->resources == NULL)
+    if (scope == NULL || scope->adapter == NULL ||
+        scope->adapter->resources == NULL)
         return;
 
-    for (i = 0u; i < count; ++i) {
-        if (borrowed[i]) {
+    for (i = 0u; i < scope->count; ++i) {
+        const turbowasm_component_call_resource_entry *entry =
+            &scope->entries[i];
+
+        if (entry->borrowed) {
             (void)turbowasm_component_resource_drop(
-                adapter->resources, handles[i], identities[i],
+                scope->adapter->resources,
+                entry->handle, entry->identity,
                 NULL, NULL);
         } else {
             turbowasm_value rep = {0};
             (void)turbowasm_component_resource_take_owned(
-                adapter->resources, handles[i], identities[i], &rep);
+                scope->adapter->resources,
+                entry->handle, entry->identity, &rep);
         }
     }
 }
 
-static bool finalize_borrow_scope(
-    const turbowasm_component_core_call_adapter *adapter,
-    const turbowasm_component_resource_handle *handles,
-    const uint64_t *identities,
-    const bool *borrowed,
-    uint32_t count) {
+static void resource_scope_abort_borrows(
+    turbowasm_component_call_resource_scope *scope) {
+    uint32_t i;
+
+    if (scope == NULL || scope->adapter == NULL ||
+        scope->adapter->resources == NULL)
+        return;
+
+    for (i = 0u; i < scope->count; ++i) {
+        const turbowasm_component_call_resource_entry *entry =
+            &scope->entries[i];
+        if (entry->borrowed) {
+            (void)turbowasm_component_resource_drop(
+                scope->adapter->resources,
+                entry->handle, entry->identity,
+                NULL, NULL);
+        }
+    }
+}
+
+static bool resource_scope_finalize_borrows(
+    turbowasm_component_call_resource_scope *scope) {
     uint32_t i;
     bool clean = true;
 
-    if (adapter == NULL || adapter->resources == NULL)
-        return count == 0u;
+    if (scope == NULL || scope->adapter == NULL ||
+        scope->adapter->resources == NULL)
+        return scope == NULL || scope->count == 0u;
 
-    for (i = 0u; i < count; ++i) {
+    for (i = 0u; i < scope->count; ++i) {
+        const turbowasm_component_call_resource_entry *entry =
+            &scope->entries[i];
         turbowasm_value rep = {0};
         turbowasm_status status;
 
-        if (!borrowed[i])
+        if (!entry->borrowed)
             continue;
 
         status = turbowasm_component_resource_rep(
-            adapter->resources, handles[i], identities[i], &rep);
+            scope->adapter->resources,
+            entry->handle, entry->identity, &rep);
         if (status == TURBOWASM_OK) {
             clean = false;
             (void)turbowasm_component_resource_drop(
-                adapter->resources, handles[i], identities[i],
+                scope->adapter->resources,
+                entry->handle, entry->identity,
                 NULL, NULL);
         } else if (status != TURBOWASM_TRAPPED) {
             clean = false;
         }
     }
     return clean;
+}
+
+static void resource_scope_destroy(
+    turbowasm_component_call_resource_scope *scope) {
+    const turbowasm_runtime_config *config;
+    turbowasm_runtime_scope alloc_scope;
+
+    if (scope == NULL)
+        return;
+
+    config = adapter_runtime_config(scope->adapter);
+    if (scope->entries != NULL && config != NULL) {
+        alloc_scope = turbowasm_runtime_scope_enter(config);
+        turbowasm_rt_free(scope->entries);
+        turbowasm_runtime_scope_leave(alloc_scope);
+    }
+    memset(scope, 0, sizeof(*scope));
+}
+
+static void rollback_one_created_handle(
+    const turbowasm_component_core_call_adapter *adapter,
+    turbowasm_component_resource_handle handle,
+    uint64_t identity,
+    bool borrowed) {
+    if (adapter == NULL || adapter->resources == NULL)
+        return;
+    if (borrowed) {
+        (void)turbowasm_component_resource_drop(
+            adapter->resources, handle, identity,
+            NULL, NULL);
+    } else {
+        turbowasm_value rep = {0};
+        (void)turbowasm_component_resource_take_owned(
+            adapter->resources, handle, identity, &rep);
+    }
+}
+
+static turbowasm_status canonical_resource_lower(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_component_value *value,
+    uint32_t *out_handle) {
+    turbowasm_component_resource_codec_context *codec =
+        (turbowasm_component_resource_codec_context *)context;
+    turbowasm_component_resource_handle handle;
+    uint64_t identity;
+    bool borrowed;
+    turbowasm_value flat = {0};
+    turbowasm_status status;
+
+    if (codec == NULL || codec->adapter == NULL ||
+        codec->scope == NULL || graph != codec->adapter->graph ||
+        out_handle == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = lower_resource_argument(
+        codec->adapter, ref, value,
+        &handle, &identity, &borrowed, &flat);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = resource_scope_record(
+        codec->scope, handle, identity, borrowed);
+    if (status != TURBOWASM_OK) {
+        rollback_one_created_handle(
+            codec->adapter, handle, identity, borrowed);
+        return status;
+    }
+
+    *out_handle = handle;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status canonical_resource_lift(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    uint32_t handle,
+    turbowasm_component_value *out) {
+    turbowasm_component_resource_codec_context *codec =
+        (turbowasm_component_resource_codec_context *)context;
+    turbowasm_value flat = {0};
+
+    if (codec == NULL || codec->adapter == NULL ||
+        graph != codec->adapter->graph || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    flat.kind = TURBOWASM_VALUE_I32;
+    flat.as.i32 = (int32_t)handle;
+    return lift_owned_result(
+        codec->adapter, ref, &flat, out);
 }
 
 static turbowasm_value_kind flat_value_kind(
