@@ -202,7 +202,7 @@ set_target_properties(turbowasm_component_type_graph_test PROPERTIES
 add_test(NAME turbowasm_component_type_graph_test
          COMMAND turbowasm_component_type_graph_test)
 
-if(TURBOWASM_ENABLE_WASI02_ADAPTER)
+if(TARGET turbowasm_wasi02_core)
   add_executable(turbowasm_wasi02_descriptor_test
     wasi02_descriptor_test.c)
   target_link_libraries(turbowasm_wasi02_descriptor_test
