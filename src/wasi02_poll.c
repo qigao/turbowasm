@@ -142,6 +142,7 @@ turbowasm_status turbowasm_wasi02_pollable_block(
     bool ready = false;
     uintptr_t operation_token = 0u;
     turbowasm_host_wait wait = {0};
+    turbowasm_host_wait *wait_storage = &wait;
     int completion_status = 0;
 
     if (poll == NULL || !poll->initialized)
@@ -160,25 +161,39 @@ turbowasm_status turbowasm_wasi02_pollable_block(
 
     if (call == NULL ||
         !turbowasm_host_call_can_wait(call) ||
-        poll->provider.arm == NULL)
+        (poll->provider.arm == NULL &&
+         poll->provider.arm_routed == NULL))
         return TURBOWASM_UNSUPPORTED;
 
     /*
-     * arm promises that completion is published only when this pollable is
-     * ready (including terminal/error readiness). Runtime owns suspension and
-     * generation-checked wakeup; the provider token remains opaque.
+     * A routed provider may retain the exact Runtime wait storage so an
+     * external completion source can complete it with generation checking.
+     * Plain providers continue to use local storage.
      */
-    status = poll->provider.arm(
-        poll->provider.context,
-        rep,
-        &operation_token);
-    if (status != TURBOWASM_OK)
-        return status;
+    if (poll->provider.arm_routed != NULL) {
+        status = poll->provider.arm_routed(
+            poll->provider.context,
+            rep,
+            call,
+            &operation_token,
+            &wait_storage);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (wait_storage == NULL)
+            return TURBOWASM_INVALID_ARGUMENT;
+    } else {
+        status = poll->provider.arm(
+            poll->provider.context,
+            rep,
+            &operation_token);
+        if (status != TURBOWASM_OK)
+            return status;
+    }
 
     status = turbowasm_host_call_wait(
         call,
         operation_token,
-        &wait,
+        wait_storage,
         &completion_status);
     if (status != TURBOWASM_OK)
         return status;
@@ -280,6 +295,7 @@ turbowasm_status turbowasm_wasi02_poll_many(
     size_t ready_count = 0u;
     uintptr_t operation_token = 0u;
     turbowasm_host_wait wait = {0};
+    turbowasm_host_wait *wait_storage = &wait;
     int completion_status = 0;
     turbowasm_status status;
 
@@ -325,23 +341,40 @@ turbowasm_status turbowasm_wasi02_poll_many(
 
     if (call == NULL ||
         !turbowasm_host_call_can_wait(call) ||
-        poll->provider.arm_many == NULL) {
+        (poll->provider.arm_many == NULL &&
+         poll->provider.arm_many_routed == NULL)) {
         status = TURBOWASM_UNSUPPORTED;
         goto done;
     }
 
-    status = poll->provider.arm_many(
-        poll->provider.context,
-        reps,
-        resource_count,
-        &operation_token);
-    if (status != TURBOWASM_OK)
-        goto done;
+    if (poll->provider.arm_many_routed != NULL) {
+        status = poll->provider.arm_many_routed(
+            poll->provider.context,
+            reps,
+            resource_count,
+            call,
+            &operation_token,
+            &wait_storage);
+        if (status != TURBOWASM_OK)
+            goto done;
+        if (wait_storage == NULL) {
+            status = TURBOWASM_INVALID_ARGUMENT;
+            goto done;
+        }
+    } else {
+        status = poll->provider.arm_many(
+            poll->provider.context,
+            reps,
+            resource_count,
+            &operation_token);
+        if (status != TURBOWASM_OK)
+            goto done;
+    }
 
     status = turbowasm_host_call_wait(
         call,
         operation_token,
-        &wait,
+        wait_storage,
         &completion_status);
     if (status != TURBOWASM_OK)
         goto done;
