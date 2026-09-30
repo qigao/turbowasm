@@ -66,6 +66,37 @@ turbowasm_status turbowasm_wasi02_filesystem_descriptor_drop(
     uint32_t resource);
 
 /*
+ * W3c synchronous descriptor operations that map losslessly onto the existing
+ * filesystem provider contract. Results use WIT-shaped result values.
+ */
+turbowasm_status turbowasm_wasi02_filesystem_create_directory_at(
+    turbowasm_wasi02_filesystem *filesystem,
+    uint32_t descriptor_resource,
+    turbowasm_wasi02_string_view path,
+    turbowasm_wasi02_value *out_result);
+
+turbowasm_status turbowasm_wasi02_filesystem_remove_directory_at(
+    turbowasm_wasi02_filesystem *filesystem,
+    uint32_t descriptor_resource,
+    turbowasm_wasi02_string_view path,
+    turbowasm_wasi02_value *out_result);
+
+turbowasm_status turbowasm_wasi02_filesystem_unlink_file_at(
+    turbowasm_wasi02_filesystem *filesystem,
+    uint32_t descriptor_resource,
+    turbowasm_wasi02_string_view path,
+    turbowasm_wasi02_value *out_result);
+
+turbowasm_status turbowasm_wasi02_filesystem_open_at(
+    turbowasm_wasi02_filesystem *filesystem,
+    uint32_t descriptor_resource,
+    uint32_t path_flags,
+    turbowasm_wasi02_string_view path,
+    uint32_t open_flags,
+    uint32_t descriptor_flags,
+    turbowasm_wasi02_value *out_result);
+
+/*
  * Instantiate the real W3 preopens import path through Component canonical ABI.
  * The bridge is borrowed and must outlive the executable.
  */
