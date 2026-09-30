@@ -9,6 +9,7 @@
 #endif
 #include <assert.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const uint8_t use_list32_module[] = {
