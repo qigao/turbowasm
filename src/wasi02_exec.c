@@ -2,6 +2,10 @@
 
 #include <string.h>
 
+#ifndef TURBOWASM_WASI02_HAS_FILESYSTEM
+#define TURBOWASM_WASI02_HAS_FILESYSTEM 1
+#endif
+
 turbowasm_status turbowasm_wasi02_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
@@ -25,11 +29,15 @@ turbowasm_status turbowasm_wasi02_exec_init(
     }
 
     if (capabilities->filesystem != NULL) {
+#if TURBOWASM_WASI02_HAS_FILESYSTEM
         status = turbowasm_wasi02_filesystem_imports(
             capabilities->filesystem, &sets[count]);
         if (status != TURBOWASM_OK)
             return status;
         ++count;
+#else
+        return TURBOWASM_UNSUPPORTED;
+#endif
     }
 
     if (capabilities->poll != NULL) {
