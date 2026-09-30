@@ -4,6 +4,9 @@
 
 #define TW_WASI02_V028 {0u, 2u, 8u}
 
+static const turbowasm_wasi02_type_desc type_bool = {
+    TURBOWASM_WASI02_TYPE_BOOL, "bool", {{0}}
+};
 static const turbowasm_wasi02_type_desc type_u8 = {
     TURBOWASM_WASI02_TYPE_U8, "u8", {{0}}
 };
@@ -160,6 +163,17 @@ static const turbowasm_wasi02_type_desc type_list_u8 = {
     {.list = {&type_u8}}
 };
 
+static const turbowasm_wasi02_type_desc type_list_u32 = {
+    TURBOWASM_WASI02_TYPE_LIST,
+    NULL,
+    {.list = {&type_u32}}
+};
+static const turbowasm_wasi02_type_desc type_list_pollable = {
+    TURBOWASM_WASI02_TYPE_LIST,
+    NULL,
+    {.list = {&type_pollable}}
+};
+
 static const turbowasm_wasi02_type_desc *const seed_elements[] = {
     &type_u64, &type_u64
 };
@@ -299,6 +313,21 @@ static const turbowasm_wasi02_function_desc preopens_functions[] = {
     {"get-directories", NULL, 0u, &type_preopen_list}
 };
 
+static const turbowasm_wasi02_param_desc pollable_self_param[] = {
+    {"self", &type_pollable}
+};
+static const turbowasm_wasi02_param_desc poll_list_param[] = {
+    {"in", &type_list_pollable}
+};
+static const turbowasm_wasi02_function_desc poll_functions[] = {
+    {"[method]pollable.ready",
+     pollable_self_param, 1u, &type_bool},
+    {"[method]pollable.block",
+     pollable_self_param, 1u, NULL},
+    {"poll",
+     poll_list_param, 1u, &type_list_u32}
+};
+
 static const turbowasm_wasi02_interface_desc interfaces[] = {
     {
         "wasi:clocks", "wall-clock", TW_WASI02_V028,
@@ -353,6 +382,12 @@ static const turbowasm_wasi02_interface_desc interfaces[] = {
         "https://github.com/WebAssembly/wasi-filesystem",
         "971b11617b50e7496bea85f36e60141bda172964",
         preopens_functions, 1u
+    },
+    {
+        "wasi:io", "poll", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-io",
+        "3983fe1feab6b3a3b4e5c47c8b13daaf22266f00",
+        poll_functions, 3u
     }
 };
 
