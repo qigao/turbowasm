@@ -874,10 +874,6 @@ turbowasm_status turbowasm_component_core_call_adapter_init_with_resources(
         goto fail;
 
     if (adapter->flat_signature.params_indirect) {
-        if (uses_resources) {
-            status = TURBOWASM_UNSUPPORTED;
-            goto fail;
-        }
         adapter->uses_memory = true;
         needs_realloc = true;
     }
