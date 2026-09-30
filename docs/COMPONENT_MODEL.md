@@ -452,6 +452,41 @@ closed. It requires recursive Component execution and Component import binding,
 which belongs to a later layer rather than being simulated with Core linker
 state.
 
+## C5b2 nested resource values
+
+C5b2 extends the synchronous resource transfer boundary from top-level
+`own<R>` / `borrow<R>` values into canonical memory representations such as
+dynamic lists and indirect parameter tuples.
+
+The generic canonical memory codec remains independent from C4. It accepts
+optional resource lift/lower callbacks attached only by the C5 composition
+layer:
+
+```text
+Component list/tuple value
+    -> canonical memory recursion
+    -> resource lower/lift callback
+    -> one C5 synchronous call scope
+    -> C4 generation-safe resource table
+```
+
+The call scope tracks every canonical handle created while lowering, including
+handles nested inside lists or inside the >16-parameter indirect tuple. Its
+tracking storage uses the target Core module Runtime allocation policy.
+
+- lowering failure rolls back every handle created by that attempt;
+- Core traps clean transient borrows while preserving transferred owned
+  handles, matching the C5b1 top-level rule;
+- a successful synchronous call must have explicitly dropped every borrowed
+  handle; a leaked nested borrow is cleaned and the adapter traps;
+- nested `own<R>` results consume the Core handle while recursively lifting
+  the result value;
+- borrow-containing result types remain rejected transitively by Component type
+  validation.
+
+Both memory32 and memory64 canonical list representations use this same scope.
+No C4 dependency is introduced into the generic C3 canonical codec.
+
 ## Deferred work
 
 C1 intentionally does not implement:
