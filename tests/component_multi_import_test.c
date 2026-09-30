@@ -66,8 +66,7 @@ static turbowasm_status probe_invoke(
     (void)call;
 
     if (probe == NULL || out_result == NULL ||
-        trap == NULL || arguments != NULL ||
-        argument_count != 0u ||
+        trap == NULL || argument_count != 0u ||
         !probe_can_bind(
             context,
             instance_name,
