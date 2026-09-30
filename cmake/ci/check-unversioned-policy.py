@@ -116,8 +116,37 @@ def check_salts_restore() -> None:
         ):
             fail(path, f"{package_id} PackageReference uses a literal numeric version")
 
-    if "SALTS_SDK_VERSION" in text:
-        fail(path, "SALTS_SDK_VERSION override is forbidden; GitHub package restore must resolve latest")
+    if re.search(r'\$requestedVersion|\$versionSpec|Version="\    for package_id in ("Salts.Native", "SaltsUtils.Native"):
+        match = re.search(
+            rf'PackageReference[^>]*Include="{re.escape(package_id)}"[^>]*Version="([^"]+)"',
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if match and match.group(1).strip() != "*":
+            fail(path, f"{package_id} GitHub PackageReference must use Version=\"*\"")
+
+
+def main() -> int:
+    for path in cmake_files():
+        check_cmake(path)
+    check_vcpkg()
+    check_workflows()
+    check_salts_restore()
+
+    if ERRORS:
+        print("Unversioned dependency policy violations:", file=sys.stderr)
+        for error in ERRORS:
+            print(f"  - {error}", file=sys.stderr)
+        return 1
+
+    print("Unversioned dependency policy: OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+, text):
+        fail(path, "GitHub package version selection through variables is forbidden")
 
     for package_id in ("Salts.Native", "SaltsUtils.Native"):
         match = re.search(
