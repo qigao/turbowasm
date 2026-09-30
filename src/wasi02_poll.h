@@ -4,62 +4,12 @@
 #include "component_exec.h"
 #include "component_resource.h"
 
-#include <turbowasm/link.h>
-#include <turbowasm/status.h>
+#include <turbowasm/wasi02.h>
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-typedef turbowasm_status (*turbowasm_wasi02_poll_ready_fn)(
-    void *context,
-    turbowasm_value rep,
-    bool *out_ready);
-
-typedef turbowasm_status (*turbowasm_wasi02_poll_arm_fn)(
-    void *context,
-    turbowasm_value rep,
-    uintptr_t *out_operation_token);
-
-typedef turbowasm_status (*turbowasm_wasi02_poll_arm_routed_fn)(
-    void *context,
-    turbowasm_value rep,
-    turbowasm_host_call *call,
-    uintptr_t *out_operation_token,
-    turbowasm_host_wait **out_wait_storage);
-
-/*
- * Arm one provider-owned wait-set for the supplied pollable reps. Completion
- * of the returned opaque token promises that at least one supplied source is
- * ready (terminal/error readiness counts as ready).
- */
-typedef turbowasm_status (*turbowasm_wasi02_poll_arm_many_fn)(
-    void *context,
-    const turbowasm_value *reps,
-    size_t rep_count,
-    uintptr_t *out_operation_token);
-
-typedef turbowasm_status (*turbowasm_wasi02_poll_arm_many_routed_fn)(
-    void *context,
-    const turbowasm_value *reps,
-    size_t rep_count,
-    turbowasm_host_call *call,
-    uintptr_t *out_operation_token,
-    turbowasm_host_wait **out_wait_storage);
-
-typedef turbowasm_status (*turbowasm_wasi02_poll_drop_fn)(
-    void *context,
-    turbowasm_value rep);
-
-typedef struct turbowasm_wasi02_poll_provider {
-    void *context;
-    turbowasm_wasi02_poll_ready_fn ready;
-    turbowasm_wasi02_poll_arm_fn arm;
-    turbowasm_wasi02_poll_arm_routed_fn arm_routed;
-    turbowasm_wasi02_poll_arm_many_fn arm_many;
-    turbowasm_wasi02_poll_arm_many_routed_fn arm_many_routed;
-    turbowasm_wasi02_poll_drop_fn drop;
-} turbowasm_wasi02_poll_provider;
 
 typedef struct turbowasm_wasi02_poll {
     turbowasm_wasi02_poll_provider provider;
