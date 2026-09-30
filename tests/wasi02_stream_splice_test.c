@@ -361,8 +361,8 @@ static void test_nonblocking_splice_contract(void) {
     turbowasm_wasi02_value_destroy(&result);
 
     /*
-     * A zero permit still performs the exact splice sequence with read(0) and
-     * write(empty), returning zero without blocking.
+     * With no output permit, no transfer is possible: return zero without
+     * touching the input or calling write, and consume the hidden permit.
      */
     probe.output_ready = false;
     probe.written_size = 99u;
@@ -373,10 +373,9 @@ static void test_nonblocking_splice_contract(void) {
                args, 3u, &result) == TURBOWASM_OK);
     assert(result_u64(&result) == 0u);
     assert(probe.check_calls == 2u);
-    assert(probe.read_calls == 2u);
-    assert(probe.last_read_limit == 0u);
-    assert(probe.write_calls == 2u);
-    assert(probe.written_size == 0u);
+    assert(probe.read_calls == 1u);
+    assert(probe.write_calls == 1u);
+    assert(probe.written_size == 99u);
     turbowasm_wasi02_value_destroy(&result);
 
     destroy_probe(&probe);
@@ -567,6 +566,7 @@ static void test_restartable_blocking_splice(void) {
     assert(turbowasm_execution_yield_reason_get(
                &execution) == TURBOWASM_YIELD_HOST_WAIT);
     assert(probe.host_entries == 1u);
+    assert(probe.check_calls == 1u);
     assert(probe.output_subscribe_calls == 1u);
     assert(probe.input_subscribe_calls == 0u);
     assert(probe.arm_calls == 1u);
@@ -584,6 +584,8 @@ static void test_restartable_blocking_splice(void) {
                &execution) == TURBOWASM_YIELD_HOST_WAIT);
     assert(probe.host_entries == 1u);
     assert(probe.output_poll_drop_calls == 1u);
+    assert(probe.check_calls == 2u);
+    assert(probe.read_calls == 1u);
     assert(probe.input_subscribe_calls == 1u);
     assert(probe.arm_calls == 2u);
     assert(turbowasm_execution_pending_host_wait(
@@ -598,8 +600,8 @@ static void test_restartable_blocking_splice(void) {
     assert(probe.host_entries == 1u);
     assert(probe.input_poll_drop_calls == 1u);
     assert(probe.output_poll_drop_calls == 1u);
-    assert(probe.check_calls == 1u);
-    assert(probe.read_calls == 1u);
+    assert(probe.check_calls == 2u);
+    assert(probe.read_calls == 2u);
     assert(probe.write_calls == 1u);
     assert(probe.written_size == 3u);
     assert(memcmp(probe.written, "ABC", 3u) == 0);
