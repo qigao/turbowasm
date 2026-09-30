@@ -1,4 +1,5 @@
 #include "../src/wasi02_provider.h"
+#include "../src/wasi02_component.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -414,6 +415,88 @@ static void test_validation_and_limits(
     turbowasm_wasi02_provider_destroy(&provider);
 }
 
+static void test_stream_error_variant_values(void) {
+    const turbowasm_wasi02_interface_desc *streams =
+        turbowasm_wasi02_find_interface(
+            "wasi:io", "streams");
+    const turbowasm_wasi02_function_desc *read;
+    const turbowasm_wasi02_type_desc *stream_error;
+    turbowasm_wasi02_value error_payload = {0};
+    turbowasm_wasi02_value value = {0};
+    turbowasm_component_value component_payload = {0};
+    turbowasm_component_value component_value = {0};
+    turbowasm_component_value roundtrip = {0};
+    turbowasm_wasi02_value converted = {0};
+
+    assert(streams != NULL);
+    read = turbowasm_wasi02_find_function(
+        streams, "[method]input-stream.read");
+    assert(read != NULL);
+    assert(read->result != NULL);
+    assert(read->result->kind ==
+           TURBOWASM_WASI02_TYPE_RESULT);
+    stream_error = read->result->as.result.error;
+    assert(stream_error != NULL);
+    assert(stream_error->kind ==
+           TURBOWASM_WASI02_TYPE_VARIANT);
+    assert(stream_error->as.variant.count == 2u);
+
+    value.kind = TURBOWASM_WASI02_VALUE_VARIANT;
+    value.as.variant.case_index = 1u;
+    value.as.variant.value = NULL;
+    assert(turbowasm_wasi02_value_matches_type(
+        stream_error, &value));
+
+    error_payload.kind = TURBOWASM_WASI02_VALUE_RESOURCE;
+    error_payload.as.resource = 77u;
+    value.as.variant.case_index = 0u;
+    value.as.variant.value = &error_payload;
+    assert(turbowasm_wasi02_value_matches_type(
+        stream_error, &value));
+
+    value.as.variant.case_index = 2u;
+    assert(!turbowasm_wasi02_value_matches_type(
+        stream_error, &value));
+
+    /*
+     * Exercise the private Component/WIT recursive converter used by future
+     * stream execution: variant payload is an owned io/error resource handle.
+     */
+    component_payload.kind = TURBOWASM_COMPONENT_TYPE_OWN;
+    component_payload.as.resource_rep.kind = TURBOWASM_VALUE_I32;
+    component_payload.as.resource_rep.as.i32 = 42;
+    component_value.kind = TURBOWASM_COMPONENT_TYPE_VARIANT;
+    component_value.as.variant.case_index = 0u;
+    component_value.as.variant.payload = &component_payload;
+
+    assert(turbowasm_wasi02_component_value_to_wasi(
+               stream_error,
+               &component_value,
+               &converted) == TURBOWASM_OK);
+    assert(converted.kind == TURBOWASM_WASI02_VALUE_VARIANT);
+    assert(converted.as.variant.case_index == 0u);
+    assert(converted.as.variant.value != NULL);
+    assert(converted.as.variant.value->kind ==
+           TURBOWASM_WASI02_VALUE_RESOURCE);
+    assert(converted.as.variant.value->as.resource == 42u);
+
+    assert(turbowasm_wasi02_component_value_from_wasi(
+               stream_error,
+               &converted,
+               &roundtrip) == TURBOWASM_OK);
+    assert(roundtrip.kind == TURBOWASM_COMPONENT_TYPE_VARIANT);
+    assert(roundtrip.as.variant.case_index == 0u);
+    assert(roundtrip.as.variant.payload != NULL);
+    assert(roundtrip.as.variant.payload->kind ==
+           TURBOWASM_COMPONENT_TYPE_OWN);
+    assert(roundtrip.as.variant.payload->as.resource_rep.kind ==
+           TURBOWASM_VALUE_I32);
+    assert(roundtrip.as.variant.payload->as.resource_rep.as.i32 == 42);
+
+    turbowasm_component_value_destroy(&roundtrip);
+    turbowasm_wasi02_value_destroy(&converted);
+}
+
 int main(void) {
     provider_state state;
     turbowasm_wasi02_provider provider = {0};
@@ -428,6 +511,7 @@ int main(void) {
     test_clocks(&provider, &state);
     test_random(&provider, &state);
     test_cli(&provider, &state);
+    test_stream_error_variant_values();
 
     turbowasm_wasi02_provider_destroy(&provider);
     test_validation_and_limits(&state);
