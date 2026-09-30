@@ -126,11 +126,12 @@ static void test_native_io_terminal_routes_one_wait_any(void) {
     turbowasm_wasi02_native_io_poll native_poll = {0};
     turbowasm_wasi02_poll_provider provider = {0};
     turbowasm_wasi02_poll poll = {0};
-    native_io_request requests[2] = {
+    native_io_request requests[3] = {
         {1u, 11u},
-        {2u, 12u}
+        {2u, 12u},
+        {3u, 13u}
     };
-    turbowasm_value reps[2] = {{0}};
+    turbowasm_value reps[3] = {{0}};
     host_probe host = {0};
     turbowasm_module module = {0};
     turbowasm_linker linker = {0};
@@ -254,6 +255,58 @@ static void test_native_io_terminal_routes_one_wait_any(void) {
     assert(cancel.calls == 0u);
 
     /*
+     * Abandon a second aggregate wait before destroying its coroutine.
+     * The later terminal completion must not retain/dereference that old
+     * host-call frame.
+     */
+    turbowasm_execution_destroy(&execution);
+    assert(turbowasm_wasi02_native_io_poll_register_request(
+               &native_poll,
+               requests[2],
+               &reps[2]) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_pollable_new(
+               &poll,
+               reps[2],
+               &host.resources[1]) == TURBOWASM_OK);
+
+    assert(turbowasm_execution_create(
+               &execution,
+               &instance,
+               1u,
+               NULL, 0u) == TURBOWASM_OK);
+    assert(turbowasm_execution_resume(
+               &execution, NULL) == TURBOWASM_YIELDED);
+    assert(turbowasm_execution_pending_host_wait(
+               &execution, &wait));
+    assert(wait.generation != 0u);
+    assert(wait.operation_token != 0u);
+    assert(turbowasm_wasi02_native_io_poll_abandon_wait(
+               &native_poll,
+               wait.operation_token) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_native_io_poll_abandon_wait(
+               &native_poll,
+               wait.operation_token) == TURBOWASM_TRAPPED);
+
+    turbowasm_execution_destroy(&execution);
+
+    completion = (native_io_completion){0};
+    completion.request = requests[2];
+    completion.kind = NATIVE_IO_COMPLETION_OK;
+    completion.status = SALTS_OK;
+    assert(turbowasm_wasi02_native_io_poll_complete(
+               &native_poll,
+               &completion) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_pollable_ready(
+               &poll,
+               host.resources[1],
+               &ready) == TURBOWASM_OK);
+    assert(ready);
+    assert(turbowasm_wasi02_pollable_drop(
+               &poll,
+               host.resources[1]) == TURBOWASM_OK);
+    assert(cancel.calls == 0u);
+
+    /*
      * Non-terminal drop requests NativeIO cancellation but the internal
      * registration remains retained until the terminal CANCELLED packet.
      */
@@ -276,7 +329,6 @@ static void test_native_io_terminal_routes_one_wait_any(void) {
                &native_poll,
                &completion) == TURBOWASM_TRAPPED);
 
-    turbowasm_execution_destroy(&execution);
     turbowasm_instance_destroy(&instance);
     turbowasm_module_destroy(&module);
 
