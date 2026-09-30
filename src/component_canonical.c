@@ -2070,43 +2070,177 @@ static turbowasm_status lift_flat_scalar(
     }
 }
 
-turbowasm_status turbowasm_component_canonical_lower_flat_value(
+static bool flat_type_value_kind(
+    turbowasm_component_flat_type flat,
+    turbowasm_value_kind *out) {
+    if (out == NULL)
+        return false;
+    switch (flat) {
+        case TURBOWASM_COMPONENT_FLAT_I32:
+            *out = TURBOWASM_VALUE_I32;
+            return true;
+        case TURBOWASM_COMPONENT_FLAT_I64:
+            *out = TURBOWASM_VALUE_I64;
+            return true;
+        case TURBOWASM_COMPONENT_FLAT_F32:
+            *out = TURBOWASM_VALUE_F32;
+            return true;
+        case TURBOWASM_COMPONENT_FLAT_F64:
+            *out = TURBOWASM_VALUE_F64;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void zero_flat_value(
+    turbowasm_component_flat_type type,
+    turbowasm_value *out) {
+    turbowasm_value_kind kind = TURBOWASM_VALUE_I32;
+
+    memset(out, 0, sizeof(*out));
+    if (flat_type_value_kind(type, &kind))
+        out->kind = kind;
+}
+
+static turbowasm_status coerce_lower_variant_carrier(
+    turbowasm_component_flat_type have,
+    turbowasm_component_flat_type want,
+    const turbowasm_value *input,
+    turbowasm_value *out) {
+    uint32_t bits32;
+    uint64_t bits64;
+    turbowasm_value_kind have_kind;
+
+    if (input == NULL || out == NULL ||
+        !flat_type_value_kind(have, &have_kind) ||
+        input->kind != have_kind)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    if (have == want) {
+        *out = *input;
+        return TURBOWASM_OK;
+    }
+
+    memset(out, 0, sizeof(*out));
+    if (have == TURBOWASM_COMPONENT_FLAT_F32 &&
+        want == TURBOWASM_COMPONENT_FLAT_I32) {
+        memcpy(&bits32, &input->as.f32, sizeof(bits32));
+        out->kind = TURBOWASM_VALUE_I32;
+        out->as.i32 = (int32_t)bits32;
+        return TURBOWASM_OK;
+    }
+    if (have == TURBOWASM_COMPONENT_FLAT_I32 &&
+        want == TURBOWASM_COMPONENT_FLAT_I64) {
+        out->kind = TURBOWASM_VALUE_I64;
+        out->as.i64 = (int64_t)(uint64_t)(uint32_t)input->as.i32;
+        return TURBOWASM_OK;
+    }
+    if (have == TURBOWASM_COMPONENT_FLAT_F32 &&
+        want == TURBOWASM_COMPONENT_FLAT_I64) {
+        memcpy(&bits32, &input->as.f32, sizeof(bits32));
+        out->kind = TURBOWASM_VALUE_I64;
+        out->as.i64 = (int64_t)(uint64_t)bits32;
+        return TURBOWASM_OK;
+    }
+    if (have == TURBOWASM_COMPONENT_FLAT_F64 &&
+        want == TURBOWASM_COMPONENT_FLAT_I64) {
+        memcpy(&bits64, &input->as.f64, sizeof(bits64));
+        out->kind = TURBOWASM_VALUE_I64;
+        out->as.i64 = (int64_t)bits64;
+        return TURBOWASM_OK;
+    }
+
+    return TURBOWASM_TYPE_MISMATCH;
+}
+
+static turbowasm_status coerce_lift_variant_carrier(
+    turbowasm_component_flat_type have,
+    turbowasm_component_flat_type want,
+    const turbowasm_value *input,
+    turbowasm_value *out) {
+    uint32_t bits32;
+    uint64_t bits64;
+    turbowasm_value_kind have_kind;
+
+    if (input == NULL || out == NULL ||
+        !flat_type_value_kind(have, &have_kind) ||
+        input->kind != have_kind)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    if (have == want) {
+        *out = *input;
+        return TURBOWASM_OK;
+    }
+
+    memset(out, 0, sizeof(*out));
+    if (have == TURBOWASM_COMPONENT_FLAT_I32 &&
+        want == TURBOWASM_COMPONENT_FLAT_F32) {
+        bits32 = (uint32_t)input->as.i32;
+        out->kind = TURBOWASM_VALUE_F32;
+        memcpy(&out->as.f32, &bits32, sizeof(bits32));
+        return TURBOWASM_OK;
+    }
+    if (have == TURBOWASM_COMPONENT_FLAT_I64 &&
+        want == TURBOWASM_COMPONENT_FLAT_I32) {
+        out->kind = TURBOWASM_VALUE_I32;
+        out->as.i32 = (int32_t)(uint32_t)input->as.i64;
+        return TURBOWASM_OK;
+    }
+    if (have == TURBOWASM_COMPONENT_FLAT_I64 &&
+        want == TURBOWASM_COMPONENT_FLAT_F32) {
+        bits32 = (uint32_t)input->as.i64;
+        out->kind = TURBOWASM_VALUE_F32;
+        memcpy(&out->as.f32, &bits32, sizeof(bits32));
+        return TURBOWASM_OK;
+    }
+    if (have == TURBOWASM_COMPONENT_FLAT_I64 &&
+        want == TURBOWASM_COMPONENT_FLAT_F64) {
+        bits64 = (uint64_t)input->as.i64;
+        out->kind = TURBOWASM_VALUE_F64;
+        memcpy(&out->as.f64, &bits64, sizeof(bits64));
+        return TURBOWASM_OK;
+    }
+
+    return TURBOWASM_TYPE_MISMATCH;
+}
+
+static turbowasm_status lower_flat_value_inner(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
     const turbowasm_component_canonical_memory *memory,
     const turbowasm_component_value *value,
     turbowasm_value *out,
     uint32_t out_capacity,
+    uint32_t depth,
+    uint32_t *out_count);
+
+static turbowasm_status lift_flat_value_inner(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_value *values,
+    uint32_t value_count,
+    uint32_t depth,
+    turbowasm_component_value *out);
+
+static turbowasm_status lower_flat_dynamic_pair(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_component_value *value,
+    turbowasm_value *out,
+    uint32_t out_capacity,
+    uint32_t depth,
     uint32_t *out_count) {
-    turbowasm_component_type_kind kind;
-    const turbowasm_component_type *type;
     turbowasm_instance_impl *instance = NULL;
+    uint64_t pointer = 0u;
+    uint64_t length = 0u;
     turbowasm_status status;
-    uint64_t pointer;
-    uint64_t length;
 
-    if (graph == NULL || value == NULL ||
-        out == NULL || out_count == NULL ||
-        out_capacity == 0u)
+    if (out_capacity < 2u)
         return TURBOWASM_INVALID_ARGUMENT;
-
-    *out_count = 0u;
-    memset(out, 0, (size_t)out_capacity * sizeof(*out));
-
-    status = resolved_kind(graph, ref, &kind, &type);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    if (kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
-        kind <= TURBOWASM_COMPONENT_TYPE_CHAR) {
-        if (out_capacity < 1u)
-            return TURBOWASM_INVALID_ARGUMENT;
-        status = lower_flat_scalar(kind, value, &out[0]);
-        if (status == TURBOWASM_OK)
-            *out_count = 1u;
-        return status;
-    }
-
     status = canonical_memory_validate(memory, &instance);
     if (status != TURBOWASM_OK)
         return status;
@@ -2119,15 +2253,12 @@ turbowasm_status turbowasm_component_canonical_lower_flat_value(
             return TURBOWASM_MALFORMED_MODULE;
         status = lower_list_range(
             graph, type, memory, instance,
-            0u, value, &pointer, &length);
+            depth, value, &pointer, &length);
     } else {
-        return TURBOWASM_UNSUPPORTED;
+        return TURBOWASM_INVALID_ARGUMENT;
     }
     if (status != TURBOWASM_OK)
         return status;
-
-    if (out_capacity < 2u)
-        return TURBOWASM_INVALID_ARGUMENT;
 
     status = flat_pointer_value(
         memory->pointer_type, pointer, &out[0]);
@@ -2142,35 +2273,21 @@ turbowasm_status turbowasm_component_canonical_lower_flat_value(
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_component_canonical_lift_flat_value(
+static turbowasm_status lift_flat_dynamic_pair(
     const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_ref ref,
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
     const turbowasm_component_canonical_memory *memory,
     const turbowasm_value *values,
     uint32_t value_count,
+    uint32_t depth,
     turbowasm_component_value *out) {
-    turbowasm_component_type_kind kind;
-    const turbowasm_component_type *type;
     turbowasm_instance_impl *instance = NULL;
     const turbowasm_module_impl *module;
     turbowasm_runtime_scope scope;
-    turbowasm_status status;
     uint64_t pointer;
     uint64_t length;
-
-    if (graph == NULL || values == NULL || out == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    status = resolved_kind(graph, ref, &kind, &type);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    if (kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
-        kind <= TURBOWASM_COMPONENT_TYPE_CHAR) {
-        if (value_count != 1u)
-            return TURBOWASM_TYPE_MISMATCH;
-        return lift_flat_scalar(kind, &values[0], out);
-    }
+    turbowasm_status status;
 
     if (value_count != 2u)
         return TURBOWASM_TYPE_MISMATCH;
@@ -2190,7 +2307,6 @@ turbowasm_status turbowasm_component_canonical_lift_flat_value(
     if (module == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    memset(out, 0, sizeof(*out));
     scope = turbowasm_runtime_scope_enter(&module->config);
     if (kind == TURBOWASM_COMPONENT_TYPE_STRING) {
         status = lift_string_range(
@@ -2201,13 +2317,523 @@ turbowasm_status turbowasm_component_canonical_lift_flat_value(
         } else {
             status = lift_list_range(
                 graph, type, memory, instance,
-                pointer, length, 0u, out);
+                pointer, length, depth, out);
         }
     } else {
-        status = TURBOWASM_UNSUPPORTED;
+        status = TURBOWASM_INVALID_ARGUMENT;
     }
     turbowasm_runtime_scope_leave(scope);
+    return status;
+}
 
+static turbowasm_status lower_flat_sequence(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_component_value *value,
+    turbowasm_value *out,
+    uint32_t out_capacity,
+    uint32_t depth,
+    uint32_t *out_count) {
+    const turbowasm_component_value_list *sequence;
+    uint32_t count = 0u;
+    uint32_t cursor = 0u;
+    uint32_t i;
+    turbowasm_status status;
+
+    if (value == NULL || value->kind != kind)
+        return TURBOWASM_TYPE_MISMATCH;
+    status = composite_sequence_info(type, kind, &count);
+    if (status != TURBOWASM_OK)
+        return status;
+    sequence = kind == TURBOWASM_COMPONENT_TYPE_RECORD
+        ? &value->as.record
+        : &value->as.tuple;
+    if (sequence->count != count ||
+        (count != 0u && sequence->items == NULL))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    for (i = 0u; i < count; ++i) {
+        uint32_t part_count = 0u;
+        if (cursor > out_capacity)
+            return TURBOWASM_INVALID_ARGUMENT;
+        status = lower_flat_value_inner(
+            graph,
+            composite_sequence_ref(type, kind, i),
+            memory,
+            &sequence->items[i],
+            out + cursor,
+            out_capacity - cursor,
+            depth + 1u,
+            &part_count);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (part_count > out_capacity - cursor)
+            return TURBOWASM_INVALID_ARGUMENT;
+        cursor += part_count;
+    }
+
+    *out_count = cursor;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status lift_flat_sequence(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_value *values,
+    uint32_t value_count,
+    uint32_t depth,
+    turbowasm_component_value *out) {
+    turbowasm_component_value *items = NULL;
+    uint32_t count = 0u;
+    uint32_t cursor = 0u;
+    uint32_t i;
+    turbowasm_status status;
+
+    status = composite_sequence_info(type, kind, &count);
+    if (status != TURBOWASM_OK)
+        return status;
+    if ((size_t)count > SIZE_MAX / sizeof(*items))
+        return TURBOWASM_OUT_OF_MEMORY;
+    items = (turbowasm_component_value *)turbowasm_rt_calloc(
+        (size_t)count, sizeof(*items));
+    if (items == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    for (i = 0u; i < count; ++i) {
+        turbowasm_component_flat_type_list flat;
+        uint32_t part_count;
+
+        status = canonical_flatten_type_inner(
+            graph,
+            composite_sequence_ref(type, kind, i),
+            memory != NULL
+                ? memory->pointer_type
+                : TURBOWASM_COMPONENT_POINTER_I32,
+            depth + 1u,
+            &flat);
+        if (status != TURBOWASM_OK)
+            goto fail;
+        part_count = flat.count;
+        if (part_count > value_count - cursor) {
+            status = TURBOWASM_TYPE_MISMATCH;
+            goto fail;
+        }
+        status = lift_flat_value_inner(
+            graph,
+            composite_sequence_ref(type, kind, i),
+            memory,
+            values + cursor,
+            part_count,
+            depth + 1u,
+            &items[i]);
+        if (status != TURBOWASM_OK)
+            goto fail;
+        cursor += part_count;
+    }
+
+    if (cursor != value_count) {
+        status = TURBOWASM_TYPE_MISMATCH;
+        goto fail;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = kind;
+    if (kind == TURBOWASM_COMPONENT_TYPE_RECORD) {
+        out->as.record.items = items;
+        out->as.record.count = count;
+    } else {
+        out->as.tuple.items = items;
+        out->as.tuple.count = count;
+    }
+    return TURBOWASM_OK;
+
+fail:
+    while (i != 0u) {
+        --i;
+        turbowasm_component_value_destroy(&items[i]);
+    }
+    turbowasm_rt_free(items);
+    return status;
+}
+
+static turbowasm_status lower_flat_variant(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    turbowasm_component_type_ref ref,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_component_value *value,
+    turbowasm_value *out,
+    uint32_t out_capacity,
+    uint32_t depth,
+    uint32_t *out_count) {
+    const turbowasm_component_value_variant *variant;
+    turbowasm_component_flat_type_list full_flat;
+    turbowasm_component_flat_type_list payload_flat = {{0}, 0u};
+    turbowasm_value
+        payload_values[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS] = {{0}};
+    bool has_payload = false;
+    turbowasm_component_type_ref payload_type;
+    uint32_t payload_count = 0u;
+    uint32_t joined_count;
+    uint32_t i;
+    turbowasm_status status;
+
+    if (value == NULL || value->kind != kind)
+        return TURBOWASM_TYPE_MISMATCH;
+    variant = kind == TURBOWASM_COMPONENT_TYPE_OPTION
+        ? &value->as.option
+        : &value->as.result;
+    if (variant->case_index >= 2u)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    status = canonical_flatten_type_inner(
+        graph, ref,
+        memory != NULL
+            ? memory->pointer_type
+            : TURBOWASM_COMPONENT_POINTER_I32,
+        depth, &full_flat);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (full_flat.count == 0u ||
+        full_flat.types[0] != TURBOWASM_COMPONENT_FLAT_I32 ||
+        out_capacity < full_flat.count)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = variant_case_ref(
+        type, kind, variant->case_index,
+        &has_payload, &payload_type);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (has_payload != (variant->payload != NULL))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    out[0].kind = TURBOWASM_VALUE_I32;
+    out[0].as.i32 = (int32_t)variant->case_index;
+    joined_count = full_flat.count - 1u;
+
+    if (has_payload) {
+        status = canonical_flatten_type_inner(
+            graph, payload_type,
+            memory != NULL
+                ? memory->pointer_type
+                : TURBOWASM_COMPONENT_POINTER_I32,
+            depth + 1u, &payload_flat);
+        if (status != TURBOWASM_OK)
+            return status;
+        status = lower_flat_value_inner(
+            graph, payload_type, memory,
+            variant->payload,
+            payload_values,
+            TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS,
+            depth + 1u,
+            &payload_count);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (payload_count != payload_flat.count ||
+            payload_count > joined_count)
+            return TURBOWASM_MALFORMED_MODULE;
+    }
+
+    for (i = 0u; i < joined_count; ++i) {
+        if (i < payload_count) {
+            status = coerce_lower_variant_carrier(
+                payload_flat.types[i],
+                full_flat.types[i + 1u],
+                &payload_values[i],
+                &out[i + 1u]);
+            if (status != TURBOWASM_OK)
+                return status;
+        } else {
+            zero_flat_value(
+                full_flat.types[i + 1u],
+                &out[i + 1u]);
+        }
+    }
+
+    *out_count = full_flat.count;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status lift_flat_variant(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    turbowasm_component_type_ref ref,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_value *values,
+    uint32_t value_count,
+    uint32_t depth,
+    turbowasm_component_value *out) {
+    turbowasm_component_flat_type_list full_flat;
+    turbowasm_component_flat_type_list payload_flat = {{0}, 0u};
+    turbowasm_value
+        payload_values[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS] = {{0}};
+    turbowasm_component_value *payload = NULL;
+    bool has_payload = false;
+    turbowasm_component_type_ref payload_type;
+    uint32_t case_index;
+    uint32_t i;
+    turbowasm_status status;
+
+    status = canonical_flatten_type_inner(
+        graph, ref,
+        memory != NULL
+            ? memory->pointer_type
+            : TURBOWASM_COMPONENT_POINTER_I32,
+        depth, &full_flat);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (full_flat.count != value_count ||
+        value_count == 0u ||
+        values[0].kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    case_index = (uint32_t)values[0].as.i32;
+    if (case_index >= 2u)
+        return TURBOWASM_TRAPPED;
+
+    status = variant_case_ref(
+        type, kind, case_index,
+        &has_payload, &payload_type);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (has_payload) {
+        status = canonical_flatten_type_inner(
+            graph, payload_type,
+            memory != NULL
+                ? memory->pointer_type
+                : TURBOWASM_COMPONENT_POINTER_I32,
+            depth + 1u, &payload_flat);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (payload_flat.count > value_count - 1u)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        for (i = 0u; i < payload_flat.count; ++i) {
+            status = coerce_lift_variant_carrier(
+                full_flat.types[i + 1u],
+                payload_flat.types[i],
+                &values[i + 1u],
+                &payload_values[i]);
+            if (status != TURBOWASM_OK)
+                return status;
+        }
+
+        payload = (turbowasm_component_value *)
+            turbowasm_rt_calloc(1u, sizeof(*payload));
+        if (payload == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+        status = lift_flat_value_inner(
+            graph, payload_type, memory,
+            payload_values, payload_flat.count,
+            depth + 1u, payload);
+        if (status != TURBOWASM_OK) {
+            turbowasm_component_value_destroy(payload);
+            turbowasm_rt_free(payload);
+            return status;
+        }
+    }
+
+    for (i = 1u; i < value_count; ++i) {
+        turbowasm_value_kind expected_kind;
+        if (!flat_type_value_kind(
+                full_flat.types[i], &expected_kind) ||
+            values[i].kind != expected_kind) {
+            if (payload != NULL) {
+                turbowasm_component_value_destroy(payload);
+                turbowasm_rt_free(payload);
+            }
+            return TURBOWASM_TYPE_MISMATCH;
+        }
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = kind;
+    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION) {
+        out->as.option.case_index = case_index;
+        out->as.option.payload = payload;
+    } else {
+        out->as.result.case_index = case_index;
+        out->as.result.payload = payload;
+    }
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status lower_flat_value_inner(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_component_value *value,
+    turbowasm_value *out,
+    uint32_t out_capacity,
+    uint32_t depth,
+    uint32_t *out_count) {
+    turbowasm_component_type_kind kind;
+    const turbowasm_component_type *type;
+    turbowasm_status status;
+
+    if (graph == NULL || value == NULL || out == NULL ||
+        out_count == NULL || depth >=
+            TURBOWASM_COMPONENT_CANONICAL_MAX_DEPTH)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = resolved_kind(graph, ref, &kind, &type);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
+        kind <= TURBOWASM_COMPONENT_TYPE_CHAR) {
+        if (out_capacity < 1u)
+            return TURBOWASM_INVALID_ARGUMENT;
+        status = lower_flat_scalar(kind, value, &out[0]);
+        if (status == TURBOWASM_OK)
+            *out_count = 1u;
+        return status;
+    }
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_STRING ||
+        kind == TURBOWASM_COMPONENT_TYPE_LIST)
+        return lower_flat_dynamic_pair(
+            graph, type, kind, memory, value,
+            out, out_capacity, depth, out_count);
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_RECORD ||
+        kind == TURBOWASM_COMPONENT_TYPE_TUPLE)
+        return lower_flat_sequence(
+            graph, type, kind, memory, value,
+            out, out_capacity, depth, out_count);
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
+        kind == TURBOWASM_COMPONENT_TYPE_RESULT)
+        return lower_flat_variant(
+            graph, type, kind, ref, memory, value,
+            out, out_capacity, depth, out_count);
+
+    return TURBOWASM_UNSUPPORTED;
+}
+
+static turbowasm_status lift_flat_value_inner(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_value *values,
+    uint32_t value_count,
+    uint32_t depth,
+    turbowasm_component_value *out) {
+    turbowasm_component_type_kind kind;
+    const turbowasm_component_type *type;
+    turbowasm_status status;
+
+    if (graph == NULL || values == NULL || out == NULL ||
+        depth >= TURBOWASM_COMPONENT_CANONICAL_MAX_DEPTH)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = resolved_kind(graph, ref, &kind, &type);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    if (kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
+        kind <= TURBOWASM_COMPONENT_TYPE_CHAR) {
+        if (value_count != 1u)
+            return TURBOWASM_TYPE_MISMATCH;
+        return lift_flat_scalar(kind, &values[0], out);
+    }
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_STRING ||
+        kind == TURBOWASM_COMPONENT_TYPE_LIST)
+        return lift_flat_dynamic_pair(
+            graph, type, kind, memory,
+            values, value_count, depth, out);
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_RECORD ||
+        kind == TURBOWASM_COMPONENT_TYPE_TUPLE)
+        return lift_flat_sequence(
+            graph, type, kind, memory,
+            values, value_count, depth, out);
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_OPTION ||
+        kind == TURBOWASM_COMPONENT_TYPE_RESULT)
+        return lift_flat_variant(
+            graph, type, kind, ref, memory,
+            values, value_count, depth, out);
+
+    return TURBOWASM_UNSUPPORTED;
+}
+
+turbowasm_status turbowasm_component_canonical_lower_flat_value(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_component_value *value,
+    turbowasm_value *out,
+    uint32_t out_capacity,
+    uint32_t *out_count) {
+    turbowasm_component_flat_type_list flat;
+    turbowasm_component_pointer_type pointer_type =
+        memory != NULL
+            ? memory->pointer_type
+            : TURBOWASM_COMPONENT_POINTER_I32;
+    turbowasm_status status;
+    uint32_t actual_count = 0u;
+
+    if (graph == NULL || value == NULL ||
+        out == NULL || out_count == NULL ||
+        out_capacity == 0u)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = canonical_flatten_type_inner(
+        graph, ref, pointer_type, 0u, &flat);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (flat.count > out_capacity)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memset(out, 0, (size_t)out_capacity * sizeof(*out));
+    status = lower_flat_value_inner(
+        graph, ref, memory, value,
+        out, out_capacity, 0u, &actual_count);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (actual_count != flat.count)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    *out_count = actual_count;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_canonical_lift_flat_value(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_value *values,
+    uint32_t value_count,
+    turbowasm_component_value *out) {
+    turbowasm_component_flat_type_list flat;
+    turbowasm_component_pointer_type pointer_type =
+        memory != NULL
+            ? memory->pointer_type
+            : TURBOWASM_COMPONENT_POINTER_I32;
+    turbowasm_status status;
+
+    if (graph == NULL || values == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = canonical_flatten_type_inner(
+        graph, ref, pointer_type, 0u, &flat);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (flat.count != value_count)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    memset(out, 0, sizeof(*out));
+    status = lift_flat_value_inner(
+        graph, ref, memory, values, value_count, 0u, out);
     if (status != TURBOWASM_OK)
         turbowasm_component_value_destroy(out);
     return status;
