@@ -420,6 +420,38 @@ C5c2b supports inline Core instances whose exports are resource built-in Core
 functions. General inline Core exports and Component-instance composition
 remain C5c3.
 
+## C5c3 inline Component instances
+
+The first Component-instance composition slice supports the pinned synchronous
+inline instance form:
+
+```text
+(component func N)
+    -> inline Component instance export "name" func N
+    -> alias export instance "name" (func)
+    -> new Component function index
+```
+
+Decoded inline instances retain named Component-function exports. A later
+Component export alias creates a new function index that resolves to the same
+C5a/C5b canon-lift adapter as the source function. Adapters, Core instances,
+resource tables and realloc contexts are therefore not copied when a function
+is re-exported through an instance.
+
+The executor keeps an explicit:
+
+```text
+Component function index -> canon-lift adapter index
+```
+
+map. This removes the earlier temporary assumption that a Component function
+index was identical to its position in the canon-lift record array.
+
+Nested Component instantiation (`instance 0x00 componentidx ...`) still fails
+closed. It requires recursive Component execution and Component import binding,
+which belongs to a later layer rather than being simulated with Core linker
+state.
+
 ## Deferred work
 
 C1 intentionally does not implement:

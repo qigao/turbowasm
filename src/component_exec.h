@@ -73,6 +73,9 @@ typedef struct turbowasm_component_exec {
         *resource_builtin_contexts;
 
     turbowasm_component_core_call_adapter *functions;
+    uint32_t adapter_count;
+
+    uint32_t *function_adapter_indices;
     uint32_t function_count;
 
     bool initialized;

@@ -314,6 +314,46 @@ static bool append_resource_builtin(
     return true;
 }
 
+static bool append_component_instance(
+    turbowasm_component_binary *component,
+    turbowasm_component_instance_def definition) {
+    uint32_t required;
+
+    if (component == NULL ||
+        component->component_instance_count == UINT32_MAX)
+        return false;
+    required = component->component_instance_count + 1u;
+    if (!reserve_array(
+            (void **)&component->component_instances,
+            &component->component_instance_capacity,
+            required,
+            sizeof(*component->component_instances)))
+        return false;
+    component->component_instances[
+        component->component_instance_count++] = definition;
+    return true;
+}
+
+static bool append_component_function_alias(
+    turbowasm_component_binary *component,
+    turbowasm_component_function_alias alias) {
+    uint32_t required;
+
+    if (component == NULL ||
+        component->component_function_alias_count == UINT32_MAX)
+        return false;
+    required = component->component_function_alias_count + 1u;
+    if (!reserve_array(
+            (void **)&component->component_function_aliases,
+            &component->component_function_alias_capacity,
+            required,
+            sizeof(*component->component_function_aliases)))
+        return false;
+    component->component_function_aliases[
+        component->component_function_alias_count++] = alias;
+    return true;
+}
+
 static turbowasm_status validate_custom_section(
     turbowasm_reader section) {
     uint32_t name_size;
@@ -657,74 +697,105 @@ fail_definition:
         : TURBOWASM_MALFORMED_MODULE;
 }
 
-static turbowasm_status decode_core_alias_section(
+static turbowasm_status decode_alias_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
     uint32_t current_core_instances,
+    uint32_t current_component_instances,
     uint32_t *next_core_function_index,
-    uint32_t *next_core_memory_index) {
+    uint32_t *next_core_memory_index,
+    uint32_t *next_component_function_index) {
     uint32_t count;
     uint32_t i;
 
     if (component == NULL ||
         next_core_function_index == NULL ||
-        next_core_memory_index == NULL)
+        next_core_memory_index == NULL ||
+        next_component_function_index == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(&section, &count))
         return TURBOWASM_MALFORMED_MODULE;
 
     for (i = 0u; i < count; ++i) {
-        uint8_t sort_prefix;
-        uint8_t core_sort;
-        uint8_t alias_kind;
-        uint32_t instance_index;
-        turbowasm_component_name name = {0};
-        turbowasm_status status;
+        uint8_t sort;
 
-        if (!turbowasm_reader_u8(&section, &sort_prefix) ||
-            !turbowasm_reader_u8(&section, &core_sort) ||
-            !turbowasm_reader_u8(&section, &alias_kind))
+        if (!turbowasm_reader_u8(&section, &sort))
             return TURBOWASM_MALFORMED_MODULE;
 
-        /*
-         * C5c2a supports:
-         *   alias core export <core-instance> <name> (core func)
-         *   alias core export <core-instance> <name> (core memory)
-         */
-        if (sort_prefix != 0x00u || alias_kind != 0x01u)
-            return TURBOWASM_UNSUPPORTED;
-        if (core_sort != 0x00u && core_sort != 0x02u)
-            return TURBOWASM_UNSUPPORTED;
+        if (sort == 0x00u) {
+            uint8_t core_sort;
+            uint8_t alias_kind;
+            uint32_t instance_index;
+            turbowasm_component_name name = {0};
+            turbowasm_status status;
 
-        if (!turbowasm_reader_uleb32(
-                &section, &instance_index) ||
-            instance_index >= current_core_instances)
-            return TURBOWASM_MALFORMED_MODULE;
+            if (!turbowasm_reader_u8(&section, &core_sort) ||
+                !turbowasm_reader_u8(&section, &alias_kind))
+                return TURBOWASM_MALFORMED_MODULE;
 
-        status = read_component_name(&section, &name);
-        if (status != TURBOWASM_OK)
-            return status;
+            if (alias_kind != 0x01u)
+                return TURBOWASM_UNSUPPORTED;
+            if (core_sort != 0x00u && core_sort != 0x02u)
+                return TURBOWASM_UNSUPPORTED;
 
-        if (core_sort == 0x00u) {
-            turbowasm_component_core_function_alias alias = {0};
-            alias.instance_index = instance_index;
-            alias.name = name;
-            alias.core_function_index = *next_core_function_index;
-            if (!append_core_function_alias(component, alias))
+            if (!turbowasm_reader_uleb32(
+                    &section, &instance_index) ||
+                instance_index >= current_core_instances)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            status = read_component_name(&section, &name);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            if (core_sort == 0x00u) {
+                turbowasm_component_core_function_alias alias = {0};
+                alias.instance_index = instance_index;
+                alias.name = name;
+                alias.core_function_index = *next_core_function_index;
+                if (!append_core_function_alias(component, alias))
+                    return TURBOWASM_OUT_OF_MEMORY;
+                if (*next_core_function_index == UINT32_MAX)
+                    return TURBOWASM_OUT_OF_MEMORY;
+                ++*next_core_function_index;
+            } else {
+                turbowasm_component_core_memory_alias alias = {0};
+                alias.instance_index = instance_index;
+                alias.name = name;
+                alias.core_memory_index = *next_core_memory_index;
+                if (!append_core_memory_alias(component, alias))
+                    return TURBOWASM_OUT_OF_MEMORY;
+                if (*next_core_memory_index == UINT32_MAX)
+                    return TURBOWASM_OUT_OF_MEMORY;
+                ++*next_core_memory_index;
+            }
+        } else if (sort == 0x01u) {
+            turbowasm_component_function_alias alias = {0};
+            uint8_t alias_kind;
+            turbowasm_status status;
+
+            if (!turbowasm_reader_u8(&section, &alias_kind))
+                return TURBOWASM_MALFORMED_MODULE;
+            if (alias_kind != 0x00u)
+                return TURBOWASM_UNSUPPORTED;
+
+            if (!turbowasm_reader_uleb32(
+                    &section, &alias.instance_index) ||
+                alias.instance_index >= current_component_instances)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            status = read_component_name(&section, &alias.name);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            alias.component_function_index =
+                *next_component_function_index;
+            if (!append_component_function_alias(component, alias))
                 return TURBOWASM_OUT_OF_MEMORY;
-            if (*next_core_function_index == UINT32_MAX)
+            if (*next_component_function_index == UINT32_MAX)
                 return TURBOWASM_OUT_OF_MEMORY;
-            ++*next_core_function_index;
+            ++*next_component_function_index;
         } else {
-            turbowasm_component_core_memory_alias alias = {0};
-            alias.instance_index = instance_index;
-            alias.name = name;
-            alias.core_memory_index = *next_core_memory_index;
-            if (!append_core_memory_alias(component, alias))
-                return TURBOWASM_OUT_OF_MEMORY;
-            if (*next_core_memory_index == UINT32_MAX)
-                return TURBOWASM_OUT_OF_MEMORY;
-            ++*next_core_memory_index;
+            return TURBOWASM_UNSUPPORTED;
         }
     }
 
@@ -884,6 +955,99 @@ static turbowasm_status decode_canon_section(
         } else {
             return TURBOWASM_UNSUPPORTED;
         }
+    }
+
+    return turbowasm_reader_remaining(&section) == 0u
+        ? TURBOWASM_OK
+        : TURBOWASM_MALFORMED_MODULE;
+}
+
+static turbowasm_status decode_component_instance_section(
+    turbowasm_reader section,
+    turbowasm_component_binary *component,
+    uint32_t current_component_functions) {
+    uint32_t count;
+    uint32_t i;
+
+    if (component == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_reader_uleb32(&section, &count))
+        return TURBOWASM_MALFORMED_MODULE;
+
+    for (i = 0u; i < count; ++i) {
+        turbowasm_component_instance_def definition = {0};
+        uint8_t opcode;
+        uint32_t export_count;
+        uint32_t j;
+        turbowasm_status status = TURBOWASM_OK;
+
+        if (!turbowasm_reader_u8(&section, &opcode))
+            return TURBOWASM_MALFORMED_MODULE;
+
+        /*
+         * C5c3 intentionally supports only inline Component instances.
+         * Nested Component instantiation needs recursive execution/import
+         * binding and therefore fails closed for now.
+         */
+        if (opcode == 0x00u)
+            return TURBOWASM_UNSUPPORTED;
+        if (opcode != 0x01u)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        if (!turbowasm_reader_uleb32(&section, &export_count))
+            return TURBOWASM_MALFORMED_MODULE;
+
+        if (export_count != 0u) {
+            if ((size_t)export_count >
+                SIZE_MAX / sizeof(*definition.exports))
+                return TURBOWASM_OUT_OF_MEMORY;
+            definition.exports =
+                (turbowasm_component_inline_export *)
+                    turbowasm_rt_calloc(
+                        export_count,
+                        sizeof(*definition.exports));
+            if (definition.exports == NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+        }
+        definition.export_count = export_count;
+
+        for (j = 0u; j < export_count; ++j) {
+            uint8_t sort;
+            status = read_name_attributes(
+                &section, &definition.exports[j].name);
+            if (status != TURBOWASM_OK)
+                goto fail_definition;
+
+            if (!turbowasm_reader_u8(&section, &sort)) {
+                status = TURBOWASM_MALFORMED_MODULE;
+                goto fail_definition;
+            }
+            if (sort != 0x01u) {
+                status = TURBOWASM_UNSUPPORTED;
+                goto fail_definition;
+            }
+
+            definition.exports[j].kind =
+                TURBOWASM_COMPONENT_EXTERN_FUNCTION;
+            if (!turbowasm_reader_uleb32(
+                    &section,
+                    &definition.exports[j].item_index) ||
+                definition.exports[j].item_index >=
+                    current_component_functions) {
+                status = TURBOWASM_MALFORMED_MODULE;
+                goto fail_definition;
+            }
+        }
+
+        if (!append_component_instance(component, definition)) {
+            status = TURBOWASM_OUT_OF_MEMORY;
+            goto fail_definition;
+        }
+        continue;
+
+fail_definition:
+        turbowasm_rt_free(definition.exports);
+        return status;
     }
 
     return turbowasm_reader_remaining(&section) == 0u
@@ -1206,13 +1370,20 @@ static turbowasm_status decode_component_semantics(
                 component,
                 current_core_modules,
                 next_core_function_index);
+        } else if (section->id == 5u) {
+            status = decode_component_instance_section(
+                reader,
+                component,
+                next_component_function_index);
         } else if (section->id == 6u) {
-            status = decode_core_alias_section(
+            status = decode_alias_section(
                 reader,
                 component,
                 component->core_instance_count,
+                component->component_instance_count,
                 &next_core_function_index,
-                &next_core_memory_index);
+                &next_core_memory_index,
+                &next_component_function_index);
         } else if (section->id == 7u) {
             status = decode_component_type_section(
                 reader, component, &current_types);
@@ -1254,6 +1425,8 @@ static turbowasm_status decode_component_semantics(
         return TURBOWASM_MALFORMED_MODULE;
 
     component->core_function_count = next_core_function_index;
+    component->component_function_count =
+        next_component_function_index;
     return TURBOWASM_OK;
 }
 
@@ -1284,6 +1457,8 @@ turbowasm_status turbowasm_component_binary_load_with_config(
         component->core_memory_aliases != NULL ||
         component->canon_lifts != NULL ||
         component->resource_builtins != NULL ||
+        component->component_instances != NULL ||
+        component->component_function_aliases != NULL ||
         component->type_graph.types != NULL ||
         component->type_graph.count != 0u ||
         component->imports != NULL ||
@@ -1372,6 +1547,11 @@ fail:
             turbowasm_rt_free(
                 component->core_instances[index].exports);
         }
+        for (index = 0u;
+             index < component->component_instance_count;
+             ++index)
+            turbowasm_rt_free(
+                component->component_instances[index].exports);
     }
     turbowasm_component_type_graph_destroy(
         &component->type_graph);
@@ -1384,6 +1564,8 @@ fail:
     turbowasm_rt_free(component->core_memory_aliases);
     turbowasm_rt_free(component->canon_lifts);
     turbowasm_rt_free(component->resource_builtins);
+    turbowasm_rt_free(component->component_instances);
+    turbowasm_rt_free(component->component_function_aliases);
     memset(component, 0, sizeof(*component));
     turbowasm_runtime_scope_leave(scope);
     return status;
@@ -1407,6 +1589,11 @@ void turbowasm_component_binary_destroy(
             turbowasm_rt_free(
                 component->core_instances[index].exports);
         }
+        for (index = 0u;
+             index < component->component_instance_count;
+             ++index)
+            turbowasm_rt_free(
+                component->component_instances[index].exports);
     }
     turbowasm_component_type_graph_destroy(
         &component->type_graph);
@@ -1419,6 +1606,8 @@ void turbowasm_component_binary_destroy(
     turbowasm_rt_free(component->core_memory_aliases);
     turbowasm_rt_free(component->canon_lifts);
     turbowasm_rt_free(component->resource_builtins);
+    turbowasm_rt_free(component->component_instances);
+    turbowasm_rt_free(component->component_function_aliases);
     memset(component, 0, sizeof(*component));
     turbowasm_runtime_scope_leave(scope);
 }
@@ -1487,6 +1676,26 @@ turbowasm_component_binary_resource_builtin_at(
         index >= component->resource_builtin_count)
         return NULL;
     return &component->resource_builtins[index];
+}
+
+const turbowasm_component_instance_def *
+turbowasm_component_binary_component_instance_at(
+    const turbowasm_component_binary *component,
+    uint32_t index) {
+    if (component == NULL ||
+        index >= component->component_instance_count)
+        return NULL;
+    return &component->component_instances[index];
+}
+
+const turbowasm_component_function_alias *
+turbowasm_component_binary_component_function_alias_at(
+    const turbowasm_component_binary *component,
+    uint32_t index) {
+    if (component == NULL ||
+        index >= component->component_function_alias_count)
+        return NULL;
+    return &component->component_function_aliases[index];
 }
 
 const turbowasm_component_import *
