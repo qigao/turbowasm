@@ -582,7 +582,7 @@ static turbowasm_status decode_component_function_type(
     turbowasm_reader *reader,
     turbowasm_component_binary *component,
     uint32_t type_index) {
-    if (component == NULL || next_component_instance_index == NULL)
+    if (component == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     return decode_function_type_into_graph(
         reader, &component->type_graph, type_index);
@@ -1002,7 +1002,7 @@ static turbowasm_status decode_component_instance_section(
     uint32_t count;
     uint32_t i;
 
-    if (component == NULL)
+    if (component == NULL || next_component_instance_index == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_reader_uleb32(&section, &count))
         return TURBOWASM_MALFORMED_MODULE;
