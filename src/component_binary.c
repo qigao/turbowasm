@@ -1340,12 +1340,14 @@ static bool clone_type_between_graphs(
     const turbowasm_component_type_graph *source_graph,
     uint32_t source) {
     const turbowasm_component_type *type;
+    bool same_graph;
 
     if (destination_graph == NULL || source_graph == NULL)
         return false;
     type = turbowasm_component_type_graph_get(source_graph, source);
     if (type == NULL)
         return false;
+    same_graph = destination_graph == source_graph;
 
     if (type->kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
         type->kind <= TURBOWASM_COMPONENT_TYPE_CHAR)
@@ -1356,55 +1358,75 @@ static bool clone_type_between_graphs(
         case TURBOWASM_COMPONENT_TYPE_STRING:
             return turbowasm_component_type_graph_define_string(
                 destination_graph, destination);
-        case TURBOWASM_COMPONENT_TYPE_LIST:
-            return turbowasm_component_type_graph_define_list_ref(
-                destination_graph, destination, type->as.list.element_type);
-        case TURBOWASM_COMPONENT_TYPE_RECORD:
-            return turbowasm_component_type_graph_define_record(
-                graph,
-                destination,
-                type->as.record.fields,
-                type->as.record.count);
-        case TURBOWASM_COMPONENT_TYPE_TUPLE:
-            return turbowasm_component_type_graph_define_tuple(
-                graph,
-                destination,
-                type->as.tuple.elements,
-                type->as.tuple.count);
-        case TURBOWASM_COMPONENT_TYPE_OPTION:
-            return turbowasm_component_type_graph_define_option(
-                destination_graph, destination, type->as.option.payload);
-        case TURBOWASM_COMPONENT_TYPE_RESULT:
-            return turbowasm_component_type_graph_define_result(
-                graph,
-                destination,
-                type->as.result.has_ok,
-                type->as.result.ok,
-                type->as.result.has_error,
-                type->as.result.error);
-        case TURBOWASM_COMPONENT_TYPE_FUNCTION:
-            return turbowasm_component_type_graph_define_function(
-                graph,
-                destination,
-                type->as.function.params,
-                type->as.function.param_count,
-                type->as.function.has_result,
-                type->as.function.result);
+
         case TURBOWASM_COMPONENT_TYPE_RESOURCE:
             return turbowasm_component_type_graph_define_resource_alias(
-                graph,
+                destination_graph,
                 destination,
                 type->as.resource.identity,
                 type->as.resource.rep_type,
                 type->as.resource.has_destructor,
                 type->as.resource.destructor_index);
+
+        case TURBOWASM_COMPONENT_TYPE_LIST:
+            return same_graph &&
+                turbowasm_component_type_graph_define_list_ref(
+                    destination_graph,
+                    destination,
+                    type->as.list.element_type);
+
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+            return same_graph &&
+                turbowasm_component_type_graph_define_record(
+                    destination_graph,
+                    destination,
+                    type->as.record.fields,
+                    type->as.record.count);
+
+        case TURBOWASM_COMPONENT_TYPE_TUPLE:
+            return same_graph &&
+                turbowasm_component_type_graph_define_tuple(
+                    destination_graph,
+                    destination,
+                    type->as.tuple.elements,
+                    type->as.tuple.count);
+
+        case TURBOWASM_COMPONENT_TYPE_OPTION:
+            return same_graph &&
+                turbowasm_component_type_graph_define_option(
+                    destination_graph,
+                    destination,
+                    type->as.option.payload);
+
+        case TURBOWASM_COMPONENT_TYPE_RESULT:
+            return same_graph &&
+                turbowasm_component_type_graph_define_result(
+                    destination_graph,
+                    destination,
+                    type->as.result.has_ok,
+                    type->as.result.ok,
+                    type->as.result.has_error,
+                    type->as.result.error);
+
+        case TURBOWASM_COMPONENT_TYPE_FUNCTION:
+            return same_graph &&
+                turbowasm_component_type_graph_define_function(
+                    destination_graph,
+                    destination,
+                    type->as.function.params,
+                    type->as.function.param_count,
+                    type->as.function.has_result,
+                    type->as.function.result);
+
         case TURBOWASM_COMPONENT_TYPE_OWN:
         case TURBOWASM_COMPONENT_TYPE_BORROW:
-            return turbowasm_component_type_graph_define_handle(
-                graph,
-                destination,
-                type->kind,
-                type->as.handle.resource_type);
+            return same_graph &&
+                turbowasm_component_type_graph_define_handle(
+                    destination_graph,
+                    destination,
+                    type->kind,
+                    type->as.handle.resource_type);
+
         default:
             return false;
     }
