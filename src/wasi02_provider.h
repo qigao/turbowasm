@@ -3,8 +3,7 @@
 
 #include "wasi02_descriptor.h"
 
-#include <turbowasm/runtime.h>
-#include <turbowasm/status.h>
+#include <turbowasm/wasi02.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -67,77 +66,6 @@ struct turbowasm_wasi02_value {
     } as;
 };
 
-typedef struct turbowasm_wasi02_string_view {
-    const uint8_t *data;
-    size_t size;
-} turbowasm_wasi02_string_view;
-
-typedef struct turbowasm_wasi02_environment_entry_view {
-    turbowasm_wasi02_string_view name;
-    turbowasm_wasi02_string_view value;
-} turbowasm_wasi02_environment_entry_view;
-
-typedef turbowasm_status (*turbowasm_wasi02_wall_clock_fn)(
-    void *context,
-    uint64_t *out_seconds,
-    uint32_t *out_nanoseconds);
-
-typedef turbowasm_status (*turbowasm_wasi02_monotonic_clock_fn)(
-    void *context,
-    uint64_t *out_value);
-
-typedef turbowasm_status (*turbowasm_wasi02_random_bytes_fn)(
-    void *context,
-    uint8_t *bytes,
-    size_t size);
-
-typedef turbowasm_status (*turbowasm_wasi02_random_u64_fn)(
-    void *context,
-    uint64_t *out_value);
-
-typedef turbowasm_status (*turbowasm_wasi02_insecure_seed_fn)(
-    void *context,
-    uint64_t *out_first,
-    uint64_t *out_second);
-
-typedef turbowasm_status (*turbowasm_wasi02_environment_fn)(
-    void *context,
-    const turbowasm_wasi02_environment_entry_view **out_entries,
-    size_t *out_count);
-
-typedef turbowasm_status (*turbowasm_wasi02_arguments_fn)(
-    void *context,
-    const turbowasm_wasi02_string_view **out_arguments,
-    size_t *out_count);
-
-typedef turbowasm_status (*turbowasm_wasi02_initial_cwd_fn)(
-    void *context,
-    bool *out_has_value,
-    turbowasm_wasi02_string_view *out_value);
-
-typedef turbowasm_status (*turbowasm_wasi02_exit_fn)(
-    void *context,
-    bool success);
-
-typedef struct turbowasm_wasi02_provider_config {
-    void *context;
-
-    turbowasm_wasi02_wall_clock_fn wall_clock_now;
-    turbowasm_wasi02_wall_clock_fn wall_clock_resolution;
-    turbowasm_wasi02_monotonic_clock_fn monotonic_clock_now;
-    turbowasm_wasi02_monotonic_clock_fn monotonic_clock_resolution;
-
-    turbowasm_wasi02_random_bytes_fn random_bytes;
-    turbowasm_wasi02_random_u64_fn random_u64;
-    turbowasm_wasi02_random_bytes_fn insecure_random_bytes;
-    turbowasm_wasi02_random_u64_fn insecure_random_u64;
-    turbowasm_wasi02_insecure_seed_fn insecure_seed;
-
-    turbowasm_wasi02_environment_fn environment;
-    turbowasm_wasi02_arguments_fn arguments;
-    turbowasm_wasi02_initial_cwd_fn initial_cwd;
-    turbowasm_wasi02_exit_fn exit;
-} turbowasm_wasi02_provider_config;
 
 typedef struct turbowasm_wasi02_provider {
     turbowasm_wasi02_provider_config config;
