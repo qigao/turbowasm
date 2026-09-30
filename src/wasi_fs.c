@@ -1,4 +1,4 @@
-#include <turbowasm/wasi_fs.h>
+#include "wasi_fs_internal.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -72,6 +72,23 @@ turbowasm_wasi_fs_find_descriptor(
     turbowasm_wasi_fs_impl *impl,
     turbowasm_wasi_fs_descriptor descriptor) {
     turbowasm_wasi_fs_slot *slot;
+
+    if (impl == NULL || descriptor.generation == 0u ||
+        descriptor.slot >= impl->capacity)
+        return NULL;
+
+    slot = &impl->slots[descriptor.slot];
+    if (!slot->active ||
+        slot->generation != descriptor.generation)
+        return NULL;
+    return slot;
+}
+
+static const turbowasm_wasi_fs_slot *
+turbowasm_wasi_fs_find_descriptor_const(
+    const turbowasm_wasi_fs_impl *impl,
+    turbowasm_wasi_fs_descriptor descriptor) {
+    const turbowasm_wasi_fs_slot *slot;
 
     if (impl == NULL || descriptor.generation == 0u ||
         descriptor.slot >= impl->capacity)
@@ -245,6 +262,79 @@ bool turbowasm_wasi_fs_descriptor_info_get(
     out_info->guest_path = slot->guest_path;
     out_info->rights_base = slot->rights_base;
     out_info->rights_inheriting = slot->rights_inheriting;
+    return true;
+}
+
+static void turbowasm_wasi_fs_fill_info(
+    const turbowasm_wasi_fs_impl *impl,
+    const turbowasm_wasi_fs_slot *slot,
+    turbowasm_wasi_fs_descriptor_info *out_info) {
+    memset(out_info, 0, sizeof(*out_info));
+    out_info->descriptor.slot =
+        (uint32_t)(slot - impl->slots);
+    out_info->descriptor.generation = slot->generation;
+    out_info->guest_fd = slot->guest_fd;
+    out_info->file = slot->file;
+    out_info->preopen = slot->preopen;
+    out_info->guest_path = slot->guest_path;
+    out_info->rights_base = slot->rights_base;
+    out_info->rights_inheriting = slot->rights_inheriting;
+}
+
+size_t turbowasm_wasi_fs_internal_preopen_count(
+    const turbowasm_wasi_fs *filesystem) {
+    const turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_get(filesystem);
+    uint32_t i;
+    size_t count = 0u;
+
+    if (impl == NULL)
+        return 0u;
+    for (i = 0u; i < impl->capacity; ++i) {
+        if (impl->slots[i].active && impl->slots[i].preopen)
+            ++count;
+    }
+    return count;
+}
+
+bool turbowasm_wasi_fs_internal_preopen_at(
+    const turbowasm_wasi_fs *filesystem,
+    size_t index,
+    turbowasm_wasi_fs_descriptor_info *out_info) {
+    const turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_get(filesystem);
+    uint32_t i;
+    size_t seen = 0u;
+
+    if (impl == NULL || out_info == NULL)
+        return false;
+    for (i = 0u; i < impl->capacity; ++i) {
+        const turbowasm_wasi_fs_slot *slot = &impl->slots[i];
+        if (!slot->active || !slot->preopen)
+            continue;
+        if (seen++ != index)
+            continue;
+        turbowasm_wasi_fs_fill_info(impl, slot, out_info);
+        return true;
+    }
+    return false;
+}
+
+bool turbowasm_wasi_fs_internal_descriptor_info_get(
+    const turbowasm_wasi_fs *filesystem,
+    turbowasm_wasi_fs_descriptor descriptor,
+    turbowasm_wasi_fs_descriptor_info *out_info) {
+    const turbowasm_wasi_fs_impl *impl =
+        turbowasm_wasi_fs_impl_get(filesystem);
+    const turbowasm_wasi_fs_slot *slot;
+
+    if (impl == NULL || out_info == NULL)
+        return false;
+    slot = turbowasm_wasi_fs_find_descriptor_const(
+        impl, descriptor);
+    if (slot == NULL)
+        return false;
+    turbowasm_wasi_fs_fill_info(impl, slot, out_info);
     return true;
 }
 
