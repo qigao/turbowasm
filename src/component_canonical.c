@@ -1149,6 +1149,24 @@ static turbowasm_status lift_value_inner(
             graph, type, memory, instance,
             address, depth, out);
 
+    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
+        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+        uint8_t bytes[4] = {0};
+        uint32_t handle;
+
+        if (memory->resource_lift == NULL)
+            return TURBOWASM_UNSUPPORTED;
+        status = read_memory(
+            instance, memory->memory_index,
+            address, bytes, sizeof(bytes));
+        if (status != TURBOWASM_OK)
+            return status;
+        handle = (uint32_t)read_le(bytes, sizeof(bytes));
+        return memory->resource_lift(
+            memory->resource_context,
+            graph, ref, handle, out);
+    }
+
     return TURBOWASM_UNSUPPORTED;
 }
 
@@ -1185,6 +1203,24 @@ static turbowasm_status lower_value_inner(
         return lower_list(
             graph, type, memory, instance,
             address, depth, value);
+
+    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
+        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+        uint8_t bytes[4] = {0};
+        uint32_t handle;
+
+        if (memory->resource_lower == NULL)
+            return TURBOWASM_UNSUPPORTED;
+        status = memory->resource_lower(
+            memory->resource_context,
+            graph, ref, value, &handle);
+        if (status != TURBOWASM_OK)
+            return status;
+        write_le(bytes, sizeof(bytes), handle);
+        return write_memory(
+            instance, memory->memory_index,
+            address, bytes, sizeof(bytes));
+    }
 
     return TURBOWASM_UNSUPPORTED;
 }
