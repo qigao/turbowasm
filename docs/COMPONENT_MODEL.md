@@ -487,6 +487,52 @@ tracking storage uses the target Core module Runtime allocation policy.
 Both memory32 and memory64 canonical list representations use this same scope.
 No C4 dependency is introduced into the generic C3 canonical codec.
 
+## C6a installed façade boundary
+
+The stable synchronous scalar/string/list subset is exposed through a separate
+installed target:
+
+```cmake
+find_package(TurboWasm CONFIG REQUIRED)
+target_link_libraries(app PRIVATE TurboWasm::Component)
+```
+
+and the explicit header:
+
+```c
+#include <turbowasm/component.h>
+```
+
+`turbowasm/turbowasm.h` intentionally remains the Core Runtime umbrella and
+does not include the Component façade.
+
+The public layer uses opaque component/instance owner handles. A component load
+borrows immutable Component bytes. Component instances retain a private decoded
+state reference, so destroying the public component handle does not invalidate
+already-created instances; the borrowed source bytes still must outlive all
+instances.
+
+The first public host-value ABI freezes only:
+
+- bool and signed/unsigned integer scalars;
+- float32 / float64;
+- char;
+- UTF-8 string;
+- recursive list values.
+
+Resource own/borrow remains private until its public host ownership/identity
+contract is intentionally frozen. An export whose parameter/result tree contains
+resource values is rejected by the façade before Core execution begins.
+
+Input values are caller-owned and borrowed for the duration of an invocation.
+Lifted string/list results are TurboWasm-owned and released recursively with
+`turbowasm_component_host_value_destroy()`.
+
+The installed `TurboWasm::Component` library is a real façade target that
+depends publicly on `TurboWasm::Runtime`. Runtime never links back to the
+Component target, and the private retained type graph/canonical/resource structs
+are not installed as ABI.
+
 ## Deferred work
 
 C1 intentionally does not implement:
