@@ -4,9 +4,6 @@
 
 #define TW_WASI02_V028 {0u, 2u, 8u}
 
-static const turbowasm_wasi02_type_desc type_bool = {
-    TURBOWASM_WASI02_TYPE_BOOL, "bool", {{0}}
-};
 static const turbowasm_wasi02_type_desc type_u8 = {
     TURBOWASM_WASI02_TYPE_U8, "u8", {{0}}
 };
