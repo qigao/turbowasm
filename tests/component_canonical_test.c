@@ -441,6 +441,169 @@ static void test_composite_flat_limit(void) {
     turbowasm_component_type_graph_destroy(&graph);
 }
 
+static void test_composite_flat_value_codec(void) {
+    turbowasm_component_type_graph graph = {0};
+    turbowasm_component_record_field fields[2];
+    turbowasm_component_type_ref tuple_elements[2];
+    turbowasm_component_value record_items[2] = {{0}};
+    turbowasm_component_value tuple_items[2] = {{0}};
+    turbowasm_component_value payload = {0};
+    turbowasm_component_value in = {0};
+    turbowasm_component_value out = {0};
+    turbowasm_value flat[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS] = {{0}};
+    uint32_t flat_count = 0u;
+    turbowasm_component_type_ref unit = {0};
+    static const uint8_t seconds[] = "seconds";
+    static const uint8_t nanoseconds[] = "nanoseconds";
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 5u));
+    assert(turbowasm_component_type_graph_define_scalar(
+        &graph, 0u, TURBOWASM_COMPONENT_TYPE_U64));
+    assert(turbowasm_component_type_graph_define_scalar(
+        &graph, 1u, TURBOWASM_COMPONENT_TYPE_U32));
+
+    fields[0].name = seconds;
+    fields[0].name_size = 7u;
+    fields[0].type = indexed_ref(0u);
+    fields[1].name = nanoseconds;
+    fields[1].name_size = 11u;
+    fields[1].type = indexed_ref(1u);
+    assert(turbowasm_component_type_graph_define_record(
+        &graph, 2u, fields, 2u));
+
+    tuple_elements[0] = indexed_ref(0u);
+    tuple_elements[1] = indexed_ref(0u);
+    assert(turbowasm_component_type_graph_define_tuple(
+        &graph, 3u, tuple_elements, 2u));
+
+    assert(turbowasm_component_type_graph_define_result(
+        &graph, 4u,
+        true, inline_ref(TURBOWASM_COMPONENT_TYPE_U32),
+        true, inline_ref(TURBOWASM_COMPONENT_TYPE_F64)));
+    assert(turbowasm_component_type_graph_validate(&graph));
+
+    /* datetime record -> [i64, i32] */
+    record_items[0].kind = TURBOWASM_COMPONENT_TYPE_U64;
+    record_items[0].as.u64 = UINT64_C(1234);
+    record_items[1].kind = TURBOWASM_COMPONENT_TYPE_U32;
+    record_items[1].as.u32 = UINT32_C(567);
+    in.kind = TURBOWASM_COMPONENT_TYPE_RECORD;
+    in.as.record.items = record_items;
+    in.as.record.count = 2u;
+
+    assert(turbowasm_component_canonical_lower_flat_value(
+               &graph, indexed_ref(2u), NULL, &in,
+               flat, TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS,
+               &flat_count) == TURBOWASM_OK);
+    assert(flat_count == 2u);
+    assert(flat[0].kind == TURBOWASM_VALUE_I64);
+    assert((uint64_t)flat[0].as.i64 == UINT64_C(1234));
+    assert(flat[1].kind == TURBOWASM_VALUE_I32);
+    assert((uint32_t)flat[1].as.i32 == UINT32_C(567));
+
+    assert(turbowasm_component_canonical_lift_flat_value(
+               &graph, indexed_ref(2u), NULL,
+               flat, flat_count, &out) == TURBOWASM_OK);
+    assert(out.kind == TURBOWASM_COMPONENT_TYPE_RECORD);
+    assert(out.as.record.count == 2u);
+    assert(out.as.record.items[0].as.u64 == UINT64_C(1234));
+    assert(out.as.record.items[1].as.u32 == UINT32_C(567));
+    turbowasm_component_value_destroy(&out);
+
+    /* Capacity is explicit and fail-closed. */
+    assert(turbowasm_component_canonical_lower_flat_value(
+               &graph, indexed_ref(2u), NULL, &in,
+               flat, 1u, &flat_count) == TURBOWASM_INVALID_ARGUMENT);
+
+    /* insecure-seed tuple -> [i64, i64] */
+    tuple_items[0].kind = TURBOWASM_COMPONENT_TYPE_U64;
+    tuple_items[0].as.u64 = UINT64_C(11);
+    tuple_items[1].kind = TURBOWASM_COMPONENT_TYPE_U64;
+    tuple_items[1].as.u64 = UINT64_C(22);
+    memset(&in, 0, sizeof(in));
+    in.kind = TURBOWASM_COMPONENT_TYPE_TUPLE;
+    in.as.tuple.items = tuple_items;
+    in.as.tuple.count = 2u;
+
+    assert(turbowasm_component_canonical_lower_flat_value(
+               &graph, indexed_ref(3u), NULL, &in,
+               flat, TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS,
+               &flat_count) == TURBOWASM_OK);
+    assert(flat_count == 2u);
+    assert(flat[0].kind == TURBOWASM_VALUE_I64);
+    assert((uint64_t)flat[0].as.i64 == UINT64_C(11));
+    assert(flat[1].kind == TURBOWASM_VALUE_I64);
+    assert((uint64_t)flat[1].as.i64 == UINT64_C(22));
+
+    assert(turbowasm_component_canonical_lift_flat_value(
+               &graph, indexed_ref(3u), NULL,
+               flat, flat_count, &out) == TURBOWASM_OK);
+    assert(out.kind == TURBOWASM_COMPONENT_TYPE_TUPLE);
+    assert(out.as.tuple.count == 2u);
+    assert(out.as.tuple.items[0].as.u64 == UINT64_C(11));
+    assert(out.as.tuple.items[1].as.u64 == UINT64_C(22));
+    turbowasm_component_value_destroy(&out);
+
+    /*
+     * result<u32,f64> flattens to [i32 discriminator, i64 joined payload].
+     * Exercise both carrier coercion directions.
+     */
+    payload.kind = TURBOWASM_COMPONENT_TYPE_U32;
+    payload.as.u32 = UINT32_C(0xf1234567);
+    memset(&in, 0, sizeof(in));
+    in.kind = TURBOWASM_COMPONENT_TYPE_RESULT;
+    in.as.result.case_index = 0u;
+    in.as.result.payload = &payload;
+
+    assert(turbowasm_component_canonical_lower_flat_value(
+               &graph, indexed_ref(4u), NULL, &in,
+               flat, TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS,
+               &flat_count) == TURBOWASM_OK);
+    assert(flat_count == 2u);
+    assert(flat[0].kind == TURBOWASM_VALUE_I32);
+    assert(flat[0].as.i32 == 0);
+    assert(flat[1].kind == TURBOWASM_VALUE_I64);
+    assert((uint64_t)flat[1].as.i64 == UINT64_C(0xf1234567));
+
+    assert(turbowasm_component_canonical_lift_flat_value(
+               &graph, indexed_ref(4u), NULL,
+               flat, flat_count, &out) == TURBOWASM_OK);
+    assert(out.kind == TURBOWASM_COMPONENT_TYPE_RESULT);
+    assert(out.as.result.case_index == 0u);
+    assert(out.as.result.payload != NULL);
+    assert(out.as.result.payload->kind == TURBOWASM_COMPONENT_TYPE_U32);
+    assert(out.as.result.payload->as.u32 == UINT32_C(0xf1234567));
+    turbowasm_component_value_destroy(&out);
+
+    payload.kind = TURBOWASM_COMPONENT_TYPE_F64;
+    payload.as.f64 = 3.5;
+    in.as.result.case_index = 1u;
+    in.as.result.payload = &payload;
+
+    assert(turbowasm_component_canonical_lower_flat_value(
+               &graph, indexed_ref(4u), NULL, &in,
+               flat, TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS,
+               &flat_count) == TURBOWASM_OK);
+    assert(flat_count == 2u);
+    assert(flat[0].kind == TURBOWASM_VALUE_I32);
+    assert(flat[0].as.i32 == 1);
+    assert(flat[1].kind == TURBOWASM_VALUE_I64);
+
+    assert(turbowasm_component_canonical_lift_flat_value(
+               &graph, indexed_ref(4u), NULL,
+               flat, flat_count, &out) == TURBOWASM_OK);
+    assert(out.kind == TURBOWASM_COMPONENT_TYPE_RESULT);
+    assert(out.as.result.case_index == 1u);
+    assert(out.as.result.payload != NULL);
+    assert(out.as.result.payload->kind == TURBOWASM_COMPONENT_TYPE_F64);
+    assert(out.as.result.payload->as.f64 == 3.5);
+    turbowasm_component_value_destroy(&out);
+
+    /* A unit result still needs only its discriminant carrier. */
+    turbowasm_component_type_graph_destroy(&graph);
+    (void)unit;
+}
+
 int main(void) {
     turbowasm_component_type_graph graph = {0};
 
@@ -452,5 +615,6 @@ int main(void) {
 
     test_composite_metadata();
     test_composite_flat_limit();
+    test_composite_flat_value_codec();
     return 0;
 }
