@@ -1058,6 +1058,7 @@ fail_definition:
 static turbowasm_status decode_component_type_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
+    uint32_t current_core_functions,
     uint32_t *next_type_index) {
     uint32_t count;
     uint32_t i;
@@ -1130,10 +1131,12 @@ static turbowasm_status decode_component_type_section(
                 return TURBOWASM_MALFORMED_MODULE;
             if (dtor_flag > 1u)
                 return TURBOWASM_MALFORMED_MODULE;
-            if (dtor_flag != 0u &&
-                !turbowasm_reader_uleb32(
-                    &section, &dtor_index))
-                return TURBOWASM_MALFORMED_MODULE;
+            if (dtor_flag != 0u) {
+                if (!turbowasm_reader_uleb32(
+                        &section, &dtor_index) ||
+                    dtor_index >= current_core_functions)
+                    return TURBOWASM_MALFORMED_MODULE;
+            }
 
             if (!turbowasm_component_type_graph_define_resource_full(
                     &component->type_graph,
@@ -1386,7 +1389,10 @@ static turbowasm_status decode_component_semantics(
                 &next_component_function_index);
         } else if (section->id == 7u) {
             status = decode_component_type_section(
-                reader, component, &current_types);
+                reader,
+                component,
+                next_core_function_index,
+                &current_types);
         } else if (section->id == 8u) {
             status = decode_canon_section(
                 reader,
