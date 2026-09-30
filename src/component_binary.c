@@ -1801,6 +1801,7 @@ turbowasm_status turbowasm_component_binary_load_with_config(
         component->core_function_aliases != NULL ||
         component->core_memory_aliases != NULL ||
         component->canon_lifts != NULL ||
+        component->canon_lowers != NULL ||
         component->resource_builtins != NULL ||
         component->component_instances != NULL ||
         component->component_function_aliases != NULL ||
@@ -1908,6 +1909,7 @@ fail:
     turbowasm_rt_free(component->core_function_aliases);
     turbowasm_rt_free(component->core_memory_aliases);
     turbowasm_rt_free(component->canon_lifts);
+    turbowasm_rt_free(component->canon_lowers);
     turbowasm_rt_free(component->resource_builtins);
     turbowasm_rt_free(component->component_instances);
     turbowasm_rt_free(component->component_function_aliases);
@@ -2011,6 +2013,15 @@ turbowasm_component_binary_canon_lift_at(
     if (component == NULL || index >= component->canon_lift_count)
         return NULL;
     return &component->canon_lifts[index];
+}
+
+const turbowasm_component_canon_lower *
+turbowasm_component_binary_canon_lower_at(
+    const turbowasm_component_binary *component,
+    uint32_t index) {
+    if (component == NULL || index >= component->canon_lower_count)
+        return NULL;
+    return &component->canon_lowers[index];
 }
 
 const turbowasm_component_resource_builtin *
