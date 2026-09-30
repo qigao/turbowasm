@@ -1069,7 +1069,9 @@ find_instance_type_function_export(
     for (i = 0u; i < instance_type->export_count; ++i) {
         const turbowasm_component_instance_type_export *export_desc =
             &instance_type->exports[i];
-        if (export_desc->name_size == name.size &&
+        if (export_desc->kind ==
+                TURBOWASM_COMPONENT_INSTANCE_EXPORT_FUNCTION &&
+            export_desc->name_size == name.size &&
             (name.size == 0u ||
              (export_desc->name != NULL &&
               name.bytes != NULL &&
@@ -1380,7 +1382,7 @@ static turbowasm_status initialize_canon_lower_state(
 
         function_type = turbowasm_component_type_graph_get(
             &outer_instance_type->as.instance->type_graph,
-            function_export->function_type);
+            function_export->type_index);
         if (function_type == NULL ||
             function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
             return TURBOWASM_MALFORMED_MODULE;
@@ -1390,7 +1392,7 @@ static turbowasm_status initialize_canon_lower_state(
         context->function_name = alias->name;
         context->graph =
             &outer_instance_type->as.instance->type_graph;
-        context->function_type = function_export->function_type;
+        context->function_type = function_export->type_index;
 
         if (lower->has_realloc && !lower->has_memory)
             return TURBOWASM_MALFORMED_MODULE;
