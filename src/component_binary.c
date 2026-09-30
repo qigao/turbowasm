@@ -952,6 +952,35 @@ static turbowasm_status decode_canon_section(
             if (*next_component_function_index == UINT32_MAX)
                 return TURBOWASM_OUT_OF_MEMORY;
             ++*next_component_function_index;
+        } else if (opcode == 0x01u) {
+            turbowasm_component_canon_lower lower = {0};
+            uint8_t sort;
+            uint32_t option_count;
+
+            if (!turbowasm_reader_u8(&section, &sort) ||
+                sort != 0x00u ||
+                !turbowasm_reader_uleb32(
+                    &section, &lower.component_function_index) ||
+                lower.component_function_index >=
+                    *next_component_function_index ||
+                !turbowasm_reader_uleb32(
+                    &section, &option_count))
+                return TURBOWASM_MALFORMED_MODULE;
+
+            /*
+             * W2b1 is deliberately the flat scalar import slice. Dynamic
+             * values need canonical memory/realloc options and are W2b2.
+             */
+            if (option_count != 0u)
+                return TURBOWASM_UNSUPPORTED;
+
+            lower.core_function_index =
+                *next_core_function_index;
+            if (!append_canon_lower(component, lower))
+                return TURBOWASM_OUT_OF_MEMORY;
+            if (*next_core_function_index == UINT32_MAX)
+                return TURBOWASM_OUT_OF_MEMORY;
+            ++*next_core_function_index;
         } else if (opcode == 0x02u ||
                    opcode == 0x03u ||
                    opcode == 0x04u) {
