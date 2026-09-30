@@ -46,7 +46,19 @@ typedef struct turbowasm_wasi_fs_stat {
     uint64_t link_count;
     uint64_t accessed_ns;
     uint64_t changed_ns;
+
+    /*
+     * Optional timestamp validity for richer WASI 0.2 projection.
+     * Preview1 continues to expose numeric timestamps exactly as before.
+     */
+    uint8_t timestamp_valid;
 } turbowasm_wasi_fs_stat;
+
+enum {
+    TURBOWASM_WASI_FS_TIME_ACCESSED_VALID = 1u << 0,
+    TURBOWASM_WASI_FS_TIME_MODIFIED_VALID = 1u << 1,
+    TURBOWASM_WASI_FS_TIME_CHANGED_VALID = 1u << 2
+};
 
 enum {
     TURBOWASM_WASI_FS_DIRENT_NAME_MAX = 255

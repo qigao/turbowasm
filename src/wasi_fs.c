@@ -429,8 +429,7 @@ uint32_t turbowasm_wasi_fs_path_open(
         impl, directory_fd);
     if (directory == NULL)
         return TURBOWASM_WASI_ERRNO_BADF;
-    if (!directory->preopen ||
-        (directory->rights_base &
+    if ((directory->rights_base &
          TURBOWASM_WASI_RIGHT_PATH_OPEN) == 0u)
         return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
 
