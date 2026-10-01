@@ -126,10 +126,6 @@ jobs:
           )
           PY
 
-          committed="tests/wasi02/fixtures/generated/wasi02_toolchain_fixtures.h"
-          test -f "$committed"
-          cmp "$out/wasi02_toolchain_fixtures.h" "$committed"
-
           cat > "$out/PROVENANCE.txt" <<EOF
           generator=wasm-tools
           version=${WASM_TOOLS_VERSION}
@@ -149,3 +145,13 @@ jobs:
           path: ${{ runner.temp }}/wasi02-fixtures
           if-no-files-found: error
           retention-days: 7
+
+      - name: Verify vendored fixture header
+        shell: bash
+        run: |
+          set -euo pipefail
+          committed="tests/wasi02/fixtures/generated/wasi02_toolchain_fixtures.h"
+          generated="$RUNNER_TEMP/wasi02-fixtures/wasi02_toolchain_fixtures.h"
+          test -f "$committed"
+          test -f "$generated"
+          cmp "$generated" "$committed"
