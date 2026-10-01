@@ -44,6 +44,11 @@ typedef struct turbowasm_wasi02_sockets {
     turbowasm_wasi02_streams *streams;
     turbowasm_wasi02_poll *poll;
 
+    uint64_t component_network_identity;
+    uint64_t component_tcp_identity;
+    bool component_network_identity_bound;
+    bool component_tcp_identity_bound;
+
     bool initialized;
 } turbowasm_wasi02_sockets;
 
@@ -93,5 +98,9 @@ turbowasm_status turbowasm_wasi02_sockets_call(
     const turbowasm_wasi02_value *arguments,
     size_t argument_count,
     turbowasm_wasi02_value *out_result);
+
+turbowasm_status turbowasm_wasi02_sockets_imports(
+    turbowasm_wasi02_sockets *sockets,
+    turbowasm_component_exec_imports *out_imports);
 
 #endif /* TURBOWASM_WASI02_SOCKETS_H */
