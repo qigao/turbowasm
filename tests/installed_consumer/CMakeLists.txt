@@ -134,6 +134,21 @@ if(TARGET TurboWasm::WASI02)
   add_test(NAME turbowasm_installed_wasi02_consumer
            COMMAND turbowasm_installed_wasi02_consumer)
 
+  add_executable(turbowasm_installed_wasi02_corpus_consumer
+    wasi02_corpus_main.c)
+  target_link_libraries(turbowasm_installed_wasi02_corpus_consumer
+    PRIVATE TurboWasm::WASI02)
+  target_include_directories(turbowasm_installed_wasi02_corpus_consumer
+    PRIVATE
+      "${CMAKE_CURRENT_LIST_DIR}/../wasi02/fixtures/generated")
+  set_target_properties(
+    turbowasm_installed_wasi02_corpus_consumer PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi02_corpus_consumer
+           COMMAND turbowasm_installed_wasi02_corpus_consumer)
+
   add_executable(turbowasm_installed_wasi02_cpp_consumer
     wasi02_cpp_main.cpp)
   target_link_libraries(turbowasm_installed_wasi02_cpp_consumer

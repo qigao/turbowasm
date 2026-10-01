@@ -518,7 +518,9 @@ static turbowasm_status component_canon_lower_host(
 
     component_param_count =
         function_type->as.function.param_count;
-    if (lower_context->uses_memory)
+    if (lower_context->uses_memory ||
+        lower_context->memory.resource_lower != NULL ||
+        lower_context->memory.resource_lift != NULL)
         memory = &lower_context->memory;
 
     *trap = TURBOWASM_TRAP_NONE;
@@ -1277,6 +1279,27 @@ static turbowasm_status configure_canon_lower_memory(
     if (exec == NULL || binary == NULL ||
         lower == NULL || context == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+
+    /*
+     * Canonical resource handles are always i32 in the flat ABI and do not
+     * require a guest linear-memory option. Keep the external resource codec
+     * available even for resource-only lowerings such as:
+     *
+     *   get-stdin() -> own<input-stream>
+     *   subscribe(borrow<input-stream>) -> own<pollable>
+     */
+    context->memory.pointer_type = TURBOWASM_COMPONENT_POINTER_I32;
+    context->memory.string_encoding = lower->string_encoding;
+    if (exec->imports.resource_lower != NULL ||
+        exec->imports.resource_lift != NULL) {
+        context->memory.resource_lower =
+            exec->imports.resource_lower;
+        context->memory.resource_lift =
+            exec->imports.resource_lift;
+        context->memory.resource_context =
+            exec->imports.context;
+    }
+
     if (!lower->has_memory)
         return TURBOWASM_OK;
 
@@ -1357,16 +1380,6 @@ static turbowasm_status configure_canon_lower_memory(
             component_guest_realloc;
         context->memory.realloc_context =
             &context->realloc_context;
-    }
-
-    if (exec->imports.resource_lower != NULL ||
-        exec->imports.resource_lift != NULL) {
-        context->memory.resource_lower =
-            exec->imports.resource_lower;
-        context->memory.resource_lift =
-            exec->imports.resource_lift;
-        context->memory.resource_context =
-            exec->imports.context;
     }
 
     return TURBOWASM_OK;
