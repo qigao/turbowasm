@@ -105,32 +105,6 @@ static turbowasm_status result_resource_ok(
     return result_take_payload(out, false, &payload);
 }
 
-static turbowasm_status make_tuple(
-    const turbowasm_wasi02_value *items,
-    size_t count,
-    turbowasm_wasi02_value *out) {
-    turbowasm_wasi02_value *copy;
-
-    if (out == NULL || (count != 0u && items == NULL) ||
-        count > SIZE_MAX / sizeof(*copy))
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    copy = count == 0u
-        ? NULL
-        : (turbowasm_wasi02_value *)turbowasm_rt_calloc(
-              count, sizeof(*copy));
-    if (count != 0u && copy == NULL)
-        return TURBOWASM_OUT_OF_MEMORY;
-
-    if (count != 0u)
-        memcpy(copy, items, count * sizeof(*copy));
-    memset(out, 0, sizeof(*out));
-    out->kind = TURBOWASM_WASI02_VALUE_TUPLE;
-    out->as.tuple.items = copy;
-    out->as.tuple.count = count;
-    return TURBOWASM_OK;
-}
-
 static turbowasm_status make_result_tuple_resources(
     const uint32_t *resources,
     size_t count,
