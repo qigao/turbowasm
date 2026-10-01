@@ -176,6 +176,54 @@ static void test_cli(void) {
     /* unstable cli-exit-with-code is deliberately outside W1 stable registry */
     assert(turbowasm_wasi02_find_function(
                exit_iface, "exit-with-code") == NULL);
+
+    {
+        const turbowasm_wasi02_interface_desc *stdin_iface =
+            turbowasm_wasi02_find_interface("wasi:cli", "stdin");
+        const turbowasm_wasi02_interface_desc *stdout_iface =
+            turbowasm_wasi02_find_interface("wasi:cli", "stdout");
+        const turbowasm_wasi02_interface_desc *stderr_iface =
+            turbowasm_wasi02_find_interface("wasi:cli", "stderr");
+        const turbowasm_wasi02_function_desc *get_stdin;
+        const turbowasm_wasi02_function_desc *get_stdout;
+        const turbowasm_wasi02_function_desc *get_stderr;
+
+        assert(stdin_iface != NULL);
+        assert(stdout_iface != NULL);
+        assert(stderr_iface != NULL);
+        assert(strcmp(
+            stdin_iface->source_commit,
+            "e922fd7bd137cd284a5e6c4815a5a630d32fdd01") == 0);
+        assert(strcmp(
+            stdout_iface->source_commit,
+            "e922fd7bd137cd284a5e6c4815a5a630d32fdd01") == 0);
+        assert(strcmp(
+            stderr_iface->source_commit,
+            "e922fd7bd137cd284a5e6c4815a5a630d32fdd01") == 0);
+
+        get_stdin = turbowasm_wasi02_find_function(
+            stdin_iface, "get-stdin");
+        get_stdout = turbowasm_wasi02_find_function(
+            stdout_iface, "get-stdout");
+        get_stderr = turbowasm_wasi02_find_function(
+            stderr_iface, "get-stderr");
+        assert(get_stdin != NULL && get_stdin->param_count == 0u);
+        assert(get_stdout != NULL && get_stdout->param_count == 0u);
+        assert(get_stderr != NULL && get_stderr->param_count == 0u);
+        assert(get_stdin->result != NULL);
+        assert(get_stdin->result->kind ==
+               TURBOWASM_WASI02_TYPE_RESOURCE);
+        assert(strcmp(
+            get_stdin->result->as.resource.resource_name,
+            "input-stream") == 0);
+        assert(get_stdout->result != NULL);
+        assert(get_stdout->result->kind ==
+               TURBOWASM_WASI02_TYPE_RESOURCE);
+        assert(strcmp(
+            get_stdout->result->as.resource.resource_name,
+            "output-stream") == 0);
+        assert(get_stderr->result == get_stdout->result);
+    }
 }
 
 static void test_filesystem_preopens(void) {
@@ -584,7 +632,7 @@ static void test_io_streams_surface(void) {
 int main(void) {
     size_t i;
 
-    assert(turbowasm_wasi02_interface_count() == 12u);
+    assert(turbowasm_wasi02_interface_count() == 15u);
     for (i = 0u; i < turbowasm_wasi02_interface_count(); ++i) {
         const turbowasm_wasi02_interface_desc *iface =
             turbowasm_wasi02_interface_at(i);

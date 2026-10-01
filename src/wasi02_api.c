@@ -59,6 +59,19 @@ static bool config_valid(
         config->pollable_capacity == 0u)
         return false;
 
+    if ((config->streams.get_stdin != NULL ||
+         config->streams.get_stdout != NULL ||
+         config->streams.get_stderr != NULL) &&
+        config->stream_resource_capacity == 0u)
+        return false;
+    if (config->streams.get_stdin != NULL &&
+        config->streams.input_drop == NULL)
+        return false;
+    if ((config->streams.get_stdout != NULL ||
+         config->streams.get_stderr != NULL) &&
+        config->streams.output_drop == NULL)
+        return false;
+
     return true;
 }
 

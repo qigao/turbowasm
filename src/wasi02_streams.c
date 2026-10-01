@@ -227,7 +227,12 @@ turbowasm_status turbowasm_wasi02_streams_init(
     if (streams == NULL || provider == NULL ||
         max_resources == 0u ||
         max_resources > TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS ||
-        streams->initialized)
+        streams->initialized ||
+        (provider->get_stdin != NULL &&
+         provider->input_drop == NULL) ||
+        ((provider->get_stdout != NULL ||
+          provider->get_stderr != NULL) &&
+         provider->output_drop == NULL))
         return TURBOWASM_INVALID_ARGUMENT;
 
     memset(streams, 0, sizeof(*streams));
@@ -1570,6 +1575,57 @@ static turbowasm_status call_output_blocking_splice(
     return make_result_u64_ok(transferred, out);
 }
 
+static void drop_factory_rep(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_wasi02_stream_slot_kind kind,
+    turbowasm_value rep) {
+    if (streams == NULL)
+        return;
+    if (kind == TURBOWASM_WASI02_STREAM_SLOT_INPUT) {
+        if (streams->provider.input_drop != NULL)
+            streams->provider.input_drop(
+                streams->provider.context, rep);
+    } else if (kind == TURBOWASM_WASI02_STREAM_SLOT_OUTPUT) {
+        if (streams->provider.output_drop != NULL)
+            streams->provider.output_drop(
+                streams->provider.context, rep);
+    }
+}
+
+static turbowasm_status call_stream_factory(
+    turbowasm_wasi02_streams *streams,
+    turbowasm_wasi02_stream_factory_fn factory,
+    turbowasm_wasi02_stream_slot_kind kind,
+    turbowasm_wasi02_value *out) {
+    turbowasm_value rep = {0};
+    uint32_t resource = 0u;
+    turbowasm_status status;
+
+    if (streams == NULL || out == NULL ||
+        (kind != TURBOWASM_WASI02_STREAM_SLOT_INPUT &&
+         kind != TURBOWASM_WASI02_STREAM_SLOT_OUTPUT))
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (factory == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    status = factory(
+        streams->provider.context, &rep);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = new_resource(
+        streams, kind, rep, &resource);
+    if (status != TURBOWASM_OK) {
+        drop_factory_rep(streams, kind, rep);
+        return status;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = TURBOWASM_WASI02_VALUE_RESOURCE;
+    out->as.resource = resource;
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status call_error_debug(
     turbowasm_wasi02_streams *streams,
     const turbowasm_wasi02_value *arguments,
@@ -1615,8 +1671,15 @@ turbowasm_status turbowasm_wasi02_streams_call_with_host(
         out_result == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    iface = turbowasm_wasi02_find_interface(
-        "wasi:io", interface_name);
+    if (strcmp(interface_name, "stdin") == 0 ||
+        strcmp(interface_name, "stdout") == 0 ||
+        strcmp(interface_name, "stderr") == 0) {
+        iface = turbowasm_wasi02_find_interface(
+            "wasi:cli", interface_name);
+    } else {
+        iface = turbowasm_wasi02_find_interface(
+            "wasi:io", interface_name);
+    }
     function = turbowasm_wasi02_find_function(
         iface, function_name);
     if (function == NULL ||
@@ -1633,7 +1696,28 @@ turbowasm_status turbowasm_wasi02_streams_call_with_host(
 
     memset(out_result, 0, sizeof(*out_result));
 
-    if (strcmp(interface_name, "streams") == 0) {
+    if (strcmp(interface_name, "stdin") == 0 &&
+        strcmp(function_name, "get-stdin") == 0) {
+        status = call_stream_factory(
+            streams,
+            streams->provider.get_stdin,
+            TURBOWASM_WASI02_STREAM_SLOT_INPUT,
+            out_result);
+    } else if (strcmp(interface_name, "stdout") == 0 &&
+               strcmp(function_name, "get-stdout") == 0) {
+        status = call_stream_factory(
+            streams,
+            streams->provider.get_stdout,
+            TURBOWASM_WASI02_STREAM_SLOT_OUTPUT,
+            out_result);
+    } else if (strcmp(interface_name, "stderr") == 0 &&
+               strcmp(function_name, "get-stderr") == 0) {
+        status = call_stream_factory(
+            streams,
+            streams->provider.get_stderr,
+            TURBOWASM_WASI02_STREAM_SLOT_OUTPUT,
+            out_result);
+    } else if (strcmp(interface_name, "streams") == 0) {
         if (strcmp(
                 function_name,
                 "[method]input-stream.blocking-read") == 0) {
@@ -1794,6 +1878,18 @@ stream_interface_by_component_name(
             name, "wasi:io/error@0.2.8"))
         return turbowasm_wasi02_find_interface(
             "wasi:io", "error");
+    if (stream_component_name_is(
+            name, "wasi:cli/stdin@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:cli", "stdin");
+    if (stream_component_name_is(
+            name, "wasi:cli/stdout@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:cli", "stdout");
+    if (stream_component_name_is(
+            name, "wasi:cli/stderr@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:cli", "stderr");
     return NULL;
 }
 

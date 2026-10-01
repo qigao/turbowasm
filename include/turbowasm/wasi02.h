@@ -199,6 +199,15 @@ typedef turbowasm_status (*turbowasm_wasi02_stream_subscribe_fn)(
     turbowasm_value stream_rep,
     turbowasm_value *out_pollable_rep);
 
+/*
+ * Produce one caller-owned opaque stream representation. On success ownership
+ * transfers to TurboWasm's generation-safe stream resource table and is later
+ * released through input_drop/output_drop.
+ */
+typedef turbowasm_status (*turbowasm_wasi02_stream_factory_fn)(
+    void *context,
+    turbowasm_value *out_stream_rep);
+
 typedef turbowasm_status (*turbowasm_wasi02_error_debug_fn)(
     void *context,
     turbowasm_value error_rep,
@@ -210,6 +219,11 @@ typedef void (*turbowasm_wasi02_stream_drop_fn)(
 
 typedef struct turbowasm_wasi02_stream_provider {
     void *context;
+
+    /* wasi:cli/stdin, stdout and stderr stream producers. */
+    turbowasm_wasi02_stream_factory_fn get_stdin;
+    turbowasm_wasi02_stream_factory_fn get_stdout;
+    turbowasm_wasi02_stream_factory_fn get_stderr;
 
     turbowasm_wasi02_input_read_fn input_read;
     turbowasm_wasi02_input_skip_fn input_skip;
