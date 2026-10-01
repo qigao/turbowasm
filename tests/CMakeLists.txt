@@ -269,7 +269,9 @@ set(_turbowasm_wasi02_fixture_dir
 if(TARGET turbowasm_wasi02 AND
    EXISTS "${_turbowasm_wasi02_fixture_dir}/monotonic-clock.wasm" AND
    EXISTS "${_turbowasm_wasi02_fixture_dir}/random-u64.wasm" AND
-   EXISTS "${_turbowasm_wasi02_fixture_dir}/cli-exit.wasm")
+   EXISTS "${_turbowasm_wasi02_fixture_dir}/cli-exit.wasm" AND
+   EXISTS "${_turbowasm_wasi02_fixture_dir}/filesystem-preopens.wasm" AND
+   EXISTS "${_turbowasm_wasi02_fixture_dir}/stream-poll-block.wasm")
   add_executable(turbowasm_wasi02_toolchain_fixture_test
     wasi02_toolchain_fixture_test.c)
   target_link_libraries(turbowasm_wasi02_toolchain_fixture_test
