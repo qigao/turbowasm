@@ -7,6 +7,7 @@
 #endif
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 typedef struct fixture_probe {
@@ -172,6 +173,7 @@ static turbowasm_name run_name(void) {
 
 static uint64_t run_integer_fixture(
     turbowasm_wasi02 *wasi02,
+    const char *label,
     const uint8_t *bytes,
     size_t size,
     turbowasm_component_host_value_kind expected_kind) {
@@ -181,10 +183,22 @@ static uint64_t run_integer_fixture(
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
     size_t result_count = 0u;
     uint64_t value;
+    turbowasm_status status;
 
+    assert(label != NULL);
     assert(bytes != NULL && size > 8u);
-    assert(turbowasm_component_load_borrowed(
-               &component, bytes, size) == TURBOWASM_OK);
+    status = turbowasm_component_load_borrowed(
+        &component, bytes, size);
+    if (status != TURBOWASM_OK) {
+        fprintf(
+            stderr,
+            "WASI02 toolchain fixture %s load failed: %d (%s), size=%zu\n",
+            label,
+            (int)status,
+            turbowasm_status_string(status),
+            size);
+    }
+    assert(status == TURBOWASM_OK);
     assert(turbowasm_wasi02_component_instance_create(
                &instance, &component, wasi02) == TURBOWASM_OK);
     assert(turbowasm_component_instance_invoke(
@@ -289,12 +303,14 @@ int main(void) {
 
     assert(run_integer_fixture(
                &wasi02,
+               "monotonic-clock",
                turbowasm_wasi02_fixture_monotonic_clock,
                turbowasm_wasi02_fixture_monotonic_clock_size,
                TURBOWASM_COMPONENT_HOST_U64) ==
            probe.clock_value);
     assert(run_integer_fixture(
                &wasi02,
+               "random-u64",
                turbowasm_wasi02_fixture_random_u64,
                turbowasm_wasi02_fixture_random_u64_size,
                TURBOWASM_COMPONENT_HOST_U64) ==
@@ -303,11 +319,13 @@ int main(void) {
 
     assert(run_integer_fixture(
                &wasi02,
+               "filesystem-preopens",
                turbowasm_wasi02_fixture_filesystem_preopens,
                turbowasm_wasi02_fixture_filesystem_preopens_size,
                TURBOWASM_COMPONENT_HOST_U32) == 1u);
     assert(run_integer_fixture(
                &wasi02,
+               "stream-poll-block",
                turbowasm_wasi02_fixture_stream_poll_block,
                turbowasm_wasi02_fixture_stream_poll_block_size,
                TURBOWASM_COMPONENT_HOST_U32) == 1u);
