@@ -58,9 +58,7 @@
     )
   )
   (core instance $m (instantiate $M
-    (with "m" (instance
-      (export "mem" (memory $mem))
-    ))
+    (with "m" (instance $memory))
     (with "p" (instance
       (export "get-directories" (func $get-directories))
       (export "drop-descriptor" (func $drop-descriptor))
