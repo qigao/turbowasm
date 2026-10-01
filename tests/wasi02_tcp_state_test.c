@@ -814,6 +814,19 @@ int main(void) {
                &streams, output_resource) == TURBOWASM_OK);
     assert(turbowasm_wasi02_tcp_drop(&sockets, child) == TURBOWASM_OK);
 
+    client = create_tcp(&sockets, 1u);
+    args[0] = resource_value(client);
+    args[1] = resource_value(network);
+    args[2] = address;
+    before = state.start_connect_calls;
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp", "[method]tcp-socket.start-connect",
+               args, 3u, &result) == TURBOWASM_OK);
+    expect_error(&result, TURBOWASM_WASI02_SOCKET_ERROR_INVALID_ARGUMENT);
+    assert(state.start_connect_calls == before);
+    assert_state(&sockets, client, TURBOWASM_WASI02_TCP_CLOSED);
+    assert(turbowasm_wasi02_tcp_drop(&sockets, client) == TURBOWASM_OK);
+
     client = create_tcp(&sockets, 0u);
     args[0] = resource_value(client);
     args[1] = resource_value(network);
@@ -914,7 +927,7 @@ int main(void) {
                &sockets, network) == TURBOWASM_OK);
 
     assert(state.network_drop_calls == 1u);
-    assert(state.tcp_drop_calls == 4u);
+    assert(state.tcp_drop_calls == 5u);
     assert(state.input_drop_calls == 2u);
     assert(state.output_drop_calls == 2u);
     assert(state.poll_drop_calls == 1u);
