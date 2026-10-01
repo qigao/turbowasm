@@ -261,6 +261,32 @@ if(TARGET turbowasm_wasi02_core AND
   endif()
 endif()
 
+if(TARGET turbowasm_wasi02_core AND
+   TARGET turbowasm_wasi02_poll_core AND
+   TARGET turbowasm_wasi02_streams_core)
+  # S2 typed sockets state/provider contract. Keep this backend-neutral:
+  # CNet/NativeIO integration belongs to #393.
+  add_library(turbowasm_wasi02_sockets_core STATIC
+    src/wasi02_sockets.c)
+  target_compile_features(turbowasm_wasi02_sockets_core PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02_sockets_core
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(turbowasm_wasi02_sockets_core
+    PRIVATE
+      turbowasm_wasi02_core
+      turbowasm_wasi02_poll_core
+      turbowasm_wasi02_streams_core
+      TurboWasm::Component)
+  if(MSVC)
+    target_compile_options(turbowasm_wasi02_sockets_core PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_wasi02_sockets_core PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
 if(TARGET turbowasm_wasi02_poll_core AND TARGET TurboWasm::NativeIO)
   # W4b3 NativeIO completion routing remains internal until stream/poll
   # qualification is complete. It never submits I/O or exposes native handles.
