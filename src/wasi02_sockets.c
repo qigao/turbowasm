@@ -593,6 +593,23 @@ turbowasm_status turbowasm_wasi02_tcp_state_get(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_wasi02_tcp_mark_closed(
+    turbowasm_wasi02_sockets *sockets,
+    uint32_t socket_resource) {
+    turbowasm_wasi02_tcp_slot *slot;
+    turbowasm_status status;
+
+    status = tcp_slot_get(sockets, socket_resource, &slot);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (slot->state == TURBOWASM_WASI02_TCP_CLOSED)
+        return TURBOWASM_OK;
+    if (slot->state != TURBOWASM_WASI02_TCP_CONNECTED)
+        return TURBOWASM_INVALID_ARGUMENT;
+    slot->state = TURBOWASM_WASI02_TCP_CLOSED;
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_wasi02_network_drop(
     turbowasm_wasi02_sockets *sockets,
     uint32_t network_resource) {
