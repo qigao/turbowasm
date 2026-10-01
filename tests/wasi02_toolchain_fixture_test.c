@@ -1,17 +1,13 @@
 #include <turbowasm/wasi02.h>
 
+#include "wasi02_toolchain_fixtures.h"
+
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
 #include <assert.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#ifndef TURBOWASM_WASI02_FIXTURE_DIR
-#error "TURBOWASM_WASI02_FIXTURE_DIR must be defined"
-#endif
 
 typedef struct fixture_probe {
     uint64_t clock_value;
@@ -167,48 +163,6 @@ static uint32_t fs_write(
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
-static uint8_t *read_fixture(
-    const char *name,
-    size_t *out_size) {
-    char path[1024];
-    FILE *file;
-    long length;
-    uint8_t *bytes;
-
-    assert(name != NULL);
-    assert(out_size != NULL);
-    assert(snprintf(
-               path, sizeof(path),
-               "%s/%s",
-               TURBOWASM_WASI02_FIXTURE_DIR,
-               name) > 0);
-
-    file = fopen(path, "rb");
-    assert(file != NULL);
-    assert(fseek(file, 0, SEEK_END) == 0);
-    length = ftell(file);
-    assert(length > 8);
-    assert(fseek(file, 0, SEEK_SET) == 0);
-
-    bytes = (uint8_t *)malloc((size_t)length);
-    assert(bytes != NULL);
-    assert(fread(bytes, 1u, (size_t)length, file) ==
-           (size_t)length);
-    assert(fclose(file) == 0);
-
-    assert(bytes[0] == 0x00u);
-    assert(bytes[1] == 0x61u);
-    assert(bytes[2] == 0x73u);
-    assert(bytes[3] == 0x6du);
-    assert(bytes[4] == 0x0du);
-    assert(bytes[5] == 0x00u);
-    assert(bytes[6] == 0x01u);
-    assert(bytes[7] == 0x00u);
-
-    *out_size = (size_t)length;
-    return bytes;
-}
-
 static turbowasm_name run_name(void) {
     turbowasm_name name;
     name.bytes = (const uint8_t *)"run";
@@ -218,17 +172,17 @@ static turbowasm_name run_name(void) {
 
 static uint64_t run_integer_fixture(
     turbowasm_wasi02 *wasi02,
-    const char *filename,
+    const uint8_t *bytes,
+    size_t size,
     turbowasm_component_host_value_kind expected_kind) {
     turbowasm_component component = {0};
     turbowasm_component_instance instance = {0};
     turbowasm_component_host_value result = {0};
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
     size_t result_count = 0u;
-    size_t size = 0u;
-    uint8_t *bytes = read_fixture(filename, &size);
     uint64_t value;
 
+    assert(bytes != NULL && size > 8u);
     assert(turbowasm_component_load_borrowed(
                &component, bytes, size) == TURBOWASM_OK);
     assert(turbowasm_wasi02_component_instance_create(
@@ -254,7 +208,6 @@ static uint64_t run_integer_fixture(
     turbowasm_component_host_value_destroy(&result);
     turbowasm_component_instance_destroy(&instance);
     turbowasm_component_destroy(&component);
-    free(bytes);
     return value;
 }
 
@@ -264,12 +217,12 @@ static void run_exit_fixture(
     turbowasm_component_instance instance = {0};
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
     size_t result_count = 99u;
-    size_t size = 0u;
-    uint8_t *bytes = read_fixture(
-        "cli-exit.wasm", &size);
 
     assert(turbowasm_component_load_borrowed(
-               &component, bytes, size) == TURBOWASM_OK);
+               &component,
+               turbowasm_wasi02_fixture_cli_exit,
+               turbowasm_wasi02_fixture_cli_exit_size) ==
+           TURBOWASM_OK);
     assert(turbowasm_wasi02_component_instance_create(
                &instance, &component, wasi02) == TURBOWASM_OK);
     assert(turbowasm_component_instance_invoke(
@@ -284,7 +237,6 @@ static void run_exit_fixture(
 
     turbowasm_component_instance_destroy(&instance);
     turbowasm_component_destroy(&component);
-    free(bytes);
 }
 
 int main(void) {
@@ -337,23 +289,27 @@ int main(void) {
 
     assert(run_integer_fixture(
                &wasi02,
-               "monotonic-clock.wasm",
+               turbowasm_wasi02_fixture_monotonic_clock,
+               turbowasm_wasi02_fixture_monotonic_clock_size,
                TURBOWASM_COMPONENT_HOST_U64) ==
            probe.clock_value);
     assert(run_integer_fixture(
                &wasi02,
-               "random-u64.wasm",
+               turbowasm_wasi02_fixture_random_u64,
+               turbowasm_wasi02_fixture_random_u64_size,
                TURBOWASM_COMPONENT_HOST_U64) ==
            probe.random_value);
     run_exit_fixture(&wasi02);
 
     assert(run_integer_fixture(
                &wasi02,
-               "filesystem-preopens.wasm",
+               turbowasm_wasi02_fixture_filesystem_preopens,
+               turbowasm_wasi02_fixture_filesystem_preopens_size,
                TURBOWASM_COMPONENT_HOST_U32) == 1u);
     assert(run_integer_fixture(
                &wasi02,
-               "stream-poll-block.wasm",
+               turbowasm_wasi02_fixture_stream_poll_block,
+               turbowasm_wasi02_fixture_stream_poll_block_size,
                TURBOWASM_COMPONENT_HOST_U32) == 1u);
 
     assert(probe.clock_calls == 1u);
