@@ -317,6 +317,7 @@ if(TARGET turbowasm_wasi02_core AND TARGET TurboWasm::WASI)
   target_link_libraries(turbowasm_wasi02_fs_core
     PRIVATE
       turbowasm_wasi02_core
+      turbowasm_wasi02_streams_core
       TurboWasm::WASI
       TurboWasm::Component)
   if(MSVC)
