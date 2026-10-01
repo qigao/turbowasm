@@ -7,6 +7,7 @@
 #include <turbowasm/status.h>
 #include <turbowasm/value.h>
 #include <turbowasm/wasi_fs.h>
+#include <turbowasm/wasi02_sockets.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -286,6 +287,15 @@ typedef struct turbowasm_wasi02_config {
 
     turbowasm_wasi02_stream_provider streams;
     uint32_t stream_resource_capacity;
+
+    /*
+     * Optional provider-neutral wasi:sockets TCP capability. Both capacities
+     * must be nonzero together. Sockets share the same poll/streams ownership
+     * domain above so connect/accept/subscribe never create parallel tables.
+     */
+    turbowasm_wasi02_socket_provider sockets;
+    uint32_t socket_network_resource_capacity;
+    uint32_t tcp_socket_resource_capacity;
 } turbowasm_wasi02_config;
 
 turbowasm_status turbowasm_wasi02_init(
