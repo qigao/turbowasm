@@ -264,6 +264,28 @@ if(TARGET turbowasm_wasi02_core)
            COMMAND turbowasm_wasi02_component_exec_test)
 endif()
 
+set(_turbowasm_wasi02_fixture_dir
+  "${PROJECT_SOURCE_DIR}/tests/wasi02/fixtures/generated")
+if(TARGET turbowasm_wasi02 AND
+   EXISTS "${_turbowasm_wasi02_fixture_dir}/monotonic-clock.wasm" AND
+   EXISTS "${_turbowasm_wasi02_fixture_dir}/random-u64.wasm" AND
+   EXISTS "${_turbowasm_wasi02_fixture_dir}/cli-exit.wasm")
+  add_executable(turbowasm_wasi02_toolchain_fixture_test
+    wasi02_toolchain_fixture_test.c)
+  target_link_libraries(turbowasm_wasi02_toolchain_fixture_test
+    PRIVATE TurboWasm::WASI02)
+  target_compile_definitions(turbowasm_wasi02_toolchain_fixture_test
+    PRIVATE
+      TURBOWASM_WASI02_FIXTURE_DIR="${_turbowasm_wasi02_fixture_dir}")
+  set_target_properties(
+    turbowasm_wasi02_toolchain_fixture_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi02_toolchain_fixture_test
+           COMMAND turbowasm_wasi02_toolchain_fixture_test)
+endif()
+
 if(TARGET turbowasm_wasi02)
   add_executable(turbowasm_wasi02_public_test
     wasi02_public_test.c)
