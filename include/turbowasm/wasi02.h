@@ -217,6 +217,31 @@ typedef void (*turbowasm_wasi02_stream_drop_fn)(
     void *context,
     turbowasm_value rep);
 
+/*
+ * Filesystem stream factories receive only the provider-owned file capability
+ * already retained by turbowasm_wasi_fs. They return an opaque stream rep that
+ * is immediately transferred into the existing WASI 0.2 Streams table.
+ *
+ * Return a Preview1 errno so the bridge can project the exact 0.2 error-code.
+ */
+typedef uint32_t (*turbowasm_wasi02_filesystem_stream_at_fn)(
+    void *context,
+    turbowasm_wasi_fs_file file,
+    uint64_t offset,
+    turbowasm_value *out_stream_rep);
+
+typedef uint32_t (*turbowasm_wasi02_filesystem_append_stream_fn)(
+    void *context,
+    turbowasm_wasi_fs_file file,
+    turbowasm_value *out_stream_rep);
+
+typedef struct turbowasm_wasi02_filesystem_stream_provider {
+    void *context;
+    turbowasm_wasi02_filesystem_stream_at_fn read_via_stream;
+    turbowasm_wasi02_filesystem_stream_at_fn write_via_stream;
+    turbowasm_wasi02_filesystem_append_stream_fn append_via_stream;
+} turbowasm_wasi02_filesystem_stream_provider;
+
 typedef struct turbowasm_wasi02_stream_provider {
     void *context;
 
@@ -254,6 +279,7 @@ typedef struct turbowasm_wasi02_config {
 
     turbowasm_wasi_fs *filesystem;
     uint32_t filesystem_resource_capacity;
+    turbowasm_wasi02_filesystem_stream_provider filesystem_streams;
 
     turbowasm_wasi02_poll_provider poll;
     uint32_t pollable_capacity;

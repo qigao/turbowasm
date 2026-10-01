@@ -1574,6 +1574,7 @@ if(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER)
     PRIVATE
       TurboWasm::WASIHostFS
       turbowasm_wasi02_fs_core
+      turbowasm_wasi02_streams_core
       TurboWasm::Component)
   set_target_properties(
     turbowasm_wasi_fs_contract_host_test PROPERTIES
@@ -1609,6 +1610,7 @@ if(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER)
     PRIVATE
       TurboWasm::WASILittleFS
       turbowasm_wasi02_fs_core
+      turbowasm_wasi02_streams_core
       TurboWasm::Component)
   set_target_properties(
     turbowasm_wasi_fs_contract_littlefs_test PROPERTIES

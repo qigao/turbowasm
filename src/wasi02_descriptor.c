@@ -213,6 +213,17 @@ static const turbowasm_wasi02_type_desc type_fs_result_descriptor = {
     {.result = {&type_fs_descriptor, &type_fs_error_code}}
 };
 
+static const turbowasm_wasi02_type_desc type_fs_result_input_stream = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_input_stream, &type_fs_error_code}}
+};
+static const turbowasm_wasi02_type_desc type_fs_result_output_stream = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_output_stream, &type_fs_error_code}}
+};
+
 static const turbowasm_wasi02_type_desc type_list_u32 = {
     TURBOWASM_WASI02_TYPE_LIST,
     NULL,
@@ -354,6 +365,11 @@ static const turbowasm_wasi02_param_desc fs_path_only_params[] = {
     {"self", &type_fs_descriptor},
     {"path", &type_string}
 };
+
+static const turbowasm_wasi02_param_desc fs_stream_at_params[] = {
+    {"self", &type_fs_descriptor},
+    {"offset", &type_fs_filesize}
+};
 static const turbowasm_wasi02_function_desc filesystem_types_functions[] = {
     {"[method]descriptor.create-directory-at",
      fs_create_dir_params, 2u, &type_fs_result_unit},
@@ -366,7 +382,13 @@ static const turbowasm_wasi02_function_desc filesystem_types_functions[] = {
     {"[method]descriptor.remove-directory-at",
      fs_path_only_params, 2u, &type_fs_result_unit},
     {"[method]descriptor.unlink-file-at",
-     fs_path_only_params, 2u, &type_fs_result_unit}
+     fs_path_only_params, 2u, &type_fs_result_unit},
+    {"[method]descriptor.read-via-stream",
+     fs_stream_at_params, 2u, &type_fs_result_input_stream},
+    {"[method]descriptor.write-via-stream",
+     fs_stream_at_params, 2u, &type_fs_result_output_stream},
+    {"[method]descriptor.append-via-stream",
+     fs_stat_params, 1u, &type_fs_result_output_stream}
 };
 
 static const turbowasm_wasi02_function_desc preopens_functions[] = {
@@ -518,7 +540,7 @@ static const turbowasm_wasi02_interface_desc interfaces[] = {
         "wasi:filesystem", "types", TW_WASI02_V028,
         "https://github.com/WebAssembly/wasi-filesystem",
         "971b11617b50e7496bea85f36e60141bda172964",
-        filesystem_types_functions, 6u
+        filesystem_types_functions, 9u
     },
     {
         "wasi:filesystem", "preopens", TW_WASI02_V028,

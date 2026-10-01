@@ -4,6 +4,7 @@
 #include "component_resource.h"
 #include "component_exec.h"
 #include "wasi02_provider.h"
+#include "wasi02_streams.h"
 
 #include <turbowasm/wasi_fs.h>
 
@@ -26,6 +27,10 @@ typedef struct turbowasm_wasi02_filesystem {
     turbowasm_component_resource_table resources;
     uint64_t descriptor_identity;
     bool descriptor_identity_bound;
+
+    turbowasm_wasi02_streams *streams;
+    turbowasm_wasi02_filesystem_stream_provider stream_provider;
+
     bool initialized;
 } turbowasm_wasi02_filesystem;
 
@@ -33,6 +38,16 @@ turbowasm_status turbowasm_wasi02_filesystem_init(
     turbowasm_wasi02_filesystem *filesystem,
     turbowasm_wasi_fs *backing_filesystem,
     uint32_t max_resources);
+
+/*
+ * Attach the already-initialized W4 Streams table used by descriptor stream
+ * factory methods. The factory provider is copied; all callback contexts are
+ * borrowed and must outlive this filesystem bridge.
+ */
+turbowasm_status turbowasm_wasi02_filesystem_attach_streams(
+    turbowasm_wasi02_filesystem *filesystem,
+    turbowasm_wasi02_streams *streams,
+    const turbowasm_wasi02_filesystem_stream_provider *provider);
 
 /*
  * Destroy is ownership-strict: all WIT descriptor handles must have been
