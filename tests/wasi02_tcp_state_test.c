@@ -912,6 +912,12 @@ int main(void) {
                &sockets, "tcp", "[method]tcp-socket.shutdown",
                args, 2u, &result) == TURBOWASM_OK);
     expect_unit_ok(&result);
+    assert_state(&sockets, client, TURBOWASM_WASI02_TCP_CONNECTED);
+    assert(turbowasm_wasi02_tcp_mark_closed(
+               &sockets, client) == TURBOWASM_OK);
+    assert_state(&sockets, client, TURBOWASM_WASI02_TCP_CLOSED);
+    assert(turbowasm_wasi02_tcp_mark_closed(
+               &sockets, client) == TURBOWASM_OK);
 
     assert(turbowasm_wasi02_stream_resource_drop(
                &streams, input_resource) == TURBOWASM_OK);
