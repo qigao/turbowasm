@@ -117,6 +117,29 @@ turbowasm_status turbowasm_wasi02_filesystem_init(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_wasi02_filesystem_attach_streams(
+    turbowasm_wasi02_filesystem *filesystem,
+    turbowasm_wasi02_streams *streams,
+    const turbowasm_wasi02_filesystem_stream_provider *provider) {
+    if (filesystem == NULL || !filesystem->initialized ||
+        filesystem->streams != NULL ||
+        streams == NULL || !streams->initialized ||
+        provider == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (provider->read_via_stream != NULL &&
+        streams->provider.input_drop == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if ((provider->write_via_stream != NULL ||
+         provider->append_via_stream != NULL) &&
+        streams->provider.output_drop == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    filesystem->streams = streams;
+    filesystem->stream_provider = *provider;
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_wasi02_filesystem_destroy(
     turbowasm_wasi02_filesystem *filesystem) {
     if (filesystem == NULL)
@@ -560,6 +583,111 @@ static turbowasm_status make_result_resource_ok(
     return TURBOWASM_OK;
 }
 
+static void drop_stream_factory_rep(
+    turbowasm_wasi02_filesystem *filesystem,
+    bool input,
+    turbowasm_value rep) {
+    if (filesystem == NULL || filesystem->streams == NULL)
+        return;
+    if (input) {
+        if (filesystem->streams->provider.input_drop != NULL)
+            filesystem->streams->provider.input_drop(
+                filesystem->streams->provider.context, rep);
+    } else if (filesystem->streams->provider.output_drop != NULL) {
+        filesystem->streams->provider.output_drop(
+            filesystem->streams->provider.context, rep);
+    }
+}
+
+static turbowasm_status filesystem_call_stream_factory(
+    turbowasm_wasi02_filesystem *filesystem,
+    const char *function_name,
+    const turbowasm_wasi02_value *arguments,
+    turbowasm_wasi02_value *out) {
+    turbowasm_wasi_fs_descriptor_info info = {0};
+    turbowasm_value stream_rep = {0};
+    uint32_t stream_resource = 0u;
+    uint32_t error;
+    bool input;
+    turbowasm_status status;
+
+    if (filesystem == NULL || function_name == NULL ||
+        arguments == NULL || out == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (filesystem->streams == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    if (turbowasm_wasi02_filesystem_descriptor_resolve(
+            filesystem, arguments[0].as.resource, &info) !=
+        TURBOWASM_OK)
+        return make_result_error(
+            TURBOWASM_WASI_ERRNO_BADF, out);
+
+    if (strcmp(
+            function_name,
+            "[method]descriptor.read-via-stream") == 0) {
+        if (filesystem->stream_provider.read_via_stream == NULL)
+            return TURBOWASM_UNSUPPORTED;
+        input = true;
+        error = filesystem->stream_provider.read_via_stream(
+            filesystem->stream_provider.context,
+            info.file,
+            arguments[1].as.u64,
+            &stream_rep);
+    } else if (strcmp(
+                   function_name,
+                   "[method]descriptor.write-via-stream") == 0) {
+        if (filesystem->stream_provider.write_via_stream == NULL)
+            return TURBOWASM_UNSUPPORTED;
+        input = false;
+        error = filesystem->stream_provider.write_via_stream(
+            filesystem->stream_provider.context,
+            info.file,
+            arguments[1].as.u64,
+            &stream_rep);
+    } else if (strcmp(
+                   function_name,
+                   "[method]descriptor.append-via-stream") == 0) {
+        if (filesystem->stream_provider.append_via_stream == NULL)
+            return TURBOWASM_UNSUPPORTED;
+        input = false;
+        error = filesystem->stream_provider.append_via_stream(
+            filesystem->stream_provider.context,
+            info.file,
+            &stream_rep);
+    } else {
+        return TURBOWASM_UNSUPPORTED;
+    }
+
+    if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
+        return make_result_error(error, out);
+
+    status = input
+        ? turbowasm_wasi02_input_stream_new(
+              filesystem->streams,
+              stream_rep,
+              &stream_resource)
+        : turbowasm_wasi02_output_stream_new(
+              filesystem->streams,
+              stream_rep,
+              &stream_resource);
+    if (status != TURBOWASM_OK) {
+        drop_stream_factory_rep(
+            filesystem, input, stream_rep);
+        return status;
+    }
+
+    status = make_result_resource_ok(
+        stream_resource, out);
+    if (status != TURBOWASM_OK) {
+        (void)turbowasm_wasi02_stream_resource_drop(
+            filesystem->streams,
+            stream_resource);
+        return status;
+    }
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status child_resource_from_fd(
     turbowasm_wasi02_filesystem *filesystem,
     uint32_t guest_fd,
@@ -846,6 +974,18 @@ turbowasm_status turbowasm_wasi02_filesystem_call(
         status = filesystem_call_path_mutation(
             filesystem, function_name,
             arguments, out_result);
+    } else if (strcmp(
+                   function_name,
+                   "[method]descriptor.read-via-stream") == 0 ||
+               strcmp(
+                   function_name,
+                   "[method]descriptor.write-via-stream") == 0 ||
+               strcmp(
+                   function_name,
+                   "[method]descriptor.append-via-stream") == 0) {
+        status = filesystem_call_stream_factory(
+            filesystem, function_name,
+            arguments, out_result);
     } else {
         return TURBOWASM_UNSUPPORTED;
     }
@@ -1025,6 +1165,67 @@ static bool fs_bind_descriptor_identity(
     filesystem->descriptor_identity = identity;
     filesystem->descriptor_identity_bound = true;
     return true;
+}
+
+static bool fs_bind_stream_identity(
+    turbowasm_wasi02_filesystem *filesystem,
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_type *handle_type,
+    const turbowasm_wasi02_type_desc *resource_desc,
+    turbowasm_component_type_kind expected_handle_kind) {
+    const turbowasm_component_type *resource_type;
+    turbowasm_wasi02_streams *streams;
+    uint64_t identity;
+
+    if (filesystem == NULL ||
+        filesystem->streams == NULL ||
+        graph == NULL || handle_type == NULL ||
+        resource_desc == NULL ||
+        resource_desc->kind != TURBOWASM_WASI02_TYPE_RESOURCE ||
+        handle_type->kind != expected_handle_kind)
+        return false;
+
+    if (strcmp(
+            resource_desc->as.resource.package_name,
+            "wasi:io") != 0 ||
+        strcmp(
+            resource_desc->as.resource.interface_name,
+            "streams") != 0)
+        return false;
+
+    resource_type = turbowasm_component_type_graph_get(
+        graph, handle_type->as.handle.resource_type);
+    if (resource_type == NULL ||
+        resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE ||
+        resource_type->as.resource.identity == 0u)
+        return false;
+
+    streams = filesystem->streams;
+    identity = resource_type->as.resource.identity;
+
+    if (strcmp(
+            resource_desc->as.resource.resource_name,
+            "input-stream") == 0) {
+        if (streams->component_input_identity_bound &&
+            streams->component_input_identity != identity)
+            return false;
+        streams->component_input_identity = identity;
+        streams->component_input_identity_bound = true;
+        return true;
+    }
+
+    if (strcmp(
+            resource_desc->as.resource.resource_name,
+            "output-stream") == 0) {
+        if (streams->component_output_identity_bound &&
+            streams->component_output_identity != identity)
+            return false;
+        streams->component_output_identity = identity;
+        streams->component_output_identity_bound = true;
+        return true;
+    }
+
+    return false;
 }
 
 static bool fs_component_type_matches_wasi(
@@ -1207,10 +1408,24 @@ static bool fs_component_type_matches_wasi(
         }
 
         case TURBOWASM_WASI02_TYPE_RESOURCE:
-            return type != NULL &&
-                   fs_bind_descriptor_identity(
-                       filesystem, graph, type,
-                       resource_handle_kind);
+            if (type == NULL)
+                return false;
+            if (strcmp(
+                    base->as.resource.package_name,
+                    "wasi:filesystem") == 0 &&
+                strcmp(
+                    base->as.resource.interface_name,
+                    "types") == 0 &&
+                strcmp(
+                    base->as.resource.resource_name,
+                    "descriptor") == 0) {
+                return fs_bind_descriptor_identity(
+                    filesystem, graph, type,
+                    resource_handle_kind);
+            }
+            return fs_bind_stream_identity(
+                filesystem, graph, type, base,
+                resource_handle_kind);
 
         case TURBOWASM_WASI02_TYPE_UNIT:
         case TURBOWASM_WASI02_TYPE_ALIAS:
@@ -1445,11 +1660,11 @@ static void rollback_method_result_resource(
     turbowasm_wasi02_filesystem *filesystem,
     const turbowasm_wasi02_function_desc *function,
     turbowasm_wasi02_value *result) {
+    bool descriptor_result;
+    bool stream_result;
+
     if (filesystem == NULL || function == NULL ||
         result == NULL ||
-        strcmp(
-            function->name,
-            "[method]descriptor.open-at") != 0 ||
         result->kind != TURBOWASM_WASI02_VALUE_RESULT ||
         result->as.result.is_error ||
         result->as.result.value == NULL ||
@@ -1457,9 +1672,30 @@ static void rollback_method_result_resource(
             TURBOWASM_WASI02_VALUE_RESOURCE)
         return;
 
-    (void)turbowasm_wasi02_filesystem_descriptor_drop(
-        filesystem,
-        result->as.result.value->as.resource);
+    descriptor_result =
+        strcmp(
+            function->name,
+            "[method]descriptor.open-at") == 0;
+    stream_result =
+        strcmp(
+            function->name,
+            "[method]descriptor.read-via-stream") == 0 ||
+        strcmp(
+            function->name,
+            "[method]descriptor.write-via-stream") == 0 ||
+        strcmp(
+            function->name,
+            "[method]descriptor.append-via-stream") == 0;
+
+    if (descriptor_result) {
+        (void)turbowasm_wasi02_filesystem_descriptor_drop(
+            filesystem,
+            result->as.result.value->as.resource);
+    } else if (stream_result && filesystem->streams != NULL) {
+        (void)turbowasm_wasi02_stream_resource_drop(
+            filesystem->streams,
+            result->as.result.value->as.resource);
+    }
 }
 
 static turbowasm_status invoke_filesystem_method(
