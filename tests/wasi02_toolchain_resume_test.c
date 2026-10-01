@@ -9,6 +9,7 @@
 #endif
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 typedef struct resume_probe {
@@ -193,8 +194,28 @@ int main(void) {
                adapter->function_index,
                NULL, 0u) == TURBOWASM_OK);
 
-    assert(turbowasm_execution_resume(
-               &execution, NULL) == TURBOWASM_YIELDED);
+    {
+        turbowasm_status resume_status =
+            turbowasm_execution_resume(&execution, NULL);
+        if (resume_status != TURBOWASM_YIELDED) {
+            fprintf(
+                stderr,
+                "toolchain stream resume expected yield, got %d (%s); "
+                "state=%d reason=%d stdin=%u subscribe=%u ready=%u arm=%u "
+                "poll_drop=%u input_drop=%u\n",
+                (int)resume_status,
+                turbowasm_status_string(resume_status),
+                (int)turbowasm_execution_state_get(&execution),
+                (int)turbowasm_execution_yield_reason_get(&execution),
+                probe.stdin_calls,
+                probe.subscribe_calls,
+                probe.ready_calls,
+                probe.arm_calls,
+                probe.poll_drop_calls,
+                probe.input_drop_calls);
+        }
+        assert(resume_status == TURBOWASM_YIELDED);
+    }
     assert(turbowasm_execution_yield_reason_get(
                &execution) == TURBOWASM_YIELD_HOST_WAIT);
     assert(probe.stdin_calls == 1u);
