@@ -874,7 +874,7 @@ int main(void) {
                &sockets, "tcp", "[method]tcp-socket.keep-alive-enabled",
                args, 1u, &result) == TURBOWASM_OK);
     assert(!result.as.result.is_error);
-    assert(result.as.result.value->as.boolean);
+    assert(!result.as.result.value->as.boolean);
     turbowasm_wasi02_value_destroy(&result);
 
     args[1].kind = TURBOWASM_WASI02_VALUE_U8;
