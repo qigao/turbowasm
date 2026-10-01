@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "tests/wasi02/fixtures/src/**"
+      - "tests/wasi02/fixtures/generated/**"
       - ".github/workflows/wasi02-fixture-generator.yml"
   push:
     branches:
       - master
     paths:
       - "tests/wasi02/fixtures/src/**"
+      - "tests/wasi02/fixtures/generated/**"
       - ".github/workflows/wasi02-fixture-generator.yml"
   workflow_dispatch:
 
@@ -123,6 +125,10 @@ jobs:
               encoding="utf-8",
           )
           PY
+
+          committed="tests/wasi02/fixtures/generated/wasi02_toolchain_fixtures.h"
+          test -f "$committed"
+          cmp "$out/wasi02_toolchain_fixtures.h" "$committed"
 
           cat > "$out/PROVENANCE.txt" <<EOF
           generator=wasm-tools
