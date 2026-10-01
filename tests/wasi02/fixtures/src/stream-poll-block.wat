@@ -24,7 +24,9 @@
   (core func $block
     (canon lower (func $poll "[method]pollable.block"))
   )
-  (canon resource.drop $pollable (core func $drop-pollable))
+  (core func $drop-pollable
+    (canon resource.drop $pollable)
+  )
 
   (core module $M
     (import "" "subscribe" (func $subscribe (param i32) (result i32)))
