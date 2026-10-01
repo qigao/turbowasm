@@ -563,6 +563,121 @@ int main(void) {
     listener = create_tcp(&sockets, 0u);
     assert_state(&sockets, listener, TURBOWASM_WASI02_TCP_UNBOUND);
 
+    args[0] = resource_value(listener);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp", "[method]tcp-socket.address-family",
+               args, 1u, &result) == TURBOWASM_OK);
+    assert(result.kind == TURBOWASM_WASI02_VALUE_ENUM);
+    assert(result.as.enum_index == 0u);
+    turbowasm_wasi02_value_destroy(&result);
+
+    args[1].kind = TURBOWASM_WASI02_VALUE_U64;
+    args[1].as.u64 = UINT64_C(64);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.set-listen-backlog-size",
+               args, 2u, &result) == TURBOWASM_OK);
+    expect_unit_ok(&result);
+    assert(state.u64_value == UINT64_C(64));
+
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp", "[method]tcp-socket.keep-alive-enabled",
+               args, 1u, &result) == TURBOWASM_OK);
+    assert(!result.as.result.is_error);
+    assert(result.as.result.value->kind ==
+           TURBOWASM_WASI02_VALUE_BOOL);
+    assert(result.as.result.value->as.boolean);
+    turbowasm_wasi02_value_destroy(&result);
+
+    args[1].kind = TURBOWASM_WASI02_VALUE_BOOL;
+    args[1].as.boolean = false;
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.set-keep-alive-enabled",
+               args, 2u, &result) == TURBOWASM_OK);
+    expect_unit_ok(&result);
+    assert(!state.keepalive);
+
+    args[1].kind = TURBOWASM_WASI02_VALUE_U64;
+    args[1].as.u64 = UINT64_C(11);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.set-keep-alive-idle-time",
+               args, 2u, &result) == TURBOWASM_OK);
+    expect_unit_ok(&result);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.keep-alive-idle-time",
+               args, 1u, &result) == TURBOWASM_OK);
+    assert(result.as.result.value->as.u64 == UINT64_C(11));
+    turbowasm_wasi02_value_destroy(&result);
+
+    args[1].as.u64 = UINT64_C(12);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.set-keep-alive-interval",
+               args, 2u, &result) == TURBOWASM_OK);
+    expect_unit_ok(&result);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.keep-alive-interval",
+               args, 1u, &result) == TURBOWASM_OK);
+    assert(result.as.result.value->as.u64 == UINT64_C(12));
+    turbowasm_wasi02_value_destroy(&result);
+
+    args[1].kind = TURBOWASM_WASI02_VALUE_U32;
+    args[1].as.u32 = UINT32_C(7);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.set-keep-alive-count",
+               args, 2u, &result) == TURBOWASM_OK);
+    expect_unit_ok(&result);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.keep-alive-count",
+               args, 1u, &result) == TURBOWASM_OK);
+    assert(result.as.result.value->as.u32 == UINT32_C(7));
+    turbowasm_wasi02_value_destroy(&result);
+
+    args[1].kind = TURBOWASM_WASI02_VALUE_U8;
+    args[1].as.u8 = UINT8_C(55);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp", "[method]tcp-socket.set-hop-limit",
+               args, 2u, &result) == TURBOWASM_OK);
+    expect_unit_ok(&result);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp", "[method]tcp-socket.hop-limit",
+               args, 1u, &result) == TURBOWASM_OK);
+    assert(result.as.result.value->as.u8 == UINT8_C(55));
+    turbowasm_wasi02_value_destroy(&result);
+
+    args[1].kind = TURBOWASM_WASI02_VALUE_U64;
+    args[1].as.u64 = UINT64_C(4096);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.set-receive-buffer-size",
+               args, 2u, &result) == TURBOWASM_OK);
+    expect_unit_ok(&result);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.receive-buffer-size",
+               args, 1u, &result) == TURBOWASM_OK);
+    assert(result.as.result.value->as.u64 == UINT64_C(4096));
+    turbowasm_wasi02_value_destroy(&result);
+
+    args[1].as.u64 = UINT64_C(8192);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.set-send-buffer-size",
+               args, 2u, &result) == TURBOWASM_OK);
+    expect_unit_ok(&result);
+    assert(turbowasm_wasi02_sockets_call(
+               &sockets, "tcp",
+               "[method]tcp-socket.send-buffer-size",
+               args, 1u, &result) == TURBOWASM_OK);
+    assert(result.as.result.value->as.u64 == UINT64_C(8192));
+    turbowasm_wasi02_value_destroy(&result);
+
     make_ipv4_address(
         UINT16_C(8080),
         &address, &address_record, address_record_items,
