@@ -24,14 +24,18 @@
     )
   )
   (core instance $memory (instantiate $Memory))
+  (alias core export $memory "mem" (core memory $mem))
+  (alias core export $memory "realloc" (core func $realloc))
   (core func $get-directories
     (canon lower
       (func $preopens "get-directories")
-      (memory (core memory $memory "mem"))
-      (realloc (core func $memory "realloc"))
+      (memory $mem)
+      (realloc $realloc)
     )
   )
-  (canon resource.drop $descriptor (core func $drop-descriptor))
+  (core func $drop-descriptor
+    (canon resource.drop $descriptor)
+  )
 
   (core module $M
     (import "m" "mem" (memory 1))
@@ -55,7 +59,7 @@
   )
   (core instance $m (instantiate $M
     (with "m" (instance
-      (export "mem" (memory (core memory $memory "mem")))
+      (export "mem" (memory $mem))
     ))
     (with "p" (instance
       (export "get-directories" (func $get-directories))
