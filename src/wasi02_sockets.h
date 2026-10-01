@@ -277,6 +277,14 @@ turbowasm_status turbowasm_wasi02_tcp_state_get(
     uint32_t socket_resource,
     turbowasm_wasi02_tcp_state *out_state);
 
+/*
+ * Provider-side terminal event for the sole asynchronous state transition in
+ * the upstream TCP state machine: connected -> closed.
+ */
+turbowasm_status turbowasm_wasi02_tcp_mark_closed(
+    turbowasm_wasi02_sockets *sockets,
+    uint32_t socket_resource);
+
 turbowasm_status turbowasm_wasi02_network_drop(
     turbowasm_wasi02_sockets *sockets,
     uint32_t network_resource);
