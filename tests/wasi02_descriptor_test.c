@@ -283,6 +283,9 @@ static void test_filesystem_types_surface(void) {
     const turbowasm_wasi02_function_desc *create_dir;
     const turbowasm_wasi02_function_desc *remove_dir;
     const turbowasm_wasi02_function_desc *unlink_file;
+    const turbowasm_wasi02_function_desc *read_stream;
+    const turbowasm_wasi02_function_desc *write_stream;
+    const turbowasm_wasi02_function_desc *append_stream;
     const turbowasm_wasi02_type_desc *stat_result;
     const turbowasm_wasi02_type_desc *stat_record;
     const turbowasm_wasi02_type_desc *error_code;
@@ -295,7 +298,7 @@ static void test_filesystem_types_surface(void) {
     assert(strcmp(
         types->source_commit,
         "971b11617b50e7496bea85f36e60141bda172964") == 0);
-    assert(types->function_count == 6u);
+    assert(types->function_count == 9u);
 
     stat = turbowasm_wasi02_find_function(
         types, "[method]descriptor.stat");
@@ -309,6 +312,12 @@ static void test_filesystem_types_surface(void) {
         types, "[method]descriptor.remove-directory-at");
     unlink_file = turbowasm_wasi02_find_function(
         types, "[method]descriptor.unlink-file-at");
+    read_stream = turbowasm_wasi02_find_function(
+        types, "[method]descriptor.read-via-stream");
+    write_stream = turbowasm_wasi02_find_function(
+        types, "[method]descriptor.write-via-stream");
+    append_stream = turbowasm_wasi02_find_function(
+        types, "[method]descriptor.append-via-stream");
 
     assert(stat != NULL);
     assert(stat->param_count == 1u);
@@ -383,6 +392,38 @@ static void test_filesystem_types_surface(void) {
     assert(create_dir->result->as.result.error == error_code);
     assert(remove_dir->param_count == 2u);
     assert(unlink_file->param_count == 2u);
+
+    assert(read_stream != NULL);
+    assert(write_stream != NULL);
+    assert(append_stream != NULL);
+    assert(read_stream->param_count == 2u);
+    assert(read_stream->params[0].type == stat->params[0].type);
+    assert(read_stream->params[1].type->kind ==
+           TURBOWASM_WASI02_TYPE_ALIAS);
+    assert(strcmp(read_stream->params[1].type->name,
+                  "filesize") == 0);
+    assert(read_stream->result->kind ==
+           TURBOWASM_WASI02_TYPE_RESULT);
+    assert(read_stream->result->as.result.ok->kind ==
+           TURBOWASM_WASI02_TYPE_RESOURCE);
+    assert(strcmp(
+        read_stream->result->as.result.ok
+            ->as.resource.resource_name,
+        "input-stream") == 0);
+    assert(read_stream->result->as.result.error == error_code);
+
+    assert(write_stream->param_count == 2u);
+    assert(write_stream->result->kind ==
+           TURBOWASM_WASI02_TYPE_RESULT);
+    assert(strcmp(
+        write_stream->result->as.result.ok
+            ->as.resource.resource_name,
+        "output-stream") == 0);
+    assert(write_stream->result->as.result.error == error_code);
+
+    assert(append_stream->param_count == 1u);
+    assert(append_stream->params[0].type == stat->params[0].type);
+    assert(append_stream->result == write_stream->result);
 }
 
 static void test_io_poll_surface(void) {
