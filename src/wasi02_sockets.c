@@ -1,6 +1,8 @@
 #include "wasi02_sockets.h"
 
 #include "runtime_alloc.h"
+#include "wasi02_component.h"
+#include "wasi02_descriptor.h"
 
 #include <limits.h>
 #include <string.h>
