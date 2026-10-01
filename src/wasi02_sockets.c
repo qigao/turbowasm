@@ -842,9 +842,11 @@ static turbowasm_status call_start_connect(
     status = address_from_value(&arguments[2], &address);
     if (status != TURBOWASM_OK)
         return status;
-    if (address.family != slot->family)
+    if (address.family != slot->family) {
+        slot->state = TURBOWASM_WASI02_TCP_CLOSED;
         return result_error(
             out, TURBOWASM_WASI02_SOCKET_ERROR_INVALID_ARGUMENT);
+    }
     status = network_rep_get(
         sockets, arguments[1].as.resource, &network_rep);
     if (status != TURBOWASM_OK)
