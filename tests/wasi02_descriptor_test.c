@@ -584,7 +584,7 @@ static void test_io_streams_surface(void) {
 int main(void) {
     size_t i;
 
-    assert(turbowasm_wasi02_interface_count() == 12u);
+    assert(turbowasm_wasi02_interface_count() == 15u);
     for (i = 0u; i < turbowasm_wasi02_interface_count(); ++i) {
         const turbowasm_wasi02_interface_desc *iface =
             turbowasm_wasi02_interface_at(i);
