@@ -165,6 +165,8 @@ static bool value_matches_type_depth(
             return value->kind == TURBOWASM_WASI02_VALUE_BOOL;
         case TURBOWASM_WASI02_TYPE_U8:
             return value->kind == TURBOWASM_WASI02_VALUE_U8;
+        case TURBOWASM_WASI02_TYPE_U16:
+            return value->kind == TURBOWASM_WASI02_VALUE_U16;
         case TURBOWASM_WASI02_TYPE_U32:
             return value->kind == TURBOWASM_WASI02_VALUE_U32;
         case TURBOWASM_WASI02_TYPE_U64:

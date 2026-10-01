@@ -120,6 +120,9 @@ static bool component_type_matches_wasi_depth(
         case TURBOWASM_WASI02_TYPE_U8:
             return component_type->kind ==
                    TURBOWASM_COMPONENT_TYPE_U8;
+        case TURBOWASM_WASI02_TYPE_U16:
+            return component_type->kind ==
+                   TURBOWASM_COMPONENT_TYPE_U16;
         case TURBOWASM_WASI02_TYPE_U32:
             return component_type->kind ==
                    TURBOWASM_COMPONENT_TYPE_U32;
@@ -479,6 +482,13 @@ static turbowasm_status component_to_wasi_value(
             out->as.u8 = value->as.u8;
             return TURBOWASM_OK;
 
+        case TURBOWASM_WASI02_TYPE_U16:
+            if (value->kind != TURBOWASM_COMPONENT_TYPE_U16)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->kind = TURBOWASM_WASI02_VALUE_U16;
+            out->as.u16 = value->as.u16;
+            return TURBOWASM_OK;
+
         case TURBOWASM_WASI02_TYPE_U32:
             if (value->kind != TURBOWASM_COMPONENT_TYPE_U32)
                 return TURBOWASM_TYPE_MISMATCH;
@@ -779,6 +789,13 @@ static turbowasm_status wasi_to_component_value(
                 return TURBOWASM_TYPE_MISMATCH;
             out->kind = TURBOWASM_COMPONENT_TYPE_U8;
             out->as.u8 = value->as.u8;
+            return TURBOWASM_OK;
+
+        case TURBOWASM_WASI02_TYPE_U16:
+            if (value->kind != TURBOWASM_WASI02_VALUE_U16)
+                return TURBOWASM_TYPE_MISMATCH;
+            out->kind = TURBOWASM_COMPONENT_TYPE_U16;
+            out->as.u16 = value->as.u16;
             return TURBOWASM_OK;
 
         case TURBOWASM_WASI02_TYPE_U32:

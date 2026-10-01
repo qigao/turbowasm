@@ -10,6 +10,9 @@ static const turbowasm_wasi02_type_desc type_bool = {
 static const turbowasm_wasi02_type_desc type_u8 = {
     TURBOWASM_WASI02_TYPE_U8, "u8", {{0}}
 };
+static const turbowasm_wasi02_type_desc type_u16 = {
+    TURBOWASM_WASI02_TYPE_U16, "u16", {{0}}
+};
 static const turbowasm_wasi02_type_desc type_u32 = {
     TURBOWASM_WASI02_TYPE_U32, "u32", {{0}}
 };
@@ -475,6 +478,299 @@ static const turbowasm_wasi02_function_desc streams_functions[] = {
      output_splice_params, 3u, &type_stream_result_u64}
 };
 
+
+static const turbowasm_wasi02_type_desc type_socket_network = {
+    TURBOWASM_WASI02_TYPE_RESOURCE,
+    "network",
+    {.resource = {
+        "wasi:sockets", "network", TW_WASI02_V028, "network"
+    }}
+};
+
+static const turbowasm_wasi02_type_desc type_tcp_socket = {
+    TURBOWASM_WASI02_TYPE_RESOURCE,
+    "tcp-socket",
+    {.resource = {
+        "wasi:sockets", "tcp", TW_WASI02_V028, "tcp-socket"
+    }}
+};
+
+static const char *const network_error_code_labels[] = {
+    "unknown",
+    "access-denied",
+    "not-supported",
+    "invalid-argument",
+    "out-of-memory",
+    "timeout",
+    "concurrency-conflict",
+    "not-in-progress",
+    "would-block",
+    "invalid-state",
+    "new-socket-limit",
+    "address-not-bindable",
+    "address-in-use",
+    "remote-unreachable",
+    "connection-refused",
+    "connection-reset",
+    "connection-aborted",
+    "datagram-too-large",
+    "name-unresolvable",
+    "temporary-resolver-failure",
+    "permanent-resolver-failure"
+};
+static const turbowasm_wasi02_type_desc type_network_error_code = {
+    TURBOWASM_WASI02_TYPE_ENUM,
+    "error-code",
+    {.enumeration = {network_error_code_labels, 21u}}
+};
+
+static const char *const ip_address_family_labels[] = {
+    "ipv4", "ipv6"
+};
+static const turbowasm_wasi02_type_desc type_ip_address_family = {
+    TURBOWASM_WASI02_TYPE_ENUM,
+    "ip-address-family",
+    {.enumeration = {ip_address_family_labels, 2u}}
+};
+
+static const turbowasm_wasi02_type_desc *const ipv4_address_elements[] = {
+    &type_u8, &type_u8, &type_u8, &type_u8
+};
+static const turbowasm_wasi02_type_desc type_ipv4_address = {
+    TURBOWASM_WASI02_TYPE_TUPLE,
+    "ipv4-address",
+    {.tuple = {ipv4_address_elements, 4u}}
+};
+
+static const turbowasm_wasi02_type_desc *const ipv6_address_elements[] = {
+    &type_u16, &type_u16, &type_u16, &type_u16,
+    &type_u16, &type_u16, &type_u16, &type_u16
+};
+static const turbowasm_wasi02_type_desc type_ipv6_address = {
+    TURBOWASM_WASI02_TYPE_TUPLE,
+    "ipv6-address",
+    {.tuple = {ipv6_address_elements, 8u}}
+};
+
+static const turbowasm_wasi02_record_field ipv4_socket_address_fields[] = {
+    {"port", &type_u16},
+    {"address", &type_ipv4_address}
+};
+static const turbowasm_wasi02_type_desc type_ipv4_socket_address = {
+    TURBOWASM_WASI02_TYPE_RECORD,
+    "ipv4-socket-address",
+    {.record = {ipv4_socket_address_fields, 2u}}
+};
+
+static const turbowasm_wasi02_record_field ipv6_socket_address_fields[] = {
+    {"port", &type_u16},
+    {"flow-info", &type_u32},
+    {"address", &type_ipv6_address},
+    {"scope-id", &type_u32}
+};
+static const turbowasm_wasi02_type_desc type_ipv6_socket_address = {
+    TURBOWASM_WASI02_TYPE_RECORD,
+    "ipv6-socket-address",
+    {.record = {ipv6_socket_address_fields, 4u}}
+};
+
+static const turbowasm_wasi02_variant_case ip_socket_address_cases[] = {
+    {"ipv4", &type_ipv4_socket_address},
+    {"ipv6", &type_ipv6_socket_address}
+};
+static const turbowasm_wasi02_type_desc type_ip_socket_address = {
+    TURBOWASM_WASI02_TYPE_VARIANT,
+    "ip-socket-address",
+    {.variant = {ip_socket_address_cases, 2u}}
+};
+
+static const char *const tcp_shutdown_type_labels[] = {
+    "receive", "send", "both"
+};
+static const turbowasm_wasi02_type_desc type_tcp_shutdown_type = {
+    TURBOWASM_WASI02_TYPE_ENUM,
+    "shutdown-type",
+    {.enumeration = {tcp_shutdown_type_labels, 3u}}
+};
+
+static const turbowasm_wasi02_type_desc type_network_result_unit = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {NULL, &type_network_error_code}}
+};
+static const turbowasm_wasi02_type_desc type_network_result_tcp_socket = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_tcp_socket, &type_network_error_code}}
+};
+static const turbowasm_wasi02_type_desc type_network_result_socket_address = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_ip_socket_address, &type_network_error_code}}
+};
+static const turbowasm_wasi02_type_desc type_network_result_bool = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_bool, &type_network_error_code}}
+};
+static const turbowasm_wasi02_type_desc type_network_result_duration = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_duration, &type_network_error_code}}
+};
+static const turbowasm_wasi02_type_desc type_network_result_u32 = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_u32, &type_network_error_code}}
+};
+static const turbowasm_wasi02_type_desc type_network_result_u8 = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_u8, &type_network_error_code}}
+};
+static const turbowasm_wasi02_type_desc type_network_result_u64 = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_u64, &type_network_error_code}}
+};
+
+static const turbowasm_wasi02_type_desc *const tcp_stream_pair_elements[] = {
+    &type_input_stream, &type_output_stream
+};
+static const turbowasm_wasi02_type_desc type_tcp_stream_pair = {
+    TURBOWASM_WASI02_TYPE_TUPLE,
+    NULL,
+    {.tuple = {tcp_stream_pair_elements, 2u}}
+};
+static const turbowasm_wasi02_type_desc type_network_result_stream_pair = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_tcp_stream_pair, &type_network_error_code}}
+};
+
+static const turbowasm_wasi02_type_desc *const tcp_accept_elements[] = {
+    &type_tcp_socket, &type_input_stream, &type_output_stream
+};
+static const turbowasm_wasi02_type_desc type_tcp_accept_tuple = {
+    TURBOWASM_WASI02_TYPE_TUPLE,
+    NULL,
+    {.tuple = {tcp_accept_elements, 3u}}
+};
+static const turbowasm_wasi02_type_desc type_network_result_accept = {
+    TURBOWASM_WASI02_TYPE_RESULT,
+    NULL,
+    {.result = {&type_tcp_accept_tuple, &type_network_error_code}}
+};
+
+static const turbowasm_wasi02_param_desc tcp_self_params[] = {
+    {"self", &type_tcp_socket}
+};
+static const turbowasm_wasi02_param_desc tcp_start_bind_params[] = {
+    {"self", &type_tcp_socket},
+    {"network", &type_socket_network},
+    {"local-address", &type_ip_socket_address}
+};
+static const turbowasm_wasi02_param_desc tcp_start_connect_params[] = {
+    {"self", &type_tcp_socket},
+    {"network", &type_socket_network},
+    {"remote-address", &type_ip_socket_address}
+};
+static const turbowasm_wasi02_param_desc tcp_u64_params[] = {
+    {"self", &type_tcp_socket},
+    {"value", &type_u64}
+};
+static const turbowasm_wasi02_param_desc tcp_bool_params[] = {
+    {"self", &type_tcp_socket},
+    {"value", &type_bool}
+};
+static const turbowasm_wasi02_param_desc tcp_duration_params[] = {
+    {"self", &type_tcp_socket},
+    {"value", &type_duration}
+};
+static const turbowasm_wasi02_param_desc tcp_u32_params[] = {
+    {"self", &type_tcp_socket},
+    {"value", &type_u32}
+};
+static const turbowasm_wasi02_param_desc tcp_u8_params[] = {
+    {"self", &type_tcp_socket},
+    {"value", &type_u8}
+};
+static const turbowasm_wasi02_param_desc tcp_shutdown_params[] = {
+    {"self", &type_tcp_socket},
+    {"shutdown-type", &type_tcp_shutdown_type}
+};
+
+static const turbowasm_wasi02_function_desc tcp_functions[] = {
+    {"[method]tcp-socket.start-bind",
+     tcp_start_bind_params, 3u, &type_network_result_unit},
+    {"[method]tcp-socket.finish-bind",
+     tcp_self_params, 1u, &type_network_result_unit},
+    {"[method]tcp-socket.start-connect",
+     tcp_start_connect_params, 3u, &type_network_result_unit},
+    {"[method]tcp-socket.finish-connect",
+     tcp_self_params, 1u, &type_network_result_stream_pair},
+    {"[method]tcp-socket.start-listen",
+     tcp_self_params, 1u, &type_network_result_unit},
+    {"[method]tcp-socket.finish-listen",
+     tcp_self_params, 1u, &type_network_result_unit},
+    {"[method]tcp-socket.accept",
+     tcp_self_params, 1u, &type_network_result_accept},
+    {"[method]tcp-socket.local-address",
+     tcp_self_params, 1u, &type_network_result_socket_address},
+    {"[method]tcp-socket.remote-address",
+     tcp_self_params, 1u, &type_network_result_socket_address},
+    {"[method]tcp-socket.is-listening",
+     tcp_self_params, 1u, &type_bool},
+    {"[method]tcp-socket.address-family",
+     tcp_self_params, 1u, &type_ip_address_family},
+    {"[method]tcp-socket.set-listen-backlog-size",
+     tcp_u64_params, 2u, &type_network_result_unit},
+    {"[method]tcp-socket.keep-alive-enabled",
+     tcp_self_params, 1u, &type_network_result_bool},
+    {"[method]tcp-socket.set-keep-alive-enabled",
+     tcp_bool_params, 2u, &type_network_result_unit},
+    {"[method]tcp-socket.keep-alive-idle-time",
+     tcp_self_params, 1u, &type_network_result_duration},
+    {"[method]tcp-socket.set-keep-alive-idle-time",
+     tcp_duration_params, 2u, &type_network_result_unit},
+    {"[method]tcp-socket.keep-alive-interval",
+     tcp_self_params, 1u, &type_network_result_duration},
+    {"[method]tcp-socket.set-keep-alive-interval",
+     tcp_duration_params, 2u, &type_network_result_unit},
+    {"[method]tcp-socket.keep-alive-count",
+     tcp_self_params, 1u, &type_network_result_u32},
+    {"[method]tcp-socket.set-keep-alive-count",
+     tcp_u32_params, 2u, &type_network_result_unit},
+    {"[method]tcp-socket.hop-limit",
+     tcp_self_params, 1u, &type_network_result_u8},
+    {"[method]tcp-socket.set-hop-limit",
+     tcp_u8_params, 2u, &type_network_result_unit},
+    {"[method]tcp-socket.receive-buffer-size",
+     tcp_self_params, 1u, &type_network_result_u64},
+    {"[method]tcp-socket.set-receive-buffer-size",
+     tcp_u64_params, 2u, &type_network_result_unit},
+    {"[method]tcp-socket.send-buffer-size",
+     tcp_self_params, 1u, &type_network_result_u64},
+    {"[method]tcp-socket.set-send-buffer-size",
+     tcp_u64_params, 2u, &type_network_result_unit},
+    {"[method]tcp-socket.subscribe",
+     tcp_self_params, 1u, &type_pollable},
+    {"[method]tcp-socket.shutdown",
+     tcp_shutdown_params, 2u, &type_network_result_unit}
+};
+
+static const turbowasm_wasi02_param_desc tcp_create_params[] = {
+    {"address-family", &type_ip_address_family}
+};
+static const turbowasm_wasi02_function_desc tcp_create_functions[] = {
+    {"create-tcp-socket",
+     tcp_create_params, 1u, &type_network_result_tcp_socket}
+};
+
+static const turbowasm_wasi02_function_desc instance_network_functions[] = {
+    {"instance-network", NULL, 0u, &type_socket_network}
+};
+
 static const turbowasm_wasi02_interface_desc interfaces[] = {
     {
         "wasi:clocks", "wall-clock", TW_WASI02_V028,
@@ -565,6 +861,30 @@ static const turbowasm_wasi02_interface_desc interfaces[] = {
         "https://github.com/WebAssembly/wasi-io",
         "3983fe1feab6b3a3b4e5c47c8b13daaf22266f00",
         streams_functions, 15u
+    },
+    {
+        "wasi:sockets", "network", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-sockets",
+        "85f0c064f5b9ea2faa3c65b1a80b870119c0fc7f",
+        NULL, 0u
+    },
+    {
+        "wasi:sockets", "tcp", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-sockets",
+        "85f0c064f5b9ea2faa3c65b1a80b870119c0fc7f",
+        tcp_functions, 28u
+    },
+    {
+        "wasi:sockets", "tcp-create-socket", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-sockets",
+        "85f0c064f5b9ea2faa3c65b1a80b870119c0fc7f",
+        tcp_create_functions, 1u
+    },
+    {
+        "wasi:sockets", "instance-network", TW_WASI02_V028,
+        "https://github.com/WebAssembly/wasi-sockets",
+        "85f0c064f5b9ea2faa3c65b1a80b870119c0fc7f",
+        instance_network_functions, 1u
     }
 };
 
