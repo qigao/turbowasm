@@ -72,6 +72,21 @@ static bool config_valid(
         config->streams.output_drop == NULL)
         return false;
 
+    if (config->filesystem_streams.read_via_stream != NULL ||
+        config->filesystem_streams.write_via_stream != NULL ||
+        config->filesystem_streams.append_via_stream != NULL) {
+        if (config->filesystem == NULL ||
+            config->stream_resource_capacity == 0u)
+            return false;
+        if (config->filesystem_streams.read_via_stream != NULL &&
+            config->streams.input_drop == NULL)
+            return false;
+        if ((config->filesystem_streams.write_via_stream != NULL ||
+             config->filesystem_streams.append_via_stream != NULL) &&
+            config->streams.output_drop == NULL)
+            return false;
+    }
+
     return true;
 }
 
@@ -186,6 +201,18 @@ turbowasm_status turbowasm_wasi02_init(
             goto fail;
         impl->capabilities.streams = &impl->streams;
     }
+
+#if TURBOWASM_WASI02_HAS_FILESYSTEM
+    if (impl->filesystem_initialized &&
+        impl->streams_initialized) {
+        status = turbowasm_wasi02_filesystem_attach_streams(
+            &impl->filesystem,
+            &impl->streams,
+            &impl->config.filesystem_streams);
+        if (status != TURBOWASM_OK)
+            goto fail;
+    }
+#endif
 
     wasi02->impl = impl;
     return TURBOWASM_OK;
