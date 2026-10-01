@@ -13,6 +13,7 @@ typedef enum turbowasm_wasi02_value_kind {
     TURBOWASM_WASI02_VALUE_UNIT = 0,
     TURBOWASM_WASI02_VALUE_BOOL,
     TURBOWASM_WASI02_VALUE_U8,
+    TURBOWASM_WASI02_VALUE_U16,
     TURBOWASM_WASI02_VALUE_U32,
     TURBOWASM_WASI02_VALUE_U64,
     TURBOWASM_WASI02_VALUE_STRING,
@@ -39,6 +40,7 @@ struct turbowasm_wasi02_value {
     union {
         bool boolean;
         uint8_t u8;
+        uint16_t u16;
         uint32_t u32;
         uint64_t u64;
         struct {
