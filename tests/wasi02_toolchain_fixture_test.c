@@ -26,6 +26,9 @@ typedef struct fixture_probe {
     uint32_t poll_drop_calls;
 
     uint32_t fs_close_calls;
+
+    uint32_t socket_network_calls;
+    uint32_t socket_network_drop_calls;
 } fixture_probe;
 
 static turbowasm_status monotonic_now(
@@ -122,6 +125,61 @@ static turbowasm_status poll_drop(
         return TURBOWASM_INVALID_ARGUMENT;
     ++probe->poll_drop_calls;
     return TURBOWASM_OK;
+}
+
+static turbowasm_status socket_instance_network(
+    void *context,
+    turbowasm_value *out_rep) {
+    fixture_probe *probe = (fixture_probe *)context;
+    if (probe == NULL || out_rep == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    ++probe->socket_network_calls;
+    out_rep->kind = TURBOWASM_VALUE_I32;
+    out_rep->as.i32 = 99;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status socket_network_drop(
+    void *context,
+    turbowasm_value rep) {
+    fixture_probe *probe = (fixture_probe *)context;
+    if (probe == NULL ||
+        rep.kind != TURBOWASM_VALUE_I32 ||
+        rep.as.i32 != 99)
+        return TURBOWASM_INVALID_ARGUMENT;
+    ++probe->socket_network_drop_calls;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status socket_tcp_create(
+    void *context,
+    turbowasm_wasi02_ip_address_family family,
+    turbowasm_value *out_rep,
+    turbowasm_wasi02_socket_error *out_error) {
+    (void)context;
+    if (out_rep == NULL || out_error == NULL ||
+        (family != TURBOWASM_WASI02_IP_ADDRESS_IPV4 &&
+         family != TURBOWASM_WASI02_IP_ADDRESS_IPV6))
+        return TURBOWASM_INVALID_ARGUMENT;
+    out_rep->kind = TURBOWASM_VALUE_I32;
+    out_rep->as.i32 = 100;
+    *out_error = TURBOWASM_WASI02_SOCKET_ERROR_NONE;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status socket_tcp_drop(
+    void *context,
+    turbowasm_value rep) {
+    (void)context;
+    (void)rep;
+    return TURBOWASM_OK;
+}
+
+static void output_drop(
+    void *context,
+    turbowasm_value rep) {
+    (void)context;
+    (void)rep;
 }
 
 static uint32_t fs_close(
@@ -296,7 +354,16 @@ int main(void) {
     config.streams.get_stdin = get_stdin;
     config.streams.input_subscribe = input_subscribe;
     config.streams.input_drop = input_drop;
+    config.streams.output_drop = output_drop;
     config.stream_resource_capacity = 8u;
+
+    config.sockets.context = &probe;
+    config.sockets.instance_network = socket_instance_network;
+    config.sockets.network_drop = socket_network_drop;
+    config.sockets.tcp_create = socket_tcp_create;
+    config.sockets.tcp_drop = socket_tcp_drop;
+    config.socket_network_resource_capacity = 4u;
+    config.tcp_socket_resource_capacity = 4u;
 
     assert(turbowasm_wasi02_init(
                &wasi02, &config, NULL) == TURBOWASM_OK);
@@ -329,6 +396,12 @@ int main(void) {
                turbowasm_wasi02_fixture_stream_poll_block,
                turbowasm_wasi02_fixture_stream_poll_block_size,
                TURBOWASM_COMPONENT_HOST_U32) == 1u);
+    assert(run_integer_fixture(
+               &wasi02,
+               "socket-instance-network",
+               turbowasm_wasi02_fixture_socket_instance_network,
+               turbowasm_wasi02_fixture_socket_instance_network_size,
+               TURBOWASM_COMPONENT_HOST_U32) == 1u);
 
     assert(probe.clock_calls == 1u);
     assert(probe.random_calls == 1u);
@@ -340,6 +413,9 @@ int main(void) {
     assert(probe.poll_ready_calls == 1u);
     assert(probe.poll_drop_calls == 1u);
     assert(probe.input_drop_calls == 1u);
+
+    assert(probe.socket_network_calls == 1u);
+    assert(probe.socket_network_drop_calls == 1u);
 
     assert(turbowasm_wasi02_destroy(
                &wasi02) == TURBOWASM_OK);
