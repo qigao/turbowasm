@@ -36,6 +36,10 @@ typedef struct tw_cnet_impl {
     uint32_t network_live;
     uint32_t network_generation;
     size_t default_listen_backlog;
+
+    cnet_client client;
+    bool client_initialized;
+    uint32_t client_stop_timeout_ms;
 } tw_cnet_impl;
 
 static tw_cnet_impl *impl_mut(turbowasm_wasi02_cnet *adapter) {
@@ -101,6 +105,26 @@ static turbowasm_wasi02_socket_error map_error(int status) {
             return TURBOWASM_WASI02_SOCKET_ERROR_PERMANENT_RESOLVER_FAILURE;
         default:
             return TURBOWASM_WASI02_SOCKET_ERROR_UNKNOWN;
+    }
+}
+
+static turbowasm_status map_client_status(int status) {
+    switch (status) {
+        case SALTS_OK:
+            return TURBOWASM_OK;
+        case SALTS_EINVAL:
+        case SALTS_EFAULT:
+        case SALTS_ERANGE:
+        case SALTS_EBUSY:
+            return TURBOWASM_INVALID_ARGUMENT;
+        case SALTS_ENOMEM:
+        case SALTS_ENOBUFS:
+            return TURBOWASM_OUT_OF_MEMORY;
+        case SALTS_ENOTSUP:
+        case SALTS_ENOSYS:
+            return TURBOWASM_UNSUPPORTED;
+        default:
+            return TURBOWASM_TRAPPED;
     }
 }
 
@@ -830,6 +854,33 @@ turbowasm_status turbowasm_wasi02_cnet_init(
     for (i = 0u; i < impl->capacity; ++i)
         impl->free_indices[i] = impl->capacity - 1u - i;
 
+    if (config->client_config != NULL) {
+        int status;
+
+        if (config->client_config->backend != config->backend ||
+            config->client_config->connection_capacity <
+                (size_t)config->socket_capacity ||
+            config->client_stop_timeout_ms == 0u) {
+            free(impl->free_indices);
+            free(impl->slots);
+            free(impl);
+            return TURBOWASM_INVALID_ARGUMENT;
+        }
+
+        status = cnet_client_init(
+            &impl->client, config->client_config);
+        if (status != SALTS_OK) {
+            turbowasm_status mapped = map_client_status(status);
+            free(impl->free_indices);
+            free(impl->slots);
+            free(impl);
+            return mapped;
+        }
+        impl->client_initialized = true;
+        impl->client_stop_timeout_ms =
+            config->client_stop_timeout_ms;
+    }
+
     adapter->impl = impl;
     return TURBOWASM_OK;
 }
@@ -845,6 +896,30 @@ turbowasm_status turbowasm_wasi02_cnet_destroy(
     if (impl->free_count != impl->capacity ||
         impl->network_live != 0u)
         return TURBOWASM_INVALID_ARGUMENT;
+
+    if (impl->client_initialized) {
+        int stop_status;
+        int destroy_status;
+        turbowasm_status mapped_stop;
+
+        stop_status = cnet_client_stop(
+            &impl->client, impl->client_stop_timeout_ms);
+        if (stop_status == SALTS_ETIMEDOUT)
+            return TURBOWASM_TRAPPED;
+
+        destroy_status = cnet_client_destroy(&impl->client);
+        if (destroy_status != SALTS_OK)
+            return map_client_status(destroy_status);
+
+        impl->client_initialized = false;
+        mapped_stop = map_client_status(stop_status);
+
+        free(impl->free_indices);
+        free(impl->slots);
+        free(impl);
+        adapter->impl = NULL;
+        return mapped_stop;
+    }
 
     free(impl->free_indices);
     free(impl->slots);
