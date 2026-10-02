@@ -278,6 +278,7 @@ if(TARGET turbowasm_wasi02_core AND
       turbowasm_wasi02_core
       turbowasm_wasi02_poll_core
       turbowasm_wasi02_streams_core
+      turbowasm_wasi02_sockets_core
       TurboWasm::Component)
   if(MSVC)
     target_compile_options(turbowasm_wasi02_sockets_core PRIVATE /W4)
@@ -357,7 +358,8 @@ endif()
 if(TARGET turbowasm_wasi02_core AND
    TARGET turbowasm_wasi02_fs_core AND
    TARGET turbowasm_wasi02_poll_core AND
-   TARGET turbowasm_wasi02_streams_core)
+   TARGET turbowasm_wasi02_streams_core AND
+   TARGET turbowasm_wasi02_sockets_core)
   # Internal aggregate import dispatcher used to qualify one Component exec
   # across the W2/W3/W4 capability families before the public W5 façade.
   add_library(turbowasm_wasi02_exec_core STATIC
