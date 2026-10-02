@@ -581,6 +581,32 @@ if(TARGET turbowasm_wasi02_poll_native_io_core)
            COMMAND turbowasm_wasi02_poll_native_io_test)
 endif()
 
+if(TARGET turbowasm_wasi02_poll_native_io_core AND
+   TARGET turbowasm_wasi02_sockets_core AND
+   TARGET turbowasm_wasi02_streams_core)
+  add_executable(turbowasm_wasi02_socket_native_io_test
+    wasi02_socket_native_io_test.c)
+  target_link_libraries(turbowasm_wasi02_socket_native_io_test
+    PRIVATE
+      turbowasm_wasi02_sockets_core
+      turbowasm_wasi02_streams_core
+      turbowasm_wasi02_poll_native_io_core
+      turbowasm_wasi02_poll_core
+      TurboWasm::NativeIO
+      TurboWasm::Component
+      TurboWasm::Runtime)
+  target_include_directories(turbowasm_wasi02_socket_native_io_test
+    PRIVATE
+      "${PROJECT_SOURCE_DIR}/src"
+      "${PROJECT_SOURCE_DIR}/include")
+  set_target_properties(turbowasm_wasi02_socket_native_io_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi02_socket_native_io_test
+           COMMAND turbowasm_wasi02_socket_native_io_test)
+endif()
+
 if(TARGET turbowasm_wasi02_fs_core)
   add_executable(turbowasm_wasi02_filesystem_test
     wasi02_filesystem_test.c)
