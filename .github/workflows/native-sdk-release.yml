@@ -68,7 +68,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: ./cmake/ci/restore-salts-sdk.ps1
-      - name: Build and install Runtime-only SDK
+      - name: Build and install Runtime + Component SDK
         shell: bash
         run: |
           set -euxo pipefail
@@ -86,7 +86,7 @@ jobs:
             -DTURBOWASM_BUILD_TOOLS=OFF \
             -DTURBOWASM_BUILD_CONFORMANCE_RUNNER=OFF \
             -DTURBOWASM_ENABLE_MIR_JIT=OFF \
-            -DTURBOWASM_ENABLE_COMPONENT=OFF \
+            -DTURBOWASM_ENABLE_COMPONENT=ON \
             -DTURBOWASM_ENABLE_WASI02_ADAPTER=OFF \
             -DTURBOWASM_ENABLE_CFLOW_ADAPTER=OFF \
             -DTURBOWASM_ENABLE_NATIVE_IO_ADAPTER=OFF \
@@ -99,13 +99,15 @@ jobs:
           cmake --install build/release
           test -f "$prefix/lib/cmake/TurboWasm/TurboWasmConfig.cmake"
           test -f "$prefix/include/turbowasm/turbowasm.h"
+          test -f "$prefix/include/turbowasm/component.h"
           grep -F "TurboWasm::Runtime" "$prefix/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
-          ! grep -Eq "TurboWasm::(Component|CFlow|NativeIO|WASI)" "$prefix/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
+          grep -F "TurboWasm::Component" "$prefix/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
+          ! grep -Eq "TurboWasm::(CFlow|NativeIO|WASI|WASI02)" "$prefix/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
           cat > "$prefix/turbowasm-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=$GITHUB_SHA
           rid=${{ matrix.rid }}
-          profile=runtime-only
+          profile=runtime+component
           EOF
       - uses: actions/upload-artifact@v4
         with:
@@ -129,12 +131,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: ./cmake/ci/restore-salts-sdk.ps1
-      - name: Build and install Runtime-only SDK
+      - name: Build and install Runtime + Component SDK
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
-          cmake -S . -B build/release-windows -G "Visual Studio 17 2022" -A x64 -DCMAKE_INSTALL_PREFIX="$prefix" -DTURBOWASM_BUILD_TESTS=OFF -DTURBOWASM_BUILD_TOOLS=OFF -DTURBOWASM_BUILD_CONFORMANCE_RUNNER=OFF -DTURBOWASM_ENABLE_MIR_JIT=OFF -DTURBOWASM_ENABLE_COMPONENT=OFF -DTURBOWASM_ENABLE_WASI02_ADAPTER=OFF -DTURBOWASM_ENABLE_CFLOW_ADAPTER=OFF -DTURBOWASM_ENABLE_NATIVE_IO_ADAPTER=OFF -DTURBOWASM_ENABLE_WASI_ADAPTER=OFF -DTURBOWASM_ENABLE_WASI_THREADS_ADAPTER=OFF -DTURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER=OFF -DTURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER=OFF -DTURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER=OFF
+          cmake -S . -B build/release-windows -G "Visual Studio 17 2022" -A x64 -DCMAKE_INSTALL_PREFIX="$prefix" -DTURBOWASM_BUILD_TESTS=OFF -DTURBOWASM_BUILD_TOOLS=OFF -DTURBOWASM_BUILD_CONFORMANCE_RUNNER=OFF -DTURBOWASM_ENABLE_MIR_JIT=OFF -DTURBOWASM_ENABLE_COMPONENT=ON -DTURBOWASM_ENABLE_WASI02_ADAPTER=OFF -DTURBOWASM_ENABLE_CFLOW_ADAPTER=OFF -DTURBOWASM_ENABLE_NATIVE_IO_ADAPTER=OFF -DTURBOWASM_ENABLE_WASI_ADAPTER=OFF -DTURBOWASM_ENABLE_WASI_THREADS_ADAPTER=OFF -DTURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER=OFF -DTURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER=OFF -DTURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER=OFF
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build/release-windows --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -142,15 +144,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $config = Join-Path $prefix "lib\cmake\TurboWasm\TurboWasmConfig.cmake"
           $header = Join-Path $prefix "include\turbowasm\turbowasm.h"
+          $componentHeader = Join-Path $prefix "include\turbowasm\component.h"
           $targets = Join-Path $prefix "lib\cmake\TurboWasm\TurboWasmTargets.cmake"
           if (-not (Test-Path $config)) { throw "missing $config" }
           if (-not (Test-Path $header)) { throw "missing $header" }
-          if (-not ((Get-Content $targets -Raw) -match "TurboWasm::Runtime")) { throw "Runtime target missing" }
+          if (-not (Test-Path $componentHeader)) { throw "missing $componentHeader" }
+          $targetsText = Get-Content $targets -Raw
+          if (-not ($targetsText -match "TurboWasm::Runtime")) { throw "Runtime target missing" }
+          if (-not ($targetsText -match "TurboWasm::Component")) { throw "Component target missing" }
+          if ($targetsText -match "TurboWasm::(CFlow|NativeIO|WASI|WASI02)") { throw "unexpected optional adapter target" }
           @"
           version=${{ needs.metadata.outputs.version }}
           commit=$env:GITHUB_SHA
           rid=windows-x64
-          profile=runtime-only
+          profile=runtime+component
           "@ | Set-Content (Join-Path $prefix "turbowasm-sdk-manifest.txt")
       - uses: actions/upload-artifact@v4
         with:
@@ -174,7 +181,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid android-arm64-v8a
-      - name: Build and install Runtime-only Android SDK
+      - name: Build and install Runtime + Component Android SDK
         shell: bash
         run: |
           set -euxo pipefail
@@ -192,7 +199,7 @@ jobs:
             -DTURBOWASM_BUILD_TOOLS=OFF \
             -DTURBOWASM_BUILD_CONFORMANCE_RUNNER=OFF \
             -DTURBOWASM_ENABLE_MIR_JIT=OFF \
-            -DTURBOWASM_ENABLE_COMPONENT=OFF \
+            -DTURBOWASM_ENABLE_COMPONENT=ON \
             -DTURBOWASM_ENABLE_WASI02_ADAPTER=OFF \
             -DTURBOWASM_ENABLE_CFLOW_ADAPTER=OFF \
             -DTURBOWASM_ENABLE_NATIVE_IO_ADAPTER=OFF \
@@ -205,12 +212,15 @@ jobs:
           cmake --install build/release-android
           test -f "$prefix/lib/cmake/TurboWasm/TurboWasmConfig.cmake"
           test -f "$prefix/include/turbowasm/turbowasm.h"
+          test -f "$prefix/include/turbowasm/component.h"
           grep -F "TurboWasm::Runtime" "$prefix/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
+          grep -F "TurboWasm::Component" "$prefix/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
+          ! grep -Eq "TurboWasm::(CFlow|NativeIO|WASI|WASI02)" "$prefix/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
           cat > "$prefix/turbowasm-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=$GITHUB_SHA
           rid=android-arm64-v8a
-          profile=runtime-only
+          profile=runtime+component
           EOF
       - uses: actions/upload-artifact@v4
         with:
@@ -240,7 +250,10 @@ jobs:
           for rid in linux-x64 windows-x64 macos-arm64 android-arm64-v8a; do
             test -f "package/sdk/$rid/lib/cmake/TurboWasm/TurboWasmConfig.cmake"
             test -f "package/sdk/$rid/include/turbowasm/turbowasm.h"
+            test -f "package/sdk/$rid/include/turbowasm/component.h"
             grep -F "TurboWasm::Runtime" "package/sdk/$rid/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
+            grep -F "TurboWasm::Component" "package/sdk/$rid/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
+            ! grep -Eq "TurboWasm::(CFlow|NativeIO|WASI|WASI02)" "package/sdk/$rid/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
             test -f "package/sdk/$rid/turbowasm-sdk-manifest.txt"
           done
           test "$(find package/sdk -maxdepth 2 -name turbowasm-sdk-manifest.txt | wc -l)" -eq 4
@@ -262,9 +275,13 @@ jobs:
           fi
           unzip -Z1 "$nupkg" | sort | tee "$RUNNER_TEMP/turbowasm-nupkg.txt"
           grep -Fx "sdk/linux-x64/include/turbowasm/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/linux-x64/include/turbowasm/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
           grep -Fx "sdk/windows-x64/include/turbowasm/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/windows-x64/include/turbowasm/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
           grep -Fx "sdk/macos-arm64/include/turbowasm/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/macos-arm64/include/turbowasm/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
           grep -Fx "sdk/android-arm64-v8a/include/turbowasm/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/android-arm64-v8a/include/turbowasm/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: turbowasm-native-nuget
