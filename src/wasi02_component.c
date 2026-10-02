@@ -303,6 +303,14 @@ static bool component_type_matches_wasi_depth(
     }
 }
 
+bool turbowasm_wasi02_component_type_matches(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref component_ref,
+    const turbowasm_wasi02_type_desc *wasi_type) {
+    return component_type_matches_wasi_depth(
+        graph, component_ref, wasi_type, 0u);
+}
+
 static bool binding_matches_descriptor(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_id function_type_index,
