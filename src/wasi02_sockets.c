@@ -667,7 +667,8 @@ static turbowasm_status call_instance_network(
     uint32_t resource = 0u;
     turbowasm_status status;
 
-    if (argument_count != 0u || arguments != NULL)
+    (void)arguments;
+    if (argument_count != 0u)
         return TURBOWASM_TYPE_MISMATCH;
 
     status = sockets->provider.instance_network(
