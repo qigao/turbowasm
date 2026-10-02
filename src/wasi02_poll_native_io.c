@@ -56,6 +56,25 @@ static bool request_equal(
            left.generation == right.generation;
 }
 
+static bool request_has_other_live_consumer(
+    const turbowasm_wasi02_native_io_poll_impl *impl,
+    const turbowasm_wasi02_native_io_poll_slot *self) {
+    uint32_t i;
+
+    if (impl == NULL || self == NULL)
+        return false;
+    for (i = 0u; i < impl->pollable_capacity; ++i) {
+        const turbowasm_wasi02_native_io_poll_slot *slot =
+            &impl->pollables[i];
+        if (slot == self || !slot->active ||
+            slot->terminal || slot->abandoned)
+            continue;
+        if (request_equal(slot->request, self->request))
+            return true;
+    }
+    return false;
+}
+
 static turbowasm_status map_native_status(int status) {
     if (status == SALTS_OK)
         return TURBOWASM_OK;
@@ -355,17 +374,27 @@ static turbowasm_status provider_drop(
     if (slot->abandoned)
         return TURBOWASM_OK;
 
+    /*
+     * Multiple WASI pollables may alias one NativeIO request. Consuming one
+     * logical alias must not cancel shared work while another live alias still
+     * observes the same generation-safe request.
+     */
+    slot->abandoned = true;
+    if (request_has_other_live_consumer(impl, slot))
+        return TURBOWASM_OK;
+
     status = impl->cancel_fn(
         impl->backend, slot->request);
     if (status != SALTS_OK &&
-        status != SALTS_EALREADY)
+        status != SALTS_EALREADY) {
+        slot->abandoned = false;
         return map_native_status(status);
+    }
 
     /*
-     * NativeIO cancellation is not terminal. Consume the logical pollable but
-     * retain this internal registration until its observed terminal packet.
+     * NativeIO cancellation is not terminal. All abandoned aliases remain
+     * retained until the authoritative terminal packet is observed.
      */
-    slot->abandoned = true;
     return TURBOWASM_OK;
 }
 
@@ -504,20 +533,11 @@ turbowasm_status turbowasm_wasi02_native_io_poll_register_request(
     turbowasm_wasi02_native_io_poll_impl *impl =
         impl_mut(adapter);
     turbowasm_wasi02_native_io_poll_slot *slot;
-    uint32_t i;
     uint64_t packed;
 
     if (impl == NULL || out_provider_rep == NULL ||
         !native_io_request_valid(request))
         return TURBOWASM_INVALID_ARGUMENT;
-
-    for (i = 0u; i < impl->pollable_capacity; ++i) {
-        if (impl->pollables[i].active &&
-            request_equal(
-                impl->pollables[i].request,
-                request))
-            return TURBOWASM_INVALID_ARGUMENT;
-    }
 
     slot = reserve_slot(impl);
     if (slot == NULL)
@@ -560,38 +580,72 @@ turbowasm_status turbowasm_wasi02_native_io_poll_complete(
     const native_io_completion *completion) {
     turbowasm_wasi02_native_io_poll_impl *impl =
         impl_mut(adapter);
-    turbowasm_wasi02_native_io_poll_slot *slot = NULL;
-    uint64_t handle;
     uint32_t i;
+    uint32_t matched = 0u;
     turbowasm_status final_status = TURBOWASM_OK;
 
     if (impl == NULL || completion == NULL ||
         !native_io_request_valid(completion->request))
         return TURBOWASM_INVALID_ARGUMENT;
 
+    /*
+     * Mark every logical alias terminal first. Routes are completed only
+     * after the full alias set is visible as ready.
+     */
     for (i = 0u; i < impl->pollable_capacity; ++i) {
-        if (impl->pollables[i].active &&
-            request_equal(
-                impl->pollables[i].request,
-                completion->request)) {
-            slot = &impl->pollables[i];
-            break;
-        }
+        turbowasm_wasi02_native_io_poll_slot *slot =
+            &impl->pollables[i];
+        if (!slot->active ||
+            !request_equal(slot->request, completion->request))
+            continue;
+        if (slot->terminal)
+            continue;
+        slot->terminal = true;
+        ++matched;
     }
-    if (slot == NULL || slot->terminal)
+    if (matched == 0u)
         return TURBOWASM_TRAPPED;
 
-    slot->terminal = true;
-    handle = slot_handle(impl, slot);
-    if (handle == 0u)
-        return TURBOWASM_TRAPPED;
-
+    /*
+     * One route may contain more than one alias of the same request. Complete
+     * that host wait exactly once when any member belongs to this completion.
+     */
     for (i = 0u; i < impl->route_capacity; ++i) {
         turbowasm_wasi02_native_io_route *route =
             &impl->routes[i];
+        bool affected = false;
+        size_t member_index;
         turbowasm_status status;
 
-        if (!route_contains(route, handle))
+        if (!route->active)
+            continue;
+
+        for (member_index = 0u;
+             member_index < route->member_count;
+             ++member_index) {
+            uint32_t slot_index;
+            uint32_t generation;
+            turbowasm_value rep = {0};
+            turbowasm_wasi02_native_io_poll_slot *slot;
+
+            rep.kind = TURBOWASM_VALUE_I64;
+            rep.as.i64 = (int64_t)route->members[member_index];
+            if (!unpack_pollable(
+                    rep, &slot_index, &generation) ||
+                slot_index >= impl->pollable_capacity)
+                continue;
+            slot = &impl->pollables[slot_index];
+            if (!slot->active ||
+                slot->generation != generation)
+                continue;
+            if (request_equal(
+                    slot->request,
+                    completion->request)) {
+                affected = true;
+                break;
+            }
+        }
+        if (!affected)
             continue;
 
         if (route->call == NULL ||
@@ -610,8 +664,16 @@ turbowasm_status turbowasm_wasi02_native_io_poll_complete(
             final_status = status;
     }
 
-    if (slot->abandoned)
-        release_slot(impl, slot);
+    for (i = 0u; i < impl->pollable_capacity; ++i) {
+        turbowasm_wasi02_native_io_poll_slot *slot =
+            &impl->pollables[i];
+        if (slot->active && slot->terminal &&
+            slot->abandoned &&
+            request_equal(
+                slot->request,
+                completion->request))
+            release_slot(impl, slot);
+    }
 
     return final_status;
 }
