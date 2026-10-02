@@ -556,6 +556,34 @@ turbowasm_status turbowasm_wasi02_native_io_poll_register_request(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_wasi02_native_io_poll_register_ready(
+    turbowasm_wasi02_native_io_poll *adapter,
+    turbowasm_value *out_provider_rep) {
+    turbowasm_wasi02_native_io_poll_impl *impl =
+        impl_mut(adapter);
+    turbowasm_wasi02_native_io_poll_slot *slot;
+    uint64_t packed;
+
+    if (impl == NULL || out_provider_rep == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    slot = reserve_slot(impl);
+    if (slot == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+    slot->terminal = true;
+
+    packed = slot_handle(impl, slot);
+    if (packed == 0u) {
+        release_slot(impl, slot);
+        return TURBOWASM_TRAPPED;
+    }
+
+    memset(out_provider_rep, 0, sizeof(*out_provider_rep));
+    out_provider_rep->kind = TURBOWASM_VALUE_I64;
+    out_provider_rep->as.i64 = (int64_t)packed;
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_wasi02_native_io_poll_provider(
     turbowasm_wasi02_native_io_poll *adapter,
     turbowasm_wasi02_poll_provider *out_provider) {
