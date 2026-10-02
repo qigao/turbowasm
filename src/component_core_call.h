@@ -4,6 +4,7 @@
 #include "component_canonical.h"
 #include "component_resource.h"
 
+#include <turbowasm/execution.h>
 #include <turbowasm/instance.h>
 
 #include <stdbool.h>
@@ -67,5 +68,50 @@ turbowasm_status turbowasm_component_core_call_invoke(
     size_t argument_count,
     turbowasm_component_value *out_result,
     turbowasm_trap *trap);
+
+typedef struct turbowasm_component_core_execution {
+    void *impl;
+} turbowasm_component_core_execution;
+
+turbowasm_status turbowasm_component_core_execution_create(
+    turbowasm_component_core_execution *execution,
+    const turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_component_value *arguments,
+    size_t argument_count);
+
+void turbowasm_component_core_execution_destroy(
+    turbowasm_component_core_execution *execution);
+
+turbowasm_status turbowasm_component_core_execution_resume(
+    turbowasm_component_core_execution *execution,
+    const turbowasm_execution_options *options);
+
+turbowasm_execution_state turbowasm_component_core_execution_state_get(
+    const turbowasm_component_core_execution *execution);
+
+turbowasm_yield_reason turbowasm_component_core_execution_yield_reason_get(
+    const turbowasm_component_core_execution *execution);
+
+bool turbowasm_component_core_execution_pending_host_wait(
+    const turbowasm_component_core_execution *execution,
+    turbowasm_host_wait *out_wait);
+
+turbowasm_status turbowasm_component_core_execution_complete_host_wait(
+    turbowasm_component_core_execution *execution,
+    turbowasm_host_wait wait,
+    int status);
+
+turbowasm_status turbowasm_component_core_execution_terminal_status(
+    const turbowasm_component_core_execution *execution);
+
+turbowasm_trap turbowasm_component_core_execution_trap(
+    const turbowasm_component_core_execution *execution);
+
+size_t turbowasm_component_core_execution_result_count(
+    const turbowasm_component_core_execution *execution);
+
+turbowasm_status turbowasm_component_core_execution_take_result(
+    turbowasm_component_core_execution *execution,
+    turbowasm_component_value *out_result);
 
 #endif /* TURBOWASM_COMPONENT_CORE_CALL_H */

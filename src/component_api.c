@@ -667,3 +667,259 @@ done:
     turbowasm_runtime_scope_leave(scope);
     return status;
 }
+
+
+typedef struct turbowasm_component_call_public_impl {
+    turbowasm_component_instance_public_impl *instance;
+    turbowasm_component_exec_call call;
+    bool has_result;
+} turbowasm_component_call_public_impl;
+
+static turbowasm_component_call_public_impl *
+component_call_public_impl_mut(
+    turbowasm_component_call *call) {
+    return call != NULL
+        ? (turbowasm_component_call_public_impl *)call->impl
+        : NULL;
+}
+
+static const turbowasm_component_call_public_impl *
+component_call_public_impl_get(
+    const turbowasm_component_call *call) {
+    return call != NULL
+        ? (const turbowasm_component_call_public_impl *)call->impl
+        : NULL;
+}
+
+turbowasm_status turbowasm_component_call_create(
+    turbowasm_component_call *call,
+    turbowasm_component_instance *instance,
+    turbowasm_name export_name,
+    const turbowasm_component_host_value *arguments,
+    size_t argument_count) {
+    turbowasm_component_instance_public_impl *instance_impl;
+    turbowasm_component_call_public_impl *call_impl = NULL;
+    turbowasm_component_value *internal_arguments = NULL;
+    turbowasm_runtime_scope scope;
+    turbowasm_status status;
+    bool has_result = false;
+    size_t i;
+
+    if (call == NULL || call->impl != NULL ||
+        instance == NULL ||
+        (export_name.size != 0u && export_name.bytes == NULL) ||
+        (argument_count != 0u && arguments == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    instance_impl =
+        turbowasm_component_instance_public_impl_get(instance);
+    if (instance_impl == NULL || instance_impl->component == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (!public_export_result_type(
+            instance_impl, export_name, &has_result))
+        return TURBOWASM_UNSUPPORTED;
+
+    scope = turbowasm_runtime_scope_enter(
+        &instance_impl->component->binary.config);
+
+    call_impl =
+        (turbowasm_component_call_public_impl *)
+            turbowasm_rt_calloc(1u, sizeof(*call_impl));
+    if (call_impl == NULL) {
+        status = TURBOWASM_OUT_OF_MEMORY;
+        goto done;
+    }
+
+    if (argument_count != 0u) {
+        internal_arguments =
+            (turbowasm_component_value *)turbowasm_rt_calloc(
+                argument_count, sizeof(*internal_arguments));
+        if (internal_arguments == NULL) {
+            status = TURBOWASM_OUT_OF_MEMORY;
+            goto done;
+        }
+    }
+
+    for (i = 0u; i < argument_count; ++i) {
+        status = public_to_internal(
+            &arguments[i], &internal_arguments[i], 0u);
+        if (status != TURBOWASM_OK)
+            goto done;
+    }
+
+    status = turbowasm_component_exec_call_create(
+        &call_impl->call,
+        &instance_impl->exec,
+        export_name.bytes,
+        export_name.size,
+        internal_arguments,
+        argument_count);
+    if (status != TURBOWASM_OK)
+        goto done;
+
+    call_impl->instance = instance_impl;
+    call_impl->has_result = has_result;
+    call->impl = call_impl;
+    call_impl = NULL;
+
+done:
+    if (internal_arguments != NULL) {
+        for (i = 0u; i < argument_count; ++i)
+            internal_input_destroy(&internal_arguments[i]);
+        turbowasm_rt_free(internal_arguments);
+    }
+    if (call_impl != NULL) {
+        turbowasm_component_exec_call_destroy(
+            &call_impl->call);
+        turbowasm_rt_free(call_impl);
+    }
+    turbowasm_runtime_scope_leave(scope);
+    return status;
+}
+
+void turbowasm_component_call_destroy(
+    turbowasm_component_call *call) {
+    turbowasm_component_call_public_impl *impl =
+        component_call_public_impl_mut(call);
+    turbowasm_runtime_scope scope;
+
+    if (impl == NULL)
+        return;
+
+    if (impl->instance == NULL ||
+        impl->instance->component == NULL) {
+        call->impl = NULL;
+        return;
+    }
+
+    scope = turbowasm_runtime_scope_enter(
+        &impl->instance->component->binary.config);
+    turbowasm_component_exec_call_destroy(&impl->call);
+    turbowasm_rt_free(impl);
+    turbowasm_runtime_scope_leave(scope);
+    call->impl = NULL;
+}
+
+turbowasm_status turbowasm_component_call_resume(
+    turbowasm_component_call *call,
+    const turbowasm_execution_options *options) {
+    turbowasm_component_call_public_impl *impl =
+        component_call_public_impl_mut(call);
+
+    if (impl == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_component_exec_call_resume(
+        &impl->call, options);
+}
+
+turbowasm_execution_state turbowasm_component_call_state_get(
+    const turbowasm_component_call *call) {
+    const turbowasm_component_call_public_impl *impl =
+        component_call_public_impl_get(call);
+
+    return impl != NULL
+        ? turbowasm_component_exec_call_state_get(
+              &impl->call)
+        : TURBOWASM_EXECUTION_FAILED;
+}
+
+turbowasm_yield_reason turbowasm_component_call_yield_reason_get(
+    const turbowasm_component_call *call) {
+    const turbowasm_component_call_public_impl *impl =
+        component_call_public_impl_get(call);
+
+    return impl != NULL
+        ? turbowasm_component_exec_call_yield_reason_get(
+              &impl->call)
+        : TURBOWASM_YIELD_NONE;
+}
+
+bool turbowasm_component_call_pending_host_wait(
+    const turbowasm_component_call *call,
+    turbowasm_host_wait *out_wait) {
+    const turbowasm_component_call_public_impl *impl =
+        component_call_public_impl_get(call);
+
+    return impl != NULL &&
+        turbowasm_component_exec_call_pending_host_wait(
+            &impl->call, out_wait);
+}
+
+turbowasm_status turbowasm_component_call_complete_host_wait(
+    turbowasm_component_call *call,
+    turbowasm_host_wait wait,
+    int status) {
+    turbowasm_component_call_public_impl *impl =
+        component_call_public_impl_mut(call);
+
+    if (impl == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_component_exec_call_complete_host_wait(
+        &impl->call, wait, status);
+}
+
+turbowasm_status turbowasm_component_call_terminal_status(
+    const turbowasm_component_call *call) {
+    const turbowasm_component_call_public_impl *impl =
+        component_call_public_impl_get(call);
+
+    return impl != NULL
+        ? turbowasm_component_exec_call_terminal_status(
+              &impl->call)
+        : TURBOWASM_INVALID_ARGUMENT;
+}
+
+turbowasm_trap turbowasm_component_call_trap(
+    const turbowasm_component_call *call) {
+    const turbowasm_component_call_public_impl *impl =
+        component_call_public_impl_get(call);
+
+    return impl != NULL
+        ? turbowasm_component_exec_call_trap(
+              &impl->call)
+        : TURBOWASM_TRAP_NONE;
+}
+
+size_t turbowasm_component_call_result_count(
+    const turbowasm_component_call *call) {
+    const turbowasm_component_call_public_impl *impl =
+        component_call_public_impl_get(call);
+
+    return impl != NULL
+        ? turbowasm_component_exec_call_result_count(
+              &impl->call)
+        : 0u;
+}
+
+turbowasm_status turbowasm_component_call_take_result(
+    turbowasm_component_call *call,
+    turbowasm_component_host_value *out_result) {
+    turbowasm_component_call_public_impl *impl =
+        component_call_public_impl_mut(call);
+    turbowasm_component_value internal_result = {0};
+    turbowasm_status status;
+
+    if (impl == NULL || out_result == NULL ||
+        !impl->has_result ||
+        turbowasm_component_exec_call_result_count(
+            &impl->call) != 1u)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memset(out_result, 0, sizeof(*out_result));
+    status = turbowasm_component_exec_call_take_result(
+        &impl->call, &internal_result);
+    if (status != TURBOWASM_OK)
+        return status;
+
+    status = internal_to_public(
+        &internal_result, out_result, 0u);
+    if (internal_result.kind !=
+        TURBOWASM_COMPONENT_TYPE_UNDEFINED)
+        turbowasm_component_value_destroy(
+            &internal_result);
+    if (status != TURBOWASM_OK)
+        turbowasm_component_host_value_destroy(
+            out_result);
+    return status;
+}

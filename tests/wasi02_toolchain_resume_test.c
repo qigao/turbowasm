@@ -1,15 +1,12 @@
-#include "../src/wasi02_exec.h"
+#include <turbowasm/wasi02.h>
 
 #include "wasi02_toolchain_fixtures.h"
-
-#include <turbowasm/execution.h>
 
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
 #include <assert.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 typedef struct resume_probe {
@@ -23,6 +20,13 @@ typedef struct resume_probe {
     uint32_t poll_drop_calls;
     uint32_t input_drop_calls;
 } resume_probe;
+
+static turbowasm_name run_name(void) {
+    turbowasm_name name;
+    name.bytes = (const uint8_t *)"run";
+    name.size = 3u;
+    return name;
+}
 
 static turbowasm_status get_stdin(
     void *context,
@@ -106,118 +110,66 @@ static turbowasm_status poll_drop(
     return TURBOWASM_OK;
 }
 
-static const turbowasm_component_core_call_adapter *
-find_export_adapter(
-    const turbowasm_component_exec *exec,
-    const char *name) {
-    size_t size = strlen(name);
-    uint32_t i;
-
-    assert(exec != NULL);
-    assert(exec->binary != NULL);
-
-    for (i = 0u; i < exec->binary->export_count; ++i) {
-        const turbowasm_component_export *export_desc =
-            &exec->binary->exports[i];
-        uint32_t adapter_index;
-
-        if (export_desc->kind !=
-                TURBOWASM_COMPONENT_EXTERN_FUNCTION ||
-            export_desc->name.size != size ||
-            memcmp(export_desc->name.bytes, name, size) != 0)
-            continue;
-
-        assert(export_desc->item_index < exec->function_count);
-        adapter_index =
-            exec->function_adapter_indices[
-                export_desc->item_index];
-        assert(adapter_index != UINT32_MAX);
-        assert(adapter_index < exec->adapter_count);
-        return &exec->functions[adapter_index];
-    }
-
-    return NULL;
-}
-
 int main(void) {
     resume_probe probe = {0};
-    turbowasm_wasi02_poll_provider poll_provider = {0};
-    turbowasm_wasi02_stream_provider stream_provider = {0};
-    turbowasm_wasi02_poll poll = {0};
-    turbowasm_wasi02_streams streams = {0};
-    turbowasm_wasi02_exec_capabilities capabilities = {0};
-    turbowasm_component_binary binary = {0};
-    turbowasm_component_exec exec = {0};
-    const turbowasm_component_core_call_adapter *adapter;
-    turbowasm_execution execution = {0};
+    turbowasm_wasi02_config config = {0};
+    turbowasm_wasi02 wasi02 = {0};
+    turbowasm_component component = {0};
+    turbowasm_component_instance instance = {0};
+    turbowasm_component_call call = {0};
+    turbowasm_component_host_value result = {0};
     turbowasm_host_wait wait = {0};
-    const turbowasm_value *result;
+    turbowasm_host_wait stale = {0};
 
     probe.operation_token = (uintptr_t)0x5753493032u;
 
-    poll_provider.context = &probe;
-    poll_provider.ready = poll_ready;
-    poll_provider.arm = poll_arm;
-    poll_provider.drop = poll_drop;
+    config.poll.context = &probe;
+    config.poll.ready = poll_ready;
+    config.poll.arm = poll_arm;
+    config.poll.drop = poll_drop;
+    config.pollable_capacity = 8u;
 
-    stream_provider.context = &probe;
-    stream_provider.get_stdin = get_stdin;
-    stream_provider.input_subscribe = input_subscribe;
-    stream_provider.input_drop = input_drop;
+    config.streams.context = &probe;
+    config.streams.get_stdin = get_stdin;
+    config.streams.input_subscribe = input_subscribe;
+    config.streams.input_drop = input_drop;
+    config.stream_resource_capacity = 8u;
 
-    assert(turbowasm_wasi02_poll_init(
-               &poll, &poll_provider, 8u) == TURBOWASM_OK);
-    assert(turbowasm_wasi02_streams_init(
-               &streams, &stream_provider, 8u) == TURBOWASM_OK);
-    assert(turbowasm_wasi02_streams_attach_poll(
-               &streams, &poll) == TURBOWASM_OK);
-
-    assert(turbowasm_component_binary_load(
-               &binary,
+    assert(turbowasm_wasi02_init(
+               &wasi02, &config, NULL) == TURBOWASM_OK);
+    assert(turbowasm_component_load_borrowed(
+               &component,
                turbowasm_wasi02_fixture_stream_poll_block,
                turbowasm_wasi02_fixture_stream_poll_block_size) ==
            TURBOWASM_OK);
 
-    capabilities.poll = &poll;
-    capabilities.streams = &streams;
-    assert(turbowasm_wasi02_exec_init(
-               &exec, &binary, &capabilities) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_component_instance_create(
+               &instance,
+               &component,
+               &wasi02) == TURBOWASM_OK);
 
-    adapter = find_export_adapter(&exec, "run");
-    assert(adapter != NULL);
-    assert(adapter->initialized);
-    assert(adapter->instance != NULL);
-
-    assert(turbowasm_execution_create(
-               &execution,
-               adapter->instance,
-               adapter->function_index,
+    assert(turbowasm_component_call_create(
+               &call,
+               &instance,
+               run_name(),
                NULL, 0u) == TURBOWASM_OK);
 
-    {
-        turbowasm_status resume_status =
-            turbowasm_execution_resume(&execution, NULL);
-        if (resume_status != TURBOWASM_YIELDED) {
-            fprintf(
-                stderr,
-                "toolchain stream resume expected yield, got %d (%s); "
-                "state=%d reason=%d stdin=%u subscribe=%u ready=%u arm=%u "
-                "poll_drop=%u input_drop=%u\n",
-                (int)resume_status,
-                turbowasm_status_string(resume_status),
-                (int)turbowasm_execution_state_get(&execution),
-                (int)turbowasm_execution_yield_reason_get(&execution),
-                probe.stdin_calls,
-                probe.subscribe_calls,
-                probe.ready_calls,
-                probe.arm_calls,
-                probe.poll_drop_calls,
-                probe.input_drop_calls);
-        }
-        assert(resume_status == TURBOWASM_YIELDED);
-    }
-    assert(turbowasm_execution_yield_reason_get(
-               &execution) == TURBOWASM_YIELD_HOST_WAIT);
+    /* Create performs canonical lowering only; it does not enter Core Wasm. */
+    assert(probe.stdin_calls == 0u);
+    assert(probe.subscribe_calls == 0u);
+    assert(probe.ready_calls == 0u);
+    assert(probe.arm_calls == 0u);
+
+    assert(turbowasm_component_call_state_get(
+               &call) == TURBOWASM_EXECUTION_READY);
+
+    assert(turbowasm_component_call_resume(
+               &call, NULL) == TURBOWASM_YIELDED);
+    assert(turbowasm_component_call_state_get(
+               &call) == TURBOWASM_EXECUTION_YIELDED);
+    assert(turbowasm_component_call_yield_reason_get(
+               &call) == TURBOWASM_YIELD_HOST_WAIT);
+
     assert(probe.stdin_calls == 1u);
     assert(probe.subscribe_calls == 1u);
     assert(probe.ready_calls == 1u);
@@ -225,19 +177,44 @@ int main(void) {
     assert(probe.poll_drop_calls == 0u);
     assert(probe.input_drop_calls == 0u);
 
-    assert(turbowasm_execution_pending_host_wait(
-               &execution, &wait));
+    assert(turbowasm_component_call_pending_host_wait(
+               &call, &wait));
+    assert(wait.generation != 0u);
     assert(wait.operation_token == probe.operation_token);
 
+    /* Resume without completion must not re-enter the retained callback. */
+    assert(turbowasm_component_call_resume(
+               &call, NULL) == TURBOWASM_YIELDED);
+    assert(probe.stdin_calls == 1u);
+    assert(probe.subscribe_calls == 1u);
+    assert(probe.ready_calls == 1u);
+    assert(probe.arm_calls == 1u);
+
+    stale = wait;
+    ++stale.generation;
+    assert(turbowasm_component_call_complete_host_wait(
+               &call, stale, 0) == TURBOWASM_INVALID_ARGUMENT);
+
     probe.ready = true;
-    assert(turbowasm_execution_complete_host_wait(
-               &execution, wait, 0) == TURBOWASM_OK);
-    assert(turbowasm_execution_resume(
-               &execution, NULL) == TURBOWASM_OK);
+    assert(turbowasm_component_call_complete_host_wait(
+               &call, wait, 0) == TURBOWASM_OK);
+    assert(turbowasm_component_call_complete_host_wait(
+               &call, wait, 0) == TURBOWASM_INVALID_ARGUMENT);
+
+    assert(turbowasm_component_call_resume(
+               &call, NULL) == TURBOWASM_OK);
+    assert(turbowasm_component_call_state_get(
+               &call) == TURBOWASM_EXECUTION_COMPLETED);
+    assert(turbowasm_component_call_terminal_status(
+               &call) == TURBOWASM_OK);
+    assert(turbowasm_component_call_trap(
+               &call) == TURBOWASM_TRAP_NONE);
+    assert(!turbowasm_component_call_pending_host_wait(
+               &call, &wait));
 
     /*
-     * The retained host callback frame continued after completion. The
-     * producer, subscribe and arm callbacks were not replayed.
+     * The retained host callback frame continued after completion. Canonical
+     * export resolution and provider callbacks were not replayed.
      */
     assert(probe.stdin_calls == 1u);
     assert(probe.subscribe_calls == 1u);
@@ -246,21 +223,20 @@ int main(void) {
     assert(probe.poll_drop_calls == 1u);
     assert(probe.input_drop_calls == 1u);
 
-    assert(turbowasm_execution_result_count(
-               &execution) == 1u);
-    result = turbowasm_execution_result_at(
-        &execution, 0u);
-    assert(result != NULL);
-    assert(result->kind == TURBOWASM_VALUE_I32);
-    assert(result->as.i32 == 1);
+    assert(turbowasm_component_call_result_count(
+               &call) == 1u);
+    assert(turbowasm_component_call_take_result(
+               &call, &result) == TURBOWASM_OK);
+    assert(result.kind == TURBOWASM_COMPONENT_HOST_U32);
+    assert(result.as.u32 == 1u);
+    assert(turbowasm_component_call_take_result(
+               &call, &result) == TURBOWASM_INVALID_ARGUMENT);
 
-    turbowasm_execution_destroy(&execution);
-    turbowasm_component_exec_destroy(&exec);
-    turbowasm_component_binary_destroy(&binary);
-
-    assert(turbowasm_wasi02_streams_destroy(
-               &streams) == TURBOWASM_OK);
-    assert(turbowasm_wasi02_poll_destroy(
-               &poll) == TURBOWASM_OK);
+    turbowasm_component_host_value_destroy(&result);
+    turbowasm_component_call_destroy(&call);
+    turbowasm_component_instance_destroy(&instance);
+    turbowasm_component_destroy(&component);
+    assert(turbowasm_wasi02_destroy(
+               &wasi02) == TURBOWASM_OK);
     return 0;
 }

@@ -346,22 +346,13 @@ if(TARGET turbowasm_wasi02)
            COMMAND turbowasm_wasi02_public_test)
 endif()
 
-if(TARGET turbowasm_wasi02_exec_core)
+if(TARGET turbowasm_wasi02)
   add_executable(turbowasm_wasi02_toolchain_resume_test
     wasi02_toolchain_resume_test.c)
   target_link_libraries(turbowasm_wasi02_toolchain_resume_test
-    PRIVATE
-      turbowasm_wasi02_exec_core
-      turbowasm_wasi02_streams_core
-      turbowasm_wasi02_poll_core
-      turbowasm_wasi02_fs_core
-      turbowasm_wasi02_core
-      TurboWasm::Component)
+    PRIVATE TurboWasm::WASI02)
   target_include_directories(turbowasm_wasi02_toolchain_resume_test
-    PRIVATE
-      "${PROJECT_SOURCE_DIR}/src"
-      "${PROJECT_SOURCE_DIR}/include"
-      "${_turbowasm_wasi02_fixture_dir}")
+    PRIVATE "${_turbowasm_wasi02_fixture_dir}")
   set_target_properties(
     turbowasm_wasi02_toolchain_resume_test PROPERTIES
     C_STANDARD 11
@@ -369,7 +360,9 @@ if(TARGET turbowasm_wasi02_exec_core)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_wasi02_toolchain_resume_test
            COMMAND turbowasm_wasi02_toolchain_resume_test)
+endif()
 
+if(TARGET turbowasm_wasi02_exec_core)
   add_executable(turbowasm_wasi02_exec_test
     wasi02_exec_test.c)
   target_link_libraries(turbowasm_wasi02_exec_test

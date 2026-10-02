@@ -1,6 +1,7 @@
 #ifndef TURBOWASM_COMPONENT_H
 #define TURBOWASM_COMPONENT_H
 
+#include <turbowasm/execution.h>
 #include <turbowasm/instance.h>
 #include <turbowasm/module.h>
 #include <turbowasm/runtime.h>
@@ -28,6 +29,10 @@ typedef struct turbowasm_component {
 typedef struct turbowasm_component_instance {
     void *impl;
 } turbowasm_component_instance;
+
+typedef struct turbowasm_component_call {
+    void *impl;
+} turbowasm_component_call;
 
 typedef enum turbowasm_component_host_value_kind {
     TURBOWASM_COMPONENT_HOST_BOOL = 1,
@@ -129,6 +134,61 @@ turbowasm_status turbowasm_component_instance_invoke(
     size_t result_capacity,
     size_t *out_result_count,
     turbowasm_trap *trap);
+
+/*
+ * Create a restartable invocation of one Component function export.
+ *
+ * The call borrows the Component instance, which must outlive the call.
+ * Arguments are canonically lowered during create and need not outlive this
+ * function. The retained Runtime execution may then yield for fuel,
+ * interruption, or host-wait without replaying canonical lowering or the
+ * imported callback frame.
+ */
+turbowasm_status turbowasm_component_call_create(
+    turbowasm_component_call *call,
+    turbowasm_component_instance *instance,
+    turbowasm_name export_name,
+    const turbowasm_component_host_value *arguments,
+    size_t argument_count);
+
+void turbowasm_component_call_destroy(
+    turbowasm_component_call *call);
+
+turbowasm_status turbowasm_component_call_resume(
+    turbowasm_component_call *call,
+    const turbowasm_execution_options *options);
+
+turbowasm_execution_state turbowasm_component_call_state_get(
+    const turbowasm_component_call *call);
+
+turbowasm_yield_reason turbowasm_component_call_yield_reason_get(
+    const turbowasm_component_call *call);
+
+bool turbowasm_component_call_pending_host_wait(
+    const turbowasm_component_call *call,
+    turbowasm_host_wait *out_wait);
+
+turbowasm_status turbowasm_component_call_complete_host_wait(
+    turbowasm_component_call *call,
+    turbowasm_host_wait wait,
+    int status);
+
+turbowasm_status turbowasm_component_call_terminal_status(
+    const turbowasm_component_call *call);
+
+turbowasm_trap turbowasm_component_call_trap(
+    const turbowasm_component_call *call);
+
+size_t turbowasm_component_call_result_count(
+    const turbowasm_component_call *call);
+
+/*
+ * Move the completed Component result to caller-owned public storage exactly
+ * once. Calls with no result report result_count == 0 and reject take_result.
+ */
+turbowasm_status turbowasm_component_call_take_result(
+    turbowasm_component_call *call,
+    turbowasm_component_host_value *out_result);
 
 /*
  * Destroy a value returned by turbowasm_component_instance_invoke().

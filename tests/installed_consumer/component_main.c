@@ -28,7 +28,9 @@ static const uint8_t executable_component[] = {
 int main(void) {
     turbowasm_component component = {0};
     turbowasm_component_instance instance = {0};
+    turbowasm_component_call call = {0};
     turbowasm_component_host_value result = {0};
+    turbowasm_component_host_value call_result = {0};
     turbowasm_name name = {
         (const uint8_t *)"answer", 6u
     };
@@ -61,6 +63,28 @@ int main(void) {
     assert(result.kind == TURBOWASM_COMPONENT_HOST_U32);
     assert(result.as.u32 == 42u);
 
+    assert(turbowasm_component_call_create(
+               &call,
+               &instance,
+               name,
+               NULL, 0u) == TURBOWASM_OK);
+    assert(turbowasm_component_call_state_get(
+               &call) == TURBOWASM_EXECUTION_READY);
+    assert(turbowasm_component_call_resume(
+               &call, NULL) == TURBOWASM_OK);
+    assert(turbowasm_component_call_state_get(
+               &call) == TURBOWASM_EXECUTION_COMPLETED);
+    assert(turbowasm_component_call_terminal_status(
+               &call) == TURBOWASM_OK);
+    assert(turbowasm_component_call_result_count(
+               &call) == 1u);
+    assert(turbowasm_component_call_take_result(
+               &call, &call_result) == TURBOWASM_OK);
+    assert(call_result.kind == TURBOWASM_COMPONENT_HOST_U32);
+    assert(call_result.as.u32 == 42u);
+
+    turbowasm_component_host_value_destroy(&call_result);
+    turbowasm_component_call_destroy(&call);
     turbowasm_component_host_value_destroy(&result);
     turbowasm_component_instance_destroy(&instance);
     assert(instance.impl == NULL);
