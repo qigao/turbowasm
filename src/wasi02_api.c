@@ -19,12 +19,14 @@ typedef struct turbowasm_wasi02_public_impl {
     turbowasm_wasi02_filesystem filesystem;
     turbowasm_wasi02_poll poll;
     turbowasm_wasi02_streams streams;
+    turbowasm_wasi02_sockets sockets;
 
     turbowasm_wasi02_exec_capabilities capabilities;
 
     bool filesystem_initialized;
     bool poll_initialized;
     bool streams_initialized;
+    bool sockets_initialized;
 
     uint32_t instance_count;
 } turbowasm_wasi02_public_impl;
@@ -57,6 +59,14 @@ static bool config_valid(
 
     if (config->stream_resource_capacity != 0u &&
         config->pollable_capacity == 0u)
+        return false;
+
+    if ((config->socket_network_resource_capacity == 0u) !=
+        (config->tcp_socket_resource_capacity == 0u))
+        return false;
+    if (config->socket_network_resource_capacity != 0u &&
+        (config->pollable_capacity == 0u ||
+         config->stream_resource_capacity == 0u))
         return false;
 
     if ((config->streams.get_stdin != NULL ||
@@ -103,6 +113,11 @@ static void destroy_initialized(
     if (impl == NULL)
         return;
 
+    if (impl->sockets_initialized) {
+        (void)turbowasm_wasi02_sockets_destroy(
+            &impl->sockets);
+        impl->sockets_initialized = false;
+    }
     if (impl->streams_initialized) {
         (void)turbowasm_wasi02_streams_destroy(
             &impl->streams);
@@ -202,6 +217,25 @@ turbowasm_status turbowasm_wasi02_init(
         impl->capabilities.streams = &impl->streams;
     }
 
+    if (impl->config.socket_network_resource_capacity != 0u) {
+        status = turbowasm_wasi02_sockets_init(
+            &impl->sockets,
+            &impl->config.sockets,
+            impl->config.socket_network_resource_capacity,
+            impl->config.tcp_socket_resource_capacity);
+        if (status != TURBOWASM_OK)
+            goto fail;
+        impl->sockets_initialized = true;
+
+        status = turbowasm_wasi02_sockets_attach_io(
+            &impl->sockets,
+            &impl->streams,
+            &impl->poll);
+        if (status != TURBOWASM_OK)
+            goto fail;
+        impl->capabilities.sockets = &impl->sockets;
+    }
+
 #if TURBOWASM_WASI02_HAS_FILESYSTEM
     if (impl->filesystem_initialized &&
         impl->streams_initialized) {
@@ -246,6 +280,12 @@ turbowasm_status turbowasm_wasi02_destroy(
      * Preflight every strict child owner before mutating any of them so a
      * failed destroy never leaves the public context half-destroyed.
      */
+    if (impl->sockets_initialized &&
+        (impl->sockets.networks.live_count != 0u ||
+         impl->sockets.tcp_resources.live_count != 0u ||
+         impl->sockets.tcp_free_count !=
+             impl->sockets.tcp_capacity))
+        return TURBOWASM_INVALID_ARGUMENT;
     if (impl->streams_initialized &&
         (impl->streams.resources.live_count != 0u ||
          impl->streams.free_count != impl->streams.capacity))
@@ -259,6 +299,13 @@ turbowasm_status turbowasm_wasi02_destroy(
         return TURBOWASM_INVALID_ARGUMENT;
 #endif
 
+    if (impl->sockets_initialized) {
+        status = turbowasm_wasi02_sockets_destroy(
+            &impl->sockets);
+        if (status != TURBOWASM_OK)
+            return status;
+        impl->sockets_initialized = false;
+    }
     if (impl->streams_initialized) {
         status = turbowasm_wasi02_streams_destroy(
             &impl->streams);
