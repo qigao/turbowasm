@@ -29,7 +29,11 @@ typedef struct fixture_probe {
 
     uint32_t socket_network_calls;
     uint32_t socket_network_drop_calls;
+    uint32_t socket_tcp_create_calls;
+    uint32_t socket_tcp_drop_calls;
 } fixture_probe;
+
+static fixture_probe *diagnostic_probe;
 
 static turbowasm_status monotonic_now(
     void *context,
@@ -156,11 +160,12 @@ static turbowasm_status socket_tcp_create(
     turbowasm_wasi02_ip_address_family family,
     turbowasm_value *out_rep,
     turbowasm_wasi02_socket_error *out_error) {
-    (void)context;
-    if (out_rep == NULL || out_error == NULL ||
+    fixture_probe *probe = (fixture_probe *)context;
+    if (probe == NULL || out_rep == NULL || out_error == NULL ||
         (family != TURBOWASM_WASI02_IP_ADDRESS_IPV4 &&
          family != TURBOWASM_WASI02_IP_ADDRESS_IPV6))
         return TURBOWASM_INVALID_ARGUMENT;
+    ++probe->socket_tcp_create_calls;
     out_rep->kind = TURBOWASM_VALUE_I32;
     out_rep->as.i32 = 100;
     *out_error = TURBOWASM_WASI02_SOCKET_ERROR_NONE;
@@ -170,8 +175,12 @@ static turbowasm_status socket_tcp_create(
 static turbowasm_status socket_tcp_drop(
     void *context,
     turbowasm_value rep) {
-    (void)context;
-    (void)rep;
+    fixture_probe *probe = (fixture_probe *)context;
+    if (probe == NULL ||
+        rep.kind != TURBOWASM_VALUE_I32 ||
+        rep.as.i32 != 100)
+        return TURBOWASM_INVALID_ARGUMENT;
+    ++probe->socket_tcp_drop_calls;
     return TURBOWASM_OK;
 }
 
@@ -259,13 +268,35 @@ static uint64_t run_integer_fixture(
     assert(status == TURBOWASM_OK);
     assert(turbowasm_wasi02_component_instance_create(
                &instance, &component, wasi02) == TURBOWASM_OK);
-    assert(turbowasm_component_instance_invoke(
-               &instance,
-               run_name(),
-               NULL, 0u,
-               &result, 1u,
-               &result_count,
-               &trap) == TURBOWASM_OK);
+    status = turbowasm_component_instance_invoke(
+        &instance,
+        run_name(),
+        NULL, 0u,
+        &result, 1u,
+        &result_count,
+        &trap);
+    if (status != TURBOWASM_OK) {
+        fprintf(
+            stderr,
+            "WASI02 toolchain fixture %s invoke failed: %d (%s), "
+            "trap=%d, results=%zu\n",
+            label,
+            (int)status,
+            turbowasm_status_string(status),
+            (int)trap,
+            result_count);
+        if (diagnostic_probe != NULL) {
+            fprintf(
+                stderr,
+                "socket counters: create=%u drop=%u network=%u/%u\n",
+                diagnostic_probe->socket_tcp_create_calls,
+                diagnostic_probe->socket_tcp_drop_calls,
+                diagnostic_probe->socket_network_calls,
+                diagnostic_probe->socket_network_drop_calls);
+        }
+
+    }
+    assert(status == TURBOWASM_OK);
     assert(trap == TURBOWASM_TRAP_NONE);
     assert(result_count == 1u);
     assert(result.kind == expected_kind);
@@ -321,6 +352,7 @@ int main(void) {
 
     probe.clock_value = UINT64_C(0x1122334455667788);
     probe.random_value = UINT64_C(0x8877665544332211);
+    diagnostic_probe = &probe;
 
     fs_config.descriptor_capacity = 8u;
     fs_config.provider.context = &probe;
@@ -402,6 +434,12 @@ int main(void) {
                turbowasm_wasi02_fixture_socket_instance_network,
                turbowasm_wasi02_fixture_socket_instance_network_size,
                TURBOWASM_COMPONENT_HOST_U32) == 1u);
+    assert(run_integer_fixture(
+               &wasi02,
+               "socket-create-tcp",
+               turbowasm_wasi02_fixture_socket_create_tcp,
+               turbowasm_wasi02_fixture_socket_create_tcp_size,
+               TURBOWASM_COMPONENT_HOST_U32) == 1u);
 
     assert(probe.clock_calls == 1u);
     assert(probe.random_calls == 1u);
@@ -416,6 +454,8 @@ int main(void) {
 
     assert(probe.socket_network_calls == 1u);
     assert(probe.socket_network_drop_calls == 1u);
+    assert(probe.socket_tcp_create_calls == 1u);
+    assert(probe.socket_tcp_drop_calls == 1u);
 
     assert(turbowasm_wasi02_destroy(
                &wasi02) == TURBOWASM_OK);

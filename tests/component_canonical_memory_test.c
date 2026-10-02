@@ -495,6 +495,164 @@ static void test_composite_round_trip(
     turbowasm_component_value_destroy(&out);
 }
 
+
+typedef struct resource_codec_probe {
+    uint32_t lower_calls;
+    uint32_t lift_calls;
+    uint32_t canonical_handle;
+    uint32_t logical_handle;
+} resource_codec_probe;
+
+static turbowasm_status test_resource_lower(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    const turbowasm_component_value *value,
+    uint32_t *out_handle) {
+    resource_codec_probe *probe = (resource_codec_probe *)context;
+    const turbowasm_component_type *handle_type;
+    const turbowasm_component_type *resource_type;
+
+    if (probe == NULL || graph == NULL || value == NULL ||
+        out_handle == NULL ||
+        type.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    handle_type = turbowasm_component_type_graph_get(
+        graph, type.as.indexed);
+    if (handle_type == NULL ||
+        handle_type->kind != TURBOWASM_COMPONENT_TYPE_OWN)
+        return TURBOWASM_TYPE_MISMATCH;
+    resource_type = turbowasm_component_type_graph_get(
+        graph, handle_type->as.handle.resource_type);
+    if (resource_type == NULL ||
+        resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE ||
+        resource_type->as.resource.identity != UINT64_C(0x51525354) ||
+        value->kind != TURBOWASM_COMPONENT_TYPE_OWN ||
+        value->as.resource_rep.kind != TURBOWASM_VALUE_I32 ||
+        (uint32_t)value->as.resource_rep.as.i32 !=
+            probe->logical_handle)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    ++probe->lower_calls;
+    *out_handle = probe->canonical_handle;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status test_resource_lift(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    uint32_t handle,
+    turbowasm_component_value *out) {
+    resource_codec_probe *probe = (resource_codec_probe *)context;
+    const turbowasm_component_type *handle_type;
+    const turbowasm_component_type *resource_type;
+
+    if (probe == NULL || graph == NULL || out == NULL ||
+        type.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    handle_type = turbowasm_component_type_graph_get(
+        graph, type.as.indexed);
+    if (handle_type == NULL ||
+        handle_type->kind != TURBOWASM_COMPONENT_TYPE_OWN)
+        return TURBOWASM_TYPE_MISMATCH;
+    resource_type = turbowasm_component_type_graph_get(
+        graph, handle_type->as.handle.resource_type);
+    if (resource_type == NULL ||
+        resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE ||
+        resource_type->as.resource.identity != UINT64_C(0x51525354) ||
+        handle != probe->canonical_handle)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    ++probe->lift_calls;
+    memset(out, 0, sizeof(*out));
+    out->kind = TURBOWASM_COMPONENT_TYPE_OWN;
+    out->as.resource_rep.kind = TURBOWASM_VALUE_I32;
+    out->as.resource_rep.as.i32 = (int32_t)probe->logical_handle;
+    return TURBOWASM_OK;
+}
+
+static void test_result_owned_resource_round_trip(
+    turbowasm_component_canonical_memory *memory) {
+    static const uint8_t ok_name[] = "ok";
+    static const uint8_t error_name[] = "error";
+    turbowasm_component_label error_labels[2] = {
+        {ok_name, 2u}, {error_name, 5u}
+    };
+    turbowasm_component_type_graph graph = {0};
+    turbowasm_component_value payload = {0};
+    turbowasm_component_value in = {0};
+    turbowasm_component_value out = {0};
+    resource_codec_probe probe = {0};
+    uint8_t bytes[8] = {0};
+    turbowasm_instance_impl *impl =
+        (turbowasm_instance_impl *)memory->instance->impl;
+
+    probe.canonical_handle = UINT32_C(0x12345678);
+    probe.logical_handle = UINT32_C(77);
+
+    assert(turbowasm_component_type_graph_allocate(&graph, 4u));
+    assert(turbowasm_component_type_graph_define_resource(
+        &graph, 0u, UINT64_C(0x51525354)));
+    assert(turbowasm_component_type_graph_define_handle(
+        &graph, 1u, TURBOWASM_COMPONENT_TYPE_OWN, 0u));
+    assert(turbowasm_component_type_graph_define_enum(
+        &graph, 2u, error_labels, 2u));
+    assert(turbowasm_component_type_graph_define_result(
+        &graph, 3u,
+        true, turbowasm_component_type_ref_indexed(1u),
+        true, turbowasm_component_type_ref_indexed(2u)));
+    assert(turbowasm_component_type_graph_validate(&graph));
+
+    memory->resource_lower = test_resource_lower;
+    memory->resource_lift = test_resource_lift;
+    memory->resource_context = &probe;
+
+    payload.kind = TURBOWASM_COMPONENT_TYPE_OWN;
+    payload.as.resource_rep.kind = TURBOWASM_VALUE_I32;
+    payload.as.resource_rep.as.i32 = (int32_t)probe.logical_handle;
+    in.kind = TURBOWASM_COMPONENT_TYPE_RESULT;
+    in.as.result.case_index = 0u;
+    in.as.result.payload = &payload;
+
+    assert(turbowasm_component_canonical_lower_value(
+               &graph,
+               turbowasm_component_type_ref_indexed(3u),
+               memory, 240u, &in) == TURBOWASM_OK);
+    assert(probe.lower_calls == 1u);
+    assert(turbowasm_instance_memory_read_bytes(
+               impl, 0u, 240u, 0u,
+               bytes, sizeof(bytes)) == TURBOWASM_OK);
+    assert(bytes[0] == 0u);
+    assert(bytes[4] == UINT8_C(0x78));
+    assert(bytes[5] == UINT8_C(0x56));
+    assert(bytes[6] == UINT8_C(0x34));
+    assert(bytes[7] == UINT8_C(0x12));
+
+    assert(turbowasm_component_canonical_lift_value(
+               &graph,
+               turbowasm_component_type_ref_indexed(3u),
+               memory, 240u, &out) == TURBOWASM_OK);
+    assert(probe.lift_calls == 1u);
+    assert(out.kind == TURBOWASM_COMPONENT_TYPE_RESULT);
+    assert(out.as.result.case_index == 0u);
+    assert(out.as.result.payload != NULL);
+    assert(out.as.result.payload->kind ==
+           TURBOWASM_COMPONENT_TYPE_OWN);
+    assert(out.as.result.payload->as.resource_rep.kind ==
+           TURBOWASM_VALUE_I32);
+    assert((uint32_t)out.as.result.payload->as.resource_rep.as.i32 ==
+           probe.logical_handle);
+
+    turbowasm_component_value_destroy(&out);
+    memory->resource_lower = NULL;
+    memory->resource_lift = NULL;
+    memory->resource_context = NULL;
+    turbowasm_component_type_graph_destroy(&graph);
+}
+
 static void test_fail_closed_inputs(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_canonical_memory *memory) {
@@ -575,6 +733,7 @@ static void run_memory_suite(
     test_string_round_trip(&graph, &memory);
     test_nested_list_round_trip(&graph, &memory);
     test_composite_round_trip(&graph, &memory);
+    test_result_owned_resource_round_trip(&memory);
     test_fail_closed_inputs(&graph, &memory);
 
     turbowasm_instance_destroy(&instance);

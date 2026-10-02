@@ -100,12 +100,74 @@ static bool config_valid(
     return true;
 }
 
+static bool component_resources_quiescent(
+    const turbowasm_wasi02_public_impl *impl) {
+    if (impl == NULL)
+        return false;
+
+    if (impl->sockets_initialized &&
+        (impl->sockets.networks.live_count != 0u ||
+         impl->sockets.tcp_resources.live_count != 0u ||
+         impl->sockets.tcp_free_count !=
+             impl->sockets.tcp_capacity))
+        return false;
+    if (impl->streams_initialized &&
+        (impl->streams.resources.live_count != 0u ||
+         impl->streams.free_count != impl->streams.capacity))
+        return false;
+    if (impl->poll_initialized &&
+        impl->poll.resources.live_count != 0u)
+        return false;
+#if TURBOWASM_WASI02_HAS_FILESYSTEM
+    if (impl->filesystem_initialized &&
+        impl->filesystem.resources.live_count != 0u)
+        return false;
+#endif
+    return true;
+}
+
+static void reset_component_resource_identities(
+    turbowasm_wasi02_public_impl *impl) {
+    if (impl == NULL)
+        return;
+
+#if TURBOWASM_WASI02_HAS_FILESYSTEM
+    if (impl->filesystem_initialized) {
+        impl->filesystem.descriptor_identity = 0u;
+        impl->filesystem.descriptor_identity_bound = false;
+    }
+#endif
+    if (impl->poll_initialized) {
+        impl->poll.pollable_identity = 0u;
+        impl->poll.pollable_identity_bound = false;
+    }
+    if (impl->streams_initialized) {
+        impl->streams.component_input_identity = 0u;
+        impl->streams.component_output_identity = 0u;
+        impl->streams.component_error_identity = 0u;
+        impl->streams.component_input_identity_bound = false;
+        impl->streams.component_output_identity_bound = false;
+        impl->streams.component_error_identity_bound = false;
+    }
+    if (impl->sockets_initialized) {
+        impl->sockets.component_network_identity = 0u;
+        impl->sockets.component_tcp_identity = 0u;
+        impl->sockets.component_network_identity_bound = false;
+        impl->sockets.component_tcp_identity_bound = false;
+    }
+}
+
 static void wasi02_instance_release(void *context) {
     turbowasm_wasi02_public_impl *impl =
         (turbowasm_wasi02_public_impl *)context;
 
-    if (impl != NULL && impl->instance_count != 0u)
-        --impl->instance_count;
+    if (impl == NULL || impl->instance_count == 0u)
+        return;
+
+    --impl->instance_count;
+    if (impl->instance_count == 0u &&
+        component_resources_quiescent(impl))
+        reset_component_resource_identities(impl);
 }
 
 static void destroy_initialized(

@@ -79,6 +79,7 @@ jobs:
               "filesystem-preopens.wasm",
               "monotonic-clock.wasm",
               "random-u64.wasm",
+              "socket-create-tcp.wasm",
               "socket-instance-network.wasm",
               "stream-poll-block.wasm",
           ]

@@ -22,6 +22,10 @@ Corpus coverage:
   pollable block → resource drop;
 - `socket-instance-network.wat`: `wasi:sockets/instance-network@0.2.8`
   → nominal `network` resource → canonical resource drop.
+- `socket-create-tcp.wat`: `wasi:sockets/tcp-create-socket@0.2.8`
+  → IPv4 enum lowering → indirect canonical
+  `result<own<tcp-socket>, error-code>` memory result → nominal TCP resource
+  drop.
 
 The public corpus test executes the checked-in corpus through `TurboWasm::WASI02`. A
 separate internal resume test drives the same stream/poll Component through
