@@ -354,6 +354,21 @@ if(TARGET turbowasm_wasi02_cnet_core)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_wasi02_cnet_control_test
            COMMAND turbowasm_wasi02_cnet_control_test)
+  # Salts::CNet is a released shared SDK dependency. Keep its runtime payload
+  # explicit for CTest instead of relying on a system-wide Salts install.
+  if(WIN32)
+    set_tests_properties(turbowasm_wasi02_cnet_control_test PROPERTIES
+      ENVIRONMENT
+        "PATH=$<TARGET_FILE_DIR:Salts::CNet>$<SEMICOLON>${SALTS_ROOT_PATH}/bin$<SEMICOLON>${SALTS_ROOT_PATH}/lib$<SEMICOLON>$ENV{PATH}")
+  elseif(APPLE)
+    set_tests_properties(turbowasm_wasi02_cnet_control_test PROPERTIES
+      ENVIRONMENT
+        "DYLD_LIBRARY_PATH=$<TARGET_FILE_DIR:Salts::CNet>:${SALTS_ROOT_PATH}/lib:$ENV{DYLD_LIBRARY_PATH}")
+  else()
+    set_tests_properties(turbowasm_wasi02_cnet_control_test PROPERTIES
+      ENVIRONMENT
+        "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Salts::CNet>:${SALTS_ROOT_PATH}/lib:$ENV{LD_LIBRARY_PATH}")
+  endif()
 endif()
 
 set(_turbowasm_wasi02_fixture_dir
