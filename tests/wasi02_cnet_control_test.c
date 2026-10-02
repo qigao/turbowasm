@@ -20,6 +20,20 @@ static native_io_backend_kind test_backend(void) {
 #endif
 }
 
+static cnet_client_config bounded_client_config(void) {
+    cnet_client_config config;
+    memset(&config, 0, sizeof(config));
+    config.backend = test_backend();
+    config.connection_capacity = 2u;
+    config.command_capacity = 8u;
+    config.request_capacity = 8u;
+    config.completion_batch_capacity = 4u;
+    config.event_capacity = 8u;
+    config.max_send_bytes = 4096u;
+    config.receive_buffer_bytes = 4096u;
+    return config;
+}
+
 static turbowasm_wasi02_ip_socket_address loopback_v4(void) {
     turbowasm_wasi02_ip_socket_address address;
     memset(&address, 0, sizeof(address));
@@ -205,8 +219,68 @@ static void test_cnet_capacity_is_bounded(void) {
                &adapter) == TURBOWASM_OK);
 }
 
+static void test_optional_cnet_client_owner(void) {
+    turbowasm_wasi02_cnet adapter = {0};
+    turbowasm_wasi02_cnet_config config = {0};
+    turbowasm_wasi02_socket_provider provider = {0};
+    cnet_client_config client = bounded_client_config();
+
+    config.backend = test_backend();
+    config.socket_capacity = 2u;
+    config.client_config = &client;
+    config.client_stop_timeout_ms = 1000u;
+
+    assert(turbowasm_wasi02_cnet_init(
+               &adapter, &config) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_cnet_socket_provider(
+               &adapter, &provider) == TURBOWASM_OK);
+
+    /*
+     * Owning the bounded CNet client does not prematurely expose a partial
+     * WASI connect/accept surface. Those callbacks stay absent until the
+     * stream/poll ownership contract is installed.
+     */
+    assert(provider.tcp_start_connect == NULL);
+    assert(provider.tcp_finish_connect == NULL);
+    assert(provider.tcp_accept == NULL);
+    assert(provider.tcp_subscribe == NULL);
+
+    assert(turbowasm_wasi02_cnet_destroy(
+               &adapter) == TURBOWASM_OK);
+}
+
+static void test_cnet_client_owner_contract_rejects_mismatch(void) {
+    turbowasm_wasi02_cnet adapter = {0};
+    turbowasm_wasi02_cnet_config config = {0};
+    cnet_client_config client = bounded_client_config();
+
+    config.backend = test_backend();
+    config.socket_capacity = 2u;
+    config.client_config = &client;
+    config.client_stop_timeout_ms = 1000u;
+
+    client.connection_capacity = 1u;
+    assert(turbowasm_wasi02_cnet_init(
+               &adapter, &config) == TURBOWASM_INVALID_ARGUMENT);
+    assert(adapter.impl == NULL);
+
+    client = bounded_client_config();
+    client.backend = (native_io_backend_kind)((int)test_backend() + 1);
+    assert(turbowasm_wasi02_cnet_init(
+               &adapter, &config) == TURBOWASM_INVALID_ARGUMENT);
+    assert(adapter.impl == NULL);
+
+    client = bounded_client_config();
+    config.client_stop_timeout_ms = 0u;
+    assert(turbowasm_wasi02_cnet_init(
+               &adapter, &config) == TURBOWASM_INVALID_ARGUMENT);
+    assert(adapter.impl == NULL);
+}
+
 int main(void) {
     test_cnet_control_plane();
     test_cnet_capacity_is_bounded();
+    test_optional_cnet_client_owner();
+    test_cnet_client_owner_contract_rejects_mismatch();
     return 0;
 }
