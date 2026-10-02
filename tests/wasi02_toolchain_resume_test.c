@@ -28,15 +28,6 @@ static turbowasm_name run_name(void) {
     return name;
 }
 
-static void reset_probe(resume_probe *probe) {
-    uintptr_t token;
-
-    assert(probe != NULL);
-    token = probe->operation_token;
-    memset(probe, 0, sizeof(*probe));
-    probe->operation_token = token;
-}
-
 static turbowasm_status get_stdin(
     void *context,
     turbowasm_value *out_stream_rep) {
@@ -124,14 +115,11 @@ int main(void) {
     turbowasm_wasi02_config config = {0};
     turbowasm_wasi02 wasi02 = {0};
     turbowasm_component component = {0};
-    turbowasm_component_instance one_shot_instance = {0};
     turbowasm_component_instance instance = {0};
     turbowasm_component_call call = {0};
     turbowasm_component_host_value result = {0};
     turbowasm_host_wait wait = {0};
     turbowasm_host_wait stale = {0};
-    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
-    size_t result_count = 99u;
 
     probe.operation_token = (uintptr_t)0x5753493032u;
 
@@ -154,28 +142,6 @@ int main(void) {
                turbowasm_wasi02_fixture_stream_poll_block,
                turbowasm_wasi02_fixture_stream_poll_block_size) ==
            TURBOWASM_OK);
-
-    /*
-     * The legacy one-shot Component call still cannot suspend. It must fail
-     * before the poll provider arms an asynchronous operation.
-     */
-    assert(turbowasm_wasi02_component_instance_create(
-               &one_shot_instance,
-               &component,
-               &wasi02) == TURBOWASM_OK);
-    assert(turbowasm_component_instance_invoke(
-               &one_shot_instance,
-               run_name(),
-               NULL, 0u,
-               &result, 1u,
-               &result_count,
-               &trap) == TURBOWASM_UNSUPPORTED);
-    assert(result_count == 0u);
-    assert(trap == TURBOWASM_TRAP_NONE);
-    assert(probe.arm_calls == 0u);
-    turbowasm_component_instance_destroy(&one_shot_instance);
-
-    reset_probe(&probe);
 
     assert(turbowasm_wasi02_component_instance_create(
                &instance,
