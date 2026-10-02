@@ -33,6 +33,8 @@ typedef struct fixture_probe {
     uint32_t socket_tcp_drop_calls;
 } fixture_probe;
 
+static fixture_probe *diagnostic_probe;
+
 static turbowasm_status monotonic_now(
     void *context,
     uint64_t *out_value) {
@@ -283,6 +285,15 @@ static uint64_t run_integer_fixture(
             turbowasm_status_string(status),
             (int)trap,
             result_count);
+        if (diagnostic_probe != NULL) {
+            fprintf(
+                stderr,
+                "socket counters: create=%u drop=%u network=%u/%u\n",
+                diagnostic_probe->socket_tcp_create_calls,
+                diagnostic_probe->socket_tcp_drop_calls,
+                diagnostic_probe->socket_network_calls,
+                diagnostic_probe->socket_network_drop_calls);
+        }
     }
     assert(status == TURBOWASM_OK);
     assert(trap == TURBOWASM_TRAP_NONE);
@@ -340,6 +351,7 @@ int main(void) {
 
     probe.clock_value = UINT64_C(0x1122334455667788);
     probe.random_value = UINT64_C(0x8877665544332211);
+    diagnostic_probe = &probe;
 
     fs_config.descriptor_capacity = 8u;
     fs_config.provider.context = &probe;
