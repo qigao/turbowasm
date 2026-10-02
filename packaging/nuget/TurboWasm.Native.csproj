@@ -7,7 +7,7 @@
     <PackageId>TurboWasm.Native</PackageId>
     <PackageVersion Condition="'$(PackageVersion)' == ''">0.0.0-ci</PackageVersion>
     <Authors>qigao</Authors>
-    <Description>Prebuilt Runtime-only TurboWasm native SDK install trees.</Description>
+    <Description>Prebuilt TurboWasm Runtime + synchronous Component native SDK install trees.</Description>
     <PackageTags>turbowasm;wasm;native;c;cmake;android</PackageTags>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
