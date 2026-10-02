@@ -19,9 +19,11 @@ Corpus coverage:
 - `filesystem-preopens.wat`: descriptor resource + canonical list/string
   memory + resource drop;
 - `stream-poll-block.wat`: CLI stdin producer → input stream subscribe →
-  pollable block → resource drop.
+  pollable block → resource drop;
+- `socket-instance-network.wat`: `wasi:sockets/instance-network@0.2.8`
+  → nominal `network` resource → canonical resource drop.
 
-The public corpus test executes all five through `TurboWasm::WASI02`. A
+The public corpus test executes the checked-in corpus through `TurboWasm::WASI02`. A
 separate internal resume test drives the same stream/poll Component through
 Runtime host-wait yield/completion/resume so the blocking path is not reduced
 to a ready-only smoke.

@@ -26,6 +26,7 @@ env:
   WASI_CLI_COMMIT: "e922fd7bd137cd284a5e6c4815a5a630d32fdd01"
   WASI_FILESYSTEM_COMMIT: "971b11617b50e7496bea85f36e60141bda172964"
   WASI_IO_COMMIT: "3983fe1feab6b3a3b4e5c47c8b13daaf22266f00"
+  WASI_SOCKETS_COMMIT: "85f0c064f5b9ea2faa3c65b1a80b870119c0fc7f"
 
 jobs:
   generate:
@@ -78,6 +79,7 @@ jobs:
               "filesystem-preopens.wasm",
               "monotonic-clock.wasm",
               "random-u64.wasm",
+              "socket-instance-network.wasm",
               "stream-poll-block.wasm",
           ]
           for name in expected:
@@ -136,6 +138,7 @@ jobs:
           wasi_cli_commit=${WASI_CLI_COMMIT}
           wasi_filesystem_commit=${WASI_FILESYSTEM_COMMIT}
           wasi_io_commit=${WASI_IO_COMMIT}
+          wasi_sockets_commit=${WASI_SOCKETS_COMMIT}
           EOF
 
       - name: Upload generated fixture corpus
