@@ -31,8 +31,7 @@
   (alias export $network-types "ip-address-family" (type $family))
 
   (import "wasi:sockets/tcp@0.2.8" (instance $tcp-types
-    (type $tcp-socket (sub resource))
-    (export "tcp-socket" (type (eq $tcp-socket)))
+    (export "tcp-socket" (type $tcp-socket (sub resource)))
   ))
   (alias export $tcp-types "tcp-socket" (type $tcp-socket))
 
