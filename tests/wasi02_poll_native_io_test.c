@@ -172,10 +172,6 @@ static void test_native_io_terminal_routes_one_wait_any(void) {
                &native_poll,
                requests[1],
                &reps[1]) == TURBOWASM_OK);
-    assert(turbowasm_wasi02_native_io_poll_register_request(
-               &native_poll,
-               requests[1],
-               &reps[1]) == TURBOWASM_INVALID_ARGUMENT);
 
     assert(turbowasm_wasi02_pollable_new(
                &poll,
@@ -339,7 +335,109 @@ static void test_native_io_terminal_routes_one_wait_any(void) {
     backend.impl = NULL;
 }
 
+static void test_shared_request_fans_out_terminal(void) {
+    cancel_probe cancel = {0};
+    native_io_backend backend = {0};
+    turbowasm_wasi02_native_io_poll native_poll = {0};
+    turbowasm_wasi02_poll_provider provider = {0};
+    native_io_request request = {7u, 71u};
+    turbowasm_value first = {0};
+    turbowasm_value second = {0};
+    native_io_completion completion = {0};
+    bool ready = false;
+
+    cancel.status = SALTS_OK;
+    backend.impl = &cancel;
+
+    assert(turbowasm_wasi02_native_io_poll_init(
+               &native_poll, &backend,
+               4u, 2u, 4u, fake_cancel) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_native_io_poll_provider(
+               &native_poll, &provider) == TURBOWASM_OK);
+
+    assert(turbowasm_wasi02_native_io_poll_register_request(
+               &native_poll, request, &first) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_native_io_poll_register_request(
+               &native_poll, request, &second) == TURBOWASM_OK);
+    assert(first.as.i64 != second.as.i64);
+
+    completion.request = request;
+    completion.kind = NATIVE_IO_COMPLETION_OK;
+    completion.status = SALTS_OK;
+    assert(turbowasm_wasi02_native_io_poll_complete(
+               &native_poll, &completion) == TURBOWASM_OK);
+
+    assert(provider.ready(
+               provider.context, first, &ready) == TURBOWASM_OK);
+    assert(ready);
+    ready = false;
+    assert(provider.ready(
+               provider.context, second, &ready) == TURBOWASM_OK);
+    assert(ready);
+
+    assert(provider.drop(
+               provider.context, first) == TURBOWASM_OK);
+    assert(provider.drop(
+               provider.context, second) == TURBOWASM_OK);
+    assert(cancel.calls == 0u);
+
+    assert(turbowasm_wasi02_native_io_poll_complete(
+               &native_poll, &completion) == TURBOWASM_TRAPPED);
+    assert(turbowasm_wasi02_native_io_poll_destroy(
+               &native_poll) == TURBOWASM_OK);
+    backend.impl = NULL;
+}
+
+static void test_shared_request_cancels_only_last_alias(void) {
+    cancel_probe cancel = {0};
+    native_io_backend backend = {0};
+    turbowasm_wasi02_native_io_poll native_poll = {0};
+    turbowasm_wasi02_poll_provider provider = {0};
+    native_io_request request = {8u, 81u};
+    turbowasm_value first = {0};
+    turbowasm_value second = {0};
+    native_io_completion completion = {0};
+
+    cancel.status = SALTS_OK;
+    backend.impl = &cancel;
+
+    assert(turbowasm_wasi02_native_io_poll_init(
+               &native_poll, &backend,
+               4u, 2u, 4u, fake_cancel) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_native_io_poll_provider(
+               &native_poll, &provider) == TURBOWASM_OK);
+
+    assert(turbowasm_wasi02_native_io_poll_register_request(
+               &native_poll, request, &first) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_native_io_poll_register_request(
+               &native_poll, request, &second) == TURBOWASM_OK);
+
+    assert(provider.drop(
+               provider.context, first) == TURBOWASM_OK);
+    assert(cancel.calls == 0u);
+
+    assert(provider.drop(
+               provider.context, second) == TURBOWASM_OK);
+    assert(cancel.calls == 1u);
+    assert(cancel.last_request.slot == request.slot);
+    assert(cancel.last_request.generation == request.generation);
+
+    completion.request = request;
+    completion.kind = NATIVE_IO_COMPLETION_CANCELLED;
+    completion.status = SALTS_ECANCELED;
+    assert(turbowasm_wasi02_native_io_poll_complete(
+               &native_poll, &completion) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_native_io_poll_complete(
+               &native_poll, &completion) == TURBOWASM_TRAPPED);
+
+    assert(turbowasm_wasi02_native_io_poll_destroy(
+               &native_poll) == TURBOWASM_OK);
+    backend.impl = NULL;
+}
+
 int main(void) {
     test_native_io_terminal_routes_one_wait_any();
+    test_shared_request_fans_out_terminal();
+    test_shared_request_cancels_only_last_alias();
     return 0;
 }
