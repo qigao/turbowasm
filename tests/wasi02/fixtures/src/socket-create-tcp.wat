@@ -1,6 +1,6 @@
 (component
   (import "wasi:sockets/network@0.2.8" (instance $network-types
-    (export "error-code" (type $error-code (enum
+    (type $error-code (enum
       "unknown"
       "access-denied"
       "not-supported"
@@ -22,15 +22,17 @@
       "name-unresolvable"
       "temporary-resolver-failure"
       "permanent-resolver-failure"
-    )))
-    (export "ip-address-family"
-      (type $family (enum "ipv4" "ipv6")))
+    ))
+    (export "error-code" (type (eq $error-code)))
+    (type $family (enum "ipv4" "ipv6"))
+    (export "ip-address-family" (type (eq $family)))
   ))
   (alias export $network-types "error-code" (type $error-code))
   (alias export $network-types "ip-address-family" (type $family))
 
   (import "wasi:sockets/tcp@0.2.8" (instance $tcp-types
-    (export "tcp-socket" (type $tcp-socket (sub resource)))
+    (type $tcp-socket (sub resource))
+    (export "tcp-socket" (type (eq $tcp-socket)))
   ))
   (alias export $tcp-types "tcp-socket" (type $tcp-socket))
 
