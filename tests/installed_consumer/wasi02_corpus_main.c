@@ -37,5 +37,8 @@ int main(void) {
     qualify_component(
         turbowasm_wasi02_fixture_stream_poll_block,
         turbowasm_wasi02_fixture_stream_poll_block_size);
+    qualify_component(
+        turbowasm_wasi02_fixture_socket_instance_network,
+        turbowasm_wasi02_fixture_socket_instance_network_size);
     return 0;
 }
