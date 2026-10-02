@@ -28,6 +28,20 @@ turbowasm_status turbowasm_wasi02_component_value_from_wasi(
     const turbowasm_wasi02_value *value,
     turbowasm_component_value *out);
 
+typedef bool (*turbowasm_wasi02_component_resource_bind_fn)(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref component_ref,
+    const turbowasm_wasi02_type_desc *wasi_resource_type,
+    turbowasm_component_type_kind expected_handle_kind);
+
+bool turbowasm_wasi02_component_binding_matches_descriptor(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_wasi02_function_desc *function,
+    turbowasm_wasi02_component_resource_bind_fn resource_bind,
+    void *resource_context);
+
 turbowasm_status turbowasm_wasi02_component_imports(
     turbowasm_wasi02_provider *provider,
     turbowasm_component_exec_imports *out_imports);
