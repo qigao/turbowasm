@@ -289,11 +289,8 @@ if(TARGET turbowasm_wasi02_core AND
   endif()
 endif()
 
-if(TURBOWASM_ENABLE_WASI02_CNET_ADAPTER)
-  if(NOT TARGET turbowasm_wasi02_sockets_core)
-    message(FATAL_ERROR
-      "TurboWasm WASI02 CNet adapter requires the WASI02 sockets core")
-  endif()
+if(TURBOWASM_ENABLE_WASI02_CNET_ADAPTER AND
+   TARGET turbowasm_wasi02_sockets_core)
   if(NOT TARGET Salts::CNet)
     message(FATAL_ERROR
       "TurboWasm WASI02 CNet adapter requires a released Salts SDK exporting Salts::CNet")
