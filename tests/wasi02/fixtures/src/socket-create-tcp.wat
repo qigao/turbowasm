@@ -51,21 +51,32 @@
     )
   )
 
+  ;; result<own<tcp-socket>, error-code> flattens to two values, so the
+  ;; canonical ABI returns it indirectly through caller-provided memory.
+  (core module $Memory
+    (memory (export "mem") 1)
+  )
+  (core instance $memory (instantiate $Memory))
+  (alias core export $memory "mem" (core memory $mem))
+
   (core func $create-tcp-socket
-    (canon lower (func $tcp-create "create-tcp-socket"))
+    (canon lower
+      (func $tcp-create "create-tcp-socket")
+      (memory $mem)
+    )
   )
   (core func $drop-tcp-socket
     (canon resource.drop $tcp-socket)
   )
 
   (core module $M
-    (import "" "create-tcp-socket"
+    (import "m" "mem" (memory 1))
+    (import "p" "create-tcp-socket"
       (func $create-tcp-socket
-        (param i32)
-        (result i32 i32)
+        (param i32 i32)
       )
     )
-    (import "" "drop-tcp-socket"
+    (import "p" "drop-tcp-socket"
       (func $drop-tcp-socket (param i32))
     )
 
@@ -73,9 +84,10 @@
       (local $tag i32)
       (local $payload i32)
 
-      (call $create-tcp-socket (i32.const 0))
-      (local.set $payload)
-      (local.set $tag)
+      ;; address-family=ipv4, indirect result area at offset 0.
+      (call $create-tcp-socket (i32.const 0) (i32.const 0))
+      (local.set $tag (i32.load8_u (i32.const 0)))
+      (local.set $payload (i32.load (i32.const 4)))
 
       (if (result i32)
         (i32.eqz (local.get $tag))
@@ -92,7 +104,8 @@
 
   (core instance $m
     (instantiate $M
-      (with "" (instance
+      (with "m" (instance $memory))
+      (with "p" (instance
         (export "create-tcp-socket" (func $create-tcp-socket))
         (export "drop-tcp-socket" (func $drop-tcp-socket))
       ))
