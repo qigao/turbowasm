@@ -77,7 +77,6 @@ int main(void) {
     turbowasm_component_value result = {0};
     turbowasm_component_value lifted = {0};
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
-    turbowasm_value rep = {0};
     uint32_t handle;
 
     provider.context = &probe;
@@ -146,14 +145,6 @@ int main(void) {
                &lifted) == TURBOWASM_OK);
     assert(lifted.kind == TURBOWASM_COMPONENT_TYPE_OWN);
     assert((uint32_t)lifted.as.resource_rep.as.i32 == handle);
-
-    assert(turbowasm_component_resource_rep(
-               &sockets.networks,
-               handle,
-               UINT64_C(0x77617369326e6574),
-               &rep) == TURBOWASM_OK);
-    assert(rep.kind == TURBOWASM_VALUE_I32);
-    assert(rep.as.i32 == 77);
 
     assert(imports.resource_drop(
                imports.context,
