@@ -24,6 +24,68 @@ static turbowasm_status monotonic_now(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status socket_poll_ready(
+    void *context,
+    turbowasm_value rep,
+    bool *out_ready) {
+    (void)context;
+    (void)rep;
+    if (out_ready == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    *out_ready = true;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status socket_poll_drop(
+    void *context,
+    turbowasm_value rep) {
+    (void)context;
+    (void)rep;
+    return TURBOWASM_OK;
+}
+
+static void socket_stream_drop(
+    void *context,
+    turbowasm_value rep) {
+    (void)context;
+    (void)rep;
+}
+
+static turbowasm_status socket_instance_network(
+    void *context,
+    turbowasm_value *out_rep) {
+    (void)context;
+    if (out_rep == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    out_rep->kind = TURBOWASM_VALUE_I32;
+    out_rep->as.i32 = 1;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status socket_drop(
+    void *context,
+    turbowasm_value rep) {
+    (void)context;
+    (void)rep;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status socket_tcp_create(
+    void *context,
+    turbowasm_wasi02_ip_address_family family,
+    turbowasm_value *out_rep,
+    turbowasm_wasi02_socket_error *out_error) {
+    (void)context;
+    if (out_rep == NULL || out_error == NULL ||
+        (family != TURBOWASM_WASI02_IP_ADDRESS_IPV4 &&
+         family != TURBOWASM_WASI02_IP_ADDRESS_IPV6))
+        return TURBOWASM_INVALID_ARGUMENT;
+    out_rep->kind = TURBOWASM_VALUE_I32;
+    out_rep->as.i32 = 2;
+    *out_error = TURBOWASM_WASI02_SOCKET_ERROR_NONE;
+    return TURBOWASM_OK;
+}
+
 static const uint8_t monotonic_component[] = {
     0x00,0x61,0x73,0x6d,0x0d,0x00,0x01,0x00,
     0x01,0x23,
@@ -85,6 +147,29 @@ int main(void) {
     probe.value = UINT64_C(987654321);
     config.provider.context = &probe;
     config.provider.monotonic_clock_now = monotonic_now;
+
+    config.poll.ready = socket_poll_ready;
+    config.poll.drop = socket_poll_drop;
+    config.pollable_capacity = 4u;
+    config.streams.input_drop = socket_stream_drop;
+    config.streams.output_drop = socket_stream_drop;
+    config.stream_resource_capacity = 4u;
+    config.sockets.instance_network = socket_instance_network;
+    config.sockets.network_drop = socket_drop;
+    config.sockets.tcp_create = socket_tcp_create;
+    config.sockets.tcp_drop = socket_drop;
+    config.socket_network_resource_capacity = 2u;
+    config.tcp_socket_resource_capacity = 4u;
+
+    {
+        turbowasm_wasi02 invalid = {0};
+        turbowasm_wasi02_config half = config;
+        half.tcp_socket_resource_capacity = 0u;
+        assert(turbowasm_wasi02_init(
+                   &invalid, &half, NULL) ==
+               TURBOWASM_INVALID_ARGUMENT);
+        assert(invalid.impl == NULL);
+    }
 
     assert(turbowasm_wasi02_init(
                &wasi02, &config, NULL) == TURBOWASM_OK);
