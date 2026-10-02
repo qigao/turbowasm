@@ -39,12 +39,24 @@ turbowasm_status turbowasm_wasi02_native_io_poll_destroy(
 
 /*
  * Register one active NativeIO request and return an opaque provider rep for
- * turbowasm_wasi02_pollable_new(). Duplicate active request identities are
- * rejected.
+ * turbowasm_wasi02_pollable_new(). Multiple logical pollables may share the
+ * same generation-safe request identity; one terminal completion fans out to
+ * every alias.
  */
 turbowasm_status turbowasm_wasi02_native_io_poll_register_request(
     turbowasm_wasi02_native_io_poll *adapter,
     native_io_request request,
+    turbowasm_value *out_provider_rep);
+
+/*
+ * Allocate one logical pollable that is already terminal/ready.
+ *
+ * This carries no NativeIO request identity and never owns cancellation.
+ * It is used when the provider already holds the terminal capability state
+ * (for example an accepted child waiting to be consumed).
+ */
+turbowasm_status turbowasm_wasi02_native_io_poll_register_ready(
+    turbowasm_wasi02_native_io_poll *adapter,
     turbowasm_value *out_provider_rep);
 
 /* Populate the generic poll provider callbacks backed by this adapter. */
