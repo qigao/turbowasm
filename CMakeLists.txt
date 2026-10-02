@@ -392,6 +392,7 @@ if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
     src/wasi02_provider.c
     src/wasi02_poll.c
     src/wasi02_streams.c
+    src/wasi02_sockets.c
     src/wasi02_exec.c)
 
   if(TARGET TurboWasm::WASI)
