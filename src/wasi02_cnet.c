@@ -801,8 +801,7 @@ turbowasm_status turbowasm_wasi02_cnet_init(
     uint32_t i;
 
     if (adapter == NULL || adapter->impl != NULL ||
-        config == NULL || config->socket_capacity == 0u ||
-        config->socket_capacity > UINT32_MAX)
+        config == NULL || config->socket_capacity == 0u)
         return TURBOWASM_INVALID_ARGUMENT;
 
     impl = (tw_cnet_impl *)calloc(1u, sizeof(*impl));
