@@ -15,6 +15,8 @@ option(TURBOWASM_ENABLE_COMPONENT
   "Build installed synchronous Component Model façade" ON)
 option(TURBOWASM_ENABLE_WASI02_ADAPTER
   "Build experimental WASI 0.2 typed Component capability layer" ON)
+option(TURBOWASM_ENABLE_WASI02_CNET_ADAPTER
+  "Build optional released-Salts CNet WASI 0.2 TCP control-plane provider" ON)
 option(TURBOWASM_ENABLE_CFLOW_ADAPTER "Build optional CFlow execution adapter" ON)
 option(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER
   "Build optional Salts NativeIO host-wait adapter" ON)
@@ -283,6 +285,38 @@ if(TARGET turbowasm_wasi02_core AND
     target_compile_options(turbowasm_wasi02_sockets_core PRIVATE /W4)
   else()
     target_compile_options(turbowasm_wasi02_sockets_core PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
+if(TURBOWASM_ENABLE_WASI02_CNET_ADAPTER)
+  if(NOT TARGET turbowasm_wasi02_sockets_core)
+    message(FATAL_ERROR
+      "TurboWasm WASI02 CNet adapter requires the WASI02 sockets core")
+  endif()
+  if(NOT TARGET Salts::CNet)
+    message(FATAL_ERROR
+      "TurboWasm WASI02 CNet adapter requires a released Salts SDK exporting Salts::CNet")
+  endif()
+
+  # #393 S3 concrete provider stays separate from the provider-neutral
+  # TurboWasm::WASI02 target. This slice owns only the CNet TCP control plane;
+  # data-plane streams/pollables are added separately.
+  add_library(turbowasm_wasi02_cnet_core STATIC
+    src/wasi02_cnet.c)
+  target_compile_features(turbowasm_wasi02_cnet_core PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02_cnet_core
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(turbowasm_wasi02_cnet_core
+    PRIVATE
+      turbowasm_wasi02_sockets_core
+      Salts::CNet)
+  if(MSVC)
+    target_compile_options(turbowasm_wasi02_cnet_core PRIVATE /W4)
+  else()
+    target_compile_options(turbowasm_wasi02_cnet_core PRIVATE
       -Wall -Wextra -Wpedantic)
   endif()
 endif()
