@@ -278,7 +278,6 @@ if(TARGET turbowasm_wasi02_core AND
       turbowasm_wasi02_core
       turbowasm_wasi02_poll_core
       turbowasm_wasi02_streams_core
-      turbowasm_wasi02_sockets_core
       TurboWasm::Component)
   if(MSVC)
     target_compile_options(turbowasm_wasi02_sockets_core PRIVATE /W4)
@@ -375,6 +374,7 @@ if(TARGET turbowasm_wasi02_core AND
       turbowasm_wasi02_fs_core
       turbowasm_wasi02_poll_core
       turbowasm_wasi02_streams_core
+      turbowasm_wasi02_sockets_core
       TurboWasm::Component)
   if(MSVC)
     target_compile_options(turbowasm_wasi02_exec_core PRIVATE /W4)
