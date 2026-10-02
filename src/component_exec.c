@@ -2500,3 +2500,144 @@ turbowasm_status turbowasm_component_exec_invoke_export(
 
     return TURBOWASM_INVALID_ARGUMENT;
 }
+
+
+turbowasm_status turbowasm_component_exec_call_create(
+    turbowasm_component_exec_call *call,
+    const turbowasm_component_exec *exec,
+    const uint8_t *name,
+    uint32_t name_size,
+    const turbowasm_component_value *arguments,
+    size_t argument_count) {
+    uint32_t i;
+
+    if (call == NULL || call->initialized ||
+        exec == NULL || !exec->initialized ||
+        exec->binary == NULL ||
+        (name_size != 0u && name == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    for (i = 0u; i < exec->binary->export_count; ++i) {
+        const turbowasm_component_export *export_desc =
+            &exec->binary->exports[i];
+
+        if (export_desc->kind !=
+                TURBOWASM_COMPONENT_EXTERN_FUNCTION ||
+            !component_name_equal(
+                export_desc->name, name, name_size))
+            continue;
+
+        {
+            uint32_t adapter_index;
+            turbowasm_status status;
+
+            if (export_desc->item_index >= exec->function_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            adapter_index =
+                exec->function_adapter_indices[
+                    export_desc->item_index];
+            if (adapter_index == UINT32_MAX ||
+                adapter_index >= exec->adapter_count)
+                return TURBOWASM_MALFORMED_MODULE;
+
+            status = turbowasm_component_core_execution_create(
+                &call->core,
+                &exec->functions[adapter_index],
+                arguments,
+                argument_count);
+            if (status != TURBOWASM_OK)
+                return status;
+
+            call->initialized = true;
+            return TURBOWASM_OK;
+        }
+    }
+
+    return TURBOWASM_INVALID_ARGUMENT;
+}
+
+void turbowasm_component_exec_call_destroy(
+    turbowasm_component_exec_call *call) {
+    if (call == NULL)
+        return;
+    if (call->initialized)
+        turbowasm_component_core_execution_destroy(
+            &call->core);
+    memset(call, 0, sizeof(*call));
+}
+
+turbowasm_status turbowasm_component_exec_call_resume(
+    turbowasm_component_exec_call *call,
+    const turbowasm_execution_options *options) {
+    if (call == NULL || !call->initialized)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_component_core_execution_resume(
+        &call->core, options);
+}
+
+turbowasm_execution_state turbowasm_component_exec_call_state_get(
+    const turbowasm_component_exec_call *call) {
+    return call != NULL && call->initialized
+        ? turbowasm_component_core_execution_state_get(
+              &call->core)
+        : TURBOWASM_EXECUTION_FAILED;
+}
+
+turbowasm_yield_reason turbowasm_component_exec_call_yield_reason_get(
+    const turbowasm_component_exec_call *call) {
+    return call != NULL && call->initialized
+        ? turbowasm_component_core_execution_yield_reason_get(
+              &call->core)
+        : TURBOWASM_YIELD_NONE;
+}
+
+bool turbowasm_component_exec_call_pending_host_wait(
+    const turbowasm_component_exec_call *call,
+    turbowasm_host_wait *out_wait) {
+    return call != NULL && call->initialized &&
+        turbowasm_component_core_execution_pending_host_wait(
+            &call->core, out_wait);
+}
+
+turbowasm_status turbowasm_component_exec_call_complete_host_wait(
+    turbowasm_component_exec_call *call,
+    turbowasm_host_wait wait,
+    int status) {
+    if (call == NULL || !call->initialized)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_component_core_execution_complete_host_wait(
+        &call->core, wait, status);
+}
+
+turbowasm_status turbowasm_component_exec_call_terminal_status(
+    const turbowasm_component_exec_call *call) {
+    return call != NULL && call->initialized
+        ? turbowasm_component_core_execution_terminal_status(
+              &call->core)
+        : TURBOWASM_INVALID_ARGUMENT;
+}
+
+turbowasm_trap turbowasm_component_exec_call_trap(
+    const turbowasm_component_exec_call *call) {
+    return call != NULL && call->initialized
+        ? turbowasm_component_core_execution_trap(
+              &call->core)
+        : TURBOWASM_TRAP_NONE;
+}
+
+size_t turbowasm_component_exec_call_result_count(
+    const turbowasm_component_exec_call *call) {
+    return call != NULL && call->initialized
+        ? turbowasm_component_core_execution_result_count(
+              &call->core)
+        : 0u;
+}
+
+turbowasm_status turbowasm_component_exec_call_take_result(
+    turbowasm_component_exec_call *call,
+    turbowasm_component_value *out_result) {
+    if (call == NULL || !call->initialized)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_component_core_execution_take_result(
+        &call->core, out_result);
+}
