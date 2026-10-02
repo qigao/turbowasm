@@ -266,13 +266,25 @@ static uint64_t run_integer_fixture(
     assert(status == TURBOWASM_OK);
     assert(turbowasm_wasi02_component_instance_create(
                &instance, &component, wasi02) == TURBOWASM_OK);
-    assert(turbowasm_component_instance_invoke(
-               &instance,
-               run_name(),
-               NULL, 0u,
-               &result, 1u,
-               &result_count,
-               &trap) == TURBOWASM_OK);
+    status = turbowasm_component_instance_invoke(
+        &instance,
+        run_name(),
+        NULL, 0u,
+        &result, 1u,
+        &result_count,
+        &trap);
+    if (status != TURBOWASM_OK) {
+        fprintf(
+            stderr,
+            "WASI02 toolchain fixture %s invoke failed: %d (%s), "
+            "trap=%d, results=%zu\n",
+            label,
+            (int)status,
+            turbowasm_status_string(status),
+            (int)trap,
+            result_count);
+    }
+    assert(status == TURBOWASM_OK);
     assert(trap == TURBOWASM_TRAP_NONE);
     assert(result_count == 1u);
     assert(result.kind == expected_kind);
