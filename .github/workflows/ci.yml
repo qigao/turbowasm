@@ -125,17 +125,6 @@ jobs:
           if errorlevel 1 exit /b 1
           cmake --build build\turbowasm-windows --parallel 2
           if errorlevel 1 exit /b 1
-          echo === Salts SDK runtime DLLs ===
-          dir /s /b "%SALTS_ROOT%\*.dll"
-          echo === CNet control test PE dependencies ===
-          dumpbin /dependents build\turbowasm-windows\tests\turbowasm_wasi02_cnet_control_test.exe
-          if errorlevel 1 exit /b 1
-          echo === Released CNet DLL dependencies ===
-          dumpbin /dependents "%SALTS_ROOT%\bin\cnet.dll"
-          if errorlevel 1 exit /b 1
-          echo === Released Salts DLL dependencies ===
-          dumpbin /dependents "%SALTS_ROOT%\bin\salts.dll"
-          if errorlevel 1 exit /b 1
           ctest --test-dir build\turbowasm-windows --no-tests=error --output-on-failure
           if errorlevel 1 exit /b 1
           cmake --install build\turbowasm-windows
