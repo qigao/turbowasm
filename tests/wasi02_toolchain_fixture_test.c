@@ -294,28 +294,7 @@ static uint64_t run_integer_fixture(
                 diagnostic_probe->socket_network_calls,
                 diagnostic_probe->socket_network_drop_calls);
         }
-        if (strcmp(label, "socket-create-tcp") == 0) {
-            turbowasm_component_instance_public_impl *internal =
-                turbowasm_component_instance_public_impl_get(&instance);
-            uint8_t bytes[8] = {0};
-            if (internal != NULL &&
-                internal->exec.core_instance_count != 0u &&
-                internal->exec.core_instances[0].impl != NULL &&
-                turbowasm_instance_memory_read_bytes(
-                    (turbowasm_instance_impl *)
-                        internal->exec.core_instances[0].impl,
-                    0u, 0u, 0u, bytes, sizeof(bytes)) == TURBOWASM_OK) {
-                fprintf(
-                    stderr,
-                    "socket indirect result bytes:"
-                    " %02x %02x %02x %02x"
-                    " %02x %02x %02x %02x\n",
-                    (unsigned)bytes[0], (unsigned)bytes[1],
-                    (unsigned)bytes[2], (unsigned)bytes[3],
-                    (unsigned)bytes[4], (unsigned)bytes[5],
-                    (unsigned)bytes[6], (unsigned)bytes[7]);
-            }
-        }
+
     }
     assert(status == TURBOWASM_OK);
     assert(trap == TURBOWASM_TRAP_NONE);
