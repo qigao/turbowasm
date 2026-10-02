@@ -435,9 +435,41 @@ static void test_shared_request_cancels_only_last_alias(void) {
     backend.impl = NULL;
 }
 
+static void test_immediately_ready_pollable_never_cancels(void) {
+    cancel_probe cancel = {0};
+    native_io_backend backend = {0};
+    turbowasm_wasi02_native_io_poll native_poll = {0};
+    turbowasm_wasi02_poll_provider provider = {0};
+    turbowasm_value rep = {0};
+    bool ready = false;
+
+    cancel.status = SALTS_OK;
+    backend.impl = &cancel;
+
+    assert(turbowasm_wasi02_native_io_poll_init(
+               &native_poll, &backend,
+               2u, 1u, 2u, fake_cancel) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_native_io_poll_provider(
+               &native_poll, &provider) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_native_io_poll_register_ready(
+               &native_poll, &rep) == TURBOWASM_OK);
+
+    assert(provider.ready(
+               provider.context, rep, &ready) == TURBOWASM_OK);
+    assert(ready);
+    assert(provider.drop(
+               provider.context, rep) == TURBOWASM_OK);
+    assert(cancel.calls == 0u);
+
+    assert(turbowasm_wasi02_native_io_poll_destroy(
+               &native_poll) == TURBOWASM_OK);
+    backend.impl = NULL;
+}
+
 int main(void) {
     test_native_io_terminal_routes_one_wait_any();
     test_shared_request_fans_out_terminal();
     test_shared_request_cancels_only_last_alias();
+    test_immediately_ready_pollable_never_cancels();
     return 0;
 }
