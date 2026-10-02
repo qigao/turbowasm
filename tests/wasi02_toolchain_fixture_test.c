@@ -29,6 +29,8 @@ typedef struct fixture_probe {
 
     uint32_t socket_network_calls;
     uint32_t socket_network_drop_calls;
+    uint32_t socket_tcp_create_calls;
+    uint32_t socket_tcp_drop_calls;
 } fixture_probe;
 
 static turbowasm_status monotonic_now(
@@ -156,11 +158,12 @@ static turbowasm_status socket_tcp_create(
     turbowasm_wasi02_ip_address_family family,
     turbowasm_value *out_rep,
     turbowasm_wasi02_socket_error *out_error) {
-    (void)context;
-    if (out_rep == NULL || out_error == NULL ||
+    fixture_probe *probe = (fixture_probe *)context;
+    if (probe == NULL || out_rep == NULL || out_error == NULL ||
         (family != TURBOWASM_WASI02_IP_ADDRESS_IPV4 &&
          family != TURBOWASM_WASI02_IP_ADDRESS_IPV6))
         return TURBOWASM_INVALID_ARGUMENT;
+    ++probe->socket_tcp_create_calls;
     out_rep->kind = TURBOWASM_VALUE_I32;
     out_rep->as.i32 = 100;
     *out_error = TURBOWASM_WASI02_SOCKET_ERROR_NONE;
@@ -170,8 +173,12 @@ static turbowasm_status socket_tcp_create(
 static turbowasm_status socket_tcp_drop(
     void *context,
     turbowasm_value rep) {
-    (void)context;
-    (void)rep;
+    fixture_probe *probe = (fixture_probe *)context;
+    if (probe == NULL ||
+        rep.kind != TURBOWASM_VALUE_I32 ||
+        rep.as.i32 != 100)
+        return TURBOWASM_INVALID_ARGUMENT;
+    ++probe->socket_tcp_drop_calls;
     return TURBOWASM_OK;
 }
 
@@ -402,6 +409,12 @@ int main(void) {
                turbowasm_wasi02_fixture_socket_instance_network,
                turbowasm_wasi02_fixture_socket_instance_network_size,
                TURBOWASM_COMPONENT_HOST_U32) == 1u);
+    assert(run_integer_fixture(
+               &wasi02,
+               "socket-create-tcp",
+               turbowasm_wasi02_fixture_socket_create_tcp,
+               turbowasm_wasi02_fixture_socket_create_tcp_size,
+               TURBOWASM_COMPONENT_HOST_U32) == 1u);
 
     assert(probe.clock_calls == 1u);
     assert(probe.random_calls == 1u);
@@ -416,6 +429,8 @@ int main(void) {
 
     assert(probe.socket_network_calls == 1u);
     assert(probe.socket_network_drop_calls == 1u);
+    assert(probe.socket_tcp_create_calls == 1u);
+    assert(probe.socket_tcp_drop_calls == 1u);
 
     assert(turbowasm_wasi02_destroy(
                &wasi02) == TURBOWASM_OK);
