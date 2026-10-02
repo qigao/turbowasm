@@ -337,6 +337,25 @@ if(TARGET turbowasm_wasi02_sockets_core)
            COMMAND turbowasm_wasi02_tcp_state_test)
 endif()
 
+if(TARGET turbowasm_wasi02_cnet_core)
+  add_executable(turbowasm_wasi02_cnet_control_test
+    wasi02_cnet_control_test.c)
+  target_link_libraries(turbowasm_wasi02_cnet_control_test
+    PRIVATE
+      turbowasm_wasi02_cnet_core
+      Salts::CNet)
+  target_include_directories(turbowasm_wasi02_cnet_control_test
+    PRIVATE
+      "${PROJECT_SOURCE_DIR}/src"
+      "${PROJECT_SOURCE_DIR}/include")
+  set_target_properties(turbowasm_wasi02_cnet_control_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi02_cnet_control_test
+           COMMAND turbowasm_wasi02_cnet_control_test)
+endif()
+
 set(_turbowasm_wasi02_fixture_dir
   "${PROJECT_SOURCE_DIR}/tests/wasi02/fixtures/generated")
 if(TARGET turbowasm_wasi02)
