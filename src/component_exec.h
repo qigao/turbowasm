@@ -202,4 +202,52 @@ turbowasm_status turbowasm_component_exec_invoke_export(
     turbowasm_component_value *out_result,
     turbowasm_trap *trap);
 
+typedef struct turbowasm_component_exec_call {
+    turbowasm_component_core_execution core;
+    bool initialized;
+} turbowasm_component_exec_call;
+
+turbowasm_status turbowasm_component_exec_call_create(
+    turbowasm_component_exec_call *call,
+    const turbowasm_component_exec *exec,
+    const uint8_t *name,
+    uint32_t name_size,
+    const turbowasm_component_value *arguments,
+    size_t argument_count);
+
+void turbowasm_component_exec_call_destroy(
+    turbowasm_component_exec_call *call);
+
+turbowasm_status turbowasm_component_exec_call_resume(
+    turbowasm_component_exec_call *call,
+    const turbowasm_execution_options *options);
+
+turbowasm_execution_state turbowasm_component_exec_call_state_get(
+    const turbowasm_component_exec_call *call);
+
+turbowasm_yield_reason turbowasm_component_exec_call_yield_reason_get(
+    const turbowasm_component_exec_call *call);
+
+bool turbowasm_component_exec_call_pending_host_wait(
+    const turbowasm_component_exec_call *call,
+    turbowasm_host_wait *out_wait);
+
+turbowasm_status turbowasm_component_exec_call_complete_host_wait(
+    turbowasm_component_exec_call *call,
+    turbowasm_host_wait wait,
+    int status);
+
+turbowasm_status turbowasm_component_exec_call_terminal_status(
+    const turbowasm_component_exec_call *call);
+
+turbowasm_trap turbowasm_component_exec_call_trap(
+    const turbowasm_component_exec_call *call);
+
+size_t turbowasm_component_exec_call_result_count(
+    const turbowasm_component_exec_call *call);
+
+turbowasm_status turbowasm_component_exec_call_take_result(
+    turbowasm_component_exec_call *call,
+    turbowasm_component_value *out_result);
+
 #endif /* TURBOWASM_COMPONENT_EXEC_H */
