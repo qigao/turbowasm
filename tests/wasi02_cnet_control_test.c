@@ -182,6 +182,25 @@ static void test_cnet_capacity_is_bounded(void) {
                &adapter) == TURBOWASM_INVALID_ARGUMENT);
     assert(provider.tcp_drop(
                provider.context, first) == TURBOWASM_OK);
+
+    /*
+     * Reuse the sole bounded slot and prove the generation changed. The old
+     * provider rep must remain stale even though the physical slot is active
+     * again.
+     */
+    second = (turbowasm_value){0};
+    assert(provider.tcp_create(
+               provider.context,
+               TURBOWASM_WASI02_IP_ADDRESS_IPV4,
+               &second, &error) == TURBOWASM_OK);
+    assert(error == TURBOWASM_WASI02_SOCKET_ERROR_NONE);
+    assert(second.kind == TURBOWASM_VALUE_I64);
+    assert(second.as.i64 != first.as.i64);
+    assert(provider.tcp_drop(
+               provider.context, first) == TURBOWASM_TRAPPED);
+    assert(provider.tcp_drop(
+               provider.context, second) == TURBOWASM_OK);
+
     assert(turbowasm_wasi02_cnet_destroy(
                &adapter) == TURBOWASM_OK);
 }
