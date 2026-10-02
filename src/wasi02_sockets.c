@@ -1,6 +1,8 @@
 #include "wasi02_sockets.h"
 
 #include "runtime_alloc.h"
+#include "wasi02_component.h"
+#include "wasi02_descriptor.h"
 
 #include <limits.h>
 #include <string.h>
@@ -665,7 +667,8 @@ static turbowasm_status call_instance_network(
     uint32_t resource = 0u;
     turbowasm_status status;
 
-    if (argument_count != 0u || arguments != NULL)
+    (void)arguments;
+    if (argument_count != 0u)
         return TURBOWASM_TYPE_MISMATCH;
 
     status = sockets->provider.instance_network(
@@ -1647,4 +1650,730 @@ turbowasm_status turbowasm_wasi02_sockets_call(
             arguments, argument_count, out_result);
 
     return TURBOWASM_UNSUPPORTED;
+}
+
+
+static bool socket_component_name_is(
+    turbowasm_component_name name,
+    const char *text) {
+    size_t size;
+
+    if (text == NULL)
+        return false;
+    size = strlen(text);
+    return name.size == size &&
+           (size == 0u ||
+            (name.bytes != NULL &&
+             memcmp(name.bytes, text, size) == 0));
+}
+
+static const turbowasm_wasi02_type_desc *socket_wasi_type_base(
+    const turbowasm_wasi02_type_desc *type) {
+    uint32_t depth = 0u;
+
+    while (type != NULL &&
+           type->kind == TURBOWASM_WASI02_TYPE_ALIAS) {
+        if (++depth > 32u)
+            return NULL;
+        type = type->as.alias.target;
+    }
+    return type;
+}
+
+static bool socket_wasi_type_contains_resource(
+    const turbowasm_wasi02_type_desc *type,
+    uint32_t depth) {
+    const turbowasm_wasi02_type_desc *base;
+    uint32_t i;
+
+    if (depth > 64u)
+        return true;
+    base = socket_wasi_type_base(type);
+    if (base == NULL)
+        return true;
+
+    switch (base->kind) {
+        case TURBOWASM_WASI02_TYPE_RESOURCE:
+            return true;
+        case TURBOWASM_WASI02_TYPE_LIST:
+            return socket_wasi_type_contains_resource(
+                base->as.list.element, depth + 1u);
+        case TURBOWASM_WASI02_TYPE_TUPLE:
+            for (i = 0u; i < base->as.tuple.count; ++i) {
+                if (socket_wasi_type_contains_resource(
+                        base->as.tuple.elements[i], depth + 1u))
+                    return true;
+            }
+            return false;
+        case TURBOWASM_WASI02_TYPE_RECORD:
+            for (i = 0u; i < base->as.record.count; ++i) {
+                if (socket_wasi_type_contains_resource(
+                        base->as.record.fields[i].type, depth + 1u))
+                    return true;
+            }
+            return false;
+        case TURBOWASM_WASI02_TYPE_OPTION:
+            return socket_wasi_type_contains_resource(
+                base->as.option.payload, depth + 1u);
+        case TURBOWASM_WASI02_TYPE_RESULT:
+            return (base->as.result.ok != NULL &&
+                    socket_wasi_type_contains_resource(
+                        base->as.result.ok, depth + 1u)) ||
+                   (base->as.result.error != NULL &&
+                    socket_wasi_type_contains_resource(
+                        base->as.result.error, depth + 1u));
+        case TURBOWASM_WASI02_TYPE_VARIANT:
+            for (i = 0u; i < base->as.variant.count; ++i) {
+                if (base->as.variant.cases[i].payload != NULL &&
+                    socket_wasi_type_contains_resource(
+                        base->as.variant.cases[i].payload,
+                        depth + 1u))
+                    return true;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
+static const turbowasm_component_type *socket_component_type_from_ref(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    turbowasm_component_type *inline_storage) {
+    if (graph == NULL || inline_storage == NULL)
+        return NULL;
+    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE) {
+        memset(inline_storage, 0, sizeof(*inline_storage));
+        inline_storage->kind = ref.as.inline_type;
+        return inline_storage;
+    }
+    if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return NULL;
+    return turbowasm_component_type_graph_get(
+        graph, ref.as.indexed);
+}
+
+static bool socket_bind_identity(
+    uint64_t *identity,
+    bool *bound,
+    uint64_t candidate) {
+    if (identity == NULL || bound == NULL ||
+        candidate == 0u)
+        return false;
+    if (*bound && *identity != candidate)
+        return false;
+    *identity = candidate;
+    *bound = true;
+    return true;
+}
+
+static bool socket_bind_resource_type(
+    turbowasm_wasi02_sockets *sockets,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_wasi02_type_desc *wasi_type,
+    turbowasm_component_type_kind expected_handle_kind) {
+    const turbowasm_wasi02_type_desc *base =
+        socket_wasi_type_base(wasi_type);
+    const turbowasm_component_type *handle_type;
+    const turbowasm_component_type *resource_type;
+    uint64_t identity;
+
+    if (sockets == NULL || graph == NULL || base == NULL ||
+        base->kind != TURBOWASM_WASI02_TYPE_RESOURCE ||
+        ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return false;
+
+    handle_type = turbowasm_component_type_graph_get(
+        graph, ref.as.indexed);
+    if (handle_type == NULL ||
+        handle_type->kind != expected_handle_kind)
+        return false;
+
+    resource_type = turbowasm_component_type_graph_get(
+        graph, handle_type->as.handle.resource_type);
+    if (resource_type == NULL ||
+        resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE ||
+        resource_type->as.resource.identity == 0u)
+        return false;
+    identity = resource_type->as.resource.identity;
+
+    if (strcmp(base->as.resource.package_name, "wasi:sockets") == 0 &&
+        strcmp(base->as.resource.interface_name, "network") == 0 &&
+        strcmp(base->as.resource.resource_name, "network") == 0)
+        return socket_bind_identity(
+            &sockets->component_network_identity,
+            &sockets->component_network_identity_bound,
+            identity);
+
+    if (strcmp(base->as.resource.package_name, "wasi:sockets") == 0 &&
+        strcmp(base->as.resource.interface_name, "tcp") == 0 &&
+        strcmp(base->as.resource.resource_name, "tcp-socket") == 0)
+        return socket_bind_identity(
+            &sockets->component_tcp_identity,
+            &sockets->component_tcp_identity_bound,
+            identity);
+
+    if (strcmp(base->as.resource.package_name, "wasi:io") == 0 &&
+        strcmp(base->as.resource.interface_name, "streams") == 0 &&
+        strcmp(base->as.resource.resource_name, "input-stream") == 0) {
+        if (sockets->streams == NULL ||
+            !sockets->streams->initialized)
+            return false;
+        return socket_bind_identity(
+            &sockets->streams->component_input_identity,
+            &sockets->streams->component_input_identity_bound,
+            identity);
+    }
+
+    if (strcmp(base->as.resource.package_name, "wasi:io") == 0 &&
+        strcmp(base->as.resource.interface_name, "streams") == 0 &&
+        strcmp(base->as.resource.resource_name, "output-stream") == 0) {
+        if (sockets->streams == NULL ||
+            !sockets->streams->initialized)
+            return false;
+        return socket_bind_identity(
+            &sockets->streams->component_output_identity,
+            &sockets->streams->component_output_identity_bound,
+            identity);
+    }
+
+    if (strcmp(base->as.resource.package_name, "wasi:io") == 0 &&
+        strcmp(base->as.resource.interface_name, "poll") == 0 &&
+        strcmp(base->as.resource.resource_name, "pollable") == 0) {
+        if (sockets->poll == NULL ||
+            !sockets->poll->initialized)
+            return false;
+        return socket_bind_identity(
+            &sockets->poll->pollable_identity,
+            &sockets->poll->pollable_identity_bound,
+            identity);
+    }
+
+    return false;
+}
+
+static bool socket_component_type_matches(
+    turbowasm_wasi02_sockets *sockets,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_wasi02_type_desc *wasi_type,
+    turbowasm_component_type_kind resource_handle_kind,
+    uint32_t depth) {
+    turbowasm_component_type inline_storage;
+    const turbowasm_component_type *type;
+    const turbowasm_wasi02_type_desc *base;
+    uint32_t i;
+
+    if (depth > 64u || graph == NULL)
+        return false;
+
+    base = socket_wasi_type_base(wasi_type);
+    if (base == NULL)
+        return false;
+    if (!socket_wasi_type_contains_resource(base, 0u))
+        return turbowasm_wasi02_component_type_matches(
+            graph, ref, base);
+
+    type = socket_component_type_from_ref(
+        graph, ref, &inline_storage);
+    if (type == NULL)
+        return false;
+
+    switch (base->kind) {
+        case TURBOWASM_WASI02_TYPE_RESOURCE:
+            return socket_bind_resource_type(
+                sockets, graph, ref, base,
+                resource_handle_kind);
+
+        case TURBOWASM_WASI02_TYPE_LIST:
+            return type->kind == TURBOWASM_COMPONENT_TYPE_LIST &&
+                   socket_component_type_matches(
+                       sockets, graph,
+                       type->as.list.element_type,
+                       base->as.list.element,
+                       resource_handle_kind,
+                       depth + 1u);
+
+        case TURBOWASM_WASI02_TYPE_TUPLE:
+            if (type->kind != TURBOWASM_COMPONENT_TYPE_TUPLE ||
+                type->as.tuple.count != base->as.tuple.count)
+                return false;
+            for (i = 0u; i < base->as.tuple.count; ++i) {
+                if (!socket_component_type_matches(
+                        sockets, graph,
+                        type->as.tuple.elements[i],
+                        base->as.tuple.elements[i],
+                        resource_handle_kind,
+                        depth + 1u))
+                    return false;
+            }
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_RECORD:
+            if (type->kind != TURBOWASM_COMPONENT_TYPE_RECORD ||
+                type->as.record.count != base->as.record.count)
+                return false;
+            for (i = 0u; i < base->as.record.count; ++i) {
+                const turbowasm_component_record_field *field =
+                    &type->as.record.fields[i];
+                const turbowasm_wasi02_record_field *wasi_field =
+                    &base->as.record.fields[i];
+                size_t name_size;
+
+                if (wasi_field->name == NULL)
+                    return false;
+                name_size = strlen(wasi_field->name);
+                if (field->name == NULL ||
+                    field->name_size != name_size ||
+                    memcmp(field->name, wasi_field->name, name_size) != 0 ||
+                    !socket_component_type_matches(
+                        sockets, graph,
+                        field->type,
+                        wasi_field->type,
+                        resource_handle_kind,
+                        depth + 1u))
+                    return false;
+            }
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_OPTION:
+            return type->kind == TURBOWASM_COMPONENT_TYPE_OPTION &&
+                   socket_component_type_matches(
+                       sockets, graph,
+                       type->as.option.payload,
+                       base->as.option.payload,
+                       resource_handle_kind,
+                       depth + 1u);
+
+        case TURBOWASM_WASI02_TYPE_RESULT:
+            if (type->kind != TURBOWASM_COMPONENT_TYPE_RESULT ||
+                type->as.result.has_ok !=
+                    (base->as.result.ok != NULL) ||
+                type->as.result.has_error !=
+                    (base->as.result.error != NULL))
+                return false;
+            if (type->as.result.has_ok &&
+                !socket_component_type_matches(
+                    sockets, graph,
+                    type->as.result.ok,
+                    base->as.result.ok,
+                    resource_handle_kind,
+                    depth + 1u))
+                return false;
+            if (type->as.result.has_error &&
+                !socket_component_type_matches(
+                    sockets, graph,
+                    type->as.result.error,
+                    base->as.result.error,
+                    resource_handle_kind,
+                    depth + 1u))
+                return false;
+            return true;
+
+        case TURBOWASM_WASI02_TYPE_VARIANT:
+            if (type->kind != TURBOWASM_COMPONENT_TYPE_VARIANT ||
+                type->as.variant.cases == NULL ||
+                base->as.variant.cases == NULL ||
+                type->as.variant.count != base->as.variant.count)
+                return false;
+            for (i = 0u; i < base->as.variant.count; ++i) {
+                const turbowasm_component_variant_case *ccase =
+                    &type->as.variant.cases[i];
+                const turbowasm_wasi02_variant_case *wcase =
+                    &base->as.variant.cases[i];
+                size_t name_size;
+
+                if (wcase->name == NULL)
+                    return false;
+                name_size = strlen(wcase->name);
+                if (ccase->name == NULL ||
+                    ccase->name_size != name_size ||
+                    memcmp(ccase->name, wcase->name, name_size) != 0 ||
+                    ccase->has_payload !=
+                        (wcase->payload != NULL))
+                    return false;
+                if (ccase->has_payload &&
+                    !socket_component_type_matches(
+                        sockets, graph,
+                        ccase->payload,
+                        wcase->payload,
+                        resource_handle_kind,
+                        depth + 1u))
+                    return false;
+            }
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+static const turbowasm_wasi02_interface_desc *
+socket_interface_by_component_name(
+    turbowasm_component_name name) {
+    if (socket_component_name_is(
+            name, "wasi:sockets/network@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:sockets", "network");
+    if (socket_component_name_is(
+            name, "wasi:sockets/tcp@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:sockets", "tcp");
+    if (socket_component_name_is(
+            name, "wasi:sockets/tcp-create-socket@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:sockets", "tcp-create-socket");
+    if (socket_component_name_is(
+            name, "wasi:sockets/instance-network@0.2.8"))
+        return turbowasm_wasi02_find_interface(
+            "wasi:sockets", "instance-network");
+    return NULL;
+}
+
+static const turbowasm_wasi02_function_desc *
+socket_function_by_component_name(
+    const turbowasm_wasi02_interface_desc *iface,
+    turbowasm_component_name name) {
+    uint32_t i;
+
+    if (iface == NULL ||
+        (name.size != 0u && name.bytes == NULL))
+        return NULL;
+
+    for (i = 0u; i < iface->function_count; ++i) {
+        const turbowasm_wasi02_function_desc *function =
+            &iface->functions[i];
+        size_t size = strlen(function->name);
+        if (size == name.size &&
+            (size == 0u ||
+             memcmp(name.bytes, function->name, size) == 0))
+            return function;
+    }
+    return NULL;
+}
+
+static bool socket_binding_matches_descriptor(
+    turbowasm_wasi02_sockets *sockets,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type_index,
+    const turbowasm_wasi02_function_desc *function) {
+    const turbowasm_component_type *function_type;
+    uint32_t i;
+
+    if (sockets == NULL || graph == NULL ||
+        function == NULL)
+        return false;
+
+    function_type = turbowasm_component_type_graph_get(
+        graph, function_type_index);
+    if (function_type == NULL ||
+        function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
+        function_type->as.function.param_count !=
+            function->param_count ||
+        function_type->as.function.has_result !=
+            (function->result != NULL))
+        return false;
+
+    for (i = 0u; i < function->param_count; ++i) {
+        if (!socket_component_type_matches(
+                sockets, graph,
+                function_type->as.function.params[i],
+                function->params[i].type,
+                TURBOWASM_COMPONENT_TYPE_BORROW,
+                0u))
+            return false;
+    }
+
+    if (function->result != NULL &&
+        !socket_component_type_matches(
+            sockets, graph,
+            function_type->as.function.result,
+            function->result,
+            TURBOWASM_COMPONENT_TYPE_OWN,
+            0u))
+        return false;
+
+    return true;
+}
+
+static bool wasi02_sockets_can_bind(
+    void *context,
+    turbowasm_component_name instance_name,
+    turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type) {
+    turbowasm_wasi02_sockets *sockets =
+        (turbowasm_wasi02_sockets *)context;
+    const turbowasm_wasi02_interface_desc *iface =
+        socket_interface_by_component_name(instance_name);
+    const turbowasm_wasi02_function_desc *function =
+        socket_function_by_component_name(
+            iface, function_name);
+
+    return sockets != NULL && sockets->initialized &&
+           socket_binding_matches_descriptor(
+               sockets, graph, function_type, function);
+}
+
+typedef enum socket_component_resource_kind {
+    SOCKET_COMPONENT_RESOURCE_NONE = 0,
+    SOCKET_COMPONENT_RESOURCE_NETWORK,
+    SOCKET_COMPONENT_RESOURCE_TCP
+} socket_component_resource_kind;
+
+static socket_component_resource_kind
+socket_component_identity_kind(
+    const turbowasm_wasi02_sockets *sockets,
+    uint64_t identity) {
+    if (sockets == NULL || identity == 0u)
+        return SOCKET_COMPONENT_RESOURCE_NONE;
+    if (sockets->component_network_identity_bound &&
+        sockets->component_network_identity == identity)
+        return SOCKET_COMPONENT_RESOURCE_NETWORK;
+    if (sockets->component_tcp_identity_bound &&
+        sockets->component_tcp_identity == identity)
+        return SOCKET_COMPONENT_RESOURCE_TCP;
+    return SOCKET_COMPONENT_RESOURCE_NONE;
+}
+
+static bool socket_imported_resource_identity(
+    turbowasm_wasi02_sockets *sockets,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type_ref,
+    turbowasm_component_type_kind *out_handle_kind,
+    socket_component_resource_kind *out_resource_kind) {
+    const turbowasm_component_type *handle_type;
+    const turbowasm_component_type *resource_type;
+    socket_component_resource_kind kind;
+
+    if (sockets == NULL || graph == NULL ||
+        type_ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return false;
+
+    handle_type = turbowasm_component_type_graph_get(
+        graph, type_ref.as.indexed);
+    if (handle_type == NULL ||
+        (handle_type->kind != TURBOWASM_COMPONENT_TYPE_OWN &&
+         handle_type->kind != TURBOWASM_COMPONENT_TYPE_BORROW))
+        return false;
+
+    resource_type = turbowasm_component_type_graph_get(
+        graph, handle_type->as.handle.resource_type);
+    if (resource_type == NULL ||
+        resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE)
+        return false;
+
+    kind = socket_component_identity_kind(
+        sockets, resource_type->as.resource.identity);
+    if (kind == SOCKET_COMPONENT_RESOURCE_NONE)
+        return false;
+
+    if (out_handle_kind != NULL)
+        *out_handle_kind = handle_type->kind;
+    if (out_resource_kind != NULL)
+        *out_resource_kind = kind;
+    return true;
+}
+
+static turbowasm_status wasi02_sockets_resource_lower(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    const turbowasm_component_value *value,
+    uint32_t *out_handle) {
+    turbowasm_wasi02_sockets *sockets =
+        (turbowasm_wasi02_sockets *)context;
+    turbowasm_component_type_kind handle_kind;
+    socket_component_resource_kind resource_kind;
+    uint32_t handle;
+    turbowasm_value rep = {0};
+    turbowasm_wasi02_tcp_slot *slot;
+
+    if (value == NULL || out_handle == NULL ||
+        !socket_imported_resource_identity(
+            sockets, graph, type,
+            &handle_kind, &resource_kind) ||
+        value->kind != handle_kind ||
+        value->as.resource_rep.kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_TYPE_MISMATCH;
+
+    handle = (uint32_t)value->as.resource_rep.as.i32;
+    if (resource_kind == SOCKET_COMPONENT_RESOURCE_NETWORK) {
+        if (turbowasm_component_resource_rep(
+                &sockets->networks,
+                handle,
+                TW_WASI02_NETWORK_ID,
+                &rep) != TURBOWASM_OK)
+            return TURBOWASM_TRAPPED;
+    } else if (tcp_slot_get(
+                   sockets, handle, &slot) != TURBOWASM_OK) {
+        return TURBOWASM_TRAPPED;
+    }
+
+    *out_handle = handle;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status wasi02_sockets_resource_lift(
+    void *context,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    uint32_t handle,
+    turbowasm_component_value *out) {
+    turbowasm_wasi02_sockets *sockets =
+        (turbowasm_wasi02_sockets *)context;
+    turbowasm_component_type_kind handle_kind;
+    socket_component_resource_kind resource_kind;
+    turbowasm_value rep = {0};
+    turbowasm_wasi02_tcp_slot *slot;
+
+    if (out == NULL ||
+        !socket_imported_resource_identity(
+            sockets, graph, type,
+            &handle_kind, &resource_kind))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    if (resource_kind == SOCKET_COMPONENT_RESOURCE_NETWORK) {
+        if (turbowasm_component_resource_rep(
+                &sockets->networks,
+                handle,
+                TW_WASI02_NETWORK_ID,
+                &rep) != TURBOWASM_OK)
+            return TURBOWASM_TRAPPED;
+    } else if (tcp_slot_get(
+                   sockets, handle, &slot) != TURBOWASM_OK) {
+        return TURBOWASM_TRAPPED;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = handle_kind;
+    out->as.resource_rep.kind = TURBOWASM_VALUE_I32;
+    out->as.resource_rep.as.i32 = (int32_t)handle;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status wasi02_sockets_resource_drop(
+    void *context,
+    uint64_t resource_identity,
+    uint32_t handle) {
+    turbowasm_wasi02_sockets *sockets =
+        (turbowasm_wasi02_sockets *)context;
+    socket_component_resource_kind kind =
+        socket_component_identity_kind(
+            sockets, resource_identity);
+
+    if (kind == SOCKET_COMPONENT_RESOURCE_NETWORK)
+        return turbowasm_wasi02_network_drop(
+            sockets, handle);
+    if (kind == SOCKET_COMPONENT_RESOURCE_TCP)
+        return turbowasm_wasi02_tcp_drop(
+            sockets, handle);
+    return TURBOWASM_TYPE_MISMATCH;
+}
+
+static turbowasm_status wasi02_sockets_invoke(
+    void *context,
+    turbowasm_host_call *call,
+    turbowasm_component_name instance_name,
+    turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_value *arguments,
+    size_t argument_count,
+    turbowasm_component_value *out_result,
+    turbowasm_trap *trap) {
+    turbowasm_wasi02_sockets *sockets =
+        (turbowasm_wasi02_sockets *)context;
+    const turbowasm_wasi02_interface_desc *iface;
+    const turbowasm_wasi02_function_desc *function;
+    turbowasm_wasi02_value
+        wasi_arguments[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {{0}};
+    turbowasm_wasi02_value wasi_result = {0};
+    size_t i;
+    turbowasm_status status = TURBOWASM_OK;
+
+    (void)call;
+
+    if (sockets == NULL || !sockets->initialized ||
+        graph == NULL || trap == NULL ||
+        !wasi02_sockets_can_bind(
+            context,
+            instance_name,
+            function_name,
+            graph,
+            function_type))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    iface = socket_interface_by_component_name(
+        instance_name);
+    function = socket_function_by_component_name(
+        iface, function_name);
+    if (iface == NULL || function == NULL ||
+        argument_count != function->param_count ||
+        argument_count >
+            TURBOWASM_COMPONENT_MAX_FLAT_PARAMS ||
+        (argument_count != 0u && arguments == NULL))
+        return TURBOWASM_TYPE_MISMATCH;
+
+    *trap = TURBOWASM_TRAP_NONE;
+
+    for (i = 0u; i < argument_count; ++i) {
+        status =
+            turbowasm_wasi02_component_value_to_wasi(
+                function->params[i].type,
+                &arguments[i],
+                &wasi_arguments[i]);
+        if (status != TURBOWASM_OK)
+            goto done;
+    }
+
+    status = turbowasm_wasi02_sockets_call(
+        sockets,
+        iface->interface_name,
+        function->name,
+        wasi_arguments,
+        argument_count,
+        &wasi_result);
+    if (status != TURBOWASM_OK)
+        goto done;
+
+    if (function->result != NULL) {
+        if (out_result == NULL) {
+            status = TURBOWASM_INVALID_ARGUMENT;
+            goto done;
+        }
+        status =
+            turbowasm_wasi02_component_value_from_wasi(
+                function->result,
+                &wasi_result,
+                out_result);
+    }
+
+done:
+    for (i = 0u; i < argument_count; ++i)
+        turbowasm_wasi02_value_destroy(
+            &wasi_arguments[i]);
+    turbowasm_wasi02_value_destroy(&wasi_result);
+    return status;
+}
+
+turbowasm_status turbowasm_wasi02_sockets_imports(
+    turbowasm_wasi02_sockets *sockets,
+    turbowasm_component_exec_imports *out_imports) {
+    if (sockets == NULL || !sockets->initialized ||
+        out_imports == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memset(out_imports, 0, sizeof(*out_imports));
+    out_imports->context = sockets;
+    out_imports->can_bind = wasi02_sockets_can_bind;
+    out_imports->invoke = wasi02_sockets_invoke;
+    out_imports->resource_lower =
+        wasi02_sockets_resource_lower;
+    out_imports->resource_lift =
+        wasi02_sockets_resource_lift;
+    out_imports->resource_drop =
+        wasi02_sockets_resource_drop;
+    return TURBOWASM_OK;
 }

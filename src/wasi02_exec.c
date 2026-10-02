@@ -10,7 +10,7 @@ turbowasm_status turbowasm_wasi02_exec_init(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
     const turbowasm_wasi02_exec_capabilities *capabilities) {
-    turbowasm_component_exec_imports sets[4];
+    turbowasm_component_exec_imports sets[5];
     size_t count = 0u;
     turbowasm_status status;
 
@@ -57,6 +57,22 @@ turbowasm_status turbowasm_wasi02_exec_init(
 
         status = turbowasm_wasi02_streams_imports(
             capabilities->streams, &sets[count]);
+        if (status != TURBOWASM_OK)
+            return status;
+        ++count;
+    }
+
+    if (capabilities->sockets != NULL) {
+        if (capabilities->streams == NULL ||
+            capabilities->poll == NULL ||
+            capabilities->sockets->streams !=
+                capabilities->streams ||
+            capabilities->sockets->poll !=
+                capabilities->poll)
+            return TURBOWASM_INVALID_ARGUMENT;
+
+        status = turbowasm_wasi02_sockets_imports(
+            capabilities->sockets, &sets[count]);
         if (status != TURBOWASM_OK)
             return status;
         ++count;

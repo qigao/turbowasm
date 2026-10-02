@@ -28,6 +28,11 @@ turbowasm_status turbowasm_wasi02_component_value_from_wasi(
     const turbowasm_wasi02_value *value,
     turbowasm_component_value *out);
 
+bool turbowasm_wasi02_component_type_matches(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref component_ref,
+    const turbowasm_wasi02_type_desc *wasi_type);
+
 turbowasm_status turbowasm_wasi02_component_imports(
     turbowasm_wasi02_provider *provider,
     turbowasm_component_exec_imports *out_imports);
