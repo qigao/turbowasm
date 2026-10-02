@@ -1214,3 +1214,516 @@ lowering_failed:
     return status;
 }
 
+
+
+typedef struct turbowasm_component_core_execution_impl {
+    const turbowasm_component_core_call_adapter *adapter;
+    const turbowasm_component_type *function;
+
+    turbowasm_component_call_resource_scope resource_scope;
+    turbowasm_component_resource_codec_context codec;
+    turbowasm_component_canonical_memory call_memory;
+
+    turbowasm_execution runtime_execution;
+    turbowasm_component_value lifted_result;
+    turbowasm_trap trap;
+    turbowasm_status terminal_status;
+
+    bool runtime_created;
+    bool started;
+    bool finalized;
+    bool result_taken;
+} turbowasm_component_core_execution_impl;
+
+static turbowasm_component_core_execution_impl *
+component_core_execution_impl_mut(
+    turbowasm_component_core_execution *execution) {
+    return execution != NULL
+        ? (turbowasm_component_core_execution_impl *)execution->impl
+        : NULL;
+}
+
+static const turbowasm_component_core_execution_impl *
+component_core_execution_impl_get(
+    const turbowasm_component_core_execution *execution) {
+    return execution != NULL
+        ? (const turbowasm_component_core_execution_impl *)execution->impl
+        : NULL;
+}
+
+static turbowasm_status component_core_execution_lower(
+    turbowasm_component_core_execution_impl *impl,
+    const turbowasm_component_value *arguments,
+    size_t argument_count,
+    turbowasm_value *core_args,
+    size_t *out_core_arg_count) {
+    const turbowasm_component_core_call_adapter *adapter;
+    size_t core_arg_count = 0u;
+    uint32_t i;
+    turbowasm_status status;
+
+    if (impl == NULL || impl->adapter == NULL ||
+        core_args == NULL || out_core_arg_count == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    adapter = impl->adapter;
+    if (argument_count != impl->function->as.function.param_count ||
+        (argument_count != 0u && arguments == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (adapter->flat_signature.params_indirect) {
+        uint64_t pointer;
+
+        status = lower_indirect_parameters(
+            adapter, &impl->call_memory, arguments, &pointer);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        status = pointer_to_core(
+            impl->call_memory.pointer_type,
+            pointer, &core_args[0]);
+        if (status != TURBOWASM_OK)
+            return status;
+        core_arg_count = 1u;
+    } else {
+        for (i = 0u; i < impl->function->as.function.param_count; ++i) {
+            turbowasm_component_type_ref ref =
+                impl->function->as.function.params[i];
+            uint32_t j;
+
+            if (type_ref_is_resource_handle(adapter->graph, ref)) {
+                uint32_t handle;
+
+                if (resource_handle_is_external(adapter->graph, ref)) {
+                    if (adapter->external_resource_lower == NULL)
+                        return TURBOWASM_UNSUPPORTED;
+                    status = adapter->external_resource_lower(
+                        adapter->external_resource_context,
+                        adapter->graph,
+                        ref,
+                        &arguments[i],
+                        &handle);
+                } else {
+                    status = canonical_resource_lower(
+                        &impl->codec,
+                        adapter->graph,
+                        ref,
+                        &arguments[i],
+                        &handle);
+                }
+                if (status != TURBOWASM_OK)
+                    return status;
+
+                if (core_arg_count >=
+                    TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS)
+                    return TURBOWASM_MALFORMED_MODULE;
+
+                core_args[core_arg_count].kind =
+                    TURBOWASM_VALUE_I32;
+                core_args[core_arg_count].as.i32 =
+                    (int32_t)handle;
+                ++core_arg_count;
+                continue;
+            }
+
+            {
+                turbowasm_value
+                    flat[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS] = {{0}};
+                uint32_t flat_count = 0u;
+
+                status =
+                    turbowasm_component_canonical_lower_flat_value(
+                        adapter->graph,
+                        ref,
+                        adapter->uses_memory
+                            ? &impl->call_memory
+                            : NULL,
+                        &arguments[i],
+                        flat,
+                        TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS,
+                        &flat_count);
+                if (status != TURBOWASM_OK)
+                    return status;
+
+                if (flat_count >
+                    TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS -
+                        core_arg_count)
+                    return TURBOWASM_MALFORMED_MODULE;
+
+                for (j = 0u; j < flat_count; ++j)
+                    core_args[core_arg_count++] = flat[j];
+            }
+        }
+    }
+
+    if (core_arg_count != adapter->flat_signature.param_count)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    *out_core_arg_count = core_arg_count;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status component_core_execution_lift(
+    turbowasm_component_core_execution_impl *impl) {
+    const turbowasm_component_core_call_adapter *adapter;
+    turbowasm_value
+        core_results[TURBOWASM_COMPONENT_MAX_FLAT_RESULTS] = {{0}};
+    size_t core_result_count;
+    size_t i;
+    turbowasm_status status;
+
+    if (impl == NULL || impl->adapter == NULL ||
+        impl->function == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    adapter = impl->adapter;
+
+    if (!resource_scope_finalize_borrows(&impl->resource_scope))
+        return TURBOWASM_TRAPPED;
+
+    core_result_count =
+        turbowasm_execution_result_count(&impl->runtime_execution);
+    if (core_result_count != adapter->flat_signature.result_count ||
+        core_result_count > TURBOWASM_COMPONENT_MAX_FLAT_RESULTS)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    for (i = 0u; i < core_result_count; ++i) {
+        const turbowasm_value *value =
+            turbowasm_execution_result_at(
+                &impl->runtime_execution, i);
+        if (value == NULL)
+            return TURBOWASM_MALFORMED_MODULE;
+        core_results[i] = *value;
+    }
+
+    if (!impl->function->as.function.has_result)
+        return TURBOWASM_OK;
+
+    if (type_ref_is_resource_handle(
+            adapter->graph,
+            impl->function->as.function.result)) {
+        if (core_result_count != 1u ||
+            core_results[0].kind != TURBOWASM_VALUE_I32)
+            return TURBOWASM_MALFORMED_MODULE;
+
+        if (resource_handle_is_external(
+                adapter->graph,
+                impl->function->as.function.result)) {
+            if (adapter->external_resource_lift == NULL)
+                return TURBOWASM_UNSUPPORTED;
+            return adapter->external_resource_lift(
+                adapter->external_resource_context,
+                adapter->graph,
+                impl->function->as.function.result,
+                (uint32_t)core_results[0].as.i32,
+                &impl->lifted_result);
+        }
+
+        return canonical_resource_lift(
+            &impl->codec,
+            adapter->graph,
+            impl->function->as.function.result,
+            (uint32_t)core_results[0].as.i32,
+            &impl->lifted_result);
+    }
+
+    if (adapter->flat_signature.results_indirect) {
+        uint64_t pointer;
+
+        status = pointer_from_core(
+            impl->call_memory.pointer_type,
+            &core_results[0], &pointer);
+        if (status != TURBOWASM_OK)
+            return status;
+
+        return turbowasm_component_canonical_lift_value(
+            adapter->graph,
+            impl->function->as.function.result,
+            &impl->call_memory,
+            pointer,
+            &impl->lifted_result);
+    }
+
+    return turbowasm_component_canonical_lift_flat_value(
+        adapter->graph,
+        impl->function->as.function.result,
+        adapter->uses_memory ? &impl->call_memory : NULL,
+        core_results,
+        (uint32_t)core_result_count,
+        &impl->lifted_result);
+}
+
+static turbowasm_status component_core_execution_finalize(
+    turbowasm_component_core_execution_impl *impl,
+    turbowasm_status runtime_status) {
+    turbowasm_status status = runtime_status;
+
+    if (impl == NULL || impl->finalized)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    impl->trap = turbowasm_execution_trap(
+        &impl->runtime_execution);
+
+    if (runtime_status != TURBOWASM_OK) {
+        resource_scope_abort_borrows(&impl->resource_scope);
+    } else {
+        status = component_core_execution_lift(impl);
+    }
+
+    resource_scope_destroy(&impl->resource_scope);
+    impl->terminal_status = status;
+    impl->finalized = true;
+    return status;
+}
+
+turbowasm_status turbowasm_component_core_execution_create(
+    turbowasm_component_core_execution *execution,
+    const turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_component_value *arguments,
+    size_t argument_count) {
+    const turbowasm_component_type *function;
+    const turbowasm_runtime_config *config;
+    turbowasm_runtime_scope alloc_scope;
+    turbowasm_component_core_execution_impl *impl = NULL;
+    turbowasm_value
+        core_args[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS] = {{0}};
+    size_t core_arg_count = 0u;
+    turbowasm_status status;
+
+    if (execution == NULL || execution->impl != NULL ||
+        adapter == NULL || !adapter->initialized)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    function = turbowasm_component_type_graph_get(
+        adapter->graph, adapter->function_type);
+    if (function == NULL ||
+        function->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
+        return TURBOWASM_MALFORMED_MODULE;
+    if (argument_count != function->as.function.param_count ||
+        (argument_count != 0u && arguments == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    config = adapter_runtime_config(adapter);
+    if (config == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    alloc_scope = turbowasm_runtime_scope_enter(config);
+    impl = (turbowasm_component_core_execution_impl *)
+        turbowasm_rt_calloc(1u, sizeof(*impl));
+    turbowasm_runtime_scope_leave(alloc_scope);
+    if (impl == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    impl->adapter = adapter;
+    impl->function = function;
+    impl->trap = TURBOWASM_TRAP_NONE;
+    impl->terminal_status = TURBOWASM_OK;
+    impl->resource_scope.adapter = adapter;
+    impl->codec.adapter = adapter;
+    impl->codec.scope = &impl->resource_scope;
+    impl->call_memory = adapter->memory;
+
+    if (adapter->uses_resources && adapter->uses_memory) {
+        impl->call_memory.resource_lower =
+            canonical_resource_lower;
+        impl->call_memory.resource_lift =
+            canonical_resource_lift;
+        impl->call_memory.resource_context = &impl->codec;
+    }
+
+    status = component_core_execution_lower(
+        impl, arguments, argument_count,
+        core_args, &core_arg_count);
+    if (status != TURBOWASM_OK)
+        goto fail_before_start;
+
+    status = turbowasm_execution_create(
+        &impl->runtime_execution,
+        adapter->instance,
+        adapter->function_index,
+        core_args,
+        core_arg_count);
+    if (status != TURBOWASM_OK)
+        goto fail_before_start;
+
+    impl->runtime_created = true;
+    execution->impl = impl;
+    return TURBOWASM_OK;
+
+fail_before_start:
+    resource_scope_rollback(&impl->resource_scope);
+    resource_scope_destroy(&impl->resource_scope);
+    alloc_scope = turbowasm_runtime_scope_enter(config);
+    turbowasm_rt_free(impl);
+    turbowasm_runtime_scope_leave(alloc_scope);
+    return status;
+}
+
+void turbowasm_component_core_execution_destroy(
+    turbowasm_component_core_execution *execution) {
+    turbowasm_component_core_execution_impl *impl =
+        component_core_execution_impl_mut(execution);
+    const turbowasm_runtime_config *config;
+    turbowasm_runtime_scope alloc_scope;
+
+    if (impl == NULL)
+        return;
+
+    config = adapter_runtime_config(impl->adapter);
+
+    if (!impl->finalized) {
+        if (impl->started)
+            resource_scope_abort_borrows(&impl->resource_scope);
+        else
+            resource_scope_rollback(&impl->resource_scope);
+        resource_scope_destroy(&impl->resource_scope);
+    }
+
+    if (!impl->result_taken &&
+        impl->lifted_result.kind !=
+            TURBOWASM_COMPONENT_TYPE_UNDEFINED)
+        turbowasm_component_value_destroy(
+            &impl->lifted_result);
+
+    if (impl->runtime_created)
+        turbowasm_execution_destroy(
+            &impl->runtime_execution);
+
+    if (config != NULL) {
+        alloc_scope = turbowasm_runtime_scope_enter(config);
+        turbowasm_rt_free(impl);
+        turbowasm_runtime_scope_leave(alloc_scope);
+    }
+    execution->impl = NULL;
+}
+
+turbowasm_status turbowasm_component_core_execution_resume(
+    turbowasm_component_core_execution *execution,
+    const turbowasm_execution_options *options) {
+    turbowasm_component_core_execution_impl *impl =
+        component_core_execution_impl_mut(execution);
+    turbowasm_status status;
+
+    if (impl == NULL || impl->finalized)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    impl->started = true;
+    status = turbowasm_execution_resume(
+        &impl->runtime_execution, options);
+    if (status == TURBOWASM_YIELDED)
+        return status;
+
+    return component_core_execution_finalize(
+        impl, status);
+}
+
+turbowasm_execution_state
+turbowasm_component_core_execution_state_get(
+    const turbowasm_component_core_execution *execution) {
+    const turbowasm_component_core_execution_impl *impl =
+        component_core_execution_impl_get(execution);
+
+    if (impl == NULL)
+        return TURBOWASM_EXECUTION_FAILED;
+    if (!impl->finalized)
+        return turbowasm_execution_state_get(
+            &impl->runtime_execution);
+
+    if (impl->terminal_status == TURBOWASM_OK)
+        return TURBOWASM_EXECUTION_COMPLETED;
+    if (impl->terminal_status == TURBOWASM_TRAPPED)
+        return TURBOWASM_EXECUTION_TRAPPED;
+    if (impl->terminal_status == TURBOWASM_EXCEPTION)
+        return TURBOWASM_EXECUTION_EXCEPTION;
+    return TURBOWASM_EXECUTION_FAILED;
+}
+
+turbowasm_yield_reason
+turbowasm_component_core_execution_yield_reason_get(
+    const turbowasm_component_core_execution *execution) {
+    const turbowasm_component_core_execution_impl *impl =
+        component_core_execution_impl_get(execution);
+
+    if (impl == NULL || impl->finalized)
+        return TURBOWASM_YIELD_NONE;
+    return turbowasm_execution_yield_reason_get(
+        &impl->runtime_execution);
+}
+
+bool turbowasm_component_core_execution_pending_host_wait(
+    const turbowasm_component_core_execution *execution,
+    turbowasm_host_wait *out_wait) {
+    const turbowasm_component_core_execution_impl *impl =
+        component_core_execution_impl_get(execution);
+
+    return impl != NULL && !impl->finalized &&
+        turbowasm_execution_pending_host_wait(
+            &impl->runtime_execution, out_wait);
+}
+
+turbowasm_status
+turbowasm_component_core_execution_complete_host_wait(
+    turbowasm_component_core_execution *execution,
+    turbowasm_host_wait wait,
+    int status) {
+    turbowasm_component_core_execution_impl *impl =
+        component_core_execution_impl_mut(execution);
+
+    if (impl == NULL || impl->finalized)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_execution_complete_host_wait(
+        &impl->runtime_execution, wait, status);
+}
+
+turbowasm_status turbowasm_component_core_execution_terminal_status(
+    const turbowasm_component_core_execution *execution) {
+    const turbowasm_component_core_execution_impl *impl =
+        component_core_execution_impl_get(execution);
+
+    return impl != NULL && impl->finalized
+        ? impl->terminal_status
+        : TURBOWASM_INVALID_ARGUMENT;
+}
+
+turbowasm_trap turbowasm_component_core_execution_trap(
+    const turbowasm_component_core_execution *execution) {
+    const turbowasm_component_core_execution_impl *impl =
+        component_core_execution_impl_get(execution);
+
+    return impl != NULL && impl->finalized
+        ? impl->trap
+        : TURBOWASM_TRAP_NONE;
+}
+
+size_t turbowasm_component_core_execution_result_count(
+    const turbowasm_component_core_execution *execution) {
+    const turbowasm_component_core_execution_impl *impl =
+        component_core_execution_impl_get(execution);
+
+    return impl != NULL && impl->finalized &&
+        impl->terminal_status == TURBOWASM_OK &&
+        impl->function != NULL &&
+        impl->function->as.function.has_result
+        ? 1u
+        : 0u;
+}
+
+turbowasm_status turbowasm_component_core_execution_take_result(
+    turbowasm_component_core_execution *execution,
+    turbowasm_component_value *out_result) {
+    turbowasm_component_core_execution_impl *impl =
+        component_core_execution_impl_mut(execution);
+
+    if (impl == NULL || out_result == NULL ||
+        !impl->finalized ||
+        impl->terminal_status != TURBOWASM_OK ||
+        impl->function == NULL ||
+        !impl->function->as.function.has_result ||
+        impl->result_taken)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    *out_result = impl->lifted_result;
+    memset(&impl->lifted_result, 0, sizeof(impl->lifted_result));
+    impl->result_taken = true;
+    return TURBOWASM_OK;
+}
