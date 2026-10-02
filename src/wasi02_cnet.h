@@ -16,6 +16,18 @@ typedef struct turbowasm_wasi02_cnet_config {
     native_io_backend_kind backend;
     uint32_t socket_capacity;
     size_t default_listen_backlog;
+
+    /*
+     * Optional caller-provided bounded CNet data-plane owner configuration.
+     * The configuration is copied synchronously by cnet_client_init().
+     * NULL keeps this adapter control-plane-only.
+     *
+     * When present, backend must match `backend`, connection_capacity must
+     * cover every adapter socket slot, and client_stop_timeout_ms must be
+     * non-zero so teardown has an explicit bounded drain contract.
+     */
+    const cnet_client_config *client_config;
+    uint32_t client_stop_timeout_ms;
 } turbowasm_wasi02_cnet_config;
 
 /*
