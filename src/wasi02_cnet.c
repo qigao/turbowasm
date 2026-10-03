@@ -29,6 +29,9 @@ typedef struct tw_cnet_slot {
 
 typedef struct tw_cnet_impl {
     native_io_backend_kind backend;
+    native_io_backend *external_backend;
+    cnet_client client;
+    bool external_stopped;
     tw_cnet_slot *slots;
     uint32_t *free_indices;
     uint32_t capacity;
@@ -101,6 +104,28 @@ static turbowasm_wasi02_socket_error map_error(int status) {
             return TURBOWASM_WASI02_SOCKET_ERROR_PERMANENT_RESOLVER_FAILURE;
         default:
             return TURBOWASM_WASI02_SOCKET_ERROR_UNKNOWN;
+    }
+}
+
+static turbowasm_status map_backend_status(int status) {
+    switch (status) {
+        case SALTS_OK:
+            return TURBOWASM_OK;
+        case SALTS_EINVAL:
+        case SALTS_EFAULT:
+        case SALTS_ERANGE:
+        case SALTS_EBUSY:
+        case SALTS_EALREADY:
+        case SALTS_ESHUTDOWN:
+            return TURBOWASM_INVALID_ARGUMENT;
+        case SALTS_ENOMEM:
+        case SALTS_ENOBUFS:
+            return TURBOWASM_OUT_OF_MEMORY;
+        case SALTS_ENOTSUP:
+        case SALTS_ENOSYS:
+            return TURBOWASM_UNSUPPORTED;
+        default:
+            return TURBOWASM_TRAPPED;
     }
 }
 
@@ -794,14 +819,27 @@ static turbowasm_status provider_set_send(
         value, out_error);
 }
 
-turbowasm_status turbowasm_wasi02_cnet_init(
+static turbowasm_status cnet_init_common(
     turbowasm_wasi02_cnet *adapter,
-    const turbowasm_wasi02_cnet_config *config) {
+    const turbowasm_wasi02_cnet_config *config,
+    native_io_backend *external_backend,
+    const cnet_client_config *client_config) {
     tw_cnet_impl *impl;
+    bool external;
     uint32_t i;
+    int status;
 
+    external = external_backend != NULL || client_config != NULL;
     if (adapter == NULL || adapter->impl != NULL ||
-        config == NULL || config->socket_capacity == 0u)
+        config == NULL || config->socket_capacity == 0u ||
+        (external && (external_backend == NULL ||
+                      client_config == NULL)))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    if (external &&
+        (client_config->backend != config->backend ||
+         client_config->connection_capacity <
+             (size_t)config->socket_capacity))
         return TURBOWASM_INVALID_ARGUMENT;
 
     impl = (tw_cnet_impl *)calloc(1u, sizeof(*impl));
@@ -830,13 +868,103 @@ turbowasm_status turbowasm_wasi02_cnet_init(
     for (i = 0u; i < impl->capacity; ++i)
         impl->free_indices[i] = impl->capacity - 1u - i;
 
+    if (external) {
+        status = cnet_client_init_external(
+            &impl->client, client_config, external_backend);
+        if (status != SALTS_OK) {
+            turbowasm_status mapped = map_backend_status(status);
+            free(impl->free_indices);
+            free(impl->slots);
+            free(impl);
+            return mapped;
+        }
+        impl->external_backend = external_backend;
+    }
+
     adapter->impl = impl;
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_wasi02_cnet_init(
+    turbowasm_wasi02_cnet *adapter,
+    const turbowasm_wasi02_cnet_config *config) {
+    return cnet_init_common(adapter, config, NULL, NULL);
+}
+
+turbowasm_status turbowasm_wasi02_cnet_init_external(
+    turbowasm_wasi02_cnet *adapter,
+    const turbowasm_wasi02_cnet_config *config,
+    native_io_backend *external_backend,
+    const cnet_client_config *client_config) {
+    return cnet_init_common(
+        adapter, config, external_backend, client_config);
+}
+
+int turbowasm_wasi02_cnet_advance_external(
+    turbowasm_wasi02_cnet *adapter,
+    size_t *out_events) {
+    tw_cnet_impl *impl = impl_mut(adapter);
+
+    if (impl == NULL || impl->external_backend == NULL ||
+        out_events == NULL)
+        return SALTS_EINVAL;
+    if (impl->external_stopped)
+        return SALTS_ESHUTDOWN;
+    return cnet_client_advance_external(&impl->client, out_events);
+}
+
+int turbowasm_wasi02_cnet_route_external_completion(
+    turbowasm_wasi02_cnet *adapter,
+    const native_io_completion *completion,
+    bool *out_consumed,
+    size_t *out_events) {
+    tw_cnet_impl *impl = impl_mut(adapter);
+
+    if (impl == NULL || impl->external_backend == NULL ||
+        completion == NULL || out_consumed == NULL ||
+        out_events == NULL)
+        return SALTS_EINVAL;
+    if (impl->external_stopped)
+        return SALTS_ESHUTDOWN;
+    return cnet_client_route_external_completion(
+        &impl->client, completion, out_consumed, out_events);
+}
+
+int turbowasm_wasi02_cnet_external_timeout(
+    turbowasm_wasi02_cnet *adapter,
+    uint32_t max_wait_ms,
+    uint32_t *out_timeout_ms) {
+    tw_cnet_impl *impl = impl_mut(adapter);
+
+    if (impl == NULL || impl->external_backend == NULL ||
+        out_timeout_ms == NULL)
+        return SALTS_EINVAL;
+    if (impl->external_stopped)
+        return SALTS_ESHUTDOWN;
+    return cnet_client_external_timeout(
+        &impl->client, max_wait_ms, out_timeout_ms);
+}
+
+int turbowasm_wasi02_cnet_stop_external(
+    turbowasm_wasi02_cnet *adapter) {
+    tw_cnet_impl *impl = impl_mut(adapter);
+    int status;
+
+    if (impl == NULL || impl->external_backend == NULL)
+        return SALTS_EINVAL;
+    if (impl->external_stopped)
+        return SALTS_OK;
+
+    status = cnet_client_stop_external(&impl->client);
+    if (status == SALTS_OK)
+        impl->external_stopped = true;
+    return status;
 }
 
 turbowasm_status turbowasm_wasi02_cnet_destroy(
     turbowasm_wasi02_cnet *adapter) {
     tw_cnet_impl *impl = impl_mut(adapter);
+    int status;
 
     if (adapter == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -845,6 +973,15 @@ turbowasm_status turbowasm_wasi02_cnet_destroy(
     if (impl->free_count != impl->capacity ||
         impl->network_live != 0u)
         return TURBOWASM_INVALID_ARGUMENT;
+
+    if (impl->external_backend != NULL) {
+        status = turbowasm_wasi02_cnet_stop_external(adapter);
+        if (status != SALTS_OK)
+            return map_backend_status(status);
+        status = cnet_client_destroy(&impl->client);
+        if (status != SALTS_OK)
+            return map_backend_status(status);
+    }
 
     free(impl->free_indices);
     free(impl->slots);
