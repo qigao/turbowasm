@@ -340,6 +340,36 @@ if(TARGET turbowasm_wasi02_poll_core AND TARGET TurboWasm::NativeIO)
   endif()
 endif()
 
+if(TARGET turbowasm_wasi02_cnet_core AND
+   TARGET turbowasm_wasi02_poll_native_io_core)
+  # Private composition only: reuse the one W4 NativeIO poll namespace for
+  # dynamic CNet socket readiness instead of introducing a second poll table.
+  add_library(turbowasm_wasi02_cnet_poll_native_io_core STATIC
+    src/wasi02_cnet_poll_native_io.c)
+  target_compile_features(
+    turbowasm_wasi02_cnet_poll_native_io_core PUBLIC c_std_11)
+  target_include_directories(
+    turbowasm_wasi02_cnet_poll_native_io_core
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(
+    turbowasm_wasi02_cnet_poll_native_io_core
+    PRIVATE
+      turbowasm_wasi02_cnet_core
+      turbowasm_wasi02_poll_native_io_core
+      TurboWasm::Runtime)
+  if(MSVC)
+    target_compile_options(
+      turbowasm_wasi02_cnet_poll_native_io_core PRIVATE
+      /W4 /experimental:c11atomics)
+  else()
+    target_compile_options(
+      turbowasm_wasi02_cnet_poll_native_io_core PRIVATE
+      -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
 if(TURBOWASM_ENABLE_WASI_ADAPTER)
   add_library(turbowasm_wasi
     src/wasi_preview1.c

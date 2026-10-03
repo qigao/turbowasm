@@ -20,6 +20,39 @@ typedef struct turbowasm_wasi02_cnet_config {
 } turbowasm_wasi02_cnet_config;
 
 /*
+ * Private poll-registry seam. It keeps the CNet core independent from one
+ * concrete W4 poll implementation while allowing a single shared poll
+ * namespace to register reusable socket readiness sources.
+ */
+typedef turbowasm_status
+(*turbowasm_wasi02_cnet_poll_ready_fn)(
+    void *context,
+    turbowasm_value source_rep,
+    bool *out_ready);
+
+typedef turbowasm_status
+(*turbowasm_wasi02_cnet_poll_prepare_fn)(
+    void *context,
+    turbowasm_value source_rep,
+    bool *out_ready,
+    native_io_request *out_request);
+
+typedef turbowasm_status
+(*turbowasm_wasi02_cnet_poll_drop_fn)(
+    void *context,
+    turbowasm_value source_rep);
+
+typedef turbowasm_status
+(*turbowasm_wasi02_cnet_poll_register_fn)(
+    void *registry_context,
+    void *source_context,
+    turbowasm_value source_rep,
+    turbowasm_wasi02_cnet_poll_ready_fn ready_fn,
+    turbowasm_wasi02_cnet_poll_prepare_fn prepare_fn,
+    turbowasm_wasi02_cnet_poll_drop_fn drop_fn,
+    turbowasm_value *out_pollable_rep);
+
+/*
  * Bounded released-Salts CNet provider for the WASI 0.2 TCP control plane.
  *
  * The control-only initializer owns unbound/bound/listening CNet socket owners
@@ -46,6 +79,16 @@ turbowasm_status turbowasm_wasi02_cnet_init_external(
     const turbowasm_wasi02_cnet_config *config,
     native_io_backend *external_backend,
     const cnet_client_config *client_config);
+
+/*
+ * Attach the one poll registry used by the surrounding WASI02 context.
+ * Must be configured before obtaining a socket provider that exposes
+ * tcp-socket.subscribe.
+ */
+turbowasm_status turbowasm_wasi02_cnet_attach_poll_registry(
+    turbowasm_wasi02_cnet *adapter,
+    void *registry_context,
+    turbowasm_wasi02_cnet_poll_register_fn register_fn);
 
 /*
  * Internal socket-readiness substrate used by the later dynamic TCP poll

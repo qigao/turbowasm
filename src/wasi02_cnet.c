@@ -20,7 +20,8 @@ typedef enum tw_cnet_slot_state {
      * has not consumed finish-listen yet. Socket subscribe is ready here.
      */
     TW_CNET_SLOT_LISTEN_READY,
-    TW_CNET_SLOT_LISTENING
+    TW_CNET_SLOT_LISTENING,
+    TW_CNET_SLOT_CLOSED
 } tw_cnet_slot_state;
 
 typedef struct tw_cnet_slot {
@@ -30,6 +31,7 @@ typedef struct tw_cnet_slot {
     bool accept_request_active;
     bool accept_terminal;
     uint32_t generation;
+    uint32_t poll_leases;
     turbowasm_wasi02_ip_address_family family;
     tw_cnet_slot_state state;
     size_t listen_backlog;
@@ -49,6 +51,9 @@ typedef struct tw_cnet_impl {
     uint32_t network_live;
     uint32_t network_generation;
     size_t default_listen_backlog;
+
+    void *poll_registry_context;
+    turbowasm_wasi02_cnet_poll_register_fn poll_register;
 } tw_cnet_impl;
 
 static tw_cnet_impl *impl_mut(turbowasm_wasi02_cnet *adapter) {
@@ -183,6 +188,25 @@ static tw_cnet_slot *slot_from_rep(
     return slot;
 }
 
+static tw_cnet_slot *slot_from_poll_rep(
+    tw_cnet_impl *impl,
+    turbowasm_value rep) {
+    uint32_t index;
+    uint32_t generation;
+    tw_cnet_slot *slot;
+
+    if (impl == NULL ||
+        !unpack_rep(rep, &index, &generation) ||
+        index >= impl->capacity)
+        return NULL;
+
+    slot = &impl->slots[index];
+    if (!slot->active ||
+        slot->generation != generation)
+        return NULL;
+    return slot;
+}
+
 static tw_cnet_slot *reserve_slot(
     tw_cnet_impl *impl,
     turbowasm_wasi02_ip_address_family family,
@@ -236,6 +260,19 @@ static bool request_equal(
            left.generation == right.generation;
 }
 
+static void maybe_release_tombstone(
+    tw_cnet_impl *impl,
+    tw_cnet_slot *slot) {
+    if (impl == NULL || slot == NULL || !slot->active)
+        return;
+    if (!slot->guest_dropped ||
+        slot->poll_leases != 0u ||
+        slot->accept_request_active ||
+        slot->listener.impl != NULL)
+        return;
+    release_slot(impl, slot);
+}
+
 static turbowasm_status finalize_listener_slot(
     tw_cnet_impl *impl,
     tw_cnet_slot *slot) {
@@ -256,7 +293,9 @@ static turbowasm_status finalize_listener_slot(
             ? TURBOWASM_TRAPPED
             : TURBOWASM_INVALID_ARGUMENT;
 
-    release_slot(impl, slot);
+    slot->external_attached = false;
+    slot->state = TW_CNET_SLOT_CLOSED;
+    maybe_release_tombstone(impl, slot);
     return TURBOWASM_OK;
 }
 
@@ -413,14 +452,18 @@ static turbowasm_status provider_tcp_drop(
     if (slot == NULL)
         return TURBOWASM_TRAPPED;
 
+    /*
+     * Consume the guest socket identity immediately. Reusable pollables hold
+     * independent slot leases and will observe CLOSED/ready until dropped.
+     */
+    slot->guest_dropped = true;
+
     status = cnet_listener_close(&slot->listener);
     if (status == SALTS_EBUSY) {
         /*
-         * External accept cancellation is asynchronous. Consume the guest
-         * identity now, but retain the physical slot/generation until the
-         * authoritative terminal completion is observed and routed.
+         * External accept cancellation is asynchronous. Keep the physical
+         * slot/generation until the authoritative terminal completion drains.
          */
-        slot->guest_dropped = true;
         return TURBOWASM_OK;
     }
     if (status != SALTS_OK && status != SALTS_EALREADY)
@@ -432,7 +475,9 @@ static turbowasm_status provider_tcp_drop(
             ? TURBOWASM_TRAPPED
             : TURBOWASM_INVALID_ARGUMENT;
 
-    release_slot(impl, slot);
+    slot->external_attached = false;
+    slot->state = TW_CNET_SLOT_CLOSED;
+    maybe_release_tombstone(impl, slot);
     return TURBOWASM_OK;
 }
 
@@ -952,18 +997,42 @@ turbowasm_status turbowasm_wasi02_cnet_init_external(
         adapter, config, external_backend, client_config);
 }
 
-turbowasm_status turbowasm_wasi02_cnet_socket_poll_ready(
+turbowasm_status turbowasm_wasi02_cnet_attach_poll_registry(
     turbowasm_wasi02_cnet *adapter,
+    void *registry_context,
+    turbowasm_wasi02_cnet_poll_register_fn register_fn) {
+    tw_cnet_impl *impl = impl_mut(adapter);
+
+    if (impl == NULL || registry_context == NULL ||
+        register_fn == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (impl->poll_register != NULL &&
+        (impl->poll_registry_context != registry_context ||
+         impl->poll_register != register_fn))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    impl->poll_registry_context = registry_context;
+    impl->poll_register = register_fn;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status socket_poll_ready_impl(
+    tw_cnet_impl *impl,
     turbowasm_value socket_rep,
     bool *out_ready) {
-    tw_cnet_impl *impl = impl_mut(adapter);
-    tw_cnet_slot *slot = slot_from_rep(impl, socket_rep);
+    tw_cnet_slot *slot = slot_from_poll_rep(impl, socket_rep);
 
     if (out_ready == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     *out_ready = false;
     if (slot == NULL)
         return TURBOWASM_TRAPPED;
+
+    if (slot->guest_dropped ||
+        slot->state == TW_CNET_SLOT_CLOSED) {
+        *out_ready = true;
+        return TURBOWASM_OK;
+    }
 
     switch (slot->state) {
         case TW_CNET_SLOT_UNBOUND:
@@ -979,13 +1048,12 @@ turbowasm_status turbowasm_wasi02_cnet_socket_poll_ready(
     }
 }
 
-turbowasm_status turbowasm_wasi02_cnet_socket_poll_prepare(
-    turbowasm_wasi02_cnet *adapter,
+static turbowasm_status socket_poll_prepare_impl(
+    tw_cnet_impl *impl,
     turbowasm_value socket_rep,
     bool *out_ready,
     native_io_request *out_request) {
-    tw_cnet_impl *impl = impl_mut(adapter);
-    tw_cnet_slot *slot = slot_from_rep(impl, socket_rep);
+    tw_cnet_slot *slot = slot_from_poll_rep(impl, socket_rep);
     int status;
 
     if (out_ready == NULL || out_request == NULL)
@@ -995,14 +1063,25 @@ turbowasm_status turbowasm_wasi02_cnet_socket_poll_prepare(
     if (slot == NULL)
         return TURBOWASM_TRAPPED;
 
-    status = turbowasm_wasi02_cnet_socket_poll_ready(
-        adapter, socket_rep, out_ready);
+    status = socket_poll_ready_impl(
+        impl, socket_rep, out_ready);
     if (status != TURBOWASM_OK || *out_ready)
         return status;
 
     if (slot->state != TW_CNET_SLOT_LISTENING ||
-        impl->external_backend == NULL ||
-        impl->external_stopped)
+        impl->external_backend == NULL)
+        return TURBOWASM_UNSUPPORTED;
+
+    /*
+     * A request already owned by the listener remains a valid wait source even
+     * if the cnet_client side was stopped after that request was submitted.
+     */
+    if (slot->accept_request_active) {
+        *out_request = slot->accept_request;
+        return TURBOWASM_OK;
+    }
+
+    if (impl->external_stopped)
         return TURBOWASM_UNSUPPORTED;
 
     if (!slot->external_attached) {
@@ -1011,11 +1090,6 @@ turbowasm_status turbowasm_wasi02_cnet_socket_poll_prepare(
         if (status != SALTS_OK && status != SALTS_EALREADY)
             return map_backend_status(status);
         slot->external_attached = true;
-    }
-
-    if (slot->accept_request_active) {
-        *out_request = slot->accept_request;
-        return TURBOWASM_OK;
     }
 
     status = cnet_listener_submit_external_accept(
@@ -1035,6 +1109,94 @@ turbowasm_status turbowasm_wasi02_cnet_socket_poll_prepare(
     slot->accept_request_active = true;
     slot->accept_terminal = false;
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_wasi02_cnet_socket_poll_ready(
+    turbowasm_wasi02_cnet *adapter,
+    turbowasm_value socket_rep,
+    bool *out_ready) {
+    return socket_poll_ready_impl(
+        impl_mut(adapter), socket_rep, out_ready);
+}
+
+turbowasm_status turbowasm_wasi02_cnet_socket_poll_prepare(
+    turbowasm_wasi02_cnet *adapter,
+    turbowasm_value socket_rep,
+    bool *out_ready,
+    native_io_request *out_request) {
+    return socket_poll_prepare_impl(
+        impl_mut(adapter), socket_rep,
+        out_ready, out_request);
+}
+
+static turbowasm_status dynamic_poll_ready(
+    void *context,
+    turbowasm_value source_rep,
+    bool *out_ready) {
+    return socket_poll_ready_impl(
+        (tw_cnet_impl *)context,
+        source_rep,
+        out_ready);
+}
+
+static turbowasm_status dynamic_poll_prepare(
+    void *context,
+    turbowasm_value source_rep,
+    bool *out_ready,
+    native_io_request *out_request) {
+    return socket_poll_prepare_impl(
+        (tw_cnet_impl *)context,
+        source_rep,
+        out_ready,
+        out_request);
+}
+
+static turbowasm_status dynamic_poll_drop(
+    void *context,
+    turbowasm_value source_rep) {
+    tw_cnet_impl *impl = (tw_cnet_impl *)context;
+    tw_cnet_slot *slot =
+        slot_from_poll_rep(impl, source_rep);
+
+    if (slot == NULL || slot->poll_leases == 0u)
+        return TURBOWASM_TRAPPED;
+
+    --slot->poll_leases;
+    maybe_release_tombstone(impl, slot);
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status provider_subscribe(
+    void *context,
+    turbowasm_value socket_rep,
+    turbowasm_value *out_pollable_rep) {
+    tw_cnet_impl *impl = (tw_cnet_impl *)context;
+    tw_cnet_slot *slot = slot_from_rep(impl, socket_rep);
+    turbowasm_status status;
+
+    if (slot == NULL)
+        return TURBOWASM_TRAPPED;
+    if (out_pollable_rep == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (impl->poll_register == NULL)
+        return TURBOWASM_UNSUPPORTED;
+    if (slot->poll_leases == UINT32_MAX)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    ++slot->poll_leases;
+    status = impl->poll_register(
+        impl->poll_registry_context,
+        impl,
+        socket_rep,
+        dynamic_poll_ready,
+        dynamic_poll_prepare,
+        dynamic_poll_drop,
+        out_pollable_rep);
+    if (status != TURBOWASM_OK) {
+        --slot->poll_leases;
+        maybe_release_tombstone(impl, slot);
+    }
+    return status;
 }
 
 int turbowasm_wasi02_cnet_advance_external(
@@ -1208,5 +1370,7 @@ turbowasm_status turbowasm_wasi02_cnet_socket_provider(
     out_provider->tcp_set_receive_buffer_size = provider_set_recv;
     out_provider->tcp_send_buffer_size = provider_get_send;
     out_provider->tcp_set_send_buffer_size = provider_set_send;
+    if (impl->poll_register != NULL)
+        out_provider->tcp_subscribe = provider_subscribe;
     return TURBOWASM_OK;
 }

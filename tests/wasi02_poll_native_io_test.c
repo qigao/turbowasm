@@ -25,6 +25,13 @@ typedef struct host_probe {
     uint32_t calls;
 } host_probe;
 
+typedef struct dynamic_probe {
+    bool ready;
+    native_io_request request;
+    uint32_t prepare_calls;
+    uint32_t drop_calls;
+} dynamic_probe;
+
 static int fake_cancel(
     native_io_backend *backend,
     native_io_request request) {
@@ -36,6 +43,50 @@ static int fake_cancel(
     ++probe->calls;
     probe->last_request = request;
     return probe->status;
+}
+
+static turbowasm_status dynamic_ready(
+    void *context,
+    turbowasm_value source_rep,
+    bool *out_ready) {
+    dynamic_probe *probe = (dynamic_probe *)context;
+
+    assert(probe != NULL);
+    assert(source_rep.kind == TURBOWASM_VALUE_I32);
+    assert(out_ready != NULL);
+    *out_ready = probe->ready;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status dynamic_prepare(
+    void *context,
+    turbowasm_value source_rep,
+    bool *out_ready,
+    native_io_request *out_request) {
+    dynamic_probe *probe = (dynamic_probe *)context;
+
+    assert(probe != NULL);
+    assert(source_rep.kind == TURBOWASM_VALUE_I32);
+    assert(out_ready != NULL);
+    assert(out_request != NULL);
+
+    ++probe->prepare_calls;
+    *out_ready = probe->ready;
+    *out_request = probe->ready
+        ? (native_io_request){0}
+        : probe->request;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status dynamic_drop(
+    void *context,
+    turbowasm_value source_rep) {
+    dynamic_probe *probe = (dynamic_probe *)context;
+
+    assert(probe != NULL);
+    assert(source_rep.kind == TURBOWASM_VALUE_I32);
+    ++probe->drop_calls;
+    return TURBOWASM_OK;
 }
 
 static turbowasm_name name_span(
@@ -466,10 +517,162 @@ static void test_immediately_ready_pollable_never_cancels(void) {
     backend.impl = NULL;
 }
 
+static void test_dynamic_pollable_rearms_after_completion(void) {
+    cancel_probe cancel = {0};
+    dynamic_probe sources[2] = {{0}};
+    native_io_backend backend = {0};
+    turbowasm_wasi02_native_io_poll native_poll = {0};
+    turbowasm_wasi02_poll_provider provider = {0};
+    turbowasm_wasi02_poll poll = {0};
+    turbowasm_value reps[2] = {{0}};
+    turbowasm_value source_rep = {0};
+    host_probe host = {0};
+    turbowasm_module module = {0};
+    turbowasm_linker linker = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_execution execution = {0};
+    native_io_completion completion = {0};
+    const turbowasm_value *result;
+    bool ready = false;
+    static const turbowasm_value_kind host_results[] = {
+        TURBOWASM_VALUE_I32
+    };
+    const turbowasm_host_function_type host_type = {
+        NULL, 0u, host_results, 1u
+    };
+
+    cancel.status = SALTS_OK;
+    backend.impl = &cancel;
+    sources[0].request = (native_io_request){21u, 201u};
+    sources[1].request = (native_io_request){22u, 202u};
+
+    assert(turbowasm_wasi02_native_io_poll_init(
+               &native_poll, &backend,
+               4u, 2u, 4u, fake_cancel) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_native_io_poll_provider(
+               &native_poll, &provider) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_poll_init(
+               &poll, &provider, 4u) == TURBOWASM_OK);
+
+    source_rep.kind = TURBOWASM_VALUE_I32;
+    source_rep.as.i32 = 1;
+    assert(turbowasm_wasi02_native_io_poll_register_dynamic(
+               &native_poll, &sources[0], source_rep,
+               dynamic_ready, dynamic_prepare, dynamic_drop,
+               &reps[0]) == TURBOWASM_OK);
+    source_rep.as.i32 = 2;
+    assert(turbowasm_wasi02_native_io_poll_register_dynamic(
+               &native_poll, &sources[1], source_rep,
+               dynamic_ready, dynamic_prepare, dynamic_drop,
+               &reps[1]) == TURBOWASM_OK);
+
+    assert(turbowasm_wasi02_pollable_new(
+               &poll, reps[0], &host.resources[0]) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_pollable_new(
+               &poll, reps[1], &host.resources[1]) == TURBOWASM_OK);
+    host.poll = &poll;
+
+    assert(turbowasm_module_load_borrowed(
+               &module, module_bytes,
+               sizeof(module_bytes)) == TURBOWASM_OK);
+    assert(turbowasm_linker_init(&linker) == TURBOWASM_OK);
+    assert(turbowasm_linker_define_host_function(
+               &linker,
+               name_span("host", 4u),
+               name_span("poll", 4u),
+               &host_type,
+               host_poll_wait_any,
+               &host) == TURBOWASM_OK);
+    assert(turbowasm_instance_create_linked(
+               &instance, &module,
+               &linker) == TURBOWASM_OK);
+    turbowasm_linker_destroy(&linker);
+
+    /* First wait resolves through source 1. */
+    assert(turbowasm_execution_create(
+               &execution, &instance, 1u,
+               NULL, 0u) == TURBOWASM_OK);
+    assert(turbowasm_execution_resume(
+               &execution, NULL) == TURBOWASM_YIELDED);
+    assert(sources[0].prepare_calls == 1u);
+    assert(sources[1].prepare_calls == 1u);
+
+    sources[1].ready = true;
+    completion.request = sources[1].request;
+    completion.kind = NATIVE_IO_COMPLETION_OK;
+    completion.status = SALTS_OK;
+    assert(turbowasm_wasi02_native_io_poll_complete(
+               &native_poll, &completion) == TURBOWASM_OK);
+    assert(turbowasm_execution_resume(
+               &execution, NULL) == TURBOWASM_OK);
+    result = turbowasm_execution_result_at(&execution, 0u);
+    assert(result != NULL);
+    assert(result->kind == TURBOWASM_VALUE_I32);
+    assert(result->as.i32 == 1);
+    turbowasm_execution_destroy(&execution);
+
+    assert(turbowasm_wasi02_pollable_ready(
+               &poll, host.resources[1],
+               &ready) == TURBOWASM_OK);
+    assert(ready);
+
+    /*
+     * Dynamic readiness is not sticky in the W4 router. The capability owner
+     * may return to not-ready and the same pollable arms a new request.
+     */
+    sources[1].ready = false;
+    sources[1].request = (native_io_request){23u, 203u};
+    ready = true;
+    assert(turbowasm_wasi02_pollable_ready(
+               &poll, host.resources[1],
+               &ready) == TURBOWASM_OK);
+    assert(!ready);
+
+    assert(turbowasm_execution_create(
+               &execution, &instance, 1u,
+               NULL, 0u) == TURBOWASM_OK);
+    assert(turbowasm_execution_resume(
+               &execution, NULL) == TURBOWASM_YIELDED);
+    assert(sources[0].prepare_calls == 2u);
+    assert(sources[1].prepare_calls == 2u);
+
+    sources[0].ready = true;
+    completion = (native_io_completion){0};
+    completion.request = sources[0].request;
+    completion.kind = NATIVE_IO_COMPLETION_OK;
+    completion.status = SALTS_OK;
+    assert(turbowasm_wasi02_native_io_poll_complete(
+               &native_poll, &completion) == TURBOWASM_OK);
+    assert(turbowasm_execution_resume(
+               &execution, NULL) == TURBOWASM_OK);
+    result = turbowasm_execution_result_at(&execution, 0u);
+    assert(result != NULL);
+    assert(result->kind == TURBOWASM_VALUE_I32);
+    assert(result->as.i32 == 0);
+    turbowasm_execution_destroy(&execution);
+
+    assert(turbowasm_wasi02_pollable_drop(
+               &poll, host.resources[0]) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_pollable_drop(
+               &poll, host.resources[1]) == TURBOWASM_OK);
+    assert(sources[0].drop_calls == 1u);
+    assert(sources[1].drop_calls == 1u);
+    assert(cancel.calls == 0u);
+
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+    assert(turbowasm_wasi02_poll_destroy(
+               &poll) == TURBOWASM_OK);
+    assert(turbowasm_wasi02_native_io_poll_destroy(
+               &native_poll) == TURBOWASM_OK);
+    backend.impl = NULL;
+}
+
 int main(void) {
     test_native_io_terminal_routes_one_wait_any();
     test_shared_request_fans_out_terminal();
     test_shared_request_cancels_only_last_alias();
     test_immediately_ready_pollable_never_cancels();
+    test_dynamic_pollable_rearms_after_completion();
     return 0;
 }
