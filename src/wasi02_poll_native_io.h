@@ -21,7 +21,8 @@ typedef struct turbowasm_wasi02_native_io_poll {
  * Dynamic readiness source used by reusable WASI pollables whose readiness is
  * derived from capability state rather than from one permanent NativeIO
  * request. prepare() may bind one current NativeIO request identity when the
- * source is not ready. drop() releases the source's capability lease.
+ * source is not ready. drop() releases the source's capability lease; generic
+ * pollable drop never cancels capability-owned dynamic work.
  */
 typedef turbowasm_status
 (*turbowasm_wasi02_native_io_dynamic_ready_fn)(
