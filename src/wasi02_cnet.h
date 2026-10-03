@@ -59,6 +59,9 @@ turbowasm_status turbowasm_wasi02_cnet_init_external(
  * socket and returns its generation-safe NativeIO identity. Repeated calls
  * while that request is active return the same identity. If readiness is
  * already terminal, out_ready is true and out_request remains zero.
+ *
+ * Listener-owned terminal completions remain routable after the external CNet
+ * client has stopped; listener accept requests are not cnet_client requests.
  */
 turbowasm_status turbowasm_wasi02_cnet_socket_poll_ready(
     turbowasm_wasi02_cnet *adapter,
