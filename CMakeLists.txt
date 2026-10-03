@@ -101,7 +101,8 @@ add_library(turbowasm
 add_library(TurboWasm::Runtime ALIAS turbowasm)
 
 set_target_properties(turbowasm PROPERTIES
-  EXPORT_NAME Runtime)
+  EXPORT_NAME Runtime
+  POSITION_INDEPENDENT_CODE ON)
 
 target_compile_features(turbowasm PUBLIC c_std_11)
 target_include_directories(turbowasm
