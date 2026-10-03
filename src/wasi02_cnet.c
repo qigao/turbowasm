@@ -15,15 +15,25 @@ typedef enum tw_cnet_slot_state {
     TW_CNET_SLOT_FREE = 0,
     TW_CNET_SLOT_UNBOUND,
     TW_CNET_SLOT_BOUND,
+    /*
+     * The native listen call has completed, but the outer WASI state machine
+     * has not consumed finish-listen yet. Socket subscribe is ready here.
+     */
+    TW_CNET_SLOT_LISTEN_READY,
     TW_CNET_SLOT_LISTENING
 } tw_cnet_slot_state;
 
 typedef struct tw_cnet_slot {
     bool active;
+    bool guest_dropped;
+    bool external_attached;
+    bool accept_request_active;
+    bool accept_terminal;
     uint32_t generation;
     turbowasm_wasi02_ip_address_family family;
     tw_cnet_slot_state state;
     size_t listen_backlog;
+    native_io_request accept_request;
     cnet_listener listener;
 } tw_cnet_slot;
 
@@ -167,7 +177,8 @@ static tw_cnet_slot *slot_from_rep(
         return NULL;
 
     slot = &impl->slots[index];
-    if (!slot->active || slot->generation != generation)
+    if (!slot->active || slot->guest_dropped ||
+        slot->generation != generation)
         return NULL;
     return slot;
 }
@@ -214,6 +225,39 @@ static void release_slot(
     memset(slot, 0, sizeof(*slot));
     slot->generation = generation;
     impl->free_indices[impl->free_count++] = index;
+}
+
+static bool request_equal(
+    native_io_request left,
+    native_io_request right) {
+    return native_io_request_valid(left) &&
+           native_io_request_valid(right) &&
+           left.slot == right.slot &&
+           left.generation == right.generation;
+}
+
+static turbowasm_status finalize_listener_slot(
+    tw_cnet_impl *impl,
+    tw_cnet_slot *slot) {
+    int status;
+
+    if (impl == NULL || slot == NULL || !slot->active)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    status = cnet_listener_close(&slot->listener);
+    if (status != SALTS_OK && status != SALTS_EALREADY)
+        return status == SALTS_EBUSY
+            ? TURBOWASM_INVALID_ARGUMENT
+            : TURBOWASM_TRAPPED;
+
+    status = cnet_listener_destroy(&slot->listener);
+    if (slot->listener.impl != NULL)
+        return status == SALTS_OK
+            ? TURBOWASM_TRAPPED
+            : TURBOWASM_INVALID_ARGUMENT;
+
+    release_slot(impl, slot);
+    return TURBOWASM_OK;
 }
 
 static bool network_rep_valid(
@@ -370,6 +414,15 @@ static turbowasm_status provider_tcp_drop(
         return TURBOWASM_TRAPPED;
 
     status = cnet_listener_close(&slot->listener);
+    if (status == SALTS_EBUSY) {
+        /*
+         * External accept cancellation is asynchronous. Consume the guest
+         * identity now, but retain the physical slot/generation until the
+         * authoritative terminal completion is observed and routed.
+         */
+        slot->guest_dropped = true;
+        return TURBOWASM_OK;
+    }
     if (status != SALTS_OK && status != SALTS_EALREADY)
         return TURBOWASM_TRAPPED;
 
@@ -379,10 +432,6 @@ static turbowasm_status provider_tcp_drop(
             ? TURBOWASM_TRAPPED
             : TURBOWASM_INVALID_ARGUMENT;
 
-    /*
-     * destroy consumed the CNet owner before module-shutdown reporting.
-     * Never retain a provider slot whose CNet identity no longer exists.
-     */
     release_slot(impl, slot);
     return TURBOWASM_OK;
 }
@@ -462,7 +511,7 @@ static turbowasm_status provider_start_listen(
         &slot->listener, slot->listen_backlog);
     *out_error = map_error(status);
     if (status == SALTS_OK)
-        slot->state = TW_CNET_SLOT_LISTENING;
+        slot->state = TW_CNET_SLOT_LISTEN_READY;
     return TURBOWASM_OK;
 }
 
@@ -475,10 +524,13 @@ static turbowasm_status provider_finish_listen(
 
     if (out_error == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    *out_error =
-        slot != NULL && slot->state == TW_CNET_SLOT_LISTENING
-            ? TURBOWASM_WASI02_SOCKET_ERROR_NONE
-            : TURBOWASM_WASI02_SOCKET_ERROR_INVALID_STATE;
+    if (slot != NULL &&
+        slot->state == TW_CNET_SLOT_LISTEN_READY) {
+        slot->state = TW_CNET_SLOT_LISTENING;
+        *out_error = TURBOWASM_WASI02_SOCKET_ERROR_NONE;
+    } else {
+        *out_error = TURBOWASM_WASI02_SOCKET_ERROR_INVALID_STATE;
+    }
     return TURBOWASM_OK;
 }
 
@@ -900,6 +952,91 @@ turbowasm_status turbowasm_wasi02_cnet_init_external(
         adapter, config, external_backend, client_config);
 }
 
+turbowasm_status turbowasm_wasi02_cnet_socket_poll_ready(
+    turbowasm_wasi02_cnet *adapter,
+    turbowasm_value socket_rep,
+    bool *out_ready) {
+    tw_cnet_impl *impl = impl_mut(adapter);
+    tw_cnet_slot *slot = slot_from_rep(impl, socket_rep);
+
+    if (out_ready == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    *out_ready = false;
+    if (slot == NULL)
+        return TURBOWASM_TRAPPED;
+
+    switch (slot->state) {
+        case TW_CNET_SLOT_UNBOUND:
+        case TW_CNET_SLOT_BOUND:
+        case TW_CNET_SLOT_LISTEN_READY:
+            *out_ready = true;
+            return TURBOWASM_OK;
+        case TW_CNET_SLOT_LISTENING:
+            *out_ready = slot->accept_terminal;
+            return TURBOWASM_OK;
+        default:
+            return TURBOWASM_TRAPPED;
+    }
+}
+
+turbowasm_status turbowasm_wasi02_cnet_socket_poll_prepare(
+    turbowasm_wasi02_cnet *adapter,
+    turbowasm_value socket_rep,
+    bool *out_ready,
+    native_io_request *out_request) {
+    tw_cnet_impl *impl = impl_mut(adapter);
+    tw_cnet_slot *slot = slot_from_rep(impl, socket_rep);
+    int status;
+
+    if (out_ready == NULL || out_request == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    *out_ready = false;
+    *out_request = (native_io_request){0};
+    if (slot == NULL)
+        return TURBOWASM_TRAPPED;
+
+    status = turbowasm_wasi02_cnet_socket_poll_ready(
+        adapter, socket_rep, out_ready);
+    if (status != TURBOWASM_OK || *out_ready)
+        return status;
+
+    if (slot->state != TW_CNET_SLOT_LISTENING ||
+        impl->external_backend == NULL ||
+        impl->external_stopped)
+        return TURBOWASM_UNSUPPORTED;
+
+    if (!slot->external_attached) {
+        status = cnet_listener_attach_external(
+            &slot->listener, impl->external_backend);
+        if (status != SALTS_OK && status != SALTS_EALREADY)
+            return map_backend_status(status);
+        slot->external_attached = true;
+    }
+
+    if (slot->accept_request_active) {
+        *out_request = slot->accept_request;
+        return TURBOWASM_OK;
+    }
+
+    status = cnet_listener_submit_external_accept(
+        &slot->listener, out_request);
+    if (status == SALTS_EALREADY) {
+        slot->accept_terminal = true;
+        *out_ready = true;
+        *out_request = (native_io_request){0};
+        return TURBOWASM_OK;
+    }
+    if (status != SALTS_OK)
+        return map_backend_status(status);
+    if (!native_io_request_valid(*out_request))
+        return TURBOWASM_TRAPPED;
+
+    slot->accept_request = *out_request;
+    slot->accept_request_active = true;
+    slot->accept_terminal = false;
+    return TURBOWASM_OK;
+}
+
 int turbowasm_wasi02_cnet_advance_external(
     turbowasm_wasi02_cnet *adapter,
     size_t *out_events) {
@@ -919,13 +1056,60 @@ int turbowasm_wasi02_cnet_route_external_completion(
     bool *out_consumed,
     size_t *out_events) {
     tw_cnet_impl *impl = impl_mut(adapter);
+    uint32_t i;
 
     if (impl == NULL || impl->external_backend == NULL ||
         completion == NULL || out_consumed == NULL ||
         out_events == NULL)
         return SALTS_EINVAL;
+    *out_consumed = false;
+    *out_events = 0u;
+
+    /*
+     * Listener accept requests are owned by cnet_listener, not cnet_client.
+     * Route those first so one runtime-observed completion has exactly one
+     * authoritative CNet consumer.
+     */
+    for (i = 0u; i < impl->capacity; ++i) {
+        tw_cnet_slot *slot = &impl->slots[i];
+        bool consumed = false;
+        int status;
+
+        if (!slot->active || !slot->accept_request_active ||
+            !request_equal(slot->accept_request,
+                           completion->request))
+            continue;
+
+        status = cnet_listener_route_external_completion(
+            &slot->listener, completion, &consumed);
+        if (status != SALTS_OK)
+            return status;
+        if (!consumed)
+            return SALTS_EPROTO;
+
+        slot->accept_request_active = false;
+        slot->accept_request = (native_io_request){0};
+        slot->accept_terminal =
+            completion->kind != NATIVE_IO_COMPLETION_CANCELLED &&
+            completion->status != SALTS_ECANCELED;
+        *out_consumed = true;
+
+        if (slot->guest_dropped) {
+            turbowasm_status finalize_status =
+                finalize_listener_slot(impl, slot);
+            if (finalize_status != TURBOWASM_OK)
+                return SALTS_EPROTO;
+        }
+        return SALTS_OK;
+    }
+
+    /*
+     * Stopping the external CNet client does not consume listener-owned accept
+     * requests. Their terminal cancellation packets remain routable above.
+     */
     if (impl->external_stopped)
         return SALTS_ESHUTDOWN;
+
     return cnet_client_route_external_completion(
         &impl->client, completion, out_consumed, out_events);
 }

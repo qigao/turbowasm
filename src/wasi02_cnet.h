@@ -47,6 +47,30 @@ turbowasm_status turbowasm_wasi02_cnet_init_external(
     native_io_backend *external_backend,
     const cnet_client_config *client_config);
 
+/*
+ * Internal socket-readiness substrate used by the later dynamic TCP poll
+ * provider. This does not create a WASI pollable by itself.
+ *
+ * poll_ready is a side-effect-free state snapshot. Stable synchronous states
+ * are ready immediately; a listening socket becomes ready only after the
+ * currently armed accept request reaches a terminal result.
+ *
+ * poll_prepare arms at most one shared external accept request for a listening
+ * socket and returns its generation-safe NativeIO identity. Repeated calls
+ * while that request is active return the same identity. If readiness is
+ * already terminal, out_ready is true and out_request remains zero.
+ */
+turbowasm_status turbowasm_wasi02_cnet_socket_poll_ready(
+    turbowasm_wasi02_cnet *adapter,
+    turbowasm_value socket_rep,
+    bool *out_ready);
+
+turbowasm_status turbowasm_wasi02_cnet_socket_poll_prepare(
+    turbowasm_wasi02_cnet *adapter,
+    turbowasm_value socket_rep,
+    bool *out_ready,
+    native_io_request *out_request);
+
 /* External-progress wrappers preserve exact Salts status semantics. */
 int turbowasm_wasi02_cnet_advance_external(
     turbowasm_wasi02_cnet *adapter,
