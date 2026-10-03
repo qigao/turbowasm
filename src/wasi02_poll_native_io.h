@@ -5,6 +5,7 @@
 
 #include <salts/native_io.h>
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -17,11 +18,37 @@ typedef struct turbowasm_wasi02_native_io_poll {
 } turbowasm_wasi02_native_io_poll;
 
 /*
+ * Dynamic readiness source used by reusable WASI pollables whose readiness is
+ * derived from capability state rather than from one permanent NativeIO
+ * request. prepare() may bind one current NativeIO request identity when the
+ * source is not ready. drop() releases the source's capability lease; generic
+ * pollable drop never cancels capability-owned dynamic work.
+ */
+typedef turbowasm_status
+(*turbowasm_wasi02_native_io_dynamic_ready_fn)(
+    void *context,
+    turbowasm_value source_rep,
+    bool *out_ready);
+
+typedef turbowasm_status
+(*turbowasm_wasi02_native_io_dynamic_prepare_fn)(
+    void *context,
+    turbowasm_value source_rep,
+    bool *out_ready,
+    native_io_request *out_request);
+
+typedef turbowasm_status
+(*turbowasm_wasi02_native_io_dynamic_drop_fn)(
+    void *context,
+    turbowasm_value source_rep);
+
+/*
  * Bounded NativeIO completion router for WASI 0.2 pollables.
  *
- * This layer never submits I/O and never owns payload/address storage.
- * register_request borrows one already-active NativeIO request identity whose
- * operation lifetime remains owned by the stream/capability provider.
+ * This layer never owns payload/address storage and never observes NativeIO.
+ * Fixed request registrations borrow an already-active request identity.
+ * Dynamic registrations delegate readiness/request preparation to a bounded
+ * capability owner while retaining one logical pollable slot.
  *
  * route_capacity bounds simultaneously suspended Runtime wait-sets.
  * max_members_per_route bounds one WIT poll() wait-set.
@@ -52,11 +79,25 @@ turbowasm_status turbowasm_wasi02_native_io_poll_register_request(
  * Allocate one logical pollable that is already terminal/ready.
  *
  * This carries no NativeIO request identity and never owns cancellation.
- * It is used when the provider already holds the terminal capability state
- * (for example an accepted child waiting to be consumed).
  */
 turbowasm_status turbowasm_wasi02_native_io_poll_register_ready(
     turbowasm_wasi02_native_io_poll *adapter,
+    turbowasm_value *out_provider_rep);
+
+/*
+ * Register one reusable dynamic readiness source.
+ *
+ * The source callbacks are borrowed for the pollable lifetime. prepare() must
+ * return either out_ready=true with an invalid/zero request, or
+ * out_ready=false with one valid generation-safe NativeIO request.
+ */
+turbowasm_status turbowasm_wasi02_native_io_poll_register_dynamic(
+    turbowasm_wasi02_native_io_poll *adapter,
+    void *source_context,
+    turbowasm_value source_rep,
+    turbowasm_wasi02_native_io_dynamic_ready_fn ready_fn,
+    turbowasm_wasi02_native_io_dynamic_prepare_fn prepare_fn,
+    turbowasm_wasi02_native_io_dynamic_drop_fn drop_fn,
     turbowasm_value *out_provider_rep);
 
 /* Populate the generic poll provider callbacks backed by this adapter. */
@@ -66,11 +107,11 @@ turbowasm_status turbowasm_wasi02_native_io_poll_provider(
 
 /*
  * Route one terminal completion observed by the NativeIO owner.
- * Matching pollables become ready. Every suspended wait-set containing that
- * pollable is completed through its exact Runtime host-wait generation.
  *
- * The completion remains caller-owned; this adapter does not consume payload
- * storage or observe the NativeIO backend itself.
+ * Fixed request pollables become permanently ready. Dynamic pollables only
+ * have their current request binding cleared; subsequent ready() calls re-read
+ * source state, so one pollable remains reusable across capability transitions.
+ * Every affected suspended wait-set is completed exactly once.
  */
 turbowasm_status turbowasm_wasi02_native_io_poll_complete(
     turbowasm_wasi02_native_io_poll *adapter,

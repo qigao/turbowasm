@@ -393,12 +393,40 @@ if(TARGET turbowasm_wasi02_cnet_core)
   add_test(NAME turbowasm_wasi02_cnet_listener_progress_test
            COMMAND turbowasm_wasi02_cnet_listener_progress_test)
 
-  # Salts::CNet is a released shared SDK dependency. Keep its runtime payload
-  # explicit for CTest instead of relying on a system-wide Salts install.
   set(_turbowasm_wasi02_cnet_tests
     turbowasm_wasi02_cnet_control_test
     turbowasm_wasi02_cnet_external_progress_test
     turbowasm_wasi02_cnet_listener_progress_test)
+
+  if(TARGET turbowasm_wasi02_cnet_poll_native_io_core)
+    add_executable(turbowasm_wasi02_cnet_dynamic_poll_test
+      wasi02_cnet_dynamic_poll_test.c)
+    target_link_libraries(turbowasm_wasi02_cnet_dynamic_poll_test
+      PRIVATE
+        turbowasm_wasi02_cnet_poll_native_io_core
+        turbowasm_wasi02_cnet_core
+        turbowasm_wasi02_poll_native_io_core
+        turbowasm_wasi02_poll_core
+        TurboWasm::Runtime
+        Salts::CNet
+        Salts::NativeIO)
+    target_include_directories(turbowasm_wasi02_cnet_dynamic_poll_test
+      PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${PROJECT_SOURCE_DIR}/include")
+    set_target_properties(
+      turbowasm_wasi02_cnet_dynamic_poll_test PROPERTIES
+      C_STANDARD 11
+      C_STANDARD_REQUIRED ON
+      C_EXTENSIONS OFF)
+    add_test(NAME turbowasm_wasi02_cnet_dynamic_poll_test
+             COMMAND turbowasm_wasi02_cnet_dynamic_poll_test)
+    list(APPEND _turbowasm_wasi02_cnet_tests
+      turbowasm_wasi02_cnet_dynamic_poll_test)
+  endif()
+
+  # Salts::CNet is a released shared SDK dependency. Keep its runtime payload
+  # explicit for CTest instead of relying on a system-wide Salts install.
   if(WIN32)
     set_tests_properties(${_turbowasm_wasi02_cnet_tests} PROPERTIES
       ENVIRONMENT

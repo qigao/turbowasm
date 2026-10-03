@@ -9,12 +9,25 @@
 #include <stdint.h>
 #include <string.h>
 
+typedef enum turbowasm_wasi02_native_io_poll_kind {
+    TURBOWASM_WASI02_NATIVE_IO_POLL_REQUEST = 1,
+    TURBOWASM_WASI02_NATIVE_IO_POLL_DYNAMIC
+} turbowasm_wasi02_native_io_poll_kind;
+
 typedef struct turbowasm_wasi02_native_io_poll_slot {
     bool active;
     bool terminal;
     bool abandoned;
+    bool request_active;
     uint32_t generation;
+    turbowasm_wasi02_native_io_poll_kind kind;
     native_io_request request;
+
+    void *source_context;
+    turbowasm_value source_rep;
+    turbowasm_wasi02_native_io_dynamic_ready_fn dynamic_ready;
+    turbowasm_wasi02_native_io_dynamic_prepare_fn dynamic_prepare;
+    turbowasm_wasi02_native_io_dynamic_drop_fn dynamic_drop;
 } turbowasm_wasi02_native_io_poll_slot;
 
 typedef struct turbowasm_wasi02_native_io_route {
@@ -67,7 +80,9 @@ static bool request_has_other_live_consumer(
         const turbowasm_wasi02_native_io_poll_slot *slot =
             &impl->pollables[i];
         if (slot == self || !slot->active ||
-            slot->terminal || slot->abandoned)
+            slot->kind != TURBOWASM_WASI02_NATIVE_IO_POLL_REQUEST ||
+            slot->terminal || slot->abandoned ||
+            !slot->request_active)
             continue;
         if (request_equal(slot->request, self->request))
             return true;
@@ -252,20 +267,6 @@ static turbowasm_wasi02_native_io_route *route_from_token(
     return &impl->routes[index];
 }
 
-static bool route_contains(
-    const turbowasm_wasi02_native_io_route *route,
-    uint64_t pollable) {
-    size_t i;
-
-    if (route == NULL || !route->active)
-        return false;
-    for (i = 0u; i < route->member_count; ++i) {
-        if (route->members[i] == pollable)
-            return true;
-    }
-    return false;
-}
-
 static turbowasm_status provider_ready(
     void *context,
     turbowasm_value rep,
@@ -279,6 +280,15 @@ static turbowasm_status provider_ready(
     slot = slot_from_rep(impl, rep);
     if (slot == NULL || slot->abandoned)
         return TURBOWASM_TRAPPED;
+
+    if (slot->kind == TURBOWASM_WASI02_NATIVE_IO_POLL_DYNAMIC) {
+        if (slot->dynamic_ready == NULL)
+            return TURBOWASM_TRAPPED;
+        return slot->dynamic_ready(
+            slot->source_context,
+            slot->source_rep,
+            out_ready);
+    }
 
     *out_ready = slot->terminal;
     return TURBOWASM_OK;
@@ -311,9 +321,50 @@ static turbowasm_status arm_route(
             slot_from_rep(impl, reps[i]);
         uint64_t handle;
 
-        if (slot == NULL || slot->abandoned || slot->terminal) {
+        if (slot == NULL || slot->abandoned) {
             release_route(impl, route);
             return TURBOWASM_TRAPPED;
+        }
+
+        if (slot->kind ==
+            TURBOWASM_WASI02_NATIVE_IO_POLL_DYNAMIC) {
+            bool ready = false;
+            native_io_request request = {0};
+            turbowasm_status status;
+
+            if (slot->dynamic_prepare == NULL) {
+                release_route(impl, route);
+                return TURBOWASM_TRAPPED;
+            }
+
+            status = slot->dynamic_prepare(
+                slot->source_context,
+                slot->source_rep,
+                &ready,
+                &request);
+            if (status != TURBOWASM_OK) {
+                release_route(impl, route);
+                return status;
+            }
+
+            /*
+             * ready() was scanned immediately before arm on the same progress
+             * owner. A newly-ready source here would violate that serialized
+             * contract and would otherwise create a lost wake.
+             */
+            if (ready || !native_io_request_valid(request)) {
+                release_route(impl, route);
+                return TURBOWASM_TRAPPED;
+            }
+
+            slot->request = request;
+            slot->request_active = true;
+        } else {
+            if (slot->terminal || !slot->request_active ||
+                !native_io_request_valid(slot->request)) {
+                release_route(impl, route);
+                return TURBOWASM_TRAPPED;
+            }
         }
 
         handle = slot_handle(impl, slot);
@@ -367,6 +418,21 @@ static turbowasm_status provider_drop(
     if (slot == NULL)
         return TURBOWASM_TRAPPED;
 
+    if (slot->kind ==
+        TURBOWASM_WASI02_NATIVE_IO_POLL_DYNAMIC) {
+        turbowasm_status dynamic_status;
+
+        if (slot->dynamic_drop == NULL)
+            return TURBOWASM_TRAPPED;
+        dynamic_status = slot->dynamic_drop(
+            slot->source_context,
+            slot->source_rep);
+        if (dynamic_status != TURBOWASM_OK)
+            return dynamic_status;
+        release_slot(impl, slot);
+        return TURBOWASM_OK;
+    }
+
     if (slot->terminal) {
         release_slot(impl, slot);
         return TURBOWASM_OK;
@@ -375,9 +441,9 @@ static turbowasm_status provider_drop(
         return TURBOWASM_OK;
 
     /*
-     * Multiple WASI pollables may alias one NativeIO request. Consuming one
-     * logical alias must not cancel shared work while another live alias still
-     * observes the same generation-safe request.
+     * Multiple fixed-request pollables may alias one NativeIO request.
+     * Consuming one logical alias must not cancel shared work while another
+     * live alias still observes the same generation-safe request.
      */
     slot->abandoned = true;
     if (request_has_other_live_consumer(impl, slot))
@@ -542,7 +608,9 @@ turbowasm_status turbowasm_wasi02_native_io_poll_register_request(
     slot = reserve_slot(impl);
     if (slot == NULL)
         return TURBOWASM_OUT_OF_MEMORY;
+    slot->kind = TURBOWASM_WASI02_NATIVE_IO_POLL_REQUEST;
     slot->request = request;
+    slot->request_active = true;
 
     packed = slot_handle(impl, slot);
     if (packed == 0u) {
@@ -570,7 +638,49 @@ turbowasm_status turbowasm_wasi02_native_io_poll_register_ready(
     slot = reserve_slot(impl);
     if (slot == NULL)
         return TURBOWASM_OUT_OF_MEMORY;
+    slot->kind = TURBOWASM_WASI02_NATIVE_IO_POLL_REQUEST;
     slot->terminal = true;
+
+    packed = slot_handle(impl, slot);
+    if (packed == 0u) {
+        release_slot(impl, slot);
+        return TURBOWASM_TRAPPED;
+    }
+
+    memset(out_provider_rep, 0, sizeof(*out_provider_rep));
+    out_provider_rep->kind = TURBOWASM_VALUE_I64;
+    out_provider_rep->as.i64 = (int64_t)packed;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_wasi02_native_io_poll_register_dynamic(
+    turbowasm_wasi02_native_io_poll *adapter,
+    void *source_context,
+    turbowasm_value source_rep,
+    turbowasm_wasi02_native_io_dynamic_ready_fn ready_fn,
+    turbowasm_wasi02_native_io_dynamic_prepare_fn prepare_fn,
+    turbowasm_wasi02_native_io_dynamic_drop_fn drop_fn,
+    turbowasm_value *out_provider_rep) {
+    turbowasm_wasi02_native_io_poll_impl *impl =
+        impl_mut(adapter);
+    turbowasm_wasi02_native_io_poll_slot *slot;
+    uint64_t packed;
+
+    if (impl == NULL || ready_fn == NULL ||
+        prepare_fn == NULL || drop_fn == NULL ||
+        out_provider_rep == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    slot = reserve_slot(impl);
+    if (slot == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+
+    slot->kind = TURBOWASM_WASI02_NATIVE_IO_POLL_DYNAMIC;
+    slot->source_context = source_context;
+    slot->source_rep = source_rep;
+    slot->dynamic_ready = ready_fn;
+    slot->dynamic_prepare = prepare_fn;
+    slot->dynamic_drop = drop_fn;
 
     packed = slot_handle(impl, slot);
     if (packed == 0u) {
@@ -617,26 +727,8 @@ turbowasm_status turbowasm_wasi02_native_io_poll_complete(
         return TURBOWASM_INVALID_ARGUMENT;
 
     /*
-     * Mark every logical alias terminal first. Routes are completed only
-     * after the full alias set is visible as ready.
-     */
-    for (i = 0u; i < impl->pollable_capacity; ++i) {
-        turbowasm_wasi02_native_io_poll_slot *slot =
-            &impl->pollables[i];
-        if (!slot->active ||
-            !request_equal(slot->request, completion->request))
-            continue;
-        if (slot->terminal)
-            continue;
-        slot->terminal = true;
-        ++matched;
-    }
-    if (matched == 0u)
-        return TURBOWASM_TRAPPED;
-
-    /*
-     * One route may contain more than one alias of the same request. Complete
-     * that host wait exactly once when any member belongs to this completion.
+     * Complete every route while current request bindings still name the
+     * terminal request. A route may contain multiple aliases; wake it once.
      */
     for (i = 0u; i < impl->route_capacity; ++i) {
         turbowasm_wasi02_native_io_route *route =
@@ -662,9 +754,11 @@ turbowasm_status turbowasm_wasi02_native_io_poll_complete(
                     rep, &slot_index, &generation) ||
                 slot_index >= impl->pollable_capacity)
                 continue;
+
             slot = &impl->pollables[slot_index];
             if (!slot->active ||
-                slot->generation != generation)
+                slot->generation != generation ||
+                !slot->request_active)
                 continue;
             if (request_equal(
                     slot->request,
@@ -692,10 +786,42 @@ turbowasm_status turbowasm_wasi02_native_io_poll_complete(
             final_status = status;
     }
 
+    /*
+     * Fixed request aliases become permanently ready. Dynamic sources only
+     * retire the current request binding; their next readiness query is
+     * delegated back to the capability owner.
+     */
     for (i = 0u; i < impl->pollable_capacity; ++i) {
         turbowasm_wasi02_native_io_poll_slot *slot =
             &impl->pollables[i];
-        if (slot->active && slot->terminal &&
+
+        if (!slot->active || !slot->request_active ||
+            !request_equal(slot->request, completion->request))
+            continue;
+
+        if (slot->kind ==
+            TURBOWASM_WASI02_NATIVE_IO_POLL_DYNAMIC) {
+            slot->request_active = false;
+            slot->request = (native_io_request){0};
+        } else {
+            if (slot->terminal)
+                continue;
+            slot->terminal = true;
+            slot->request_active = false;
+        }
+        ++matched;
+    }
+
+    if (matched == 0u)
+        return TURBOWASM_TRAPPED;
+
+    for (i = 0u; i < impl->pollable_capacity; ++i) {
+        turbowasm_wasi02_native_io_poll_slot *slot =
+            &impl->pollables[i];
+        if (slot->active &&
+            slot->kind ==
+                TURBOWASM_WASI02_NATIVE_IO_POLL_REQUEST &&
+            slot->terminal &&
             slot->abandoned &&
             request_equal(
                 slot->request,
