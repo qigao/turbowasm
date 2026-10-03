@@ -149,8 +149,9 @@ turbowasm_status turbowasm_wasi02_cnet_socket_provider(
 
 /*
  * Lifecycle-only stream provider for connected CNet sockets.
- * This slice publishes/drop-manages input/output reps; read/write/subscribe
- * remain NULL until the following data-plane slice.
+ * This slice publishes/drop-manages input/output reps; each returned stream
+ * retains the connection slot independently from the tcp-socket resource.
+ * read/write/subscribe remain NULL until the following data-plane slice.
  */
 turbowasm_status turbowasm_wasi02_cnet_stream_provider(
     turbowasm_wasi02_cnet *adapter,
