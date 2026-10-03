@@ -1,6 +1,7 @@
 #ifndef TURBOWASM_WASI02_CNET_H
 #define TURBOWASM_WASI02_CNET_H
 
+#include <turbowasm/wasi02.h>
 #include <turbowasm/wasi02_sockets.h>
 
 #include <cnet/cnet.h>
