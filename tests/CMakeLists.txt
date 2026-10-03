@@ -374,11 +374,31 @@ if(TARGET turbowasm_wasi02_cnet_core)
   add_test(NAME turbowasm_wasi02_cnet_external_progress_test
            COMMAND turbowasm_wasi02_cnet_external_progress_test)
 
+  add_executable(turbowasm_wasi02_cnet_listener_progress_test
+    wasi02_cnet_listener_progress_test.c)
+  target_link_libraries(turbowasm_wasi02_cnet_listener_progress_test
+    PRIVATE
+      turbowasm_wasi02_cnet_core
+      Salts::CNet
+      Salts::NativeIO)
+  target_include_directories(turbowasm_wasi02_cnet_listener_progress_test
+    PRIVATE
+      "${PROJECT_SOURCE_DIR}/src"
+      "${PROJECT_SOURCE_DIR}/include")
+  set_target_properties(
+    turbowasm_wasi02_cnet_listener_progress_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_wasi02_cnet_listener_progress_test
+           COMMAND turbowasm_wasi02_cnet_listener_progress_test)
+
   # Salts::CNet is a released shared SDK dependency. Keep its runtime payload
   # explicit for CTest instead of relying on a system-wide Salts install.
   set(_turbowasm_wasi02_cnet_tests
     turbowasm_wasi02_cnet_control_test
-    turbowasm_wasi02_cnet_external_progress_test)
+    turbowasm_wasi02_cnet_external_progress_test
+    turbowasm_wasi02_cnet_listener_progress_test)
   if(WIN32)
     set_tests_properties(${_turbowasm_wasi02_cnet_tests} PROPERTIES
       ENVIRONMENT
