@@ -83,18 +83,18 @@ static void test_external_progress_borrows_backend(void) {
                &client) == TURBOWASM_OK);
 
     /*
-     * This slice establishes only the shared external progress owner.
-     * Data-plane capability callbacks remain fail-closed until their W4
-     * stream/poll ownership is wired over this exact backend.
+     * External progress now qualifies the client-connect lifecycle. Accept
+     * remains a separate listener-child slice and subscribe is exposed only
+     * after the shared W4 poll registry is attached.
      */
     assert(turbowasm_wasi02_cnet_socket_provider(
                &adapter, &provider) == TURBOWASM_OK);
-    assert(provider.tcp_start_connect == NULL);
-    assert(provider.tcp_finish_connect == NULL);
+    assert(provider.tcp_start_connect != NULL);
+    assert(provider.tcp_finish_connect != NULL);
     assert(provider.tcp_accept == NULL);
-    assert(provider.tcp_remote_address == NULL);
+    assert(provider.tcp_remote_address != NULL);
     assert(provider.tcp_subscribe == NULL);
-    assert(provider.tcp_shutdown == NULL);
+    assert(provider.tcp_shutdown != NULL);
 
     events = SIZE_MAX;
     assert(turbowasm_wasi02_cnet_advance_external(
