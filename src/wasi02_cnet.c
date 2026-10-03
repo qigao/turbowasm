@@ -828,6 +828,146 @@ static turbowasm_status provider_finish_connect(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status provider_accept(
+    void *context,
+    turbowasm_value listener_rep,
+    turbowasm_value *out_socket,
+    turbowasm_value *out_input,
+    turbowasm_value *out_output,
+    turbowasm_wasi02_socket_error *out_error) {
+    tw_cnet_impl *impl = (tw_cnet_impl *)context;
+    tw_cnet_slot *listener = slot_from_rep(
+        impl, listener_rep);
+    tw_cnet_slot *child;
+    cnet_observer observer;
+    turbowasm_status stream_status;
+    uint32_t child_index = 0u;
+    size_t events = 0u;
+    int status;
+
+    if (out_socket == NULL || out_input == NULL ||
+        out_output == NULL || out_error == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    memset(out_socket, 0, sizeof(*out_socket));
+    memset(out_input, 0, sizeof(*out_input));
+    memset(out_output, 0, sizeof(*out_output));
+    *out_error = TURBOWASM_WASI02_SOCKET_ERROR_NONE;
+
+    if (listener == NULL ||
+        listener->state != TW_CNET_SLOT_LISTENING ||
+        impl->external_backend == NULL ||
+        impl->external_stopped) {
+        *out_error =
+            TURBOWASM_WASI02_SOCKET_ERROR_INVALID_STATE;
+        return TURBOWASM_OK;
+    }
+
+    if (!listener->accept_terminal) {
+        *out_error = TURBOWASM_WASI02_SOCKET_ERROR_WOULD_BLOCK;
+        return TURBOWASM_OK;
+    }
+
+    child = reserve_slot(
+        impl, listener->family, &child_index);
+    if (child == NULL) {
+        *out_error =
+            TURBOWASM_WASI02_SOCKET_ERROR_NEW_SOCKET_LIMIT;
+        return TURBOWASM_OK;
+    }
+
+    /*
+     * Keep the child hidden until CNet has published CONNECTED and both
+     * stream leases have been created. Any failure before publication leaves
+     * an internal tombstone that normal external progress can drain safely.
+     */
+    child->guest_dropped = true;
+    observer = connection_observer(child);
+    status = cnet_listener_accept(
+        &listener->listener,
+        &impl->client,
+        &observer,
+        &child->connection);
+
+    /*
+     * cnet_listener_accept() consumes exactly one pending accept result,
+     * including a stored terminal error. The listener is not ready again
+     * until a fresh external accept request settles.
+     */
+    listener->accept_terminal = false;
+
+    if (status != SALTS_OK) {
+        release_slot(impl, child);
+        *out_error =
+            status == SALTS_ETIMEDOUT
+                ? TURBOWASM_WASI02_SOCKET_ERROR_WOULD_BLOCK
+                : map_error(status);
+        return TURBOWASM_OK;
+    }
+
+    if (!connection_equal(
+            child->connection, child->connection)) {
+        release_slot(impl, child);
+        return TURBOWASM_TRAPPED;
+    }
+
+    child->connection_active = true;
+    child->connection_connected = false;
+    child->connection_terminal = false;
+    child->connection_close_requested = false;
+    child->connection_status = SALTS_OK;
+    child->state = TW_CNET_SLOT_CONNECTING;
+
+    /*
+     * Accepted sockets are already native-connected. One owner-local CNet
+     * advance publishes their CONNECTED state callback without observing
+     * NativeIO or blocking.
+     */
+    status = cnet_client_advance_external(
+        &impl->client, &events);
+    if (status != SALTS_OK) {
+        (void)cnet_close(
+            &impl->client, child->connection);
+        child->connection_close_requested = true;
+        *out_error = map_error(status);
+        return TURBOWASM_OK;
+    }
+
+    if (child->connection_terminal) {
+        *out_error = map_error(
+            child->connection_status != SALTS_OK
+                ? child->connection_status
+                : SALTS_ECONNABORTED);
+        maybe_release_tombstone(impl, child);
+        return TURBOWASM_OK;
+    }
+
+    if (!child->connection_connected ||
+        child->state != TW_CNET_SLOT_CONNECTED) {
+        (void)cnet_close(
+            &impl->client, child->connection);
+        child->connection_close_requested = true;
+        *out_error =
+            TURBOWASM_WASI02_SOCKET_ERROR_WOULD_BLOCK;
+        return TURBOWASM_OK;
+    }
+
+    stream_status = issue_connection_stream_reps(
+        impl, child, out_input, out_output);
+    if (stream_status != TURBOWASM_OK) {
+        (void)cnet_close(
+            &impl->client, child->connection);
+        child->connection_close_requested = true;
+        return stream_status;
+    }
+
+    child->guest_dropped = false;
+    out_socket->kind = TURBOWASM_VALUE_I64;
+    out_socket->as.i64 = (int64_t)pack_rep(
+        child_index, child->generation);
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status provider_start_listen(
     void *context,
     turbowasm_value socket_rep,
@@ -1836,6 +1976,7 @@ turbowasm_status turbowasm_wasi02_cnet_socket_provider(
     out_provider->tcp_finish_connect = provider_finish_connect;
     out_provider->tcp_start_listen = provider_start_listen;
     out_provider->tcp_finish_listen = provider_finish_listen;
+    out_provider->tcp_accept = provider_accept;
     out_provider->tcp_local_address = provider_local_address;
     out_provider->tcp_remote_address = provider_remote_address;
     out_provider->tcp_set_listen_backlog_size = provider_set_backlog;
