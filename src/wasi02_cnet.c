@@ -877,11 +877,11 @@ static turbowasm_status provider_accept(
     }
 
     /*
-     * Keep the child hidden until CNet has published CONNECTED and both
-     * stream leases have been created. Any failure before publication leaves
-     * an internal tombstone that normal external progress can drain safely.
+     * Keep the child unexposed until CNet has published CONNECTED and both
+     * stream leases exist. Do not mark it dropped yet: a terminal callback may
+     * run inline from advance_external(), and the provider must still inspect
+     * that terminal state before deciding how to retire the hidden child.
      */
-    child->guest_dropped = true;
     observer = connection_observer(child);
     status = cnet_listener_accept(
         &listener->listener,
@@ -926,14 +926,17 @@ static turbowasm_status provider_accept(
     status = cnet_client_advance_external(
         &impl->client, &events);
     if (status != SALTS_OK) {
+        child->guest_dropped = true;
         (void)cnet_close(
             &impl->client, child->connection);
         child->connection_close_requested = true;
+        maybe_release_tombstone(impl, child);
         *out_error = map_error(status);
         return TURBOWASM_OK;
     }
 
     if (child->connection_terminal) {
+        child->guest_dropped = true;
         *out_error = map_error(
             child->connection_status != SALTS_OK
                 ? child->connection_status
@@ -944,9 +947,11 @@ static turbowasm_status provider_accept(
 
     if (!child->connection_connected ||
         child->state != TW_CNET_SLOT_CONNECTED) {
+        child->guest_dropped = true;
         (void)cnet_close(
             &impl->client, child->connection);
         child->connection_close_requested = true;
+        maybe_release_tombstone(impl, child);
         *out_error =
             TURBOWASM_WASI02_SOCKET_ERROR_WOULD_BLOCK;
         return TURBOWASM_OK;
@@ -955,9 +960,11 @@ static turbowasm_status provider_accept(
     stream_status = issue_connection_stream_reps(
         impl, child, out_input, out_output);
     if (stream_status != TURBOWASM_OK) {
+        child->guest_dropped = true;
         (void)cnet_close(
             &impl->client, child->connection);
         child->connection_close_requested = true;
+        maybe_release_tombstone(impl, child);
         return stream_status;
     }
 
