@@ -1,6 +1,7 @@
 #ifndef TURBOWASM_WASI02_CNET_H
 #define TURBOWASM_WASI02_CNET_H
 
+#include <turbowasm/wasi02.h>
 #include <turbowasm/wasi02_sockets.h>
 
 #include <cnet/cnet.h>
@@ -146,5 +147,15 @@ turbowasm_status turbowasm_wasi02_cnet_destroy(
 turbowasm_status turbowasm_wasi02_cnet_socket_provider(
     turbowasm_wasi02_cnet *adapter,
     turbowasm_wasi02_socket_provider *out_provider);
+
+/*
+ * Lifecycle-only stream provider for connected CNet sockets.
+ * This slice publishes/drop-manages input/output reps; each returned stream
+ * retains the connection slot independently from the tcp-socket resource.
+ * read/write/subscribe remain NULL until the following data-plane slice.
+ */
+turbowasm_status turbowasm_wasi02_cnet_stream_provider(
+    turbowasm_wasi02_cnet *adapter,
+    turbowasm_wasi02_stream_provider *out_provider);
 
 #endif /* TURBOWASM_WASI02_CNET_H */
