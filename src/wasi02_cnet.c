@@ -1832,12 +1832,15 @@ turbowasm_status turbowasm_wasi02_cnet_socket_provider(
     out_provider->tcp_drop = provider_tcp_drop;
     out_provider->tcp_start_bind = provider_start_bind;
     out_provider->tcp_finish_bind = provider_finish_bind;
-    out_provider->tcp_start_connect = provider_start_connect;
-    out_provider->tcp_finish_connect = provider_finish_connect;
+    if (impl->external_backend != NULL) {
+        out_provider->tcp_start_connect = provider_start_connect;
+        out_provider->tcp_finish_connect = provider_finish_connect;
+        out_provider->tcp_remote_address = provider_remote_address;
+        out_provider->tcp_shutdown = provider_shutdown;
+    }
     out_provider->tcp_start_listen = provider_start_listen;
     out_provider->tcp_finish_listen = provider_finish_listen;
     out_provider->tcp_local_address = provider_local_address;
-    out_provider->tcp_remote_address = provider_remote_address;
     out_provider->tcp_set_listen_backlog_size = provider_set_backlog;
     out_provider->tcp_keep_alive_enabled = provider_get_bool;
     out_provider->tcp_set_keep_alive_enabled = provider_set_bool;
@@ -1855,7 +1858,6 @@ turbowasm_status turbowasm_wasi02_cnet_socket_provider(
     out_provider->tcp_set_send_buffer_size = provider_set_send;
     if (impl->poll_register != NULL)
         out_provider->tcp_subscribe = provider_subscribe;
-    out_provider->tcp_shutdown = provider_shutdown;
     return TURBOWASM_OK;
 }
 
