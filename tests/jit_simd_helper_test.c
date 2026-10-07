@@ -20,7 +20,7 @@ static void reset_status(turbowasm_jit_invocation_context *context) {
 }
 
 static void test_slot_ops_and_reduce(void) {
-    salts_v128 slots[4] = {{{0}}};
+    cmeta_v128 slots[4] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
     uint8_t raw[16] = {0};
     int32_t lanes[4] = {0};
@@ -68,7 +68,7 @@ static void test_slot_ops_and_reduce(void) {
 }
 
 static void test_slot_copy(void) {
-    salts_v128 slots[3] = {{{0}}};
+    cmeta_v128 slots[3] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
     uint8_t expected[16];
     uint8_t actual[16] = {0};
@@ -106,7 +106,7 @@ static void test_memory_helper_and_trap(void) {
     };
     turbowasm_module module = {0};
     turbowasm_instance instance = {0};
-    salts_v128 slots[2] = {{{0}}};
+    cmeta_v128 slots[2] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
     int32_t input[4] = {1, 2, 3, 4};
     int32_t output[4] = {0};
@@ -167,7 +167,7 @@ static void test_memory_helper_and_trap(void) {
 
 
 static void test_invalid_slot_is_invalid_argument(void) {
-    salts_v128 slots[1] = {{{0}}};
+    cmeta_v128 slots[1] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
 
     context.simd_slots = slots;
@@ -182,7 +182,7 @@ static void test_invalid_slot_is_invalid_argument(void) {
 }
 
 static void test_success_does_not_set_trap(void) {
-    salts_v128 slots[2] = {{{0}}};
+    cmeta_v128 slots[2] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
 
     context.simd_slots = slots;
@@ -199,7 +199,7 @@ static void test_success_does_not_set_trap(void) {
 }
 
 static void test_relaxed_helper_parity(void) {
-    salts_v128 slots[4] = {{{0}}};
+    cmeta_v128 slots[4] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
     uint8_t source[16];
     uint8_t indexes[16] = {0};
@@ -257,7 +257,7 @@ static void test_relaxed_helper_parity(void) {
 }
 
 static void test_unsupported_kind_records_status(void) {
-    salts_v128 slots[3] = {{{0}}};
+    cmeta_v128 slots[3] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
 
     context.simd_slots = slots;
