@@ -4,7 +4,7 @@
 #include "module_internal.h"
 #include "runtime_alloc.h"
 
-#include <salts_coro.h>
+#include <coro.h>
 
 #include <stdint.h>
 #include <stdlib.h>
