@@ -26,6 +26,8 @@ The repository currently provides:
 - CMeta-backed vector/mask semantic descriptors;
 - portable SIMD execution through `Salts::SIMD`;
 - an optional lazy MIR JIT for eligible hot functions;
+- complete scalar numeric MIR admission, including comparisons, conversions,
+  saturation and exact floating constants, sharing Runtime numeric primitives;
 - helper-backed SIMD MIR lowering with invocation-local private `v128` slots,
   including structured control flow;
 - an explicit MIR executable-mapping budget;

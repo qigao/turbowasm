@@ -266,8 +266,8 @@ add GC carriers to host signature declarations.
 
 These results qualify scalar/reference indirect calls and tails through Runtime,
 not full native Core 3.0 execution. Native GC and EH instructions, reference
-globals and remaining reference control, and remaining numeric instructions are
-still gaps. Vector call signatures are covered by the increment below.
+globals and remaining reference control are still gaps. Vector call signatures
+and scalar numeric instructions are covered by the increments below.
 Public resumable execution remains on the
 interpreter. Component encoding/post-return/async coverage and broader WASI 0.2
 data paths remain separate work.
@@ -311,3 +311,45 @@ ctest --preset win-core3-asan-user -R "vector_calls|jit_simd_helper|reference_na
 This qualifies the helper-backed vector call boundary. It does not add a MIR
 vector register ABI, the remaining SIMD instructions, native GC/EH instructions,
 or resumable native execution.
+
+## MIR scalar numeric instructions
+
+Implementation `b85048b` extends the structured MIR path to all 128 scalar numeric
+opcodes (`0x45` through `0xc4`) and all eight saturating conversions. Existing
+direct arithmetic lowering is retained; the other operations call the same
+primitives used by the interpreter through a bounded two-value local stack.
+Floating constants are materialized from their original bits, including NaN
+payloads, infinities and negative zero. No installed API changes are required.
+
+`numeric_native_test.c` independently validates each generated binary module and
+compares native execution against the interpreter over integer extrema, shift
+widths, signed/unsigned boundaries, zero, subnormal/normal floats, ties, conversion
+limits, infinities and quiet/signaling NaNs. It also compares every instruction's
+fuel boundary, checks exact constant and bit-operation results, and verifies that
+helper failures do not publish a result. Every function must be compiled in the
+MIR variant. The numerical contract is the
+[Core specification](https://webassembly.github.io/spec/core/exec/numerics.html).
+
+The first native run passed the new numeric test on Linux and macOS; two older
+tests still expected integer division to be ineligible. Follow-up `2ec239d`
+updates those expectations and explicitly retains interpreted callees in the
+mixed-tier tuple tests. Windows ASan passed the five initial related tests in
+6.03 seconds and four follow-up regressions in 5.59 seconds. The complete Windows
+ASan run passed 144/144 tests in 287.85 seconds, including both Core 3.0 gates.
+
+[Native CI at `2ec239d`](https://github.com/qigao/turbowasm/actions/runs/37630910538)
+passed all five jobs:
+
+- Linux MIR: 162/162 tests, 1.59 seconds.
+- macOS arm64 MIR: 162/162 tests, 2.84 seconds.
+- Windows qualification: 142/142 tests; installed package: 16/16.
+- Linux qualification: 143/143 tests; installed package: 17/17.
+- Android arm64: cross-build and installed consumer build; no device execution.
+
+```powershell
+cmake --build --preset win-core3-asan-user
+ctest --preset win-core3-asan-user -R "numeric_native|scalar_results|scalar_tail|indirect_native|vector_calls" --output-on-failure
+```
+
+Scalar numeric coverage does not qualify native GC/EH, remaining reference
+control/globals, the remaining SIMD subset, or resumable native execution.
