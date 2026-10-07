@@ -10,9 +10,46 @@ typedef struct turbowasm_component_exec_async_transaction {
 typedef struct turbowasm_component_exec_async_call {
     turbowasm_component_async_call call;
     turbowasm_component_exec_async_transaction parameters, result;
+    turbowasm_component_exec_realloc_context result_realloc;
     struct turbowasm_component_exec_async_call *next;
     turbowasm_status failure;
 } turbowasm_component_exec_async_call;
+
+turbowasm_status turbowasm_component_exec_async_bind(
+    turbowasm_component_exec_canon_lower_context *lower,
+    turbowasm_component_exec *provider, uint32_t adapter_index) {
+    const turbowasm_component_type *source, *target;
+    const turbowasm_component_task_binding *binding;
+    uint32_t i;
+    if (lower == NULL || lower->exec == NULL || lower->async_provider != NULL || !lower->is_async ||
+        provider == NULL || !provider->initialized || provider == lower->exec ||
+        provider->async_functions == NULL || adapter_index >= provider->adapter_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+    binding = &provider->async_functions[adapter_index];
+    source = turbowasm_component_type_graph_get(lower->graph, lower->function_type);
+    target = turbowasm_component_type_graph_get(binding->graph, binding->function_type);
+    if (binding->instance == NULL || source == NULL || target == NULL ||
+        source->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION || target->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
+        !source->as.function.is_async || !target->as.function.is_async ||
+        source->as.function.param_count != target->as.function.param_count ||
+        source->as.function.has_result != target->as.function.has_result) return TURBOWASM_TYPE_MISMATCH;
+    for (i = 0u; ; ++i) {
+        bool result = i == source->as.function.param_count;
+        turbowasm_component_type_ref a, b;
+        uint32_t features;
+        if (result && !source->as.function.has_result) break;
+        a = result ? source->as.function.result : source->as.function.params[i];
+        b = result ? target->as.function.result : target->as.function.params[i];
+        if (!turbowasm_component_value_type_equal(lower->graph, a, binding->graph, b) ||
+            !turbowasm_component_transfer_type_features(lower->graph, a, &features)) return TURBOWASM_TYPE_MISMATCH;
+        if ((features & TURBOWASM_COMPONENT_VALUE_RESOURCES) != 0u) return TURBOWASM_UNSUPPORTED;
+        if (result) break;
+    }
+    if (provider->async_import_owners == UINT32_MAX) return TURBOWASM_OUT_OF_MEMORY;
+    lower->async_provider = provider; lower->async_adapter_index = adapter_index;
+    ++provider->async_import_owners;
+    return TURBOWASM_OK;
+}
 
 static turbowasm_status commit_buffer(void *context,
     turbowasm_component_value *values, uint32_t count) {
@@ -136,7 +173,8 @@ turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_h
     turbowasm_component_exec_canon_lower_context *lower = context;
     turbowasm_component_async_call_binding binding = {0};
     turbowasm_component_exec_async_call *frame;
-    turbowasm_component_exec *exec;
+    turbowasm_component_exec *exec, *provider;
+    uint32_t adapter;
     turbowasm_status status;
     uint32_t word;
     if (lower == NULL || lower->exec == NULL || !lower->is_async || caller == NULL ||
@@ -146,23 +184,30 @@ turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_h
     if (exec->task_domain.active == NULL || exec->task_domain.active->destroying || !exec->may_leave ||
         exec->task_domain.synchronous_depth != 0u)
         return TURBOWASM_TRAPPED;
-    if (exec->async_functions == NULL || lower->local_adapter_index >= exec->adapter_count ||
-        exec->async_functions[lower->local_adapter_index].instance == NULL)
+    provider = lower->async_provider != NULL ? lower->async_provider : exec;
+    adapter = lower->async_provider != NULL ? lower->async_adapter_index : lower->local_adapter_index;
+    if (provider->async_functions == NULL || adapter >= provider->adapter_count ||
+        provider->async_functions[adapter].instance == NULL)
         return TURBOWASM_UNSUPPORTED;
     status = collect(exec);
     if (status != TURBOWASM_OK) return status;
-    if (exec->task_domain.count >= exec->task_domain.limit ||
+    if (provider->task_domain.count >= provider->task_domain.limit ||
         exec->async_call_count >= exec->task_domain.limit) return TURBOWASM_OUT_OF_MEMORY;
     binding.caller_graph = lower->graph; binding.caller_function_type = lower->function_type;
-    binding.caller_domain = binding.callee_domain = &exec->task_domain;
+    binding.caller_domain = &exec->task_domain; binding.callee_domain = &provider->task_domain;
     binding.caller_memory = lower->memory;
-    binding.callee = exec->async_functions[lower->local_adapter_index];
+    binding.callee = provider->async_functions[adapter];
     frame = turbowasm_rt_calloc(1u, sizeof(*frame));
     if (frame == NULL) return TURBOWASM_OUT_OF_MEMORY;
     /* These contexts survive guest realloc suspension and are never shared with
      * a recursive lower or a different call's pending result conversion. */
-    bind_values(&binding.callee.memory, &binding.parameters, &frame->parameters, exec);
+    bind_values(&binding.callee.memory, &binding.parameters, &frame->parameters, provider);
     bind_values(&binding.caller_memory, &binding.result, &frame->result, exec);
+    if (provider != exec && binding.caller_memory.guest_realloc != NULL) {
+        frame->result_realloc = lower->realloc_context;
+        frame->result_realloc.progress_task = &frame->call.task;
+        binding.caller_memory.realloc_context = &frame->result_realloc;
+    }
     status = turbowasm_component_async_call_create(&frame->call, &binding, arguments, argument_count);
     if (status != TURBOWASM_OK) { turbowasm_rt_free(frame); return status; }
     append(exec, frame); ++exec->async_call_count;
@@ -213,12 +258,16 @@ turbowasm_status turbowasm_component_exec_async_poll(turbowasm_component_exec *e
 turbowasm_status turbowasm_component_exec_async_abort(turbowasm_component_exec *exec, turbowasm_status reason) {
     turbowasm_runtime_scope scope;
     turbowasm_status status = TURBOWASM_OK;
+    turbowasm_component_exec_async_call *frame;
+    uint32_t local_tasks = 0u;
     if (exec == NULL || !exec->initialized || reason == TURBOWASM_OK || reason == TURBOWASM_YIELDED)
         return TURBOWASM_INVALID_ARGUMENT;
     if (exec->async_driving || exec->task_domain.active != NULL) return TURBOWASM_TRAPPED;
     /* The owner must unwind exported caller tasks before invalidating their
      * subtasks/result regions, including callers waiting through a shared set. */
-    if (exec->task_domain.count != exec->async_call_count) return TURBOWASM_TRAPPED;
+    for (frame = exec->async_calls; frame != NULL; frame = frame->next)
+        if (frame->call.task.domain == &exec->task_domain) ++local_tasks;
+    if (exec->task_domain.count != local_tasks) return TURBOWASM_TRAPPED;
     scope = turbowasm_runtime_scope_enter(&exec->binary->config);
     exec->async_driving = true;
     while (exec->async_calls != NULL) {

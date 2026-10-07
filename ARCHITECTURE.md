@@ -865,8 +865,8 @@ Component during that invocation. An auxiliary owner excludes other tasks in
 the domain across suspension until context restoration. No transient host-call
 pointer is retained.
 This stage admits same-domain task/endpoint execution and local async lowering;
-async imports and cross-instance resource borrowing remain gated until their
-progress and loan owners are integrated. Local resource/endpoint call transactions
+the private import extension below adds retained cross-instance calls. Imported
+resource borrowing remains gated until its loan owners are integrated. Local resource/endpoint call transactions
 are described below. The private entry
 does not change public loading or host API admission.
 
@@ -893,8 +893,8 @@ their error for the waiting caller; unpublished failed calls unwind during owner
 collection. A private failure-abort entry propagates a non-success reason,
 rejects active/pinned conversion and releases remaining calls after exported
 caller tasks have been destroyed. It is not public cooperative cancellation. Exec destruction requires
-the call list drained. This stage binds local async lifts; async capability
-imports and cross-instance progress remain gated.
+the call list drained. Local and imported async lifts share this progress list;
+the private import extension below keeps provider tasks in their own domains.
 
 Local async endpoint parameters and results use two independent endpoint codecs
 owned by each retained call frame. The caller-to-callee and callee-to-caller
@@ -949,6 +949,26 @@ exec alive until release, and finalization performs only non-suspending rollback
 and storage release. Host endpoints can exchange local resource/endpoint values;
 same-Component nonnumeric guest-to-guest copies retain their specified trap.
 Cross-instance resource import identity and progress are separate integration work.
+
+Private async instance imports reuse the existing unambiguous capability router.
+An optional resolver selects an already initialized provider exec and async lift;
+instantiation validates the complete signature and retains the provider until the
+consumer is destroyed. Call frames stay on the consumer's bounded progress list,
+while the callee task counts against the provider's task quota. Drivers explicitly
+poll each exec with outgoing calls; no recursive scheduler or worker is introduced.
+Resources remain rejected at this boundary until imported nominal identities and
+borrowed-handle accounting are connected. Other supported canonical values use
+the existing per-direction transaction codecs.
+
+Result realloc needs the callee's retained execution control while entering the
+consumer's memory and builtin context. Each call therefore owns a copy of the
+result realloc context with an explicit progress task. Both domains retain the
+auxiliary guard through suspension; context builtins select this auxiliary task,
+whose fresh slots are restored on success or unwind. The consumer's may_leave
+guard prevents ordinary canonical reentry during realloc. Abort first unwinds
+exported caller tasks, then their outgoing calls; provider teardown refuses live
+import bindings and inbound tasks. Public async admission remains closed while
+host ownership, imported resources and general synchronous interop are completed.
 
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and

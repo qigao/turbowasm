@@ -1320,9 +1320,39 @@ realloc suspension/unwind, context lifetime after task exit, cancellation delive
 out-of-bounds admission, quota rollback, the same-Component nonnumeric copy trap,
 and allocation failures. Every case checks allocation cleanup. Windows ASan passed
 12 cases with 867 assertions; the related regression passed 81/81 targets in
-4.36 seconds. Native MIR qualification of this payload integration is pending;
-the MIR variant asserts that the exercised guest functions are compiled.
+4.36 seconds. At `89293b4`, the
+[native run](https://github.com/qigao/turbowasm/actions/runs/37704068382)
+passed all five jobs. Linux MIR passed 200/200 targets in 2.62 seconds and macOS
+arm64 MIR passed 200/200 in 3.39 seconds. The compiled payload suite passed in
+0.05 and 0.07 seconds respectively. Its allocation-failure sweep exhausts failure
+positions through success without assuming the same allocation count for each
+execution backend.
 
-Async capability imports, cross-instance resource borrowing/progress and payload
-conversion, public task/endpoint owners, synchronous
+## Private async instance imports
+
+The capability router can now resolve async instance-function imports to an
+initialized provider's lift. Instantiation validates signatures, rejects ambiguous
+providers, and retains selected execs through consumer teardown. Outgoing calls
+stay on the consumer's bounded progress list; their tasks use the provider's quota.
+Early results retain the callee until Core exit. Imported resource identities and
+borrowed handles remain excluded from this private boundary.
+
+Return conversion uses per-call realloc context and the actual callee's execution
+control, entering the consumer's memory32 from the provider's memory64. Both
+domains retain auxiliary guards through fuel suspension, and context slots are
+isolated and restored on success/unwind. Endpoint values use the existing
+transaction codecs in each instance's canonical handle table.
+
+`component_async_import_test.c` instantiates two independently validated Component
+binaries and checks eager/deferred/early results, string and nested-endpoint round
+trips, cancellation including a competing normal return, provider traps and quota,
+result realloc suspension/unwind, ambiguous/incompatible imports, and allocation
+failures in calls and partial instantiation. It checks provider reference counts,
+task/handle cleanup and allocation balance. Windows ASan passed 14 cases with
+1,899 assertions; related regression passed 82/82 targets in 4.63 seconds. The MIR
+variant checks compiled caller/provider functions and callbacks; native
+qualification of this import extension is pending.
+
+Async host capability callbacks, cross-instance resource borrowing and payload
+conversion, nested Component instantiation, public task/endpoint owners, synchronous
 destructor-to-async lowering and the broader Component/WASI gaps remain open.

@@ -47,6 +47,8 @@ typedef struct turbowasm_component_exec_realloc_context {
     turbowasm_host_call *call;
     turbowasm_trap *trap;
     turbowasm_component_task_domain *domain;
+    /* Retained cross-instance result conversion runs on this task's Core stack. */
+    turbowasm_component_task *progress_task;
 } turbowasm_component_exec_realloc_context;
 
 typedef struct turbowasm_component_exec_async_builtin {
@@ -117,6 +119,12 @@ typedef struct turbowasm_component_exec_imports {
     turbowasm_component_resource_lower_fn resource_lower;
     turbowasm_component_resource_lift_fn resource_lift;
     turbowasm_component_import_resource_drop_fn resource_drop;
+    /* Private async resolver; no guest execution. Provider must already be
+     * initialized. The consumer retains it after validating the selected lift. */
+    turbowasm_status (*async_target)(void *context,
+        turbowasm_component_name instance_name, turbowasm_component_name function_name,
+        const turbowasm_component_type_graph *graph, turbowasm_component_type_id function_type,
+        struct turbowasm_component_exec **provider, uint32_t *adapter_index);
 } turbowasm_component_exec_imports;
 
 typedef struct turbowasm_component_exec_canon_lower_context {
@@ -126,6 +134,8 @@ typedef struct turbowasm_component_exec_canon_lower_context {
     const turbowasm_component_type_graph *graph;
     turbowasm_component_type_id function_type;
     uint32_t local_adapter_index;
+    struct turbowasm_component_exec *async_provider;
+    uint32_t async_adapter_index;
     bool is_async;
 
     turbowasm_component_flat_signature flat_signature;
@@ -192,6 +202,7 @@ typedef struct turbowasm_component_exec {
     turbowasm_component_exec_async_builtin *async_builtins;
     struct turbowasm_component_exec_async_call *async_calls, *async_calls_tail;
     uint32_t async_call_count;
+    uint32_t async_import_owners;
     bool async_driving;
 
     bool may_leave;
@@ -231,11 +242,21 @@ turbowasm_status turbowasm_component_exec_resource_release(
 
 /* Private staged async integration. Explicit nonzero bounded quotas; borrows
  * binary/source bytes. Local resource/endpoint values use invocation- or
- * buffer-owned transactions; async imports and cross-instance borrowing remain gated.
+ * buffer-owned transactions; imported resource identities and borrowing remain gated.
  * No public Component loader calls this entry. */
 turbowasm_status turbowasm_component_exec_init_async(
     turbowasm_component_exec *exec, const turbowasm_component_binary *binary,
     const turbowasm_component_exec_async_limits *limits);
+/* Same retained private entry, with synchronous capabilities and/or async
+ * instance targets. Imported resource-bearing async signatures remain gated. */
+turbowasm_status turbowasm_component_exec_init_async_with_import_sets(
+    turbowasm_component_exec *exec, const turbowasm_component_binary *binary,
+    const turbowasm_component_exec_async_limits *limits,
+    const turbowasm_component_exec_imports *imports, size_t import_count);
+/* Validate and retain one already resolved imported async lift. */
+turbowasm_status turbowasm_component_exec_async_bind(
+    turbowasm_component_exec_canon_lower_context *lower,
+    turbowasm_component_exec *provider, uint32_t adapter_index);
 /* Returns a borrowed immutable lift binding. Copy it and install invocation
  * prepare/resolve hooks before task_create against exec->task_domain. */
 turbowasm_status turbowasm_component_exec_async_export(

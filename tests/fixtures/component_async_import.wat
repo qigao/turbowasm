@@ -1,0 +1,123 @@
+(component
+  (import "provider" (instance $provider
+    (type $number (func async (result u32)))
+    (type $scalar (func async (param "x" u32) (result u32)))
+    (type $text (func async (param "x" string) (result string)))
+    (type $stream (stream u32))
+    (type $mixed (tuple $stream string))
+    (type $echo (func async (param "x" $mixed) (result $mixed)))
+    (export "scalar" (func (type $scalar)))
+    (export "slow" (func (type $number)))
+    (export "early" (func (type $number)))
+    (export "text" (func (type $text)))
+    (export "mixed" (func (type $echo)))
+    (export "trap" (func (type $number)))))
+  (alias export $provider "scalar" (func $scalar))
+  (alias export $provider "slow" (func $slow))
+  (alias export $provider "early" (func $early))
+  (alias export $provider "text" (func $text))
+  (alias export $provider "mixed" (func $mixed))
+  (alias export $provider "trap" (func $trap))
+  (type $number (func async (result u32)))
+  (type $stream (stream u32))
+  (core func $get (canon context.get i32 0))
+  (core func $set (canon context.set i32 0))
+  (core instance $context (export "get" (func $get)) (export "set" (func $set)))
+  (core module $memory
+    (import "c" "get" (func $get (result i32)))
+    (import "c" "set" (func $set (param i32)))
+    (memory (export "memory") 1) (data (i32.const 0) "hello")
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32) (local $n i32)
+      call $get if unreachable end i32.const 56 call $set
+      i32.const 30 local.set $n
+      loop $loop local.get $n i32.const 1 i32.sub local.tee $n br_if $loop end
+      i32.const 1024))
+  (core instance $memory (instantiate $memory (with "c" (instance $context))))
+  (alias core export $memory "memory" (core memory $memory))
+  (alias core export $memory "realloc" (core func $realloc))
+  (core func $scalar (canon lower (func $scalar) async (memory $memory)))
+  (core func $slow (canon lower (func $slow) async (memory $memory)))
+  (core func $early (canon lower (func $early) async (memory $memory)))
+  (core func $text (canon lower (func $text) async (memory $memory) (realloc $realloc)))
+  (core func $mixed (canon lower (func $mixed) async (memory $memory) (realloc $realloc)))
+  (core func $trap (canon lower (func $trap) async (memory $memory)))
+  (core func $return (canon task.return (result u32) (memory $memory)))
+  (core func $new-set (canon waitable-set.new))
+  (core func $drop-set (canon waitable-set.drop))
+  (core func $wait (canon waitable-set.wait (memory $memory)))
+  (core func $join (canon waitable.join))
+  (core func $drop (canon subtask.drop))
+  (core func $cancel (canon subtask.cancel))
+  (core func $new-stream (canon stream.new $stream))
+  (core func $drop-reader (canon stream.drop-readable $stream))
+  (core func $drop-writer (canon stream.drop-writable $stream))
+  (core instance $a
+    (export "scalar" (func $scalar)) (export "slow" (func $slow)) (export "early" (func $early))
+    (export "text" (func $text)) (export "mixed" (func $mixed)) (export "trap" (func $trap))
+    (export "return" (func $return)) (export "new-set" (func $new-set)) (export "drop-set" (func $drop-set))
+    (export "wait" (func $wait)) (export "join" (func $join)) (export "drop" (func $drop)) (export "cancel" (func $cancel))
+    (export "new-stream" (func $new-stream)) (export "drop-reader" (func $drop-reader)) (export "drop-writer" (func $drop-writer))
+    (export "get" (func $get)) (export "set" (func $set)))
+  (core module $caller
+    (import "a" "scalar" (func $scalar (param i32 i32) (result i32)))
+    (import "a" "slow" (func $slow (param i32) (result i32)))
+    (import "a" "early" (func $early (param i32) (result i32)))
+    (import "a" "text" (func $text (param i32 i32 i32) (result i32)))
+    (import "a" "mixed" (func $mixed (param i32 i32 i32 i32) (result i32)))
+    (import "a" "trap" (func $trap (param i32) (result i32)))
+    (import "a" "return" (func $return (param i32)))
+    (import "a" "new-set" (func $new-set (result i32)))
+    (import "a" "drop-set" (func $drop-set (param i32)))
+    (import "a" "wait" (func $wait (param i32 i32) (result i32)))
+    (import "a" "join" (func $join (param i32 i32)))
+    (import "a" "drop" (func $drop (param i32)))
+    (import "a" "cancel" (func $cancel (param i32) (result i32)))
+    (import "a" "new-stream" (func $new-stream (result i64)))
+    (import "a" "drop-reader" (func $drop-reader (param i32)))
+    (import "a" "drop-writer" (func $drop-writer (param i32)))
+    (import "a" "get" (func $get (result i32)))
+    (import "a" "set" (func $set (param i32)))
+    (import "m" "memory" (memory 1))
+    (func $await (param $word i32) (local $sub i32) (local $set i32)
+      local.get $word i32.const 4 i32.shr_u local.tee $sub
+      if
+        call $new-set local.set $set local.get $sub local.get $set call $join
+        loop $events local.get $set i32.const 256 call $wait drop
+          i32.const 260 i32.load i32.const 2 i32.lt_u br_if $events end
+        local.get $sub call $drop local.get $set call $drop-set
+      end)
+    (func (export "scalar") i32.const 40 i32.const 128 call $scalar call $await i32.const 128 i32.load call $return)
+    (func (export "slow") i32.const 128 call $slow call $await i32.const 128 i32.load call $return)
+    (func (export "early") i32.const 128 call $early call $await i32.const 128 i32.load call $return)
+    (func (export "text")
+      i32.const 71 call $set i32.const 0 i32.const 5 i32.const 128 call $text call $await
+      call $get i32.const 71 i32.ne if unreachable end
+      i32.const 128 i32.load i32.load8_u i32.const 104 i32.ne if unreachable end
+      i32.const 132 i32.load call $return)
+    (func (export "mixed") (local $pair i64)
+      call $new-stream local.tee $pair i32.wrap_i64 i32.const 0 i32.const 5 i32.const 128 call $mixed call $await
+      i32.const 128 i32.load call $drop-reader
+      local.get $pair i64.const 32 i64.shr_u i32.wrap_i64 call $drop-writer
+      i32.const 132 i32.load i32.load8_u i32.const 104 i32.ne if unreachable end
+      i32.const 136 i32.load call $return)
+    (func (export "trap") i32.const 128 call $trap drop unreachable)
+    (func (export "cancel") (local $sub i32) (local $phase i32)
+      i32.const 128 call $slow i32.const 4 i32.shr_u local.tee $sub call $cancel
+      local.tee $phase i32.const 4 i32.ne local.get $phase i32.const 2 i32.ne i32.and
+      if unreachable end local.get $sub call $drop i32.const 49 call $return))
+  (core instance $caller (instantiate $caller (with "a" (instance $a)) (with "m" (instance $memory))))
+  (alias core export $caller "scalar" (core func $scalar-root))
+  (alias core export $caller "slow" (core func $slow-root))
+  (alias core export $caller "early" (core func $early-root))
+  (alias core export $caller "text" (core func $text-root))
+  (alias core export $caller "mixed" (core func $mixed-root))
+  (alias core export $caller "trap" (core func $trap-root))
+  (alias core export $caller "cancel" (core func $cancel-root))
+  (func (export "scalar") (type $number) (canon lift (core func $scalar-root) async (memory $memory)))
+  (func (export "slow") (type $number) (canon lift (core func $slow-root) async (memory $memory)))
+  (func (export "early") (type $number) (canon lift (core func $early-root) async (memory $memory)))
+  (func (export "text") (type $number) (canon lift (core func $text-root) async (memory $memory)))
+  (func (export "mixed") (type $number) (canon lift (core func $mixed-root) async (memory $memory)))
+  (func (export "trap") (type $number) (canon lift (core func $trap-root) async (memory $memory)))
+  (func (export "cancel") (type $number) (canon lift (core func $cancel-root) async (memory $memory)))
+)

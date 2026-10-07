@@ -162,7 +162,7 @@ turbowasm_status turbowasm_component_task_builtin_invoke(void *context, turbowas
         return TURBOWASM_INVALID_ARGUMENT;
     for (i = 0; i < argument_count; ++i)
         if (arguments[i].kind != binding->params[i]) return TURBOWASM_TYPE_MISMATCH;
-    task = binding->domain->active;
+    task = binding->domain->auxiliary != NULL ? binding->domain->auxiliary : binding->domain->active;
     if (task == NULL || task->destroying) return TURBOWASM_TRAPPED;
     if (binding->definition.kind != TURBOWASM_COMPONENT_CONTEXT_GET &&
         binding->definition.kind != TURBOWASM_COMPONENT_CONTEXT_SET &&
