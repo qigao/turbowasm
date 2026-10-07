@@ -5136,9 +5136,9 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
     size_t *result_count,
     turbowasm_trap *trap) {
     const turbowasm_mir_compiled *function;
-    salts_v128 *saved_slots;
+    cmeta_v128 *saved_slots;
     uint32_t saved_count;
-    salts_v128 *slots = NULL;
+    cmeta_v128 *slots = NULL;
     turbowasm_status status;
 
     if (compiled == NULL || compiled->impl == NULL ||
@@ -5153,7 +5153,7 @@ static turbowasm_status turbowasm_mir_invoke_compiled(
         if ((uint64_t)function->simd_slot_count *
                 sizeof(*slots) > (uint64_t)SIZE_MAX)
             return TURBOWASM_OUT_OF_MEMORY;
-        slots = (salts_v128 *)calloc(
+        slots = (cmeta_v128 *)calloc(
             (size_t)function->simd_slot_count,
             sizeof(*slots));
         if (slots == NULL)

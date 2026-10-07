@@ -130,20 +130,20 @@ static void test_wait_registration_notify_race(void) {
 
     for (iteration = 0u; iteration < 250u; ++iteration) {
         wait_race_context waiter = {0};
-        salts_thread_t thread = NULL;
+        cmeta_thread_t thread = NULL;
         uint32_t woken = UINT32_MAX;
         turbowasm_trap trap = TURBOWASM_TRAP_NONE;
 
         atomic_store_i32(impl, 0u, 0u);
         waiter.instance = impl;
 
-        assert(salts_thread_create(
+        assert(cmeta_thread_create(
                    &thread,
                    wait_race_thread,
                    &waiter) == 0);
 
         if ((iteration & 1u) != 0u)
-            salts_thread_yield();
+            cmeta_thread_yield();
 
         /*
          * The wait expected-value read + waiter publication is one SC
@@ -163,7 +163,7 @@ static void test_wait_registration_notify_race(void) {
         assert(trap == TURBOWASM_TRAP_NONE);
         assert(woken <= 1u);
 
-        assert(salts_thread_join(&thread) == 0);
+        assert(cmeta_thread_join(&thread) == 0);
         assert(waiter.status == TURBOWASM_OK);
         assert(waiter.trap == TURBOWASM_TRAP_NONE);
         assert(waiter.result == 0u || waiter.result == 1u);
@@ -240,7 +240,7 @@ static void size_reader_thread(void *argument) {
         if (pages > context->maximum_seen)
             context->maximum_seen = pages;
         if ((iteration & 63u) == 0u)
-            salts_thread_yield();
+            cmeta_thread_yield();
     }
 }
 
@@ -250,8 +250,8 @@ static void test_grow_size_atomic_stress(void) {
     turbowasm_instance_impl *impl;
     atomic_increment_context atomic = {0};
     size_reader_context size = {0};
-    salts_thread_t atomic_thread = NULL;
-    salts_thread_t size_thread = NULL;
+    cmeta_thread_t atomic_thread = NULL;
+    cmeta_thread_t size_thread = NULL;
     uint32_t previous_pages = UINT32_MAX;
     uint32_t final_pages = 0u;
     uint32_t yield_count;
@@ -269,17 +269,17 @@ static void test_grow_size_atomic_stress(void) {
     size.instance = impl;
     size.iterations = 20000u;
 
-    assert(salts_thread_create(
+    assert(cmeta_thread_create(
                &atomic_thread,
                atomic_increment_thread,
                &atomic) == 0);
-    assert(salts_thread_create(
+    assert(cmeta_thread_create(
                &size_thread,
                size_reader_thread,
                &size) == 0);
 
     for (yield_count = 0u; yield_count < 32u; ++yield_count)
-        salts_thread_yield();
+        cmeta_thread_yield();
 
     assert(turbowasm_instance_memory_grow(
                impl,
@@ -288,8 +288,8 @@ static void test_grow_size_atomic_stress(void) {
                &previous_pages) == TURBOWASM_OK);
     assert(previous_pages == 1u);
 
-    assert(salts_thread_join(&atomic_thread) == 0);
-    assert(salts_thread_join(&size_thread) == 0);
+    assert(cmeta_thread_join(&atomic_thread) == 0);
+    assert(cmeta_thread_join(&size_thread) == 0);
     assert(atomic.status == TURBOWASM_OK);
     assert(size.status == TURBOWASM_OK);
     assert(size.minimum_seen >= 1u);
@@ -371,8 +371,8 @@ static void test_cross_backing_sc_fence_stress(void) {
     for (iteration = 0u; iteration < 250u; ++iteration) {
         sc_litmus_context first = {0};
         sc_litmus_context second = {0};
-        salts_thread_t first_thread = NULL;
-        salts_thread_t second_thread = NULL;
+        cmeta_thread_t first_thread = NULL;
+        cmeta_thread_t second_thread = NULL;
 
         atomic_store_i32(impl, 0u, 0u);
         atomic_store_i32(impl, 1u, 0u);
@@ -384,16 +384,16 @@ static void test_cross_backing_sc_fence_stress(void) {
         second.store_memory = 1u;
         second.load_memory = 0u;
 
-        assert(salts_thread_create(
+        assert(cmeta_thread_create(
                    &first_thread,
                    sc_litmus_thread,
                    &first) == 0);
-        assert(salts_thread_create(
+        assert(cmeta_thread_create(
                    &second_thread,
                    sc_litmus_thread,
                    &second) == 0);
-        assert(salts_thread_join(&first_thread) == 0);
-        assert(salts_thread_join(&second_thread) == 0);
+        assert(cmeta_thread_join(&first_thread) == 0);
+        assert(cmeta_thread_join(&second_thread) == 0);
 
         assert(first.status == TURBOWASM_OK);
         assert(second.status == TURBOWASM_OK);

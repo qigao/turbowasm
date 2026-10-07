@@ -155,8 +155,8 @@ static int32_t invoke_i32_arg(
 }
 
 typedef struct executor_blocker {
-    salts_mutex_t mutex;
-    salts_cond_t condition;
+    cmeta_mutex_t mutex;
+    cmeta_cond_t condition;
     bool entered;
     bool release;
 } executor_blocker;
@@ -165,40 +165,40 @@ static void executor_blocker_run(void *user) {
     executor_blocker *blocker = (executor_blocker *)user;
 
     assert(blocker != NULL);
-    salts_mutex_lock(&blocker->mutex);
+    cmeta_mutex_lock(&blocker->mutex);
     blocker->entered = true;
-    salts_cond_signal(&blocker->condition);
+    cmeta_cond_signal(&blocker->condition);
     while (!blocker->release)
-        salts_cond_wait(&blocker->condition, &blocker->mutex);
-    salts_mutex_unlock(&blocker->mutex);
+        cmeta_cond_wait(&blocker->condition, &blocker->mutex);
+    cmeta_mutex_unlock(&blocker->mutex);
 }
 
 static void executor_blocker_init(executor_blocker *blocker) {
     assert(blocker != NULL);
     *blocker = (executor_blocker){0};
-    salts_mutex_init(&blocker->mutex);
-    salts_cond_init(&blocker->condition);
+    cmeta_mutex_init(&blocker->mutex);
+    cmeta_cond_init(&blocker->condition);
     assert(blocker->mutex != NULL);
     assert(blocker->condition != NULL);
 }
 
 static void executor_blocker_wait_entered(executor_blocker *blocker) {
-    salts_mutex_lock(&blocker->mutex);
+    cmeta_mutex_lock(&blocker->mutex);
     while (!blocker->entered)
-        salts_cond_wait(&blocker->condition, &blocker->mutex);
-    salts_mutex_unlock(&blocker->mutex);
+        cmeta_cond_wait(&blocker->condition, &blocker->mutex);
+    cmeta_mutex_unlock(&blocker->mutex);
 }
 
 static void executor_blocker_release(executor_blocker *blocker) {
-    salts_mutex_lock(&blocker->mutex);
+    cmeta_mutex_lock(&blocker->mutex);
     blocker->release = true;
-    salts_cond_signal(&blocker->condition);
-    salts_mutex_unlock(&blocker->mutex);
+    cmeta_cond_signal(&blocker->condition);
+    cmeta_mutex_unlock(&blocker->mutex);
 }
 
 static void executor_blocker_destroy(executor_blocker *blocker) {
-    salts_cond_destroy(&blocker->condition);
-    salts_mutex_destroy(&blocker->mutex);
+    cmeta_cond_destroy(&blocker->condition);
+    cmeta_mutex_destroy(&blocker->mutex);
 }
 
 static void test_spawn_uses_fresh_sibling_and_shared_import(void) {

@@ -8,7 +8,7 @@
 /*
  * Private backend-neutral SIMD helper ABI.
  *
- * JIT backends keep temporary v128 values in invocation-owned salts_v128
+ * JIT backends keep temporary v128 values in invocation-owned cmeta_v128
  * slots.  Generated code refers to slots only by compact integer index and
  * never exposes MIR/SIMDe/native vector types.
  */

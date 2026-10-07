@@ -121,7 +121,7 @@ static turbowasm_status invoke_compiled(
     size_t *result_count,
     turbowasm_trap *trap) {
     turbowasm_jit_invocation_context context = {0};
-    salts_v128 outer_slots[2] = {{{0}}};
+    cmeta_v128 outer_slots[2] = {{{0}}};
     uint8_t before[sizeof(outer_slots)];
 
     memset(outer_slots, 0xa5, sizeof(outer_slots));

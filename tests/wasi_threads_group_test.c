@@ -140,7 +140,7 @@ static void wait_for_marker(turbowasm_instance *root) {
     for (attempt = 0u; attempt < 200000u; ++attempt) {
         if (invoke_i32(root, 3u) == 1)
             return;
-        salts_thread_yield();
+        cmeta_thread_yield();
     }
     assert(invoke_i32(root, 3u) == 1);
 }
