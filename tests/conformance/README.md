@@ -1012,9 +1012,46 @@ memory32/64 string/indirect-tuple/unit returns, invalid options/loans/signatures
 Core exception isolation, and allocation failure cleanup. The interpreter suite
 passed 17 cases with 865 assertions on Windows ASan; related regression passed
 60/60 targets in 2.48 seconds. A separate MIR target uses the same suite with
-compiled-execution assertions; its Linux/macOS verification is pending.
+compiled-execution assertions; Linux/macOS results are recorded below.
+
+At `9e6dd9f`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37680478846)
+passed all five jobs. Linux MIR passed 190/190 in 1.73 seconds; macOS arm64 MIR
+passed 190/190 in 3.60 seconds. Both executed the new MIR Component task target,
+including its assertions that key entry/callback/wait/fuel paths were compiled.
 
 This qualifies an internal execution owner, not public async Component support.
 Automatic binding of decoded builtins/lifts, canonical argument ownership,
 subtask propagation, instance-retaining public task/endpoint/transfer APIs, and
 the remaining Component/WASI integration are still incomplete.
+
+## Private task and waitable builtin bindings
+
+Twelve builtin families now bind decoded descriptors to exact Core host
+signatures: task return/cancel, context get/set, backpressure inc/dec, thread
+yield, waitable-set new/drop/wait/poll, and waitable join. A committed Component
+fixture provides the decoded descriptors; a real Core Wasm fixture imports and
+executes the resulting bindings. Subtask and endpoint families are still rejected
+by this binding entry point, and public async admission remains disabled.
+
+The task driver resumes builtin YIELD on its next quantum and SET waits only
+when a non-consuming readiness check finds a pending event. The retained host
+callback consumes that event and releases its set pin. Unwind releases the same
+pin without replaying the import. Guest-created set storage belongs to the task
+domain, shares canonical table quotas, and is freed after successful unregister;
+domain teardown rejects nonempty/pinned sets. Event payload stores follow the
+canonical order, including partial memory output if the second u32 store traps.
+
+task.return now compares resolved mutable memory identity through imported
+aliases. Comparing Core instance pointers and local indices incorrectly rejected
+two aliases of the same memory; the regression uses two import layers, reversed
+memory indices, both address widths, and a distinct-memory rejection case.
+
+Windows ASan passed the three focused targets in 0.19 seconds and the related
+Component/WASI/resume/host-wait/memory/link regression, 76/76 in 3.48 seconds. The
+task suite passed 25 cases and 2490 assertions, including real builtin suspension,
+context isolation, memory32/64 event output, may_leave checks, cancellation,
+owned-set allocation failure and cleanup, and invalid/unsupported binding
+admission. The same test source extends the MIR task target; verification of
+this increment on Linux/macOS is pending. Component instantiation still needs
+to construct these bindings automatically alongside async lift/lower adapters,
+subtasks, endpoint ownership and the public retained-instance API.

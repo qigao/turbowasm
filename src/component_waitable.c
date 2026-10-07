@@ -176,6 +176,33 @@ turbowasm_status turbowasm_component_waitable_take(
     return take_event(waitable, turbowasm_component_handle_kind_get(table, handle), out_event);
 }
 
+static bool ready_member(const turbowasm_component_waitable *waitable,
+    turbowasm_component_handle_kind kind, turbowasm_component_resource_handle set_handle) {
+    return waitable->set_handle == set_handle && !waitable->delivering && !waitable->sync_waiter &&
+        (kind == TURBOWASM_COMPONENT_HANDLE_SUBTASK ? waitable->state.subtask.pending_event
+                                                  : waitable->state.endpoint.pending_event);
+}
+
+turbowasm_status turbowasm_component_waitable_set_ready(
+    turbowasm_component_resource_table *table, turbowasm_component_resource_handle set_handle,
+    bool *out_ready) {
+    uint32_t i;
+    if (out_ready == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    if (get_set(table, set_handle) == NULL) return TURBOWASM_TRAPPED;
+    for (i = 0u; i < table->capacity; ++i) {
+        turbowasm_component_resource_handle handle;
+        turbowasm_component_handle_kind kind;
+        void *object;
+        if (turbowasm_component_handle_at(table, i, &handle, &kind, &object) &&
+            waitable_kind(kind) && ready_member(object, kind, set_handle)) {
+            *out_ready = true;
+            return TURBOWASM_OK;
+        }
+    }
+    *out_ready = false;
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_component_waitable_set_poll(
     turbowasm_component_resource_table *table,
     turbowasm_component_resource_handle set_handle, turbowasm_component_event *out_event) {
@@ -196,9 +223,7 @@ turbowasm_status turbowasm_component_waitable_set_poll(
         if (turbowasm_component_handle_at(table, index, &handle, &kind, &object) &&
             waitable_kind(kind)) {
             waitable = object;
-            if (waitable->set_handle == set_handle && !waitable->delivering && !waitable->sync_waiter &&
-                (kind == TURBOWASM_COMPONENT_HANDLE_SUBTASK ? waitable->state.subtask.pending_event
-                                                         : waitable->state.endpoint.pending_event)) {
+            if (ready_member(waitable, kind, set_handle)) {
                 set->next_slot = next;
                 return take_event(waitable, kind, out_event);
             }

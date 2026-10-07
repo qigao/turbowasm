@@ -1,9 +1,12 @@
 #include "component_task.h"
+#include "component_task_builtin.h"
 #include "runtime_alloc.h"
 #include <tinytest.h>
 #include <stdlib.h>
 #include <string.h>
 #include "fixtures/component_task.h"
+#include "fixtures/component_task_builtins.h"
+#include "fixtures/component_task_alias.h"
 #ifdef TURBOWASM_TEST_MIR
 #include "instance_internal.h"
 #include "jit/mir_backend.h"
@@ -12,6 +15,11 @@
 static turbowasm_module module;
 static turbowasm_instance instance;
 static turbowasm_linker linker;
+static turbowasm_component_binary builtin_binary;
+static turbowasm_component_task_builtin builtins[16];
+static turbowasm_module alias_module;
+static turbowasm_instance aliases[2], other_instance;
+static turbowasm_linker alias_linker;
 static turbowasm_component_type_graph graph;
 static turbowasm_component_resource_table table;
 static turbowasm_component_task_domain domain;
@@ -26,6 +34,7 @@ static bool may_leave, ignore_cancel, callback_exit_only, wait_in_entry, request
 static bool mismatch_return, mismatched_encoding;
 static bool deliver_on_wait;
 static unsigned composite_return;
+static unsigned return_memory_override;
 static uint32_t entry_word, callback_word, prepared_argument;
 static unsigned entered, callbacks, prepared, wait_started, wait_resumed, wait_interrupted;
 static turbowasm_component_event last_event;
@@ -99,14 +108,17 @@ static turbowasm_status host(void *context, turbowasm_host_call *call,
         if (request_in_entry) check_equal(turbowasm_component_task_request_cancel(domain.active), TURBOWASM_OK);
         if (composite_return != 0u) {
             turbowasm_component_task *task = domain.active;
+            turbowasm_component_canonical_memory memory = task->binding.memory;
             turbowasm_value values[2] = {0};
             const turbowasm_component_type *type = &graph.types[task->binding.function_type];
             bool wide = task->binding.memory.pointer_type == TURBOWASM_COMPONENT_POINTER_I64;
             values[0].kind = values[1].kind = wide ? TURBOWASM_VALUE_I64 : TURBOWASM_VALUE_I32;
             if (wide) { values[0].as.i64 = composite_return == 2 ? 16 : 0; values[1].as.i64 = 5; }
             else { values[0].as.i32 = composite_return == 2 ? 16 : 0; values[1].as.i32 = 5; }
+            if (return_memory_override == 1u) { memory.instance = &aliases[1]; memory.memory_index = wide ? 0u : 1u; }
+            if (return_memory_override == 2u) memory.instance = &other_instance;
             status = turbowasm_component_task_return_flat(&domain, &graph, type->as.function.has_result,
-                type->as.function.result, &task->binding.memory, values,
+                type->as.function.result, &memory, values,
                 composite_return == 1 ? 2 : composite_return == 2 ? 1 : 0);
             if (status != TURBOWASM_OK) return status;
         }
@@ -164,6 +176,8 @@ spec("private async Component Core task execution") {
     before_each() {
         static const turbowasm_value_kind i32s[] = {TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I32};
         static const char *names[] = {"control","callback","return","cancel","wait"};
+        static const char *builtin_names[] = {"return","cancel","get0","set0","get1","set1","inc","dec",
+            "new","drop","join","yield","wait32","poll32","wait64","poll64"};
         const turbowasm_host_function_type types[] = {
             {NULL,0,i32s,1},{i32s,3,i32s,1},{i32s,1,NULL,0},{NULL,0,NULL,0},{NULL,0,NULL,0}
         };
@@ -175,6 +189,8 @@ spec("private async Component Core task execution") {
         mismatch_return = mismatched_encoding = false;
         deliver_on_wait = false;
         composite_return = 0;
+        return_memory_override = 0;
+        memset(builtins, 0, sizeof(builtins));
         entry_word = 1; callback_word = 0; prepared_argument = 42;
         entered = callbacks = prepared = wait_started = wait_resumed = wait_interrupted = 0;
         memset(&last_event, 0, sizeof(last_event)); memset(&set, 0, sizeof(set)); memset(&item, 0, sizeof(item));
@@ -197,7 +213,32 @@ spec("private async Component Core task execution") {
         check_equal(turbowasm_linker_init_with_config(&linker, &config), TURBOWASM_OK);
         for (i = 0; i < 5; ++i)
             check_equal(turbowasm_linker_define_host_function(&linker, name("t"), name(names[i]), &types[i], host, (void *)(uintptr_t)i), TURBOWASM_OK);
+        check_equal(turbowasm_component_binary_decode_async_metadata(&builtin_binary,
+            component_task_builtins_bytes, sizeof(component_task_builtins_bytes), &config), TURBOWASM_OK);
+        check_equal(builtin_binary.async_builtin_count, 16u);
+        for (i = 0; i < 16; ++i) {
+            static const turbowasm_value_kind kinds[] = {TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I64,TURBOWASM_VALUE_F32,TURBOWASM_VALUE_F64};
+            turbowasm_component_flat_signature sig;
+            turbowasm_value_kind params[17], results[1];
+            turbowasm_host_function_type type;
+            unsigned j;
+            check_equal(turbowasm_component_async_builtin_signature(&builtin_binary.type_graph,
+                &builtin_binary.async_builtins[i], i >= 14 ? TURBOWASM_COMPONENT_POINTER_I64 : TURBOWASM_COMPONENT_POINTER_I32, &sig), TURBOWASM_OK);
+            for (j = 0; j < sig.param_count; ++j) params[j] = kinds[sig.params[j]];
+            for (j = 0; j < sig.result_count; ++j) results[j] = kinds[sig.results[j]];
+            type.params = params; type.param_count = sig.param_count; type.results = results; type.result_count = sig.result_count;
+            check_equal(turbowasm_linker_define_host_function(&linker, name("a"), name(builtin_names[i]), &type,
+                turbowasm_component_task_builtin_invoke, &builtins[i]), TURBOWASM_OK);
+        }
         check_equal(turbowasm_instance_create_linked(&instance, &module, &linker), TURBOWASM_OK);
+        for (i = 0; i < 16; ++i) {
+            turbowasm_component_canonical_memory memory = {0};
+            const turbowasm_component_async_builtin *definition = &builtin_binary.async_builtins[i];
+            memory.instance = &instance; memory.memory_index = definition->memory_index;
+            memory.pointer_type = memory.memory_index ? TURBOWASM_COMPONENT_POINTER_I64 : TURBOWASM_COMPONENT_POINTER_I32;
+            check_equal(turbowasm_component_task_builtin_bind(&builtins[i], &domain, &builtin_binary.type_graph,
+                definition, definition->has_memory ? &memory : NULL), TURBOWASM_OK);
+        }
 #ifdef TURBOWASM_TEST_MIR
         { turbowasm_jit_backend backend = {0};
           check_equal(turbowasm_mir_backend_create(&backend), TURBOWASM_OK);
@@ -211,7 +252,10 @@ spec("private async Component Core task execution") {
         check_equal(turbowasm_component_task_domain_destroy(&domain), TURBOWASM_OK);
         turbowasm_component_resource_table_destroy(&table);
         turbowasm_component_type_graph_destroy(&graph);
+        turbowasm_instance_destroy(&aliases[1]); turbowasm_instance_destroy(&aliases[0]);
+        turbowasm_instance_destroy(&other_instance); turbowasm_linker_destroy(&alias_linker); turbowasm_module_destroy(&alias_module);
         turbowasm_instance_destroy(&instance); turbowasm_linker_destroy(&linker); turbowasm_module_destroy(&module);
+        turbowasm_component_binary_destroy(&builtin_binary);
         turbowasm_runtime_scope_leave(scope); check_equal(live, 0u);
     }
 
@@ -464,5 +508,156 @@ spec("private async Component Core task execution") {
         allowance = 0; status = turbowasm_component_task_resume(&tasks[0], NULL); allowance = SIZE_MAX;
         check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_equal(set.wait_count, 0u);
         check_false(item.state.subtask.pending_event); check_null(domain.exclusive); check_null(domain.active);
+    }
+
+    it("binds decoded context and yield builtins to resumable Core imports") {
+        create(0, "builtin-yield", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(tasks[0].builtin_wait, TURBOWASM_COMPONENT_TASK_WAIT_YIELD);
+        check_equal(tasks[0].context_storage[0], UINT64_C(0x123456780000002a));
+        check_equal(tasks[0].context_storage[1], UINT64_C(0x2345678900000007));
+        create(1, "builtin-context-zero", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_OK);
+        check_equal(tasks[1].result.as.u32, 0u);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(tasks[0].result.as.u32, 49u); check_equal(tasks[0].builtin_wait, TURBOWASM_COMPONENT_TASK_WAIT_NONE);
+        compiled("builtin-yield");
+    }
+
+    it("waits and polls through decoded memory32 and memory64 builtins without consuming readiness early") {
+        unsigned wide, polling;
+        register_set();
+        for (wide = 0; wide < 2; ++wide) for (polling = 0; polling < 2; ++polling) {
+            turbowasm_component_canonical_memory memory = {0};
+            turbowasm_component_value payload = {0};
+            const char *entry = wide ? (polling ? "builtin-poll64" : "builtin-wait64")
+                                     : (polling ? "builtin-poll32" : "builtin-wait32");
+            prepared_argument = set.handle; create(0, entry, NULL, true);
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), polling ? TURBOWASM_OK : TURBOWASM_YIELDED);
+            if (!polling) {
+                check_equal(set.wait_count, 1u);
+                check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+                if (wide == 0) check_true(turbowasm_component_subtask_start(&item.state.subtask));
+                else check_true(turbowasm_component_subtask_resolve(&item.state.subtask, false));
+                check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+                check_false(item.state.subtask.pending_event); check_equal(set.wait_count, 0u);
+            }
+            check_equal(tasks[0].result.as.u32, polling ? 0u : (uint32_t)TURBOWASM_COMPONENT_EVENT_SUBTASK);
+            memory.instance = &instance; memory.memory_index = wide;
+            memory.pointer_type = wide ? TURBOWASM_COMPONENT_POINTER_I64 : TURBOWASM_COMPONENT_POINTER_I32;
+            check_equal(turbowasm_component_canonical_lift_value(&graph, u32_type(), &memory, 32, &payload), TURBOWASM_OK);
+            check_equal(payload.as.u32, polling ? 0u : item.handle);
+            check_equal(turbowasm_component_value_destroy(&payload), TURBOWASM_OK);
+            compiled(entry);
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        }
+    }
+
+    it("unwinds builtin wait pins before destroying the task and preserves canonical partial stores") {
+        turbowasm_component_canonical_memory memory = {0}; turbowasm_component_value payload = {0};
+        register_set(); prepared_argument = set.handle; create(0, "builtin-wait32", NULL, true);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK); check_equal(set.wait_count, 0u);
+        check_true(turbowasm_component_subtask_start(&item.state.subtask));
+        create(0, "builtin-poll-oob", NULL, true);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_TRAPPED);
+        check_false(item.state.subtask.pending_event);
+        memory.instance = &instance;
+        check_equal(turbowasm_component_canonical_lift_value(&graph, u32_type(), &memory, 65532, &payload), TURBOWASM_OK);
+        check_equal(payload.as.u32, item.handle); /* first store committed before second OOB */
+        check_equal(turbowasm_component_value_destroy(&payload), TURBOWASM_OK);
+    }
+
+    it("owns guest-created sets and applies backpressure through actual builtins") {
+        create(0, "builtin-set-drop", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(table.live_count, 0u); check_null(domain.sets);
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_register(&table, TURBOWASM_COMPONENT_HANDLE_SUBTASK, &item), TURBOWASM_OK);
+        prepared_argument = item.handle; create(0, "builtin-join", NULL, true);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(item.set_handle, 0u); check_null(domain.sets);
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        create(0, "builtin-pressure", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED); check_equal(domain.backpressure, 1u);
+        create(1, "builtin-set-leave", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_YIELDED);
+        check_equal(tasks[1].phase, TURBOWASM_COMPONENT_TASK_INITIAL);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK); check_equal(domain.backpressure, 0u);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_OK);
+        check_not_null(domain.sets); /* domain teardown releases untaken empty sets */
+    }
+
+    it("executes decoded task.cancel and guards may_leave before side effects") {
+        create(0, "entry", "builtin-cancel", false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_task_request_cancel(&tasks[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(tasks[0].phase, TURBOWASM_COMPONENT_TASK_CANCELLED);
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        may_leave = false; create(0, "builtin-set-leave", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_TRAPPED);
+        check_null(domain.sets); check_equal(table.live_count, 0u);
+    }
+
+    it("compares canonical memory identity through two imported aliases and rejects a distinct memory") {
+        unsigned i, wide;
+        check_equal(turbowasm_module_load_borrowed(&alias_module, component_task_alias_bytes, sizeof(component_task_alias_bytes)), TURBOWASM_OK);
+        for (i = 0; i < 2; ++i) {
+            check_equal(turbowasm_linker_init(&alias_linker), TURBOWASM_OK);
+            check_equal(turbowasm_linker_define_instance(&alias_linker, name("p"), i ? &aliases[0] : &instance), TURBOWASM_OK);
+            check_equal(turbowasm_instance_create_linked(&aliases[i], &alias_module, &alias_linker), TURBOWASM_OK);
+            turbowasm_linker_destroy(&alias_linker);
+        }
+        check_equal(turbowasm_instance_create_linked(&other_instance, &module, &linker), TURBOWASM_OK);
+        composite_return = 1; entry_word = 0;
+        for (wide = 0; wide < 2; ++wide) {
+            turbowasm_component_task_binding b = binding("entry", "callback", false);
+            b.function_type = 2; b.memory.instance = &instance; b.memory.memory_index = wide;
+            b.memory.pointer_type = wide ? TURBOWASM_COMPONENT_POINTER_I64 : TURBOWASM_COMPONENT_POINTER_I32;
+            for (i = 1; i <= 2; ++i) {
+                return_memory_override = i;
+                check_equal(turbowasm_component_task_create(&tasks[0], &domain, &b), TURBOWASM_OK);
+                check_equal(turbowasm_component_task_resume(&tasks[0], NULL), i == 1 ? TURBOWASM_OK : TURBOWASM_TRAPPED);
+                if (i == 1) check_equal(tasks[0].result.as.string.data, "hello", 5u);
+                check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+            }
+        }
+    }
+
+    it("rolls back owned-set allocation failures and keeps nonempty sets alive during teardown") {
+        turbowasm_component_resource_handle handle = UINT32_MAX;
+        turbowasm_status status; size_t baseline = live;
+        allowance = 0; status = turbowasm_component_task_set_new(&domain, &handle); allowance = SIZE_MAX;
+        check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_equal(handle, UINT32_MAX);
+        check_equal(live, baseline); check_null(domain.sets); check_equal(table.live_count, 0u);
+        allowance = 1; status = turbowasm_component_task_set_new(&domain, &handle); allowance = SIZE_MAX;
+        check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_equal(handle, UINT32_MAX);
+        check_equal(live, baseline); check_null(domain.sets); check_equal(table.live_count, 0u);
+        check_equal(turbowasm_component_task_set_new(&domain, &handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_register(&table, TURBOWASM_COMPONENT_HANDLE_SUBTASK, &item), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_join(&table, item.handle, handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_domain_destroy(&domain), TURBOWASM_TRAPPED);
+        check_not_null(domain.sets); check_equal(item.set_handle, handle);
+        check_equal(turbowasm_component_waitable_join(&table, item.handle, 0), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_set_drop(&domain, handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_set_drop(&domain, handle), TURBOWASM_TRAPPED);
+        check_null(domain.sets);
+    }
+
+    it("rejects unsupported families and invalid resolved bindings before publishing a host signature") {
+        turbowasm_component_task_builtin binding = {0};
+        turbowasm_component_async_builtin definition = {0};
+        turbowasm_component_canonical_memory memory = {0};
+        definition.kind = TURBOWASM_COMPONENT_FUTURE_NEW;
+        check_equal(turbowasm_component_task_builtin_bind(&binding, &domain, &graph, &definition, NULL), TURBOWASM_UNSUPPORTED);
+        check_null(binding.domain);
+        definition = builtin_binary.async_builtins[14];
+        memory.instance = &instance; memory.memory_index = 1;
+        check_equal(turbowasm_component_task_builtin_bind(&binding, &domain, &graph, &definition, &memory), TURBOWASM_TYPE_MISMATCH);
+        check_null(binding.domain);
+        definition = builtin_binary.async_builtins[2]; definition.context_index = 2;
+        check_equal(turbowasm_component_task_builtin_bind(&binding, &domain, &graph, &definition, NULL), TURBOWASM_INVALID_ARGUMENT);
+        check_null(binding.domain);
     }
 }

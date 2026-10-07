@@ -1331,6 +1331,12 @@ turbowasm_instance_memory_resolve_const(
         binding->memory_index);
 }
 
+bool turbowasm_instance_memory_same(const turbowasm_instance_impl *left, uint32_t left_index,
+    const turbowasm_instance_impl *right, uint32_t right_index) {
+    const turbowasm_instance_memory *memory = turbowasm_instance_memory_resolve_const(left, left_index);
+    return memory != NULL && memory == turbowasm_instance_memory_resolve_const(right, right_index);
+}
+
 static turbowasm_instance_memory *
 turbowasm_instance_memory_resolve(
     turbowasm_instance_impl *instance,

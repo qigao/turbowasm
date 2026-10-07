@@ -51,6 +51,7 @@ add_library(turbowasm
   src/component_binary.c
   src/component_async_state.c
   src/component_task.c
+  src/component_task_builtin.c
   src/component_waitable.c
   src/component_endpoint.c
   src/component_buffer.c

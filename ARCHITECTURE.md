@@ -756,6 +756,26 @@ argument owners outlive all such tasks. This private runner is not yet selected
 by public Component calls; automatic builtin binding, subtask propagation and
 public retained-instance task wrappers remain integration work.
 
+Decoded task/context/backpressure/yield/waitable-set builtins now have a private
+Core host binding. Binding checks the resolved memory address width and derives
+the exact host signature from the decoded descriptor. Blocking set waits and
+thread.yield use Runtime host-wait continuations; the task driver checks readiness
+without consuming an event, then resumes that same callback. A set wait owns one
+pin in its retained callback frame and releases it on delivery or unwind. It
+does not turn cooperative task cancellation into external I/O completion.
+Callback WAIT and builtin WAIT have separate pins and continuation state.
+
+Guest-created sets use domain-owned stable storage and the existing canonical
+table quota. Drop unregisters before freeing; domain teardown frees remaining
+empty unpinned owned sets after tasks are gone. A nonempty or externally pinned
+set must be emptied/released before teardown can finish. Thread-local context
+slots live in the current task across Core and callback suspension. Event output
+uses the canonical ordering: consume the event, then store its two u32 payloads,
+so a second-store trap may leave the first store visible. task.return compares
+resolved memory object identity through imports, not Core instance/index pairs.
+Subtask and endpoint builtin bindings remain outside this private binding slice;
+public Component loading/execution retains its existing async admission gate.
+
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and
 terminal-event delivery separately. Subtask start and resolve notifications

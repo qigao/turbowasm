@@ -13,6 +13,7 @@ typedef struct turbowasm_component_task_domain {
     turbowasm_component_resource_table *table;
     bool *may_leave;
     turbowasm_component_task *active, *exclusive;
+    struct turbowasm_component_task_owned_set *sets;
     uint32_t count, limit, backpressure;
 } turbowasm_component_task_domain;
 
@@ -56,6 +57,11 @@ struct turbowasm_component_task {
     turbowasm_component_value result;
     uint32_t borrowed_handles;
     turbowasm_component_resource_handle waiting_set;
+    /* Builtin host-wait continuation, separate from callback WAIT. */
+    enum { TURBOWASM_COMPONENT_TASK_WAIT_NONE, TURBOWASM_COMPONENT_TASK_WAIT_YIELD,
+           TURBOWASM_COMPONENT_TASK_WAIT_SET } builtin_wait;
+    turbowasm_component_resource_handle builtin_wait_set;
+    uint64_t context_storage[2];
     bool between_callbacks, cancellation_requested, cancellation_delivered;
     bool result_taken, destroying;
 };
@@ -65,6 +71,13 @@ bool turbowasm_component_task_domain_init(turbowasm_component_task_domain *domai
 turbowasm_status turbowasm_component_task_domain_destroy(turbowasm_component_task_domain *domain);
 /* The canonical count is bounded to 0..65535; overflow/underflow trap unchanged. */
 turbowasm_status turbowasm_component_task_backpressure(turbowasm_component_task_domain *domain, bool increment);
+/* Guest-created set storage belongs to the domain and shares table quota.
+ * Drop also accepts externally owned registered sets, without freeing them.
+ * Domain destruction requires tasks gone and owned sets empty/unpinned. */
+turbowasm_status turbowasm_component_task_set_new(turbowasm_component_task_domain *domain,
+    turbowasm_component_resource_handle *out);
+turbowasm_status turbowasm_component_task_set_drop(turbowasm_component_task_domain *domain,
+    turbowasm_component_resource_handle handle);
 
 /* Zero-initialized stable task, borrowed immutable binding/context/instances.
  * No argument preparation or guest execution occurs on create. Capacity and

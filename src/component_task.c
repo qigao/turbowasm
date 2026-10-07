@@ -4,6 +4,11 @@
 #include "runtime_alloc.h"
 #include <string.h>
 
+typedef struct turbowasm_component_task_owned_set {
+    turbowasm_component_waitable_set set;
+    struct turbowasm_component_task_owned_set *next;
+} turbowasm_component_task_owned_set;
+
 static turbowasm_value_kind flat_kind(turbowasm_component_flat_type type) {
     static const turbowasm_value_kind kinds[] = {
         TURBOWASM_VALUE_I32, TURBOWASM_VALUE_I64, TURBOWASM_VALUE_F32, TURBOWASM_VALUE_F64
@@ -44,8 +49,42 @@ turbowasm_status turbowasm_component_task_domain_destroy(turbowasm_component_tas
     if (domain == NULL) return TURBOWASM_INVALID_ARGUMENT;
     if (domain->count != 0u || domain->active != NULL || domain->exclusive != NULL)
         return TURBOWASM_TRAPPED;
+    while (domain->sets != NULL) {
+        turbowasm_status status = turbowasm_component_task_set_drop(domain, domain->sets->set.handle);
+        if (status != TURBOWASM_OK) return status;
+    }
     memset(domain, 0, sizeof(*domain));
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_task_set_new(turbowasm_component_task_domain *domain,
+    turbowasm_component_resource_handle *out) {
+    turbowasm_component_task_owned_set *owned;
+    turbowasm_status status;
+    if (domain == NULL || domain->table == NULL || out == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    owned = turbowasm_rt_calloc(1u, sizeof(*owned));
+    if (owned == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    status = turbowasm_component_waitable_set_register(domain->table, &owned->set);
+    if (status != TURBOWASM_OK) { turbowasm_rt_free(owned); return status; }
+    owned->next = domain->sets; domain->sets = owned;
+    *out = owned->set.handle;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_task_set_drop(turbowasm_component_task_domain *domain,
+    turbowasm_component_resource_handle handle) {
+    turbowasm_component_task_owned_set **link;
+    turbowasm_status status;
+    if (domain == NULL || domain->table == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    /* Find ownership before unregistering, which clears the set's handle. */
+    for (link = &domain->sets; *link != NULL; link = &(*link)->next)
+        if ((*link)->set.handle == handle) break;
+    status = turbowasm_component_waitable_set_drop(domain->table, handle);
+    if (status == TURBOWASM_OK && *link != NULL) {
+        turbowasm_component_task_owned_set *owned = *link;
+        *link = owned->next; turbowasm_rt_free(owned);
+    }
+    return status;
 }
 
 turbowasm_status turbowasm_component_task_backpressure(turbowasm_component_task_domain *domain, bool increment) {
@@ -182,6 +221,19 @@ static turbowasm_status resume_active(turbowasm_component_task *task,
     }
     if (status == TURBOWASM_YIELDED) return status;
     if (status != TURBOWASM_OK) return finish(task, status);
+    if (task->builtin_wait != TURBOWASM_COMPONENT_TASK_WAIT_NONE) {
+        turbowasm_host_wait wait;
+        bool ready = task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_YIELD;
+        if (!ready) {
+            status = turbowasm_component_waitable_set_ready(task->domain->table, task->builtin_wait_set, &ready);
+            if (status != TURBOWASM_OK) return finish(task, status);
+        }
+        if (!ready) return TURBOWASM_YIELDED;
+        if (!turbowasm_execution_pending_host_wait(&task->core, &wait) || wait.operation_token != (uintptr_t)task)
+            return finish(task, TURBOWASM_TRAPPED);
+        status = turbowasm_execution_complete_host_wait(&task->core, wait, 0);
+        if (status != TURBOWASM_OK) return finish(task, status);
+    }
     status = turbowasm_execution_resume(&task->core, options);
     if (status == TURBOWASM_YIELDED) return status;
     if (status != TURBOWASM_OK) {
@@ -319,7 +371,10 @@ turbowasm_status turbowasm_component_task_return_flat(turbowasm_component_task_d
     if (has_result != function->as.function.has_result ||
         (has_result && !turbowasm_component_value_type_equal(graph, result_type,
             task->binding.graph, function->as.function.result)) ||
-        memory->instance != expected->instance || memory->memory_index != expected->memory_index ||
+        ((memory->instance != NULL || expected->instance != NULL) &&
+            (memory->instance == NULL || expected->instance == NULL ||
+             !turbowasm_instance_memory_same(memory->instance->impl, memory->memory_index,
+                 expected->instance->impl, expected->memory_index))) ||
         memory->pointer_type != expected->pointer_type || memory->string_encoding != expected->string_encoding)
         return TURBOWASM_TRAPPED;
     status = turbowasm_component_canonical_flatten_task_return(graph, has_result, result_type,

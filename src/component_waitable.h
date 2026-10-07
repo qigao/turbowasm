@@ -78,6 +78,10 @@ turbowasm_status turbowasm_component_waitable_set_poll(
     turbowasm_component_resource_table *table,
     turbowasm_component_resource_handle set_handle,
     turbowasm_component_event *out_event);
+/* Non-consuming readiness query for the Core continuation driver. */
+turbowasm_status turbowasm_component_waitable_set_ready(
+    turbowasm_component_resource_table *table, turbowasm_component_resource_handle set_handle,
+    bool *out_ready);
 turbowasm_status turbowasm_component_waitable_take(
     turbowasm_component_resource_table *table,
     turbowasm_component_resource_handle handle, turbowasm_component_event *out_event);
