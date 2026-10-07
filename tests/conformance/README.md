@@ -1348,8 +1348,12 @@ binaries and checks eager/deferred/early results, string and nested-endpoint rou
 trips, cancellation including a competing normal return, provider traps and quota,
 result realloc suspension/unwind, ambiguous/incompatible imports, and allocation
 failures in calls and partial instantiation. It checks provider reference counts,
-task/handle cleanup and allocation balance. Windows ASan passed 14 cases with
-1,899 assertions; related regression passed 82/82 targets in 4.63 seconds. The MIR
+task/handle cleanup and allocation balance. Import admission also rejects resource
+leaves hidden inside endpoint payloads even if separately decoded graphs reuse
+the same numeric resource ID. The shared type walker keeps this full-tree query
+separate from transfer carrier features. Windows ASan passed 15 import cases with
+1,919 assertions and 19 async-type cases with 2,565 assertions; related regression
+passed 82/82 targets in 4.64 seconds. The MIR
 variant checks compiled caller/provider functions and callbacks; native
 qualification of this import extension is pending.
 

@@ -36,13 +36,11 @@ turbowasm_status turbowasm_component_exec_async_bind(
     for (i = 0u; ; ++i) {
         bool result = i == source->as.function.param_count;
         turbowasm_component_type_ref a, b;
-        uint32_t features;
         if (result && !source->as.function.has_result) break;
         a = result ? source->as.function.result : source->as.function.params[i];
         b = result ? target->as.function.result : target->as.function.params[i];
-        if (!turbowasm_component_value_type_equal(lower->graph, a, binding->graph, b) ||
-            !turbowasm_component_transfer_type_features(lower->graph, a, &features)) return TURBOWASM_TYPE_MISMATCH;
-        if ((features & TURBOWASM_COMPONENT_VALUE_RESOURCES) != 0u) return TURBOWASM_UNSUPPORTED;
+        if (!turbowasm_component_value_type_equal(lower->graph, a, binding->graph, b)) return TURBOWASM_TYPE_MISMATCH;
+        if (!turbowasm_component_value_type_resource_free(lower->graph, a)) return TURBOWASM_UNSUPPORTED;
         if (result) break;
     }
     if (provider->async_import_owners == UINT32_MAX) return TURBOWASM_OUT_OF_MEMORY;

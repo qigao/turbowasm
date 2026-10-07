@@ -55,6 +55,25 @@ spec("private Component future and stream types") {
         turbowasm_component_type_graph_destroy(&other_graph);
     }
 
+    it("distinguishes endpoint carrier features from nominal resource payloads at every nesting layer") {
+        uint32_t i, features;
+        check_true(turbowasm_component_type_graph_allocate(&graph, 12u));
+        check_true(turbowasm_component_type_graph_define_resource(&graph, 0u, 1u));
+        check_true(turbowasm_component_type_graph_define_handle(&graph, 1u, TURBOWASM_COMPONENT_TYPE_OWN, 0u));
+        for (i = 0u; i < sizeof(wrappers) / sizeof(wrappers[0]); ++i) {
+            check_true(define_wrapper(&graph, i + 2u, wrappers[i], indexed(i + 1u)));
+            check_false(turbowasm_component_value_type_resource_free(&graph, indexed(i + 2u)));
+        }
+        check_true(turbowasm_component_transfer_type_features(&graph, indexed(9u), &features));
+        check_equal(features, TURBOWASM_COMPONENT_VALUE_ENDPOINTS);
+        check_true(define_wrapper(&graph, 10u, TURBOWASM_COMPONENT_TYPE_FUTURE, scalar(TURBOWASM_COMPONENT_TYPE_STRING)));
+        check_true(define_wrapper(&graph, 11u, TURBOWASM_COMPONENT_TYPE_STREAM, indexed(10u)));
+        check_true(turbowasm_component_value_type_resource_free(&graph, indexed(11u)));
+        graph.types[10].as.async_value.payload = indexed(11u);
+        check_false(turbowasm_component_value_type_resource_free(&graph, indexed(11u)));
+        check_false(turbowasm_component_value_type_resource_free(&graph, indexed(12u)));
+    }
+
     it("calculates async lift and lower signatures at both flat parameter limits") {
         static const uint32_t counts[] = {0u, 4u, 5u, 16u, 17u};
         static const turbowasm_component_type_kind kinds[] = {

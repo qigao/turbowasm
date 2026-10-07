@@ -1,4 +1,5 @@
 #include "component_exec.h"
+#include "component_endpoint_builtin.h"
 #include "instance_internal.h"
 #include "runtime_alloc.h"
 #include <tinytest.h>
@@ -19,6 +20,8 @@ static turbowasm_component_exec_async_limits limits = {8,32};
 static turbowasm_component_exec_imports imports;
 static size_t live, allowance;
 static bool wrong_target;
+static turbowasm_component_type_graph admission_graph;
+static turbowasm_component_task_binding *overridden_binding, saved_binding;
 
 static void *allocate(void *context, size_t size) {
     void *p; (void)context;
@@ -158,6 +161,8 @@ spec("retained async instance imports") {
         attach(1); check_equal(execs[0].async_import_owners, 6u);
     }
     after_each() {
+        if (overridden_binding != NULL) { *overridden_binding = saved_binding; overridden_binding = NULL; }
+        turbowasm_component_type_graph_destroy(&admission_graph);
         allowance = SIZE_MAX; abort_calls();
         check_equal(turbowasm_component_exec_destroy(&execs[1]), TURBOWASM_OK);
         check_equal(execs[0].async_import_owners, 0u);
@@ -246,6 +251,22 @@ spec("retained async instance imports") {
         wrong_target = true;
         check_equal(turbowasm_component_exec_init_async_with_import_sets(&rejected, &binaries[1], &limits, &imports, 1), TURBOWASM_TYPE_MISMATCH);
         check_null(rejected.binary); check_equal(execs[0].async_import_owners, 6u); check_equal(live, baseline);
+    }
+    it("rejects nominal resource imports even when hidden in an endpoint with matching numeric type IDs") {
+        turbowasm_component_type_ref stream = turbowasm_component_type_ref_indexed(2u);
+        turbowasm_component_exec_canon_lower_context lower = {0};
+        check_true(turbowasm_component_type_graph_allocate(&admission_graph, 4u));
+        check_true(turbowasm_component_type_graph_define_resource(&admission_graph, 0u, 1u));
+        check_true(turbowasm_component_type_graph_define_handle(&admission_graph, 1u, TURBOWASM_COMPONENT_TYPE_OWN, 0u));
+        check_true(turbowasm_component_type_graph_define_async_value(&admission_graph, 2u,
+            TURBOWASM_COMPONENT_TYPE_STREAM, true, turbowasm_component_type_ref_indexed(1u)));
+        check_true(turbowasm_component_type_graph_define_function(&admission_graph, 3u, &stream, 1u, true, stream));
+        admission_graph.types[3].as.function.is_async = true;
+        overridden_binding = &execs[0].async_functions[0]; saved_binding = *overridden_binding;
+        overridden_binding->graph = &admission_graph; overridden_binding->function_type = 3u;
+        lower.exec = &execs[1]; lower.graph = &admission_graph; lower.function_type = 3u; lower.is_async = true;
+        check_equal(turbowasm_component_exec_async_bind(&lower, &execs[0], 0u), TURBOWASM_UNSUPPORTED);
+        check_null(lower.async_provider); check_equal(execs[0].async_import_owners, 6u);
     }
     it("releases partially bound providers on every instantiation allocation failure") {
         size_t budget, baseline = live; bool succeeded = false;

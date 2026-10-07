@@ -187,6 +187,11 @@ bool turbowasm_component_value_type_features(
 bool turbowasm_component_transfer_type_features(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref, uint32_t *out_features);
+/* Valid value tree with no nominal resource leaves, including every nested
+ * endpoint payload. Used until import identity correspondence is established;
+ * transfer features alone describe the carrier and intentionally omit payloads. */
+bool turbowasm_component_value_type_resource_free(
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref ref);
 
 /* Structural equality of value types in validated immutable graphs, including
  * nested future/stream types. Resource leaves compare nominal identity, not

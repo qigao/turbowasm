@@ -956,7 +956,8 @@ instantiation validates the complete signature and retains the provider until th
 consumer is destroyed. Call frames stay on the consumer's bounded progress list,
 while the callee task counts against the provider's task quota. Drivers explicitly
 poll each exec with outgoing calls; no recursive scheduler or worker is introduced.
-Resources remain rejected at this boundary until imported nominal identities and
+Resources, including resource leaves inside nested endpoint payloads, remain
+rejected at this boundary until imported nominal identities and
 borrowed-handle accounting are connected. Other supported canonical values use
 the existing per-direction transaction codecs.
 
