@@ -102,8 +102,22 @@ and generated C byte arrays are kept together under `tests/fixtures/`.
 The `core3-mir` CI entry uses `ci-core3-mir-user` and the pinned Core 3.0
 `memory64/` suite, comparing interpreter and MIR results with zero unsupported
 commands and nonzero native compilation required. Existing Linux/macOS
-`ci-mir-user` jobs execute the native unit tests as well. Shared memories remain
-interpreter-only, independent of their address width.
+`ci-mir-user` and `ci-macos-mir-user` jobs execute the native unit tests as well.
+The macOS profile uses GCC 15 to match the published Salts TinyTest thread-local
+ABI. Unix CI bootstraps the shared cache contract's hash-verified vcpkg tool
+before invoking its setup action; hosted runner tool updates cannot silently
+change that contract. Shared memories remain interpreter-only, independent of
+their address width.
+
+At revision `bade74d`, [native CI](https://github.com/qigao/turbowasm/actions/runs/37597104249)
+passed all five jobs: Windows qualification and installed consumers, Linux
+qualification and installed consumers, Android build/installed consumers, and
+Linux/macOS MIR. Both MIR jobs passed 143/143 tests, including mandatory native
+memory64 execution, mixed scalar arguments, four-argument calls, NaN payloads,
+negative zero and bounds traps. The separate
+[Core 3.0 memory64 differential gate](https://github.com/qigao/turbowasm/actions/runs/37597109803)
+also passed. These results do not qualify the unimplemented native GC/table64,
+shared-memory/atomic, full exception or general multi-result paths.
 
 The local Windows build can execute Runtime/helper regressions, but cannot
 build MIR: the configured `mir-jit` vcpkg port supports Linux, macOS and Android.
