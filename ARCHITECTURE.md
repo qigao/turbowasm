@@ -735,6 +735,54 @@ stable owner pointer and copies the event before invoking it; no slot pointer
 survives that callback. These interfaces remain private until canonical guest
 bindings and async task/transfer owners are complete.
 
+Private paired endpoints implement rendezvous over transfer-owned host value
+arrays. Each endpoint embeds its registered waitable at a stable address and
+borrows its immutable endpoint type graph. Pair construction optionally registers
+both ends in their owners' canonical tables; failure removes the first handle
+before returning and leaves both output owners empty. A NULL table represents a
+host-owned end. No elements are buffered inside the pair and no worker is created.
+The logical transfer length is bounded by the canonical 28-bit buffer limit;
+actual value arrays remain subject to Runtime allocation budgets.
+
+A submitted buffer is exclusively borrowed until event delivery. A separate
+available-buffer pointer permits additional rendezvous to extend an older
+operation's partial progress before its event is consumed. Delivery detaches
+both pointers before the caller can reuse the array. Input arrays contain unique,
+already owned canonical values; output cells must be empty. Whole-array type and
+destination admission precedes any move. Copying moves each complete value and
+its cleanup obligation, clearing its source cell. Untransferred source values
+remain owned by the transfer caller. Unit streams/futures advance logical counts
+without allocating dummy values. Future operations always request one element.
+
+Zero-length stream operations follow canonical readiness asymmetry: when both
+ends submit zero elements, only the writable end completes. Peer close, immediate
+copy cancellation and event delivery reuse the existing notification precedence.
+Cancellation stops further rendezvous on that buffer; delivery returns its
+exclusive borrow without replaying or destroying transferred elements. Close
+rejects active operations and unregisters the handle before notifying the peer.
+Same-component copies of nonnumeric, nonunit payloads trap as required by the
+pinned proposal. Waitable event delivery now runs the enclosing endpoint's buffer
+release hook as well as terminal subtask loan release. These hooks cannot run
+guest code and cannot recursively consume or destroy their own waitable.
+
+This increment supplies actual host-value movement, not guest-memory conversion
+or public async admission. Guest buffers must subsequently use checked memory
+offsets and the existing canonical codecs, with resource commit/rollback and
+execution control retained across realloc. Nested endpoint values also need that
+codec/host-value integration. Keeping these paths private preserves explicit
+rejection until the complete canonical execution boundary is available.
+
+Private readable-end ownership transitions detach an idle end from its canonical
+table to the host, or attach a host-owned idle end to a destination table. The
+stable endpoint and peer connection do not move. An active operation, exclusive
+waiter, delivery callback or waitable-set membership prevents either transition;
+DONE ends cannot transfer. Pending peer-close notifications survive an idle
+transfer and acquire the destination handle when delivered. Attach allocates the
+destination slot before publishing ownership, so allocation/quota failure leaves
+the end host-owned and retryable. These are internal owner operations; canonical
+lift/lower admission must additionally validate the guest handle kind and payload
+type before calling them. They do not admit guest binaries or expose a public API.
+
 ## Canonical post-return lifecycle
 
 Synchronous lifts with `post-return` copy/lift the Core results before invoking

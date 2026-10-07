@@ -154,9 +154,10 @@ static turbowasm_status take_event(turbowasm_component_waitable *waitable,
             default: event.code = TURBOWASM_COMPONENT_EVENT_FUTURE_WRITE; break;
         }
     }
-    if (terminal && waitable->release_loans != NULL) {
+    if ((terminal || kind != TURBOWASM_COMPONENT_HANDLE_SUBTASK) &&
+        waitable->release_pending != NULL) {
         waitable->delivering = true;
-        status = waitable->release_loans(waitable->release_context);
+        status = waitable->release_pending(waitable->release_context);
         waitable->delivering = false;
     }
     if (status == TURBOWASM_OK)

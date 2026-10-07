@@ -254,6 +254,15 @@ set_target_properties(turbowasm_component_waitable_test PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 add_test(NAME turbowasm_component_waitable_test COMMAND turbowasm_component_waitable_test)
 
+add_executable(turbowasm_component_endpoint_test component_endpoint_test.c)
+target_link_libraries(turbowasm_component_endpoint_test
+  PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_endpoint_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_endpoint_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_endpoint_test COMMAND turbowasm_component_endpoint_test)
+
 if(TARGET turbowasm_wasi02_core)
   add_executable(turbowasm_wasi02_descriptor_test
     wasi02_descriptor_test.c)

@@ -757,3 +757,30 @@ in 0.18 seconds and the related 55/55 tests in 4.36 seconds. A final focused run
 also covers invalid event outputs and retaining an endpoint through deferred
 cancellation. Canonical guest bindings, scheduling, endpoint data transfers and
 public async host APIs still need implementation and end-to-end qualification.
+At `aec8ef1`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37664259457)
+passed all five jobs: Linux MIR 184/184 in 2.11 seconds, macOS arm64 MIR 184/184
+in 2.38 seconds, Windows, ordinary Linux and the Android cross-build.
+
+## Private endpoint rendezvous and readable ownership
+
+Paired future/stream endpoints now move actual canonical host values, including
+composite allocations and owned resource cleanup obligations. Source cells are
+cleared only when moved; partial transfer, cancellation and peer closure retain
+untransferred values. Host arrays remain exclusively borrowed until notification
+delivery, including waitable-set polling and exclusive waits. Unit transfers
+use logical counts without dummy allocations. Readable ends can detach to host
+ownership and attach to another canonical table while preserving peer links and
+idle close notifications; failed destination admission preserves host ownership.
+
+`component_endpoint_test.c` covers both arrival orders, partial/coalesced progress,
+zero-length readiness, real composite/resource movement, cancellation and close
+precedence, same-instance type restrictions, buffer admission and overlap,
+28-bit limits, unit futures, registration rollback, ownership transfer guards,
+stale handles and quota/allocation failures. The custom allocator tracks all live
+allocations. Windows ASan passed four focused targets in 0.14 seconds and the
+related Component/WASI 0.2/resumable/host-wait selection: 56/56 in 2.83 seconds.
+Two additional buffer/await cases then passed with the full endpoint target:
+18 cases, 387 assertions in 0.04 seconds, with production code unchanged.
+These results qualify host-array rendezvous and private owner transitions only.
+Guest memory codecs, nested endpoint values, canonical async bindings, task
+scheduling and public async host integration remain under implementation.

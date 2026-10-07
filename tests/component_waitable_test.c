@@ -285,7 +285,7 @@ spec("Component waitables and shared canonical handles") {
             check_equal(turbowasm_component_resource_new_owned(&table, 42u, rep(), &loan_handle), TURBOWASM_OK);
             check_equal(turbowasm_component_resource_lend_acquire(&table, loan_handle, 42u), TURBOWASM_OK);
             check_equal(turbowasm_component_waitable_set_register(&table, &sets[0]), TURBOWASM_OK);
-            items[0].release_loans = release_loan; items[0].release_context = &items[0];
+            items[0].release_pending = release_loan; items[0].release_context = &items[0];
             check_equal(turbowasm_component_waitable_register(&table,
                 TURBOWASM_COMPONENT_HANDLE_SUBTASK, &items[0]), TURBOWASM_OK);
             check_equal(turbowasm_component_waitable_join(&table, items[0].handle, sets[0].handle), TURBOWASM_OK);

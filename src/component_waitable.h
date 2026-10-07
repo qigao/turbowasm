@@ -20,12 +20,13 @@ typedef struct turbowasm_component_event {
     uint32_t payload;
 } turbowasm_component_event;
 
-/* Terminal loan release is nonblocking and must not run guest code. It releases
- * all loans, returning the first error. It may grow the handle table. The
+/* Event cleanup is nonblocking and must not run guest code. It releases the
+ * endpoint buffer borrow, or all loans for a terminal subtask event, returning
+ * the first error. It may grow the handle table. The
  * current waitable cannot join/drop/wait/take recursively during this callback.
  * Failure consumes the terminal notification and leaves event output untouched;
- * the owner must propagate it as a trap rather than replay loan release. */
-typedef turbowasm_status (*turbowasm_component_resolve_release_fn)(void *context);
+ * the owner must propagate it as a trap rather than replay cleanup. */
+typedef turbowasm_status (*turbowasm_component_event_release_fn)(void *context);
 
 typedef struct turbowasm_component_waitable {
     turbowasm_component_resource_table *table;
@@ -37,7 +38,7 @@ typedef struct turbowasm_component_waitable {
         turbowasm_component_subtask_state subtask;
         turbowasm_component_endpoint_state endpoint;
     } state;
-    turbowasm_component_resolve_release_fn release_loans;
+    turbowasm_component_event_release_fn release_pending;
     void *release_context;
 } turbowasm_component_waitable;
 
