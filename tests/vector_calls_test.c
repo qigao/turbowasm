@@ -145,6 +145,10 @@ spec("vector call values") {
             turbowasm_jit_backend backend = {0};
             check_equal(turbowasm_mir_backend_create(&backend), TURBOWASM_OK);
             check_equal(turbowasm_jit_instance_attach_backend(instance.impl, &backend, 1u), TURBOWASM_OK);
+            /* Exercise the supported mixed-tier boundary even when the callee
+             * body is also eligible for native compilation. */
+            ((turbowasm_instance_impl *)instance.impl)->jit_functions[index_of("interpreted")].state =
+                TURBOWASM_JIT_INTERPRET_ONLY;
         }
 #endif
     }

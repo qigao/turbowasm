@@ -350,7 +350,7 @@ static void test_direct_calls_and_trap_parity(void) {
         0x0a, 0x2f,
         0x06,
 
-        /* interpreted-only integer callee */
+        /* native integer division callee */
         0x07,
         0x00,
         0x20, 0x00,
@@ -420,7 +420,7 @@ static void test_direct_calls_and_trap_parity(void) {
            TURBOWASM_JIT_COMPILED);
 
     assert(impl->jit_functions[0].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
+           TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[2].state ==
            TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[4].state ==

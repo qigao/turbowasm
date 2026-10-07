@@ -123,6 +123,10 @@ spec("scalar result tuples") {
         check_equal(turbowasm_instance_create(&reference_instance, &module), TURBOWASM_OK);
         check_equal(turbowasm_instance_create(&instance, &module), TURBOWASM_OK);
         attach_backend();
+#ifdef TURBOWASM_TEST_MIR
+        ((turbowasm_instance_impl *)instance.impl)->jit_functions[INTERPRETED_CALLEE].state =
+            TURBOWASM_JIT_INTERPRET_ONLY;
+#endif
     }
     after_each() {
         turbowasm_instance_destroy(&instance);

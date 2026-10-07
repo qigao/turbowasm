@@ -186,6 +186,10 @@ spec("native indirect calls") {
         check_equal(made.status, TURBOWASM_OK); node = made.values[0];
         check_equal(turbowasm_root_retain(&store, &node, &root), TURBOWASM_OK);
         attach(&instance);
+#ifdef TURBOWASM_TEST_MIR
+        ((turbowasm_instance_impl *)instance.impl)->jit_functions[function_index(&instance, "interpret")].state =
+            TURBOWASM_JIT_INTERPRET_ONLY;
+#endif
     }
     after_each() {
         allocations.fail_at = 0u;

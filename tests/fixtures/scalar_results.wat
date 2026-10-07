@@ -56,7 +56,7 @@
     local.get 0 local.get 1 local.get 2 local.get 3 call 10)
   (func (param i32 i64 f32 f64) (result i32 i64 f32 f64)
     local.get 0 local.get 1 local.get 2 local.get 3 call 20)
-  ;; Division keeps this callee interpreted while its caller must compile.
+  ;; The test pins this callee to the interpreter to exercise the mixed-tier boundary.
   (func (param i32 i64 f32 f64) (result i32 i64 f32 f64)
     local.get 0 local.get 1 i64.const 1 i64.div_s local.get 2 local.get 3)
   (func (param i32 i64 f32 f64) (result i32 i64 f32 f64)

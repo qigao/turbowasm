@@ -128,7 +128,7 @@ int main(void) {
         0x0a, 0x2f,
         0x06,
 
-        /* f0: interpreted-only integer callee: p0 / 2 */
+        /* f0: native integer division callee: p0 / 2 */
         0x07,
         0x00,
         0x20, 0x00,
@@ -197,11 +197,11 @@ int main(void) {
     impl = turbowasm_module_impl_get(&module);
     assert(impl != NULL);
 
-    /* Unsupported division and unreachable callees remain interpreted. */
+    /* Division is native-eligible; unreachable still uses the interpreter. */
     callee = turbowasm_validation_context_function(
         &impl->validation, 0u);
     assert(callee != NULL);
-    assert(!backend.is_function_eligible(
+    assert(backend.is_function_eligible(
         backend.context, &impl->validation, 0u, callee));
 
     callee = turbowasm_validation_context_function(
