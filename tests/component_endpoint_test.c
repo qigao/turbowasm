@@ -468,7 +468,7 @@ spec("Component endpoint host-value rendezvous") {
         primitive_type(true, true, TURBOWASM_COMPONENT_TYPE_U32); open_hosts();
         check_equal(turbowasm_component_endpoint_into_value(&writer, &cells[0][0]), TURBOWASM_TRAPPED);
         check_equal(turbowasm_component_endpoint_into_value(&reader, &cells[0][0]), TURBOWASM_OK);
-        check_true(reader.value_owned);
+        check_not_null(reader.value_owner);
         check_equal(turbowasm_component_endpoint_into_value(&reader, &cells[0][1]), TURBOWASM_TRAPPED);
         check_equal(cells[0][1].kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
         buffers[0].length = 1u;
@@ -484,7 +484,7 @@ spec("Component endpoint host-value rendezvous") {
         check_equal(turbowasm_component_canonical_validate_value(&graph,
             turbowasm_component_type_ref_indexed(0u), &cells[0][0]), TURBOWASM_OK);
         check_equal(turbowasm_component_endpoint_take_value(&cells[0][0], &taken), TURBOWASM_OK);
-        check_true(taken == &reader); check_false(reader.value_owned);
+        check_true(taken == &reader); check_null(reader.value_owner);
         check_equal(cells[0][0].kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
         check_equal(take(taken), TURBOWASM_COMPONENT_COPY_DROPPED);
         check_equal(turbowasm_component_endpoint_into_value(taken, &cells[0][0]), TURBOWASM_TRAPPED);
@@ -529,18 +529,18 @@ spec("Component endpoint host-value rendezvous") {
             buffer(0u, 0u, 1u); buffer(1u, 1u, 1u);
             graph.types[0].as.async_value.payload = turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_U64);
             check_equal(turbowasm_component_endpoint_submit(&writer, &buffers[0]), TURBOWASM_TYPE_MISMATCH);
-            check_false(buffers[0].leased); check_true(nested_reader.value_owned);
+            check_false(buffers[0].leased); check_not_null(nested_reader.value_owner);
             graph.types[0].as.async_value.payload = turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_U32);
             check_equal(turbowasm_component_endpoint_submit(&writer, &buffers[0]), TURBOWASM_OK);
             check_equal(turbowasm_component_endpoint_submit(&reader, &buffers[1]), TURBOWASM_OK);
             check_equal(take(&writer), 16u); check_equal(take(&reader), 16u);
             check_equal(cells[0][0].kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
-            check_true(cells[1][0].as.list.items == record); check_true(nested_reader.value_owned);
+            check_true(cells[1][0].as.list.items == record); check_not_null(nested_reader.value_owner);
             numbers(2u, 1u, 42u); buffer(2u, 2u, 1u);
             check_equal(turbowasm_component_endpoint_submit(&nested_writer, &buffers[2]), TURBOWASM_OK);
             if (extract) {
                 check_equal(turbowasm_component_endpoint_take_value(leaf, &taken), TURBOWASM_OK);
-                check_true(taken == &nested_reader); check_false(nested_reader.value_owned);
+                check_true(taken == &nested_reader); check_null(nested_reader.value_owner);
                 buffers[3].values = &cells[2][1]; buffers[3].length = 1u;
                 check_equal(turbowasm_component_endpoint_submit(taken, &buffers[3]), TURBOWASM_OK);
                 check_equal(take(taken), future ? TURBOWASM_COMPONENT_COPY_COMPLETED : 16u);
@@ -550,7 +550,7 @@ spec("Component endpoint host-value rendezvous") {
                 check_false(nested_reader.closed);
             } else {
                 check_equal(turbowasm_component_value_destroy(&cells[1][0]), TURBOWASM_OK);
-                check_true(nested_reader.closed); check_false(nested_reader.value_owned);
+                check_true(nested_reader.closed); check_null(nested_reader.value_owner);
                 check_equal(take(&nested_writer), TURBOWASM_COMPONENT_COPY_DROPPED);
                 check_equal(cells[2][0].as.u32, 42u);
                 check_equal(turbowasm_component_value_destroy(&cells[1][0]), TURBOWASM_OK);

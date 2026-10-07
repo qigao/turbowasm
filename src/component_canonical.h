@@ -95,6 +95,13 @@ typedef struct turbowasm_component_value_variant {
 
 typedef turbowasm_status (*turbowasm_component_value_release_fn)(void *context);
 
+/* One record per private endpoint value obligation. The adapter owns allocation
+ * and cleanup. NULL endpoint means ownership was committed to a guest; the old
+ * carrier can still be destroyed without touching a subsequent endpoint owner. */
+typedef struct turbowasm_component_endpoint_value_owner {
+    void *endpoint;
+} turbowasm_component_endpoint_value_owner;
+
 struct turbowasm_component_value {
     turbowasm_component_type_kind kind;
     union {
@@ -128,7 +135,7 @@ struct turbowasm_component_value {
          * unique value owns it. Graph/type references remain borrowed. The
          * endpoint adapter supplies release; canonical codecs stay separate. */
         struct {
-            void *owner;
+            turbowasm_component_endpoint_value_owner *owner;
             const turbowasm_component_type_graph *graph;
             turbowasm_component_type_ref type;
         } endpoint;
@@ -162,6 +169,10 @@ typedef turbowasm_status (*turbowasm_component_resource_lift_fn)(
     uint32_t handle,
     turbowasm_component_value *out);
 
+/* Equal carrier signatures, separate ownership contexts and callbacks. */
+typedef turbowasm_component_resource_lower_fn turbowasm_component_endpoint_lower_fn;
+typedef turbowasm_component_resource_lift_fn turbowasm_component_endpoint_lift_fn;
+
 typedef struct turbowasm_component_canonical_memory {
     turbowasm_instance *instance;
     uint32_t memory_index;
@@ -177,6 +188,9 @@ typedef struct turbowasm_component_canonical_memory {
     turbowasm_component_resource_lower_fn resource_lower;
     turbowasm_component_resource_lift_fn resource_lift;
     void *resource_context;
+    turbowasm_component_endpoint_lower_fn endpoint_lower;
+    turbowasm_component_endpoint_lift_fn endpoint_lift;
+    void *endpoint_context;
 } turbowasm_component_canonical_memory;
 
 turbowasm_status turbowasm_component_canonical_layout(
@@ -218,9 +232,9 @@ turbowasm_status turbowasm_component_canonical_flatten_function(
     turbowasm_component_flat_signature *out);
 
 /*
- * Canonical flat value conversion for synchronous values. Dynamic string/list
- * values use canonical guest memory. Resource handles require the owning
- * composition layer's explicit conversion callbacks.
+ * Canonical flat value conversion. Dynamic string/list values use guest memory.
+ * Resource and private endpoint handles require their explicit callbacks; their
+ * owning composition layer commits/rolls back any lower reservations.
  */
 turbowasm_status turbowasm_component_canonical_lower_flat_value(
     const turbowasm_component_type_graph *graph,
@@ -240,9 +254,11 @@ turbowasm_status turbowasm_component_canonical_lift_flat_value(
     turbowasm_component_value *out);
 
 /*
- * Lift/lower synchronous scalar/composite values in canonical memory. Strings
+ * Lift/lower scalar/composite values in canonical memory. Strings
  * follow the selected UTF-8, UTF-16 or compact encoding. Resource handles use
- * explicit callbacks attached by the owning composition layer.
+ * explicit callbacks attached by the owning composition layer, as do private
+ * endpoint handles. Failed lifts destroy already lifted fields; failed lowers
+ * require the caller to roll back its staged handles before destroying inputs.
  */
 turbowasm_status turbowasm_component_canonical_lift_value(
     const turbowasm_component_type_graph *graph,

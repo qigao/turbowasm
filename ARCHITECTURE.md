@@ -792,9 +792,36 @@ identity), without depending on endpoint execution. The endpoint module supplies
 the release hook. Moving a record/list moves this obligation unchanged; destroying
 it closes the contained readable end and notifies its writer once. Extracting it
 clears the value before restoring direct endpoint access. Graphs and stable
-endpoint storage must outlive the containing value. No allocation or guest code
-runs at these owner transitions. Canonical memory conversion and public host
-admission remain separate, closed boundaries until their integration is complete.
+endpoint storage must outlive the containing value. A small Runtime-allocated
+owner record belongs to each value obligation. Taking the value frees that
+record; committing it to a guest clears the record's endpoint pointer. Later
+destruction of the old value can therefore free its record without touching a
+newly lifted owner of the same endpoint. Record allocation failure preserves the
+endpoint and output. No guest code runs in these ownership transitions.
+
+Private canonical endpoint codecs use four-byte handles in memory32 and memory64
+and one i32 flat carrier, including endpoints nested in composite values. The
+canonical module dispatches through explicit endpoint callbacks independently of
+resource callbacks; an absent callback still returns UNSUPPORTED. Lift validates
+kind, structural payload type, idle state and lack of set membership before
+allocating a value owner and removing the original handle. Allocation failure
+does not consume the handle. Earlier successfully lifted composite fields are
+destroyed if a later field traps, following existing canonical lift semantics.
+
+Lower conversion uses a caller-owned codec scope with a bounded intrusive chain
+of endpoint reservations. The shared handle quota bounds this chain. Reserved
+slots refer to stable waitables but are not published as their active table/handle,
+so guest operations reject them during realloc reentry. A source value and its
+owner record remain exclusively borrowed until explicit commit or rollback.
+Duplicate lowering of one owner, including from another active scope, traps.
+Commit preflights all reservations, publishes their table ownership, and clears
+the old value records. Rollback removes reservations while preserving each input
+value. Neither finishing operation allocates or runs guest code; both require
+the existing exclusive Component execution thread. Partially written guest
+memory is not a published result and may contain invalidated handles after an
+abort. The composition layer must finish the scope before publishing results or
+destroying inputs. Public async and binary admission remain closed until task,
+guest-copy and lifetime integration is complete.
 
 ## Canonical post-return lifecycle
 

@@ -13,6 +13,37 @@ enum {
     TURBOWASM_COMPONENT_CANONICAL_MAX_DEPTH = 64u
 };
 
+static bool endpoint_value_kind(turbowasm_component_type_kind kind) {
+    return kind == TURBOWASM_COMPONENT_TYPE_FUTURE || kind == TURBOWASM_COMPONENT_TYPE_STREAM;
+}
+
+static bool handle_value_kind(turbowasm_component_type_kind kind) {
+    return kind == TURBOWASM_COMPONENT_TYPE_OWN || kind == TURBOWASM_COMPONENT_TYPE_BORROW ||
+        endpoint_value_kind(kind);
+}
+
+static turbowasm_status lift_handle(const turbowasm_component_canonical_memory *memory,
+    turbowasm_component_type_kind kind, const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref, uint32_t handle, turbowasm_component_value *out) {
+    turbowasm_component_resource_lift_fn lift;
+    void *context;
+    if (memory == NULL) return TURBOWASM_UNSUPPORTED;
+    lift = endpoint_value_kind(kind) ? memory->endpoint_lift : memory->resource_lift;
+    context = endpoint_value_kind(kind) ? memory->endpoint_context : memory->resource_context;
+    return lift != NULL ? lift(context, graph, ref, handle, out) : TURBOWASM_UNSUPPORTED;
+}
+
+static turbowasm_status lower_handle(const turbowasm_component_canonical_memory *memory,
+    turbowasm_component_type_kind kind, const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref, const turbowasm_component_value *value, uint32_t *out_handle) {
+    turbowasm_component_resource_lower_fn lower;
+    void *context;
+    if (memory == NULL) return TURBOWASM_UNSUPPORTED;
+    lower = endpoint_value_kind(kind) ? memory->endpoint_lower : memory->resource_lower;
+    context = endpoint_value_kind(kind) ? memory->endpoint_context : memory->resource_context;
+    return lower != NULL ? lower(context, graph, ref, value, out_handle) : TURBOWASM_UNSUPPORTED;
+}
+
 #define TURBOWASM_COMPONENT_MAX_LIST_BYTE_LENGTH \
     (UINT64_C(1) << 28u) - UINT64_C(1)
 
@@ -395,6 +426,12 @@ static turbowasm_status canonical_layout_inner(
             return TURBOWASM_OK;
         }
 
+        case TURBOWASM_COMPONENT_TYPE_FUTURE:
+        case TURBOWASM_COMPONENT_TYPE_STREAM:
+            out->alignment = 4u;
+            out->size = 4u;
+            return TURBOWASM_OK;
+
         case TURBOWASM_COMPONENT_TYPE_RESOURCE:
         case TURBOWASM_COMPONENT_TYPE_FUNCTION:
         case TURBOWASM_COMPONENT_TYPE_INSTANCE:
@@ -518,6 +555,8 @@ static turbowasm_status canonical_flatten_type_inner(
         case TURBOWASM_COMPONENT_TYPE_S32:
         case TURBOWASM_COMPONENT_TYPE_U32:
         case TURBOWASM_COMPONENT_TYPE_CHAR:
+        case TURBOWASM_COMPONENT_TYPE_FUTURE:
+        case TURBOWASM_COMPONENT_TYPE_STREAM:
             out->types[0] = TURBOWASM_COMPONENT_FLAT_I32;
             out->count = 1u;
             return TURBOWASM_OK;
@@ -1982,22 +2021,17 @@ static turbowasm_status lift_value_inner(
             type, kind, instance, memory->memory_index,
             address, out);
 
-    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
-        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+    if (handle_value_kind(kind)) {
         uint8_t bytes[4] = {0};
         uint32_t handle;
 
-        if (memory->resource_lift == NULL)
-            return TURBOWASM_UNSUPPORTED;
         status = read_memory(
             instance, memory->memory_index,
             address, bytes, sizeof(bytes));
         if (status != TURBOWASM_OK)
             return status;
         handle = (uint32_t)read_le(bytes, sizeof(bytes));
-        return memory->resource_lift(
-            memory->resource_context,
-            graph, ref, handle, out);
+        return lift_handle(memory, kind, graph, ref, handle, out);
     }
 
     return TURBOWASM_UNSUPPORTED;
@@ -2053,16 +2087,11 @@ static turbowasm_status lower_value_inner(
             type, kind, instance, memory->memory_index,
             address, value);
 
-    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
-        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+    if (handle_value_kind(kind)) {
         uint8_t bytes[4] = {0};
         uint32_t handle;
 
-        if (memory->resource_lower == NULL)
-            return TURBOWASM_UNSUPPORTED;
-        status = memory->resource_lower(
-            memory->resource_context,
-            graph, ref, value, &handle);
+        status = lower_handle(memory, kind, graph, ref, value, &handle);
         if (status != TURBOWASM_OK)
             return status;
         write_le(bytes, sizeof(bytes), handle);
@@ -2934,16 +2963,11 @@ static turbowasm_status lower_flat_value_inner(
         return status;
     }
 
-    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
-        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+    if (handle_value_kind(kind)) {
         uint32_t handle;
         if (out_capacity < 1u)
             return TURBOWASM_INVALID_ARGUMENT;
-        if (memory == NULL || memory->resource_lower == NULL)
-            return TURBOWASM_UNSUPPORTED;
-        status = memory->resource_lower(
-            memory->resource_context,
-            graph, ref, value, &handle);
+        status = lower_handle(memory, kind, graph, ref, value, &handle);
         if (status != TURBOWASM_OK)
             return status;
         out[0].kind = TURBOWASM_VALUE_I32;
@@ -3009,18 +3033,11 @@ static turbowasm_status lift_flat_value_inner(
             type, kind, &values[0], out);
     }
 
-    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
-        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+    if (handle_value_kind(kind)) {
         if (value_count != 1u ||
             values[0].kind != TURBOWASM_VALUE_I32)
             return TURBOWASM_TYPE_MISMATCH;
-        if (memory == NULL || memory->resource_lift == NULL)
-            return TURBOWASM_UNSUPPORTED;
-        return memory->resource_lift(
-            memory->resource_context,
-            graph, ref,
-            (uint32_t)values[0].as.i32,
-            out);
+        return lift_handle(memory, kind, graph, ref, (uint32_t)values[0].as.i32, out);
     }
 
     return TURBOWASM_UNSUPPORTED;
@@ -3270,7 +3287,7 @@ static turbowasm_status validate_host_value(
             return turbowasm_component_string_validate(&value->as.string);
         case TURBOWASM_COMPONENT_TYPE_FUTURE:
         case TURBOWASM_COMPONENT_TYPE_STREAM:
-            return value->as.endpoint.owner != NULL && value->release != NULL &&
+            return value->as.endpoint.owner != NULL && value->as.endpoint.owner->endpoint != NULL && value->release != NULL &&
                 turbowasm_component_value_type_equal(graph, ref,
                     value->as.endpoint.graph, value->as.endpoint.type)
                 ? TURBOWASM_OK : TURBOWASM_TYPE_MISMATCH;

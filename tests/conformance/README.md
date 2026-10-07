@@ -810,3 +810,35 @@ its untransferred value. Windows ASan passed five focused targets in 0.18 second
 and the related 56/56 tests in 2.43 seconds; a final focused run also covers the
 nested stream variant. Guest codecs, task scheduling, canonical async bindings
 and public host lifetime/transfer APIs still need implementation and qualification.
+At `23444a8`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37667715152)
+passed Windows, ordinary Linux, Linux MIR (185/185 in 1.21 seconds) and macOS
+arm64 MIR (185/185 in 3.00 seconds). Android cross-build was still running when
+these results were recorded.
+
+## Private canonical endpoint handle codecs
+
+Private canonical conversion now represents future/stream values as four-byte
+handles under memory32 and memory64 and one i32 flat carrier. Dedicated endpoint
+callbacks keep their ownership separate from resource callbacks; absent endpoint
+callbacks still reject conversion. Lift validates the readable handle, payload
+type and idle/unjoined state before allocating its host owner and consuming the
+handle. Lower reserves handles in a caller-owned scope and publishes them only
+at explicit commit; rollback preserves input values. Reserved handles remain
+inaccessible during guest realloc reentry. Each lifted value has a separate
+Runtime-allocated owner record, so destroying an obsolete value after commit
+cannot close a newly lifted owner of the same endpoint.
+
+`component_endpoint_codec_test.c` exercises flat and guest-memory conversion,
+records and lists, exact memory-end bounds, memory32/64 overflow and alignment,
+type/kind/membership/ownership admission, duplicate lowering, allocator and quota
+failure, partial lower rollback, partial lift cleanup, and peer-close delivery
+across commit. Its realloc callback forces handle-table growth and grows Wasm
+memory while confirming that a reserved endpoint cannot be lifted. All tracked
+Runtime allocations are released. Windows ASan passed five focused targets in
+0.14 seconds and the related 57/57 tests in 2.38 seconds. Two final admission/event
+cases also passed with the complete codec target: 14 cases, 630 assertions in
+0.04 seconds, with production code unchanged after the broader regression.
+
+These are private endpoint-value codecs, not guest stream/future read/write
+buffer execution. Guest buffer rendezvous, canonical async instruction bindings,
+task scheduling and public host lifetime/transfer APIs remain under implementation.
