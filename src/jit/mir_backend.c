@@ -495,7 +495,7 @@ static bool turbowasm_mir_emit_argument_locals(
     turbowasm_mir_text *text,
     const turbowasm_validation_function *function) {
     uint32_t index;
-    if (!turbowasm_mir_text_appendf(text, ", p:jit_args, p:jit_results, p:jit_call_args, p:jit_call_results, p:jit_ref_locals, p:jit_ref_regs\nlocal i64:jit_value_word\nlocal p:jit_ref_arg\nlocal p:jit_ref_out\nlocal p:jit_ref_a\nlocal p:jit_ref_b\n"))
+    if (!turbowasm_mir_text_appendf(text, ", p:jit_args, p:jit_results, p:jit_call_args, p:jit_call_results, p:jit_ref_locals, p:jit_ref_regs\nlocal i64:jit_value_word\nlocal i64:jit_ref_arg\nlocal i64:jit_ref_out\nlocal i64:jit_ref_a\nlocal i64:jit_ref_b\n"))
         return false;
     for (index = 0u; index < function->local_count; ++index) {
         const char *name;
