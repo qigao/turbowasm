@@ -21,6 +21,9 @@ extern "C" {
  * Handles are zero-initialized opaque owners. A loaded component borrows
  * immutable source bytes. Those bytes and allocator contexts must remain alive
  * until all derived instances, calls and returned own values have been released.
+ * A canon-lift post-return runs after copying/lifting results and before host
+ * publication. Failure discards unpublished results. Resumable cleanup shares
+ * the call's fuel/interruption budget and is unwound by call destruction.
  */
 typedef struct turbowasm_component {
     void *impl;

@@ -1,4 +1,5 @@
 #include <turbowasm/execution.h>
+#include "execution_internal.h"
 
 #include "instance_internal.h"
 #include "module_internal.h"
@@ -31,6 +32,8 @@ typedef struct turbowasm_execution_impl {
     turbowasm_yield_reason yield_reason;
 
     turbowasm_jit_execution_control control;
+    turbowasm_execution_completion_fn completion;
+    void *completion_context;
     coro_t *coroutine;
 
     uint64_t next_host_wait_generation;
@@ -193,6 +196,11 @@ static void turbowasm_execution_entry(coro_t *co, void *arg) {
         &execution->trap,
         &execution->control);
 
+    if (status == TURBOWASM_OK && execution->completion != NULL)
+        status = execution->completion(execution->completion_context,
+            execution->results, execution->result_count,
+            &execution->control, &execution->trap);
+
     execution->terminal_status = status;
     execution->yield_reason = TURBOWASM_YIELD_NONE;
 
@@ -210,6 +218,18 @@ static void turbowasm_execution_entry(coro_t *co, void *arg) {
             execution->state = TURBOWASM_EXECUTION_FAILED;
             break;
     }
+}
+
+turbowasm_status turbowasm_execution_set_completion(
+    turbowasm_execution *execution,
+    turbowasm_execution_completion_fn completion, void *context) {
+    turbowasm_execution_impl *impl = turbowasm_execution_impl_mut(execution);
+    if (impl == NULL || impl->state != TURBOWASM_EXECUTION_READY ||
+        impl->completion != NULL || completion == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    impl->completion = completion;
+    impl->completion_context = context;
+    return TURBOWASM_OK;
 }
 
 turbowasm_status turbowasm_execution_create(

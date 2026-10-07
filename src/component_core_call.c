@@ -1,5 +1,6 @@
 #include "component_core_call.h"
 #include "component_string.h"
+#include "execution_internal.h"
 
 #include "instance_internal.h"
 #include "module_internal.h"
@@ -865,6 +866,96 @@ void turbowasm_component_core_call_adapter_destroy(
     memset(adapter, 0, sizeof(*adapter));
 }
 
+turbowasm_status turbowasm_component_core_call_set_post_return(
+    turbowasm_component_core_call_adapter *adapter,
+    turbowasm_instance *instance, uint32_t function_index) {
+    const turbowasm_module *module;
+    turbowasm_function_signature signature;
+    uint32_t i;
+    if (adapter == NULL || !adapter->initialized || instance == NULL ||
+        adapter->post_return_instance != NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    module = turbowasm_instance_module(instance);
+    if (module == NULL || !turbowasm_module_function_signature_get(
+            module, function_index, &signature) || signature.result_count != 0u ||
+        signature.param_count != adapter->flat_signature.result_count)
+        return TURBOWASM_TYPE_MISMATCH;
+    for (i = 0u; i < signature.param_count; ++i) {
+        if (!core_type_matches(turbowasm_module_function_param_type(
+                module, function_index, i), adapter->flat_signature.results[i]))
+            return TURBOWASM_TYPE_MISMATCH;
+    }
+    adapter->post_return_instance = instance;
+    adapter->post_return_function_index = function_index;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status component_lift_results(
+    const turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_component_type *function,
+    turbowasm_component_resource_codec_context *codec,
+    const turbowasm_component_canonical_memory *memory,
+    const turbowasm_value *results, size_t count,
+    turbowasm_component_value *out) {
+    if (count != adapter->flat_signature.result_count)
+        return TURBOWASM_MALFORMED_MODULE;
+    if (!function->as.function.has_result)
+        return TURBOWASM_OK;
+    if (type_ref_is_resource_handle(adapter->graph, function->as.function.result)) {
+        if (count != 1u || results[0].kind != TURBOWASM_VALUE_I32)
+            return TURBOWASM_MALFORMED_MODULE;
+        return canonical_resource_lift(codec, adapter->graph,
+            function->as.function.result, (uint32_t)results[0].as.i32, out);
+    }
+    if (adapter->flat_signature.results_indirect) {
+        uint64_t pointer;
+        turbowasm_status status = pointer_from_core(
+            memory->pointer_type, &results[0], &pointer);
+        if (status != TURBOWASM_OK)
+            return status;
+        return turbowasm_component_canonical_lift_value(adapter->graph,
+            function->as.function.result, memory, pointer, out);
+    }
+    return turbowasm_component_canonical_lift_flat_value(adapter->graph,
+        function->as.function.result,
+        (adapter->uses_memory || adapter->uses_resources) ? memory : NULL,
+        results, (uint32_t)count, out);
+}
+
+static turbowasm_status component_post_return(
+    const turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_value *results, size_t count,
+    turbowasm_jit_execution_control *control, turbowasm_trap *trap) {
+    turbowasm_status status;
+    size_t returned = 0u;
+    if (adapter->post_return_instance == NULL)
+        return TURBOWASM_OK;
+    if (adapter->may_leave != NULL && !*adapter->may_leave) {
+        *trap = TURBOWASM_TRAP_UNREACHABLE;
+        return TURBOWASM_TRAPPED;
+    }
+    if (adapter->may_leave != NULL)
+        *adapter->may_leave = false;
+    if (control != NULL)
+        status = turbowasm_instance_invoke_internal(
+            adapter->post_return_instance->impl, adapter->post_return_function_index,
+            results, count, NULL, 0u, &returned, trap, control);
+    else
+        status = turbowasm_instance_invoke(adapter->post_return_instance,
+            adapter->post_return_function_index, results, count,
+            NULL, 0u, &returned, trap);
+    if (adapter->may_leave != NULL)
+        *adapter->may_leave = true;
+    if (status == TURBOWASM_EXCEPTION) {
+        ((turbowasm_instance_impl *)adapter->post_return_instance->impl)->pending_exception = NULL;
+        *trap = TURBOWASM_TRAP_UNREACHABLE;
+        return TURBOWASM_TRAPPED;
+    }
+    if (status == TURBOWASM_OK && returned != 0u)
+        return TURBOWASM_TYPE_MISMATCH;
+    return status;
+}
+
 turbowasm_status turbowasm_component_core_call_invoke(
     const turbowasm_component_core_call_adapter *adapter,
     const turbowasm_component_value *arguments,
@@ -1022,55 +1113,15 @@ turbowasm_status turbowasm_component_core_call_invoke(
         return TURBOWASM_TRAPPED;
     }
 
-    if (core_result_count != adapter->flat_signature.result_count) {
-        resource_scope_destroy(&resource_scope);
-        return TURBOWASM_MALFORMED_MODULE;
+    status = component_lift_results(adapter, function, &codec, &call_memory,
+        core_results, core_result_count, out_result);
+    if (status == TURBOWASM_OK)
+        status = component_post_return(adapter, core_results, core_result_count, NULL, trap);
+    if (status != TURBOWASM_OK) {
+        /* Preserve the primary failure if a resource destructor also fails. */
+        turbowasm_status cleanup = turbowasm_component_value_destroy(out_result);
+        (void)cleanup;
     }
-
-    if (!function->as.function.has_result) {
-        resource_scope_destroy(&resource_scope);
-        return TURBOWASM_OK;
-    }
-
-    if (type_ref_is_resource_handle(
-            adapter->graph, function->as.function.result)) {
-        if (core_result_count != 1u ||
-            core_results[0].kind != TURBOWASM_VALUE_I32) {
-            resource_scope_destroy(&resource_scope);
-            return TURBOWASM_MALFORMED_MODULE;
-        }
-
-        status = canonical_resource_lift(&codec, adapter->graph,
-            function->as.function.result, (uint32_t)core_results[0].as.i32, out_result);
-        resource_scope_destroy(&resource_scope);
-        return status;
-    }
-
-    if (adapter->flat_signature.results_indirect) {
-        uint64_t pointer;
-
-        status = pointer_from_core(
-            call_memory.pointer_type,
-            &core_results[0], &pointer);
-        if (status == TURBOWASM_OK) {
-            status = turbowasm_component_canonical_lift_value(
-                adapter->graph,
-                function->as.function.result,
-                &call_memory,
-                pointer,
-                out_result);
-        }
-        resource_scope_destroy(&resource_scope);
-        return status;
-    }
-
-    status = turbowasm_component_canonical_lift_flat_value(
-        adapter->graph,
-        function->as.function.result,
-        (adapter->uses_memory || adapter->uses_resources) ? &call_memory : NULL,
-        core_results,
-        (uint32_t)core_result_count,
-        out_result);
     resource_scope_destroy(&resource_scope);
     return status;
 
@@ -1220,7 +1271,6 @@ static turbowasm_status component_core_execution_lift(
         core_results[TURBOWASM_COMPONENT_MAX_FLAT_RESULTS] = {{0}};
     size_t core_result_count;
     size_t i;
-    turbowasm_status status;
 
     if (impl == NULL || impl->adapter == NULL ||
         impl->function == NULL)
@@ -1246,49 +1296,22 @@ static turbowasm_status component_core_execution_lift(
         core_results[i] = *value;
     }
 
-    if (!impl->function->as.function.has_result)
-        return TURBOWASM_OK;
+    return component_lift_results(adapter, impl->function, &impl->codec,
+        &impl->call_memory, core_results, core_result_count, &impl->lifted_result);
+}
 
-    if (type_ref_is_resource_handle(
-            adapter->graph,
-            impl->function->as.function.result)) {
-        if (core_result_count != 1u ||
-            core_results[0].kind != TURBOWASM_VALUE_I32)
-            return TURBOWASM_MALFORMED_MODULE;
-
-
-        return canonical_resource_lift(
-            &impl->codec,
-            adapter->graph,
-            impl->function->as.function.result,
-            (uint32_t)core_results[0].as.i32,
-            &impl->lifted_result);
-    }
-
-    if (adapter->flat_signature.results_indirect) {
-        uint64_t pointer;
-
-        status = pointer_from_core(
-            impl->call_memory.pointer_type,
-            &core_results[0], &pointer);
-        if (status != TURBOWASM_OK)
-            return status;
-
-        return turbowasm_component_canonical_lift_value(
-            adapter->graph,
-            impl->function->as.function.result,
-            &impl->call_memory,
-            pointer,
-            &impl->lifted_result);
-    }
-
-    return turbowasm_component_canonical_lift_flat_value(
-        adapter->graph,
-        impl->function->as.function.result,
-        (adapter->uses_memory || adapter->uses_resources) ? &impl->call_memory : NULL,
-        core_results,
-        (uint32_t)core_result_count,
-        &impl->lifted_result);
+static turbowasm_status component_core_execution_complete(
+    void *context, const turbowasm_value *results, size_t count,
+    turbowasm_jit_execution_control *control, turbowasm_trap *trap) {
+    turbowasm_component_core_execution_impl *impl = context;
+    turbowasm_status status;
+    if (!resource_scope_finalize_borrows(&impl->resource_scope))
+        return TURBOWASM_TRAPPED;
+    status = component_lift_results(impl->adapter, impl->function, &impl->codec,
+        &impl->call_memory, results, count, &impl->lifted_result);
+    if (status == TURBOWASM_OK)
+        status = component_post_return(impl->adapter, results, count, control, trap);
+    return status;
 }
 
 static turbowasm_status component_core_execution_finalize(
@@ -1304,8 +1327,12 @@ static turbowasm_status component_core_execution_finalize(
 
     if (runtime_status != TURBOWASM_OK) {
         resource_scope_abort_borrows(&impl->resource_scope);
-    } else {
+    } else if (impl->adapter->post_return_instance == NULL) {
         status = component_core_execution_lift(impl);
+    }
+    if (status != TURBOWASM_OK) {
+        turbowasm_status cleanup = turbowasm_component_value_destroy(&impl->lifted_result);
+        (void)cleanup;
     }
 
     resource_scope_destroy(&impl->resource_scope);
@@ -1385,6 +1412,14 @@ turbowasm_status turbowasm_component_core_execution_create(
         goto fail_before_start;
 
     impl->runtime_created = true;
+    if (adapter->post_return_instance != NULL) {
+        status = turbowasm_execution_set_completion(&impl->runtime_execution,
+            component_core_execution_complete, impl);
+        if (status != TURBOWASM_OK) {
+            turbowasm_execution_destroy(&impl->runtime_execution);
+            goto fail_before_start;
+        }
+    }
     execution->impl = impl;
     return TURBOWASM_OK;
 

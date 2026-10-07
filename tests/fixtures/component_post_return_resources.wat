@@ -1,0 +1,30 @@
+(component
+  (core module $state
+    (global $drops (mut i32) (i32.const 0))
+    (global $posts (mut i32) (i32.const 0))
+    (func (export "drop") (param i32)
+      global.get $drops i32.const 1 i32.add global.set $drops)
+    (func (export "drops") (result i32) global.get $drops)
+    (func (export "post") (param i32) (local $n i32)
+      global.get $posts i32.const 1 i32.add global.set $posts
+      i32.const 8 local.set $n
+      loop $again local.get $n i32.const 1 i32.sub local.tee $n br_if $again end)
+    (func (export "trap") (param i32) unreachable))
+  (core instance $s (instantiate $state))
+  (alias core export $s "drop" (core func $dtor))
+  (alias core export $s "drops" (core func $drops))
+  (alias core export $s "post" (core func $post))
+  (alias core export $s "trap" (core func $trap))
+  (type $r-def (resource (rep i32) (dtor (core func $dtor))))
+  (export $r "resource-r" (type $r-def))
+  (core func $new (canon resource.new $r-def))
+  (core instance $builtins (export "new" (func $new)))
+  (core module $m
+    (import "r" "new" (func $new (param i32) (result i32)))
+    (func (export "make") (result i32) i32.const 42 call $new))
+  (core instance $i (instantiate $m (with "r" (instance $builtins))))
+  (alias core export $i "make" (core func $make))
+  (func (export "make") (result (own $r)) (canon lift (core func $make) (post-return $post)))
+  (func (export "trap") (result (own $r)) (canon lift (core func $make) (post-return $trap)))
+  (func (export "drops") (result u32) (canon lift (core func $drops)))
+)

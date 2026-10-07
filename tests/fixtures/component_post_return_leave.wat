@@ -1,0 +1,15 @@
+(component
+  (type $host (instance (export "notify" (func))))
+  (import "host" (instance $host (type $host)))
+  (alias export $host "notify" (func $notify))
+  (core func $lower (canon lower (func $notify)))
+  (core instance $imports (export "notify" (func $lower)))
+  (core module $m
+    (import "host" "notify" (func $notify))
+    (func (export "run") call $notify)
+    (func (export "post") call $notify))
+  (core instance $i (instantiate $m (with "host" (instance $imports))))
+  (alias core export $i "run" (core func $run))
+  (alias core export $i "post" (core func $post))
+  (func (export "run") (canon lift (core func $run) (post-return $post)))
+)

@@ -30,6 +30,11 @@ typedef struct turbowasm_component_core_call_adapter {
     turbowasm_instance *instance;
     uint32_t function_index;
 
+    turbowasm_instance *post_return_instance;
+    uint32_t post_return_function_index;
+    /* Shared with the owning exec's canon-lower boundary. */
+    bool *may_leave;
+
     turbowasm_component_canonical_memory memory;
     turbowasm_component_flat_signature flat_signature;
     turbowasm_component_resource_table *resources;
@@ -66,6 +71,10 @@ turbowasm_status turbowasm_component_core_call_adapter_init_with_resources(
 
 void turbowasm_component_core_call_adapter_destroy(
     turbowasm_component_core_call_adapter *adapter);
+
+turbowasm_status turbowasm_component_core_call_set_post_return(
+    turbowasm_component_core_call_adapter *adapter,
+    turbowasm_instance *instance, uint32_t function_index);
 
 turbowasm_status turbowasm_component_core_call_invoke(
     const turbowasm_component_core_call_adapter *adapter,

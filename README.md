@@ -93,6 +93,15 @@ interruption and host-wait yields; GC roots and vector slots remain live until
 the call completes or cancellation unwinds it. Host effects are not replayed.
 The instance, module, providers and backend must outlive the execution handle.
 
+The synchronous Component layer supports UTF-8, UTF-16LE and compact
+Latin-1/UTF-16 canonical strings, including nested host values and memory64.
+Core-instance `post-return` callbacks run after result lifting and share the
+resumable call's fuel/interruption control; failed cleanup discards unpublished
+results. Direct canonical-function bindings remain part of the binding work.
+This does not complete the Component Model: local-function canonical lowering,
+the full async/future/stream surface and broader WASI 0.2 interfaces remain work
+in progress.
+
 MIR admits the complete helper-backed SIMD instruction set, including shuffle,
 lane extraction/replacement, extending/splat/zero loads and lane loads/stores.
 Immediate SIMD operations reuse Runtime's validated instruction semantics; this

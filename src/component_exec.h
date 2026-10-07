@@ -160,6 +160,7 @@ typedef struct turbowasm_component_exec {
     uint32_t *function_adapter_indices;
     uint32_t function_count;
 
+    bool may_leave;
     bool initialized;
 } turbowasm_component_exec;
 

@@ -1291,6 +1291,13 @@ static turbowasm_status decode_canon_section(
                         break;
 
                     case 0x05u: /* post-return */
+                        if (lift.has_post_return ||
+                            !turbowasm_reader_uleb32(
+                                &section, &lift.post_return_function_index) ||
+                            lift.post_return_function_index >= *next_core_function_index)
+                            return TURBOWASM_MALFORMED_MODULE;
+                        lift.has_post_return = true;
+                        break;
                     case 0x06u: /* async */
                     case 0x07u: /* callback */
                         return TURBOWASM_UNSUPPORTED;
@@ -1376,7 +1383,8 @@ static turbowasm_status decode_canon_section(
                         lower.has_realloc = true;
                         break;
 
-                    case 0x05u: /* post-return */
+                    case 0x05u: /* post-return is only valid on canon lift */
+                        return TURBOWASM_MALFORMED_MODULE;
                     case 0x06u: /* async */
                     case 0x07u: /* callback */
                         return TURBOWASM_UNSUPPORTED;

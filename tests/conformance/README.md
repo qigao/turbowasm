@@ -564,3 +564,45 @@ ctest --preset win-core3-asan-user -R "resumable|host_wait|eh_native|gc_native|j
 Linux/macOS use the complete `ci-mir-user` / `ci-macos-mir-user` profiles; the
 targeted native filter is `mir_resumable`. These results do not qualify Component
 encoding/post-return/async or the broader WASI 0.2 surface.
+
+## Canonical string encoding qualification
+
+Implementation `7d31a9c` adds UTF-16LE and tagged Latin-1/UTF-16, preserving
+canonical guest realloc sequences and normalizing private host strings to UTF-8.
+`component_encoding_test.c` covers all encoding pairs, Unicode boundaries,
+moving/failing reallocations, malformed input, memory32/memory64 lengths,
+nested host values, separate Component instances connected through an import
+provider, and retained resumable calls. Both fixtures passed wasm-tools 1.261.0.
+
+Windows ASan passed 44/44 Component/WASI 0.2 tests and the full 149/149 tests in
+191.70 seconds. In the [native run](https://github.com/qigao/turbowasm/actions/runs/37646837512),
+Linux MIR passed 171/171 in 2.34 seconds and macOS arm64 MIR passed 171/171 in
+3.95 seconds. Both include `turbowasm_mir_resumable_test`, completing the Linux
+resumable qualification left pending in the preceding run. Windows CI and the
+Android cross-build also passed; the ordinary Linux job was still preparing
+dependencies when these results were recorded.
+
+This qualifies canonical string conversion, not post-return, local-function
+canon-lower binding, complete Component async/future/stream or broader WASI 0.2.
+
+## Canonical post-return execution
+
+`component_post_return_test.c` covers Core-instance cleanup callbacks after
+successful lifting, exact scalar arguments, empty results, memory32/memory64
+indirect result copies, cross-Core-instance callbacks, failed lifting, cleanup
+traps and uncaught exceptions, allocation failures, owned results, retained
+public owners, fuel yields and cancellation. A separate import-provider fixture
+checks that canon lower traps before leaving the Component during cleanup.
+All four WAT fixtures passed wasm-tools 1.261.0 validation. Malformed-option
+cases check duplicates, absent/out-of-range indices and post-return on lower.
+
+Windows ASan passed all 48 selected Component/WASI 0.2/resumable/host-wait tests
+in 2.78 seconds. The MIR variant additionally asserts that the producer and
+cleanup function are compiled while the cleanup frame is suspended; native
+qualification is pending. Direct canonical builtins as cleanup targets remain
+part of the general canonical-function binding work.
+
+```powershell
+cmake --build --preset win-core3-asan-user
+ctest --preset win-core3-asan-user -R "component|wasi02|resumable|host_wait" --output-on-failure
+```

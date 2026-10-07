@@ -94,6 +94,9 @@ typedef struct turbowasm_component_canon_lift {
     bool has_realloc;
     uint32_t realloc_function_index;
 
+    bool has_post_return;
+    uint32_t post_return_function_index;
+
     turbowasm_component_string_encoding string_encoding;
 } turbowasm_component_canon_lift;
 

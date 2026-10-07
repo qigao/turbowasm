@@ -607,6 +607,44 @@ with retained-owner bookkeeping; no persisted data format requires migration.
 The imported-resource table routing and consuming canonical destructors must roll
 back together; mixing raw provider handles with canonical handles is invalid.
 
+## Canonical post-return lifecycle
+
+Synchronous lifts with `post-return` copy/lift the Core results before invoking
+the cleanup function with the original flat results (including an indirect
+result pointer). Its signature must be exactly those Core results to no results.
+Duplicate options, missing indices and mismatched signatures fail admission.
+See the pinned [Canonical ABI](https://github.com/WebAssembly/component-model/blob/a25fc0b372dd21f07f0242c46e98bd0f1ea0c0e1/design/mvp/CanonicalABI.md#canon-lift).
+
+The call owns its lifted result until cleanup succeeds. Core failure or failed
+lifting skips cleanup; cleanup failure discards the unpublished host result.
+Already committed guest side effects are not rolled back. A primary call failure
+takes precedence over a secondary destructor failure during unwinding.
+The Component exec owns a single `may_leave` gate, cleared around post-return;
+canonical lower traps before any provider invocation while that gate is clear.
+The gate is restored after success, failure or cancellation unwinds the frame.
+All of these transitions run on the existing instance execution owner thread.
+
+For resumable calls, a private Runtime completion hook runs lifting and cleanup
+inside the original coroutine, using the same fuel/interruption control. This
+avoids a second coroutine allocation, a reset fuel budget or replayed cleanup.
+Fuel/interruption may suspend the cleanup frame; canonical host calls cannot
+leave the component there. The call retains the instance and its lifted result
+until completion or cancellation. Capacity remains the existing bounded flat
+result tuple, canonical value limits and Runtime call/stack/allocation budgets;
+there is no new queue, unbounded storage or additional execution owner.
+
+The alternative of invoking cleanup after `resume` returns would bypass its
+execution budget. A separate resumable execution would require duplicating
+budget and cancellation state. The private completion hook keeps Runtime free
+of Component types and preserves the installed ABI. Removing the hook and
+rejecting the option again is the rollback path. Validation includes direct and
+indirect results, empty results, allocator/lift failures, cleanup traps/exceptions,
+cross-instance cleanup, canonical-leave rejection, fuel yields and cancellation.
+The executable binding boundary currently resolves Core-instance functions,
+including their imported functions. Direct canonical builtins as cleanup targets
+remain with the general canonical-function binding work; they are not silently
+treated as missing cleanup.
+
 ## Canonical string encodings
 
 The [pinned Canonical ABI](https://github.com/WebAssembly/component-model/blob/a25fc0b372dd21f07f0242c46e98bd0f1ea0c0e1/design/mvp/CanonicalABI.md#storing)

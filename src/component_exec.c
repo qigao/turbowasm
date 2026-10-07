@@ -676,6 +676,11 @@ static turbowasm_status component_canon_lower_host(
     *trap = TURBOWASM_TRAP_NONE;
     *result_count = 0u;
 
+    if (!lower_context->exec->may_leave) {
+        *trap = TURBOWASM_TRAP_UNREACHABLE;
+        return TURBOWASM_TRAPPED;
+    }
+
     for (i = 0u; i < component_param_count; ++i) {
         turbowasm_component_flat_type_list flat;
         turbowasm_component_pointer_type pointer_type =
@@ -2131,6 +2136,7 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
 
     scope = turbowasm_runtime_scope_enter(&binary->config);
     exec->binary = binary;
+    exec->may_leave = true;
 
     status = component_import_router_init(
         exec, import_sets, import_set_count);
@@ -2486,6 +2492,25 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
         exec->function_adapter_indices[
             lift->component_function_index] = i;
         exec->functions[i].defines_local_resources = true;
+        exec->functions[i].may_leave = &exec->may_leave;
+        if (lift->has_post_return) {
+            const turbowasm_component_exec_core_function *post;
+            if (lift->post_return_function_index >= exec->core_function_count) {
+                status = TURBOWASM_MALFORMED_MODULE;
+                goto fail;
+            }
+            post = &exec->core_functions[lift->post_return_function_index];
+            if (post->kind != TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INSTANCE ||
+                post->instance_index >= exec->core_instance_count) {
+                status = TURBOWASM_TYPE_MISMATCH;
+                goto fail;
+            }
+            status = turbowasm_component_core_call_set_post_return(
+                &exec->functions[i], &exec->core_instances[post->instance_index],
+                post->function_index);
+            if (status != TURBOWASM_OK)
+                goto fail;
+        }
     }
 
     status = resolve_component_function_aliases(exec, binary);
