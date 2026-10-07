@@ -94,7 +94,7 @@ turbowasm_status turbowasm_v128_load(turbowasm_v128 *out,
     if (shape != TURBOWASM_V128_RAW &&
         turbowasm_v128_descriptor(shape) == NULL)
         return TURBOWASM_UNSUPPORTED;
-    salts_simd_v128_load(&out->bits, bytes);
+    cmeta_simd_v128_load(&out->bits, bytes);
     out->shape = shape;
     return TURBOWASM_OK;
 }
@@ -106,6 +106,6 @@ turbowasm_status turbowasm_v128_store(void *bytes,
     if (value->shape != TURBOWASM_V128_RAW &&
         turbowasm_v128_descriptor(value->shape) == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    salts_simd_v128_store(bytes, &value->bits);
+    cmeta_simd_v128_store(bytes, &value->bits);
     return TURBOWASM_OK;
 }
