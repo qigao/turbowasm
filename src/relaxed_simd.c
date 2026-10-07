@@ -67,8 +67,8 @@ static uint32_t relaxed_trunc_u32(double value) {
 }
 
 static bool relaxed_trunc_f32x4(
-    salts_v128 *out,
-    const salts_v128 *value,
+    cmeta_v128 *out,
+    const cmeta_v128 *value,
     bool is_signed) {
     uint8_t source[16];
     uint8_t result[16];
@@ -92,8 +92,8 @@ static bool relaxed_trunc_f32x4(
 }
 
 static bool relaxed_trunc_f64x2_zero(
-    salts_v128 *out,
-    const salts_v128 *value,
+    cmeta_v128 *out,
+    const cmeta_v128 *value,
     bool is_signed) {
     uint8_t source[16];
     uint8_t result[16] = {0};
@@ -117,9 +117,9 @@ static bool relaxed_trunc_f64x2_zero(
 }
 
 static bool relaxed_minmax_f32(
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b,
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b,
     bool is_min) {
     uint8_t left[16];
     uint8_t right[16];
@@ -159,9 +159,9 @@ static bool relaxed_minmax_f32(
 }
 
 static bool relaxed_minmax_f64(
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b,
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b,
     bool is_min) {
     uint8_t left[16];
     uint8_t right[16];
@@ -197,8 +197,8 @@ static bool relaxed_minmax_f64(
 
 static void relaxed_dot_i8_i7_pairs(
     int16_t out[8],
-    const salts_v128 *a,
-    const salts_v128 *b) {
+    const cmeta_v128 *a,
+    const cmeta_v128 *b) {
     uint8_t left[16];
     uint8_t right[16];
     size_t pair;
@@ -224,9 +224,9 @@ static void relaxed_dot_i8_i7_pairs(
 }
 
 static bool relaxed_dot_i16(
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b) {
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b) {
     int16_t pairs[8];
     uint8_t result[16];
     size_t lane;
@@ -242,10 +242,10 @@ static bool relaxed_dot_i16(
 }
 
 static bool relaxed_dot_add_i32(
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b,
-    const salts_v128 *c) {
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b,
+    const cmeta_v128 *c) {
     int16_t pairs[8];
     uint8_t addend[16];
     uint8_t result[16];
@@ -271,13 +271,13 @@ static bool relaxed_dot_add_i32(
 static bool relaxed_madd(
     const cmeta_vector_desc *desc,
     bool negative,
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b,
-    const salts_v128 *c) {
-    salts_v128 product;
-    salts_v128 negated_a;
-    const salts_v128 *multiplicand = a;
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b,
+    const cmeta_v128 *c) {
+    cmeta_v128 product;
+    cmeta_v128 negated_a;
+    const cmeta_v128 *multiplicand = a;
 
     /*
      * Choose the proposal-permitted unfused projection:
@@ -321,10 +321,10 @@ uint8_t turbowasm_relaxed_simd_arity(uint32_t opcode) {
 
 bool turbowasm_relaxed_simd_execute(
     uint32_t opcode,
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b,
-    const salts_v128 *c) {
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b,
+    const cmeta_v128 *c) {
     if (out == NULL || a == NULL)
         return false;
 
