@@ -442,6 +442,21 @@ static uint8_t turbowasm_mir_binary_type(uint8_t opcode) {
     return 0u;
 }
 
+static bool turbowasm_mir_decode_numeric(turbowasm_reader *reader, uint8_t opcode,
+    uint32_t *decoded, turbowasm_numeric_signature *signature) {
+    turbowasm_reader peek = *reader;
+    uint32_t value = opcode;
+    if (opcode == 0xfcu) {
+        uint32_t subopcode;
+        if (!turbowasm_reader_uleb32(&peek, &subopcode) || subopcode > 7u) return false;
+        value = TURBOWASM_JIT_NUMERIC_SAT_BASE + subopcode;
+    }
+    if (turbowasm_mir_binary_type(opcode) != 0u ||
+        !turbowasm_numeric_signature_get(value, signature)) return false;
+    *reader = peek; *decoded = value;
+    return true;
+}
+
 /* Cells, including their kind and owner identity, are materialized before the
  * next checkpoint. No GC or callback can observe an intermediate word copy. */
 static bool turbowasm_mir_emit_cell_copy(turbowasm_mir_text *text,
@@ -1888,6 +1903,15 @@ static bool turbowasm_mir_scan_structured_scalar(
         opcode_offset =
             (uint32_t)(reader.cursor - function->code - 1u);
 
+        {
+            uint32_t numeric;
+            turbowasm_numeric_signature signature;
+            if (turbowasm_mir_decode_numeric(&reader, opcode, &numeric, &signature)) {
+                if (calls.arguments < signature.input_count) calls.arguments = signature.input_count;
+                if (calls.results == 0u) calls.results = 1u;
+                continue;
+            }
+        }
         if (turbowasm_mir_storage_opcode(opcode)) {
             turbowasm_mir_storage_op op;
             uint32_t input;
@@ -2141,29 +2165,12 @@ static bool turbowasm_mir_scan_structured_scalar(
                 break;
             }
 
-            case 0x43u: {
-                uint32_t bits;
-                float value;
-                if (!turbowasm_reader_u32le(&reader, &bits))
-                    goto done;
-                memcpy(&value, &bits, sizeof(value));
-                if (!isfinite(value))
-                    goto done;
-                break;
-            }
-
+            case 0x43u:
             case 0x44u: {
                 turbowasm_reader bytes;
-                uint64_t bits = 0u;
-                double value;
-                uint32_t index;
-                if (!turbowasm_reader_slice(&reader, 8u, &bytes))
+                if (!turbowasm_reader_slice(&reader, opcode == 0x43u ? 4u : 8u, &bytes))
                     goto done;
-                for (index = 0u; index < 8u; ++index)
-                    bits |= (uint64_t)bytes.cursor[index] << (8u * index);
-                memcpy(&value, &bits, sizeof(value));
-                if (!isfinite(value))
-                    goto done;
+                if (calls.results == 0u) calls.results = 1u;
                 break;
             }
 
@@ -2600,6 +2607,32 @@ static bool turbowasm_mir_emit_call_results(turbowasm_mir_text *text,
         stack[*stack_size].reg = (*next_reg)++;
         ++*stack_size;
     }
+    return true;
+}
+
+static bool turbowasm_mir_emit_numeric(turbowasm_mir_text *text, uint32_t opcode,
+    const turbowasm_numeric_signature *signature, turbowasm_mir_stack_value *stack,
+    uint32_t *stack_size, uint32_t *next_reg) {
+    uint32_t index, base;
+    const char *memory_type = signature->output_type == 0x7fu ? "i32" :
+        turbowasm_mir_type_name(signature->output_type);
+    if (*stack_size < signature->input_count) return false;
+    base = *stack_size - signature->input_count;
+    for (index = 0u; index < signature->input_count; ++index) {
+        turbowasm_mir_stack_value value = stack[base + index];
+        if (value.type != signature->input_type ||
+            !turbowasm_mir_emit_value_store(text, "jit_call_args", index,
+                value.type, turbowasm_mir_reg_prefix(value.type), value.reg)) return false;
+    }
+    if (!turbowasm_mir_text_appendf(text,
+            "call tw_numeric_p, tw_numeric, jit_status, jit_ctx, %u, jit_call_args, jit_call_results\n"
+            "bne jit_fail, jit_status, 0\n"
+            "%s %s%u, %s:%zu(jit_call_results)\n", opcode,
+            turbowasm_mir_move_name(signature->output_type),
+            turbowasm_mir_reg_prefix(signature->output_type), *next_reg,
+            memory_type, offsetof(turbowasm_value, as))) return false;
+    stack[base].type = signature->output_type; stack[base].reg = (*next_reg)++;
+    *stack_size = base + 1u;
     return true;
 }
 
@@ -3305,6 +3338,8 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             "tw_call_status_p: proto i64, p:ctx\n"
             "tw_checkpoint_p: proto i64, p:ctx\n"
             "tw_simd_value_load_p: proto i64, p:ctx, i64:slot, p:value\n"
+            "tw_numeric_p: proto i64, p:ctx, i64:op, p:args, p:result\n"
+            "import tw_numeric\n"
             "tw_simd_value_store_p: proto i64, p:ctx, i64:slot, p:value\n"
             "import tw_simd_value_load, tw_simd_value_store\n"
             "tw_simd_copy_p: proto i64, p:ctx, i64:out_slot, i64:in_slot\n"
@@ -3568,6 +3603,15 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
         if (!turbowasm_mir_emit_checkpoint_text(&text))
             goto oom;
 
+        {
+            uint32_t numeric;
+            turbowasm_numeric_signature signature;
+            if (turbowasm_mir_decode_numeric(&reader, opcode, &numeric, &signature)) {
+                if (next_reg >= register_count || !turbowasm_mir_emit_numeric(
+                        &text, numeric, &signature, stack, &stack_size, &next_reg)) goto done;
+                continue;
+            }
+        }
         if (turbowasm_mir_storage_opcode(opcode)) {
             turbowasm_status memory_status = turbowasm_mir_emit_storage(
                 &text, validation, &reader, opcode, stack, &stack_size, &next_reg);
@@ -4184,44 +4228,28 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 break;
             }
 
-            case 0x43u: {
-                uint32_t bits;
-                float value;
-                if (!turbowasm_reader_u32le(&reader, &bits))
-                    goto done;
-                memcpy(&value, &bits, sizeof(value));
-                if (!isfinite(value) ||
-                    !turbowasm_mir_text_appendf(
-                        &text, "fmov f%u, %.*ef\n",
-                        next_reg,
-                        FLT_DECIMAL_DIG - 1,
-                        (double)value))
-                    goto done;
-                stack[stack_size].reg = next_reg++;
-                stack[stack_size].type = 0x7du;
-                ++stack_size;
-                break;
-            }
-
+            case 0x43u:
             case 0x44u: {
                 turbowasm_reader bytes;
                 uint64_t bits = 0u;
-                double value;
-                if (!turbowasm_reader_slice(&reader, 8u, &bytes))
-                    goto done;
-                for (index = 0u; index < 8u; ++index)
+                uint8_t value_type = opcode == 0x43u ? 0x7du : 0x7cu;
+                uint32_t width = opcode == 0x43u ? 4u : 8u;
+                if (!turbowasm_reader_slice(&reader, width, &bytes)) goto done;
+                for (index = 0u; index < width; ++index)
                     bits |= (uint64_t)bytes.cursor[index] << (8u * index);
-                memcpy(&value, &bits, sizeof(value));
-                if (!isfinite(value) ||
-                    !turbowasm_mir_text_appendf(
-                        &text, "dmov d%u, %.*e\n",
-                        next_reg,
-                        DBL_DECIMAL_DIG - 1,
-                        value))
-                    goto done;
+                if (!turbowasm_mir_text_appendf(&text,
+                        "mov i32:%zu(jit_call_results), %u\n"
+                        "mov jit_value_word, %lld\n"
+                        "mov %s:%zu(jit_call_results), jit_value_word\n"
+                        "%s %s%u, %s:%zu(jit_call_results)\n",
+                        offsetof(turbowasm_value, kind),
+                        opcode == 0x43u ? TURBOWASM_VALUE_F32 : TURBOWASM_VALUE_F64,
+                        (long long)(int64_t)bits, width == 4u ? "i32" : "i64",
+                        offsetof(turbowasm_value, as), turbowasm_mir_move_name(value_type),
+                        turbowasm_mir_reg_prefix(value_type), next_reg,
+                        turbowasm_mir_type_name(value_type), offsetof(turbowasm_value, as))) goto oom;
                 stack[stack_size].reg = next_reg++;
-                stack[stack_size].type = 0x7cu;
-                ++stack_size;
+                stack[stack_size++].type = value_type;
                 break;
             }
 
@@ -5679,6 +5707,13 @@ static bool turbowasm_mir_register_call_externals(
     if (backend == NULL || backend->mir == NULL)
         return false;
 
+    {
+        int64_t (*fn)(turbowasm_jit_invocation_context *, int64_t,
+            const turbowasm_value *, turbowasm_value *) = turbowasm_jit_numeric;
+        _Static_assert(sizeof(fn) == sizeof(address), "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(backend->mir, "tw_numeric", address);
+    }
     {
         int64_t (*fn)(turbowasm_jit_invocation_context *, int64_t,
             const turbowasm_value *) = turbowasm_jit_simd_value_load;

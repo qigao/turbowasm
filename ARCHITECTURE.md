@@ -322,6 +322,26 @@ host/interpreted targets, long tail chains, GC, traps, fuel and allocation failu
 Rollback removes these four admission cases and their emitter together; Runtime
 interpreted behavior remains the compatibility baseline.
 
+### MIR scalar numeric boundary
+
+Missing scalar instructions share the interpreter's numeric primitives through a
+private bridge. The bridge copies at most two scalar inputs into a fixed local
+stack, runs exactly one primitive, and commits one result only on success.
+Division/conversion traps propagate through the existing invocation status and
+trap fields. There are no callbacks, GC references, retained pointers or dynamic
+allocations inside this bridge. Generated code reuses the invocation-owned call
+scratch and pays the existing checkpoint once per instruction.
+
+Existing direct arithmetic lowering remains available. Floating constants use
+their binary representation in a typed scratch cell, preserving NaN payloads,
+infinities and negative zero without depending on MIR text float parsing.
+Duplicating numeric semantics in the backend would create a second source of
+truth; the shared primitive boundary trades helper-call overhead for identical
+trap and conversion rules without an installed API change. Validation covers all
+scalar numeric opcodes, saturation, integer boundary pairs, float bit patterns,
+fuel and compiled caller state. Rollback removes admission and bridge emission
+together without changing interpreter behavior.
+
 ### MIR vector call cells
 
 Vector parameters/results use the same private pointer-based entry ABI as scalar

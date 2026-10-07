@@ -599,4 +599,14 @@ turbowasm_status turbowasm_instance_table_fill(
     turbowasm_value value,
     uint64_t length);
 
+/* Private numeric bridge: at most two borrowed scalar inputs, one committed
+ * output. No allocation, callback, collection or retained reference occurs. */
+enum { TURBOWASM_JIT_NUMERIC_SAT_BASE = 0x100, TURBOWASM_JIT_NUMERIC_MAX_INPUTS = 2 };
+typedef struct turbowasm_numeric_signature {
+    uint8_t input_type, output_type, input_count;
+} turbowasm_numeric_signature;
+bool turbowasm_numeric_signature_get(uint32_t opcode, turbowasm_numeric_signature *out);
+int64_t turbowasm_jit_numeric(turbowasm_jit_invocation_context *context,
+    int64_t opcode, const turbowasm_value *arguments, turbowasm_value *result);
+
 #endif /* TURBOWASM_INSTANCE_INTERNAL_H */

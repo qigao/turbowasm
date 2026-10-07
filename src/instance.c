@@ -3090,6 +3090,98 @@ static turbowasm_status turbowasm_exec_trunc_sat(
     return turbowasm_stack_push(stack, out);
 }
 
+bool turbowasm_numeric_signature_get(uint32_t opcode, turbowasm_numeric_signature *out) {
+    static const uint8_t conversion_types[][2] = {
+        {0x7e, 0x7f}, /* a7: wrap */
+        {0x7d, 0x7f}, {0x7d, 0x7f}, {0x7c, 0x7f}, {0x7c, 0x7f},
+        {0x7f, 0x7e}, {0x7f, 0x7e},
+        {0x7d, 0x7e}, {0x7d, 0x7e}, {0x7c, 0x7e}, {0x7c, 0x7e},
+        {0x7f, 0x7d}, {0x7f, 0x7d}, {0x7e, 0x7d}, {0x7e, 0x7d},
+        {0x7c, 0x7d},
+        {0x7f, 0x7c}, {0x7f, 0x7c}, {0x7e, 0x7c}, {0x7e, 0x7c},
+        {0x7d, 0x7c},
+        {0x7d, 0x7f}, {0x7c, 0x7e}, {0x7f, 0x7d}, {0x7e, 0x7c},
+        {0x7f, 0x7f}, {0x7f, 0x7f}, {0x7e, 0x7e}, {0x7e, 0x7e}, {0x7e, 0x7e}
+    };
+    turbowasm_numeric_signature signature = {0};
+    if (out == NULL) return false;
+    if (opcode >= TURBOWASM_JIT_NUMERIC_SAT_BASE && opcode < TURBOWASM_JIT_NUMERIC_SAT_BASE + 8u) {
+        uint32_t subopcode = opcode - TURBOWASM_JIT_NUMERIC_SAT_BASE;
+        signature.input_type = (subopcode & 2u) == 0u ? 0x7du : 0x7cu;
+        signature.output_type = subopcode < 4u ? 0x7fu : 0x7eu;
+        signature.input_count = 1u;
+    } else if (opcode >= 0x45u && opcode <= 0xc4u) {
+        signature.input_count = 2u;
+        if (opcode <= 0x4fu) {
+            signature.input_type = signature.output_type = 0x7fu;
+            if (opcode == 0x45u) signature.input_count = 1u;
+        } else if (opcode <= 0x5au) {
+            signature.input_type = 0x7eu; signature.output_type = 0x7fu;
+            if (opcode == 0x50u) signature.input_count = 1u;
+        } else if (opcode <= 0x66u) {
+            signature.input_type = opcode <= 0x60u ? 0x7du : 0x7cu;
+            signature.output_type = 0x7fu;
+        } else if (opcode <= 0x78u) {
+            signature.input_type = signature.output_type = 0x7fu;
+            if (opcode <= 0x69u) signature.input_count = 1u;
+        } else if (opcode <= 0x8au) {
+            signature.input_type = signature.output_type = 0x7eu;
+            if (opcode <= 0x7bu) signature.input_count = 1u;
+        } else if (opcode <= 0xa6u) {
+            signature.input_type = signature.output_type = opcode <= 0x98u ? 0x7du : 0x7cu;
+            if (opcode <= 0x91u || (opcode >= 0x99u && opcode <= 0x9fu)) signature.input_count = 1u;
+        } else {
+            signature.input_count = 1u;
+            signature.input_type = conversion_types[opcode - 0xa7u][0];
+            signature.output_type = conversion_types[opcode - 0xa7u][1];
+        }
+    } else return false;
+    *out = signature;
+    return true;
+}
+
+int64_t turbowasm_jit_numeric(turbowasm_jit_invocation_context *context,
+    int64_t opcode, const turbowasm_value *arguments, turbowasm_value *result) {
+    turbowasm_value values[TURBOWASM_JIT_NUMERIC_MAX_INPUTS] = {0};
+    turbowasm_numeric_signature signature;
+    turbowasm_value_stack stack = {values, 0u, TURBOWASM_JIT_NUMERIC_MAX_INPUTS};
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_status status;
+    if (context == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    if (arguments == NULL || result == NULL) status = TURBOWASM_INVALID_ARGUMENT;
+    else if (opcode < 0 || (uint64_t)opcode > UINT32_MAX ||
+        !turbowasm_numeric_signature_get((uint32_t)opcode, &signature)) status = TURBOWASM_UNSUPPORTED;
+    else {
+        memcpy(values, arguments, signature.input_count * sizeof(*values));
+        stack.size = signature.input_count;
+        /* Every primitive consumes one/two values before pushing one, so the
+         * borrowed fixed stack never grows or reaches an allocator. */
+        if (opcode >= TURBOWASM_JIT_NUMERIC_SAT_BASE)
+            status = turbowasm_exec_trunc_sat((uint32_t)opcode - TURBOWASM_JIT_NUMERIC_SAT_BASE, &stack);
+        else if (opcode <= 0x4f) status = turbowasm_exec_i32_test_or_compare((uint8_t)opcode, &stack);
+        else if (opcode <= 0x5a) status = turbowasm_exec_i64_test_or_compare((uint8_t)opcode, &stack);
+        else if (opcode <= 0x60) status = turbowasm_exec_f32_compare((uint8_t)opcode, &stack);
+        else if (opcode <= 0x66) status = turbowasm_exec_f64_compare((uint8_t)opcode, &stack);
+        else if (opcode <= 0x69) status = turbowasm_exec_i32_unary((uint8_t)opcode, &stack);
+        else if (opcode <= 0x78) status = turbowasm_exec_i32_binary((uint8_t)opcode, &stack, &trap);
+        else if (opcode <= 0x7b) status = turbowasm_exec_i64_unary((uint8_t)opcode, &stack);
+        else if (opcode <= 0x8a) status = turbowasm_exec_i64_binary((uint8_t)opcode, &stack, &trap);
+        else if (opcode <= 0x91) status = turbowasm_exec_f32_unary((uint8_t)opcode, &stack);
+        else if (opcode <= 0x98) status = turbowasm_exec_f32_binary((uint8_t)opcode, &stack);
+        else if (opcode <= 0x9f) status = turbowasm_exec_f64_unary((uint8_t)opcode, &stack);
+        else if (opcode <= 0xa6) status = turbowasm_exec_f64_binary((uint8_t)opcode, &stack);
+        else if ((opcode >= 0xa8 && opcode <= 0xab) || (opcode >= 0xae && opcode <= 0xb1))
+            status = turbowasm_exec_trapping_conversion((uint8_t)opcode, &stack, &trap);
+        else status = turbowasm_exec_nontrapping_conversion((uint8_t)opcode, &stack);
+        if (status == TURBOWASM_OK) {
+            if (stack.size != 1u) status = TURBOWASM_TYPE_MISMATCH;
+            else *result = values[0];
+        }
+    }
+    context->call_status = status; context->call_trap = trap;
+    return status;
+}
+
 static turbowasm_status turbowasm_exec_atomic_memarg_alignment(
     const turbowasm_instance_impl *instance,
     turbowasm_reader *reader,

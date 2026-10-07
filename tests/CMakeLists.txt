@@ -1971,6 +1971,11 @@ target_include_directories(turbowasm_vector_calls_test PRIVATE "${PROJECT_SOURCE
 target_link_libraries(turbowasm_vector_calls_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
 add_test(NAME turbowasm_vector_calls_test COMMAND turbowasm_vector_calls_test)
 
+add_executable(turbowasm_numeric_native_test numeric_native_test.c)
+target_include_directories(turbowasm_numeric_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_numeric_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_numeric_native_test COMMAND turbowasm_numeric_native_test)
+
 add_executable(turbowasm_table_storage_test table_storage_test.c)
 target_include_directories(turbowasm_table_storage_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(turbowasm_table_storage_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
@@ -2003,6 +2008,12 @@ if(TURBOWASM_ENABLE_MIR_JIT)
   target_compile_definitions(turbowasm_mir_vector_calls_test PRIVATE TURBOWASM_TEST_MIR=1)
   target_link_libraries(turbowasm_mir_vector_calls_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
   add_test(NAME turbowasm_mir_vector_calls_test COMMAND turbowasm_mir_vector_calls_test)
+
+  add_executable(turbowasm_mir_numeric_test numeric_native_test.c)
+  target_include_directories(turbowasm_mir_numeric_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_numeric_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_numeric_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_numeric_test COMMAND turbowasm_mir_numeric_test)
 
   add_executable(turbowasm_mir_indirect_test indirect_native_test.c)
   target_include_directories(turbowasm_mir_indirect_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
