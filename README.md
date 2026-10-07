@@ -20,7 +20,7 @@ The repository currently provides:
 - typed tag/exception identity and cross-frame unwind across direct, indirect,
   imported and tail-call boundaries;
 - shared fuel and interruption semantics across interpreted and compiled
-  execution, plus restartable interpreter execution with fuel/interruption/
+  execution, plus restartable interpreted/native execution with fuel/interruption/
   host-wait yields;
 - scalar value kinds plus typed `v128` lane refinement;
 - CMeta-backed vector/mask semantic descriptors;
@@ -86,6 +86,12 @@ passed Linux/macOS MIR and the complete pinned Core 3.0 differential suite.
 MIR also executes scalar/vector/reference global reads and writes through Runtime,
 including imported globals, nullable-reference branches and `unreachable` traps.
 Provider state, reference owners and GC roots follow the same Runtime contracts.
+
+Restartable executions use the instance's tiering policy when the attached
+backend explicitly supports suspension. MIR retains native frames through fuel,
+interruption and host-wait yields; GC roots and vector slots remain live until
+the call completes or cancellation unwinds it. Host effects are not replayed.
+The instance, module, providers and backend must outlive the execution handle.
 
 MIR admits the complete helper-backed SIMD instruction set, including shuffle,
 lane extraction/replacement, extending/splat/zero loads and lane loads/stores.

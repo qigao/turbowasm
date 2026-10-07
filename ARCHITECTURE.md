@@ -25,7 +25,7 @@ Salts::SIMD
   -> private SIMDe/native implementation
 
 Salts::Coroutine
-  -> private retained interpreter frames for backend-neutral resumable execution
+  -> private retained interpreter/native frames for backend-neutral resumable execution
 
 CFlow / Executor
   -> optional bounded scheduling and virtual/system clocks
@@ -713,7 +713,7 @@ tail calls                              implemented + upstream qualified
 typed exception handling                implemented + upstream qualified
 relaxed SIMD                            implemented + upstream qualified
 fuel + interruption                     implemented
-restartable interpreter execution       implemented
+restartable interpreted/native execution implemented
 typed module/host linking               implemented
 optional CFlow deadline adapter         implemented
 optional NativeIO host-wait bridge      implemented

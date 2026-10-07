@@ -524,3 +524,43 @@ admission also lets previously cold callees enter tiering, so the totals cannot
 be computed by simply subtracting the former 44 EH definitions from 272.
 Resumable native execution, Component encoding/post-return/async and broader
 WASI 0.2 coverage still require their separate qualification.
+
+## Resumable native frames
+
+Runtime implementation `a32c069` routes restartable invocations through the
+existing tiered dispatcher. A separate private backend capability admits
+suspension; ordinary execution-control support is insufficient. The Salts
+coroutine retains generated frames and invocation-local reference/vector storage.
+Store frame sources stay registered during yield. Cancellation unwinds through
+the same callbacks and cleanup paths without replaying host effects.
+
+`resumable_native_test.c` exercises direct, indirect, reference, tail, EH and
+cross-instance calls; stack-only GC values and vector bits during host wait and
+instruction-by-instruction fuel yields; interruption policy changes; cancellation
+with allocation balance; terminal traps/exceptions; and allocation failure after
+resume. Its MIR-only cases also pin a callee to the interpreter and check that a
+backend without resumable opt-in keeps the reference path. MIR cases assert
+compiled function states while suspended. Both fixtures are independently
+validated with wasm-tools 1.261.0.
+
+Windows ASan passed the eight focused tests in 1.07 seconds and all 148 tests in
+225.77 seconds. The
+[Core 3.0 differential run](https://github.com/qigao/turbowasm/actions/runs/37642754579)
+at `a32c069` retained 63970 passes, zero failures/unsupported commands and zero
+interpreter/MIR mismatches; the native-state counters remained
+`compiled=6606 interpret_only=230 cold=2179 calls=6836`.
+
+The first native build exposed an incorrect enum name in the new MIR-only test.
+Test-only correction `4ecd9ea` uses the declared initial state. In the
+[corrected native run](https://github.com/qigao/turbowasm/actions/runs/37643220455),
+macOS arm64 MIR passed 170/170 tests in 2.74 seconds, including the new resumable
+MIR target. Linux MIR qualification is still pending in that run.
+
+```powershell
+cmake --build --preset win-core3-asan-user
+ctest --preset win-core3-asan-user -R "resumable|host_wait|eh_native|gc_native|jit_backend_contract|jit_tiering|shared_memory_path" --output-on-failure
+```
+
+Linux/macOS use the complete `ci-mir-user` / `ci-macos-mir-user` profiles; the
+targeted native filter is `mir_resumable`. These results do not qualify Component
+encoding/post-return/async or the broader WASI 0.2 surface.
