@@ -578,13 +578,17 @@ one value-feature query for public admission, Core-call adapters and canonical
 import memory requirements, so nested variant strings/resources cannot drift
 between those layers.
 
-Validation on 2026-10-07 at code commit `154e570`: Windows full ASAN passed
-136/136 CTest entries (224.05 seconds), including both pinned Core 3.0 suites;
-Linux x64 and macOS arm64 MIR builds each passed 148/148 entries in
-[CI run 37606014785](https://github.com/qigao/turbowasm/actions/runs/37606014785).
-The Windows/Linux qualification jobs also build and run the installed C/C++
-Component consumers. These results validate this implementation slice, not full
-Component Model conformance. The executable public usage example is
+Validation on 2026-10-07 at code commit `04ae562`: Windows ASAN verified all
+138 CTest entries, including both pinned Core 3.0 suites. The initial full run
+passed 136 entries; two filesystem executables could not load their SDK DLLs
+because the invocation omitted `SALTS_ROOT` / `SALTS_UTILS_ROOT`. Restoring those
+preset inputs and rerunning the two entries passed 2/2. Component/WASI adjacent
+regressions passed 43/43. Linux x64 and macOS arm64 MIR builds each passed
+150/150 entries in [CI run 37612293763](https://github.com/qigao/turbowasm/actions/runs/37612293763).
+All five jobs succeeded, including Windows/Linux qualification with installed
+C/C++ consumers and Android cross-compilation with installed-consumer builds.
+Android executables were not run. These results validate the implemented slice,
+not full Component Model or full native MIR Core 3.0 conformance. The executable public usage example is
 [`component_main.c`](../tests/installed_consumer/component_main.c); composite
 construction examples are in
 [`component_host_values_test.c`](../tests/component_host_values_test.c).
