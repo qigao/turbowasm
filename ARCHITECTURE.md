@@ -300,7 +300,7 @@ core interpreter semantics              implemented for qualified surface
 memory/table/reference/bulk semantics   implemented
 multi-memory/custom-pages/ext-const     implemented + upstream qualified
 memory64                                interpreter + shared-memory execution implemented
-                                        MIR native helper lowering for unshared memory
+                                        MIR helper lowering for shared/unshared memory and atomics
 tail calls                              implemented + upstream qualified
 typed exception handling                implemented + upstream qualified
 relaxed SIMD                            implemented + upstream qualified
@@ -461,15 +461,31 @@ helper retains a data pointer across a call, growth, or wait. Wait releases the
 data lock before sleeping and preserves interruption, timeout, and shutdown
 semantics. Instance destruction still requires quiescent users.
 
-The implementation extends the existing MIR helper boundary rather than
-introducing a second memory owner. MIR continues to exclude shared memories;
-shared memory64 executes through the interpreter with guarded storage access.
+The implementation extends the existing MIR helper boundary to shared memory32
+and memory64, including atomic load/store, RMW, compare-exchange, fence and
+wait/notify. The retained atomic descriptor table defines operand/result types;
+Runtime remains the only implementation of synchronization and waiter ownership.
+Every executed instruction pays its checkpoint before any memory side effect.
+Wait forwards the invocation's interruption callback without retaining native
+register or backing pointers. A failed helper publishes its exact status/trap
+and exits generated code before a result is committed.
+
+Each instance and MIR backend has one execution owner. Distinct instances may
+execute concurrently with distinct backends while importing the same shared
+backing; sharing memory does not authorize concurrent mutation of one instance's
+JIT state. This matches the upstream [MIR context threading contract](https://github.com/vnmakarov/mir/blob/master/MIR.md#mir-context).
+Backends and instances are destroyed only after their workers join.
+No new queue, allocator, lock order, waiter capacity or growth policy is added.
 This costs a helper call per memory operation but shares bounds, locking, and
 trap semantics with the Runtime. Public layouts and lifecycle contracts remain
 unchanged. Resource limits remain the configured byte/page limits and host
 address-space limit, not the width of a guest address. Validation covers
 address typing, high offsets, arithmetic overflow, atomic alignment, growth
 failure, imported backing, waits, and native/interpreter equivalence. Rollback
-can restore feature admission without migrating stored data.
+can restore feature admission without migrating stored data. Native regression
+tests require compiled handles for both memory widths, concurrent imported atomic
+increments, wait/notify across growth, alignment/bounds traps, interruption and
+all atomic descriptor families. The semantics reference is the
+[WebAssembly Threads execution specification](https://webassembly.github.io/threads/core/exec/instructions.html).
 
 Reference: [Memory64 proposal](https://github.com/WebAssembly/memory64/blob/main/proposals/memory64/Overview.md).

@@ -51,11 +51,14 @@ legacy WASI threads, the qualified Preview1 capability layer, and interpreter
 memory64 are part of the completed Runtime surface. Shared memory64 supports
 atomic operations, wait/notify, imports and guarded growth. MIR admits unshared
 memory64 modules and lowers scalar load/store, size/grow, bulk memory and its
-existing SIMD memory subset through Runtime helpers. The private scalar entry
+existing SIMD memory subset through Runtime helpers. Shared memory32/memory64
+also use these helpers, including atomic load/store, RMW, compare-exchange,
+fence and interruptible wait/notify. The private scalar entry
 accepts mixed scalar parameters, more than two arguments, and zero or multiple
 scalar results. Direct calls support the same scalar tuples through Runtime,
 including interpreted callees and host imports. Instruction admission and
-non-self tail-call limits still apply. Shared memories continue to use the interpreter. Native MIR
+non-self tail-call limits still apply. Each instance/backend retains one execution owner,
+while distinct instances can import the same shared backing. Native MIR
 memory64 verification passed the Linux and macOS MIR test profiles; see the
 [qualification record](tests/conformance/README.md). The Windows MIR dependency
 is not supported. The synchronous Component Model subset is exposed separately

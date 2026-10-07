@@ -37,4 +37,5 @@
   (func (export "simd") (result i32)
     i64.const 80 v128.const i32x4 -1 0 -1 0 v128.store
     i64.const 80 v128.load i32x4.bitmask)
+  (func (export "fence") (result i32) atomic.fence i32.const 7)
 )

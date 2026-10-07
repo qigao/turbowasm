@@ -18,11 +18,10 @@ enum { N_SIZE, N_GROW, N_LOAD, N_STORE, N_HIGH, N_OVERFLOW, N_FILL,
        N_SUM_FOUR, N_MIXED_I32 };
 enum { S_LOAD, S_STORE, S_ADD, S_CMPXCHG, S_NARROW, S_HIGH, S_OVERFLOW,
        S_WAIT32, S_WAIT64, S_NOTIFY, S_GROW, S_SIZE, S_WAIT_BLOCKING,
-       S_PLAIN, S_BULK, S_SIMD };
+       S_PLAIN, S_BULK, S_SIMD, S_FENCE };
 
 static turbowasm_module module;
 static turbowasm_instance instance;
-static bool native_fixture;
 static turbowasm_module imported_module;
 static turbowasm_instance workers[2];
 static cmeta_thread_t threads[2];
@@ -38,6 +37,22 @@ typedef struct worker_call {
 } worker_call;
 static worker_call calls[2];
 
+static bool interrupt_wait(void *context) {
+    unsigned *checks = context;
+    /* Four instruction checkpoints precede the wait's own interrupt check. */
+    return ++*checks >= 5u;
+}
+
+static void attach_backend(turbowasm_instance *target) {
+#ifdef TURBOWASM_TEST_MIR
+    turbowasm_jit_backend backend = {0};
+    check_equal(turbowasm_mir_backend_create(&backend), TURBOWASM_OK);
+    check_equal(turbowasm_jit_instance_attach_backend(target->impl, &backend, 1u), TURBOWASM_OK);
+#else
+    (void)target;
+#endif
+}
+
 static void run_worker(void *argument) {
     worker_call *call = argument;
     uint32_t index;
@@ -45,6 +60,13 @@ static void run_worker(void *argument) {
         size_t count = 0u;
         call->status = turbowasm_instance_invoke(call->instance,
             call->function, NULL, 0u, &call->result, 1u, &count, &call->trap);
+#ifdef TURBOWASM_TEST_MIR
+        if (((turbowasm_instance_impl *)call->instance->impl)->jit_functions[
+                call->function].state != TURBOWASM_JIT_COMPILED) {
+            call->status = TURBOWASM_UNSUPPORTED;
+            break;
+        }
+#endif
         if (call->status != TURBOWASM_OK)
             break;
         if (count != 1u) {
@@ -68,22 +90,16 @@ static void create_workers(void) {
         status = turbowasm_instance_create_linked(&workers[1], &imported_module, &linker);
     turbowasm_linker_destroy(&linker);
     check_equal(status, TURBOWASM_OK);
+    attach_backend(&workers[0]);
+    attach_backend(&workers[1]);
 }
 
 static void load_fixture(bool shared) {
     const uint8_t *bytes = shared ? memory64_shared_bytes : memory64_native_bytes;
     size_t size = shared ? sizeof(memory64_shared_bytes) : sizeof(memory64_native_bytes);
-    native_fixture = !shared;
     check_equal(turbowasm_module_load_borrowed(&module, bytes, size), TURBOWASM_OK);
     check_equal(turbowasm_instance_create(&instance, &module), TURBOWASM_OK);
-#ifdef TURBOWASM_TEST_MIR
-    if (!shared) {
-        turbowasm_jit_backend backend = {0};
-        check_equal(turbowasm_mir_backend_create(&backend), TURBOWASM_OK);
-        check_equal(turbowasm_jit_instance_attach_backend(instance.impl,
-            &backend, 1u), TURBOWASM_OK);
-    }
-#endif
+    attach_backend(&instance);
 }
 
 static turbowasm_value invoke_values(uint32_t function, size_t count,
@@ -97,7 +113,7 @@ static turbowasm_value invoke_values(uint32_t function, size_t count,
     check_equal(trap, expected_trap);
     check_equal(result_count, expected_status == TURBOWASM_OK ? (size_t)1 : (size_t)0);
 #ifdef TURBOWASM_TEST_MIR
-    if (native_fixture) {
+    {
         turbowasm_instance_impl *impl = instance.impl;
         check(impl->jit_functions[function].state == TURBOWASM_JIT_COMPILED,
             "function %u must compile; tier state is %d", function,
@@ -225,6 +241,7 @@ spec("memory64 execution") {
             memory64_shared_bytes, sizeof(memory64_shared_bytes),
             artifact, artifact_size), TURBOWASM_OK);
         check_equal(turbowasm_instance_create(&instance, &module), TURBOWASM_OK);
+        attach_backend(&instance);
         check_equal(integer(S_STORE, 2, 0, 42), INT64_C(42));
         check_equal(integer(S_CMPXCHG, 1, 0, 0), INT64_C(42));
         check_equal(integer(S_LOAD, 1, 0, 0), INT64_C(99));
@@ -346,6 +363,7 @@ spec("memory64 execution") {
     }
     it("uses shared backing for ordinary, SIMD and atomic accesses") {
         load_fixture(true);
+        check_equal(integer(S_FENCE, 0, 0, 0), INT64_C(7));
         check_equal(integer(S_STORE, 2, 0, 41), INT64_C(41));
         check_equal(integer(S_ADD, 2, 0, 1), INT64_C(41));
         check_equal(integer(S_CMPXCHG, 1, 0, 0), INT64_C(42));
@@ -359,6 +377,37 @@ spec("memory64 execution") {
         check_equal(integer(S_LOAD, 1, 65536, 0), INT64_C(0));
         check_equal(integer(S_GROW, 1, INT64_C(4294967296), 0), INT64_C(-1));
         check_equal(integer(S_SIZE, 0, 0, 0), INT64_C(2));
+    }
+    it("interrupts a native wait and stops before an atomic side effect on exhausted fuel") {
+        turbowasm_execution_options options = {0};
+        turbowasm_value args[2] = {{0}}, result = {0};
+        turbowasm_trap trap;
+        size_t count;
+        unsigned checks = 0u;
+        load_fixture(true);
+        args[0].kind = args[1].kind = TURBOWASM_VALUE_I64;
+        args[0].as.i64 = 8;
+        options.should_interrupt = interrupt_wait;
+        options.interrupt_context = &checks;
+        check_equal(turbowasm_instance_invoke_with_options(&instance, S_WAIT_BLOCKING,
+            args, 1u, &result, 1u, &count, &trap, &options), TURBOWASM_INTERRUPTED);
+        check_equal(count, (size_t)0);
+        check_true(checks >= 5u);
+        check_equal(((turbowasm_instance_impl *)instance.impl)->memories[0].waiter_count, 0u);
+        options = (turbowasm_execution_options){0};
+        options.has_fuel_limit = true;
+        options.fuel = 2u;
+        args[1].as.i64 = 99;
+        check_equal(turbowasm_instance_invoke_with_options(&instance, S_STORE,
+            args, 2u, &result, 1u, &count, &trap, &options), TURBOWASM_FUEL_EXHAUSTED);
+        check_equal(count, (size_t)0);
+        check_equal(integer(S_LOAD, 1, 8, 0), INT64_C(0));
+#ifdef TURBOWASM_TEST_MIR
+        check_equal(((turbowasm_instance_impl *)instance.impl)->jit_functions[
+            S_WAIT_BLOCKING].state, TURBOWASM_JIT_COMPILED);
+        check_equal(((turbowasm_instance_impl *)instance.impl)->jit_functions[
+            S_STORE].state, TURBOWASM_JIT_COMPILED);
+#endif
     }
     it("keeps wait/notify address width, timeout and alignment semantics") {
         uint32_t index;

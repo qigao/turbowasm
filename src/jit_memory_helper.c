@@ -10,6 +10,38 @@ static uint64_t guest_address(
         ? (uint64_t)bits : (uint64_t)(uint32_t)bits;
 }
 
+static turbowasm_status atomic_memory(
+    turbowasm_jit_invocation_context *context, uint32_t opcode,
+    uint32_t memory, uint64_t address, uint64_t offset,
+    int64_t first, int64_t second, uint64_t *result, turbowasm_trap *trap) {
+    const turbowasm_atomic_descriptor *descriptor;
+    turbowasm_status status;
+    uint32_t narrow_result = 0u;
+    if (opcode == 0u) {
+        status = turbowasm_instance_memory_notify(context->instance,
+            memory, address, offset, (uint32_t)first, &narrow_result, trap);
+        *result = narrow_result;
+        return status;
+    }
+    if (opcode == 1u || opcode == 2u) {
+        const turbowasm_jit_execution_control *execution = context->execution;
+        status = turbowasm_instance_memory_wait_with_interrupt(context->instance,
+            memory, address, offset, opcode == 1u ? 4u : 8u,
+            opcode == 1u ? (uint64_t)(uint32_t)first : (uint64_t)first,
+            second, execution != NULL ? execution->should_interrupt : NULL,
+            execution != NULL ? execution->interrupt_context : NULL,
+            &narrow_result, trap);
+        *result = narrow_result;
+        return status;
+    }
+    descriptor = turbowasm_atomic_descriptor_find(opcode);
+    if (descriptor == NULL)
+        return TURBOWASM_UNSUPPORTED;
+    return turbowasm_instance_memory_atomic(context->instance, memory,
+        address, offset, descriptor, (uint64_t)first,
+        (uint64_t)first, (uint64_t)second, result, trap);
+}
+
 int64_t turbowasm_jit_memory(
     turbowasm_jit_invocation_context *context, int64_t opcode,
     int64_t memory, int64_t secondary, int64_t offset,
@@ -31,10 +63,19 @@ int64_t turbowasm_jit_memory(
         status = turbowasm_instance_data_drop(instance, (uint32_t)secondary);
         goto done;
     }
+    if (opcode == TURBOWASM_JIT_MEMORY_ATOMIC + 3) {
+        status = turbowasm_threads_sc_fence();
+        goto done;
+    }
     if ((uint64_t)memory >= instance->memory_count)
         goto done;
     address = guest_address(instance, (uint32_t)memory, a);
-    if (opcode >= 0x28 && opcode <= 0x35) {
+    if (opcode >= TURBOWASM_JIT_MEMORY_ATOMIC &&
+        (uint64_t)(opcode - TURBOWASM_JIT_MEMORY_ATOMIC) <= UINT32_MAX) {
+        status = atomic_memory(context,
+            (uint32_t)(opcode - TURBOWASM_JIT_MEMORY_ATOMIC),
+            (uint32_t)memory, address, (uint64_t)offset, b, c, &result, &trap);
+    } else if (opcode >= 0x28 && opcode <= 0x35) {
         status = turbowasm_instance_memory_load_value(instance,
             (uint32_t)memory, address, (uint64_t)offset,
             (uint8_t)opcode, &value, &trap);

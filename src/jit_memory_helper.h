@@ -3,7 +3,7 @@
 
 #include "instance_internal.h"
 
-enum { TURBOWASM_JIT_MEMORY_BULK = 0x100 };
+enum { TURBOWASM_JIT_MEMORY_BULK = 0x100, TURBOWASM_JIT_MEMORY_ATOMIC = 0x200 };
 
 /* Integer arguments carry unsigned guest bit patterns. Helpers borrow backing
  * only during the call and publish failure through the invocation context. */

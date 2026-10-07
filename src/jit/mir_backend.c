@@ -177,7 +177,7 @@ typedef struct turbowasm_mir_memory_op {
 } turbowasm_mir_memory_op;
 
 static bool turbowasm_mir_memory_opcode(uint8_t opcode) {
-    return (opcode >= 0x28u && opcode <= 0x40u) || opcode == 0xfcu;
+    return (opcode >= 0x28u && opcode <= 0x40u) || opcode == 0xfcu || opcode == 0xfeu;
 }
 
 static uint8_t turbowasm_mir_memory_type(
@@ -192,6 +192,39 @@ static bool turbowasm_mir_decode_memory(
     uint8_t address_type;
     memset(op, 0, sizeof(*op));
     op->opcode = opcode;
+    if (opcode == 0xfeu) {
+        const turbowasm_atomic_descriptor *descriptor;
+        uint32_t subopcode;
+        uint8_t value_type;
+        if (!turbowasm_reader_uleb32(reader, &subopcode))
+            return false;
+        if (subopcode == 3u) {
+            uint8_t reserved;
+            op->opcode = TURBOWASM_JIT_MEMORY_ATOMIC + subopcode;
+            return turbowasm_reader_u8(reader, &reserved) && reserved == 0u;
+        }
+        descriptor = turbowasm_atomic_descriptor_find(subopcode);
+        if (subopcode > 2u && descriptor == NULL)
+            return false;
+        if (!turbowasm_mir_read_indexed_memarg(
+                validation, reader, &op->memory, &op->offset))
+            return false;
+        op->opcode = TURBOWASM_JIT_MEMORY_ATOMIC + subopcode;
+        op->inputs[0] = turbowasm_mir_memory_type(validation, op->memory);
+        if (subopcode <= 2u) {
+            op->inputs[1] = subopcode == 2u ? 0x7eu : 0x7fu;
+            op->inputs[2] = 0x7eu;
+            op->input_count = subopcode == 0u ? 2u : 3u;
+            op->result = 0x7fu;
+        } else {
+            value_type = descriptor->value_type == TURBOWASM_ATOMIC_I32 ? 0x7fu : 0x7eu;
+            op->inputs[1] = op->inputs[2] = value_type;
+            op->input_count = descriptor->kind == TURBOWASM_ATOMIC_LOAD ? 1u :
+                descriptor->kind == TURBOWASM_ATOMIC_CMPXCHG ? 3u : 2u;
+            op->result = descriptor->kind == TURBOWASM_ATOMIC_STORE ? 0u : value_type;
+        }
+        return true;
+    }
     if (opcode >= 0x28u && opcode <= 0x3eu) {
         uint8_t value_type;
         if (!turbowasm_mir_read_indexed_memarg(
@@ -1962,22 +1995,9 @@ static bool turbowasm_mir_is_function_eligible(
     const struct turbowasm_validation_context *validation,
     uint32_t function_index,
     const struct turbowasm_validation_function *function) {
-    uint32_t memory_index;
-
     (void)context;
     if (validation == NULL)
         return false;
-
-    /*
-     * Shared-memory tiering remains interpreter-only. Atomic instruction
-     * lowering and concurrent compilation ownership are outside MIR admission.
-     */
-    for (memory_index = 0u;
-         memory_index < validation->memory_count;
-         ++memory_index) {
-        if (validation->memories[memory_index].shared)
-            return false;
-    }
 
     return turbowasm_mir_scan_scalar_locals(
                validation, function_index, function, NULL, NULL) ||

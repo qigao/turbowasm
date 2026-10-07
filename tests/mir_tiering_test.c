@@ -113,8 +113,7 @@ int main(void) {
     turbowasm_module_destroy(&module);
 
     /*
-     * Shared-memory modules are deliberately interpreter-only until MIR owns
-     * the same shared backing/locking contract.
+     * Shared memory does not exclude independently eligible scalar functions.
      */
     {
         static const uint8_t shared_bytes[] = {
@@ -155,12 +154,12 @@ int main(void) {
         assert(invoke_i32(&shared_instance) == 42);
         assert(shared_impl->jit_function_count == 1u);
         assert(shared_impl->jit_functions[0].state ==
-               TURBOWASM_JIT_INTERPRET_ONLY);
-        assert(shared_impl->jit_functions[0].compiled.impl == NULL);
+               TURBOWASM_JIT_COMPILED);
+        assert(shared_impl->jit_functions[0].compiled.impl != NULL);
 
         assert(invoke_i32(&shared_instance) == 42);
         assert(shared_impl->jit_functions[0].state ==
-               TURBOWASM_JIT_INTERPRET_ONLY);
+               TURBOWASM_JIT_COMPILED);
 
         turbowasm_instance_destroy(&shared_instance);
         turbowasm_module_destroy(&shared_module);
