@@ -334,16 +334,19 @@ static turbowasm_status resume_task(turbowasm_component_task *task,
     const turbowasm_module_impl *module;
     turbowasm_runtime_scope scope;
     turbowasm_status status;
+    turbowasm_component_task *previous;
     if (task == NULL || task->domain == NULL) return TURBOWASM_INVALID_ARGUMENT;
-    if (task->domain->active != NULL || task->destroying) return TURBOWASM_TRAPPED;
+    if ((task->domain->active != NULL && parent == NULL) ||
+        task->state == TURBOWASM_EXECUTION_RUNNING || task->destroying) return TURBOWASM_TRAPPED;
     if (task->state >= TURBOWASM_EXECUTION_COMPLETED) return task->status;
     module = turbowasm_module_impl_get(turbowasm_instance_module(task->binding.instance));
     if (module == NULL) return TURBOWASM_INVALID_ARGUMENT;
     scope = turbowasm_runtime_scope_enter(&module->config);
+    previous = task->domain->active;
     task->domain->active = task; task->state = TURBOWASM_EXECUTION_RUNNING;
     status = resume_active(task, options, parent);
     if (status == TURBOWASM_YIELDED) task->state = TURBOWASM_EXECUTION_YIELDED;
-    task->domain->active = NULL;
+    task->domain->active = previous;
     turbowasm_runtime_scope_leave(scope);
     return status;
 }
@@ -356,7 +359,8 @@ turbowasm_status turbowasm_component_task_resume(turbowasm_component_task *task,
 turbowasm_status turbowasm_component_task_resume_from_host(turbowasm_component_task *task,
     const turbowasm_host_call *caller) {
     turbowasm_jit_execution_control *parent = turbowasm_host_call_control(caller);
-    if (parent == NULL || task == NULL || !task->between_callbacks) return TURBOWASM_INVALID_ARGUMENT;
+    if (caller == NULL || caller->impl == NULL || task == NULL ||
+        (task->phase != TURBOWASM_COMPONENT_TASK_INITIAL && !task->between_callbacks)) return TURBOWASM_INVALID_ARGUMENT;
     return resume_task(task, NULL, parent);
 }
 
@@ -488,7 +492,10 @@ turbowasm_status turbowasm_component_task_destroy(turbowasm_component_task *task
     if (task == NULL) return TURBOWASM_INVALID_ARGUMENT;
     domain = task->domain;
     if (domain == NULL) return TURBOWASM_OK;
-    if (domain->active != NULL || task->destroying || task->resolving) return TURBOWASM_TRAPPED;
+    if (domain->active != NULL || task->destroying ||
+        (task->resolving && task->state != TURBOWASM_EXECUTION_YIELDED)) return TURBOWASM_TRAPPED;
+    /* Result lowering may be suspended in guest realloc. Unwind its retained
+     * resolve frame before detaching the caller; active reentry remains barred. */
     domain->active = task; task->destroying = true;
     turbowasm_execution_destroy(&task->core);
     abandon_caller(task, task->status != TURBOWASM_OK ? task->status : TURBOWASM_INTERRUPTED);

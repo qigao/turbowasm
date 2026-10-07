@@ -813,6 +813,27 @@ The hook is private, cannot change the function's argument count/types, and is
 never replayed when the execution resumes. Existing public Core invocation APIs
 and synchronous Component adapters retain their current entry semantics.
 
+The private async canonical call frame owns one callee task/subtask pair, a
+snapshot of at most four direct argument carriers plus the result address, and
+the lifted parameter values. It borrows both immutable type graphs, memories,
+domains and codec contexts. Structural/nominal type agreement and exact carrier
+admission precede task creation. Parameter memory is read only by the retained
+preparation hook; all source values are lifted before lowering into the callee.
+The caller's four-carrier limit and callee's sixteen-carrier limit independently
+select direct or aligned tuple representations through the existing codecs.
+Parameter and result handle lowering use explicit per-call commit/rollback
+hooks. Commits transfer owners while preserving lender cleanup until terminal
+delivery; failures roll back staged destination handles before value cleanup.
+The frame creates no queue or worker and shares the callee task/table quotas.
+Its enclosing execution owner supplies stable storage and drives/resolves each
+frame before reclaiming it. Binary instantiation/public task ownership will
+select these frames only after the remaining async bindings are complete.
+Initial nested progress saves/restores the domain's active task and inherits an
+actual Core caller's fuel/interruption control, when present. Plain unbudgeted
+Core invocations need no control object. Result conversion can suspend in guest
+realloc just like parameter conversion; private destruction must unwind this
+resolve frame before abandoning the caller, while rejecting active reentry.
+
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and
 terminal-event delivery separately. Subtask start and resolve notifications

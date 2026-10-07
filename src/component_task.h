@@ -105,8 +105,9 @@ turbowasm_status turbowasm_component_task_create(turbowasm_component_task *task,
  * has priority over pending events. Core fuel/host waits are never replayed. */
 turbowasm_status turbowasm_component_task_resume(turbowasm_component_task *task,
     const turbowasm_execution_options *options);
-/* Nonblocking callback quantum between guest calls, sharing the active host
- * caller's remaining fuel and interrupt policy. A previously suspended Core
+/* Nonblocking initial/callback quantum between guest calls, sharing the active host
+ * caller's remaining fuel and interrupt policy (unlimited for an uncontrolled
+ * one-shot invocation). A previously suspended Core
  * call must be resumed by its driver; this entry rejects such continuations. */
 turbowasm_status turbowasm_component_task_resume_from_host(turbowasm_component_task *task,
     const turbowasm_host_call *caller);

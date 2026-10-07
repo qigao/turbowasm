@@ -1120,7 +1120,40 @@ that the realloc functions and prepared entries actually compiled.
 
 Windows ASan passed 50 task cases with 5988 assertions. The related
 Component/WASI/resumable/host-wait/memory/link/fuel/interrupt regression passed
-76/76 targets in 3.04 seconds. Native MIR verification of this increment is
-pending. This fixes the execution boundary required by async canonical argument
+76/76 targets in 3.04 seconds. At `fc648c5`, the
+[native run](https://github.com/qigao/turbowasm/actions/runs/37688569975) passed all
+five jobs. Linux MIR passed 190/190 in 2.21 seconds and macOS arm64 MIR passed
+190/190 in 2.34 seconds, including the compiled task preparation tests.
+This fixes the execution boundary required by async canonical argument
 adapters; automatic binary binding, endpoint builtins and retained public async
 owners remain incomplete, and public async admission stays closed.
+
+## Async canonical call conversion
+
+The private per-invocation call frame now connects canonical lower arguments to
+the retained callee task and lowers task.return into caller memory. It copies
+raw carriers on admission and reads guest parameter memory only after
+backpressure clears. Caller and callee flattening limits independently select
+direct or indirect parameter tuples. Result storage finishes before terminal
+publication; lifted argument owners and lender releases remain retained until
+delivery or failure teardown. Resource and endpoint codecs use explicit atomic
+commit/rollback hooks for each direction.
+
+The committed Core fixture exercises ordinary host imports and nested retained
+tasks, memory32/64 in both directions, four/five/seventeen parameter boundaries,
+UTF-16 conversion, unit results, pre-start cancellation, deferred results, and
+callback continuation after eager return. Actual resource tables verify own
+round trips, borrow exclusion until event delivery, and failed commits. A future
+endpoint round trip preserves its peer and failed commit closes the consumed
+source. Guest realloc waits in argument and result conversion retain their
+stacks; both completion and destruction paths release values in order. The suite
+also checks malformed admission, result bounds, inherited fuel and an allocation
+failure sweep. MIR targets use the same suite with compiled-entry assertions.
+
+Windows ASan passed 22 call cases with 1903 assertions and the existing 50 task
+cases with 5988 assertions. The related Component/WASI/resumable/host-wait/memory/
+link/fuel/interrupt regression passed 77/77 targets in 3.18 seconds. Native MIR
+verification of this increment is pending. This is still a private invocation
+boundary: automatic binary binding, per-instance call ownership, endpoint builtin
+dispatch and retained public async handles remain incomplete. Public async
+admission remains closed until those integration requirements are verified.

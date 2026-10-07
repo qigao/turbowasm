@@ -261,6 +261,13 @@ set_target_properties(turbowasm_component_task_test PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 add_test(NAME turbowasm_component_task_test COMMAND turbowasm_component_task_test)
 
+add_executable(turbowasm_component_async_call_test component_async_call_test.c)
+target_link_libraries(turbowasm_component_async_call_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_call_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_call_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_async_call_test COMMAND turbowasm_component_async_call_test)
+
 add_executable(turbowasm_component_waitable_test component_waitable_test.c)
 target_link_libraries(turbowasm_component_waitable_test
   PRIVATE TurboWasm::Runtime Salts::TinyTest)
@@ -2143,6 +2150,12 @@ if(TURBOWASM_ENABLE_MIR_JIT)
   target_compile_definitions(turbowasm_mir_component_task_test PRIVATE TURBOWASM_TEST_MIR=1)
   target_link_libraries(turbowasm_mir_component_task_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
   add_test(NAME turbowasm_mir_component_task_test COMMAND turbowasm_mir_component_task_test)
+
+  add_executable(turbowasm_mir_component_async_call_test component_async_call_test.c)
+  target_include_directories(turbowasm_mir_component_async_call_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_component_async_call_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_component_async_call_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_component_async_call_test COMMAND turbowasm_mir_component_async_call_test)
   if(TARGET TurboWasm::Component)
     add_executable(turbowasm_mir_component_indirect_lower_test component_indirect_lower_test.c)
     target_include_directories(turbowasm_mir_component_indirect_lower_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
