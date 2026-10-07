@@ -131,12 +131,12 @@ native execution, then copies scalar payloads into private MIR locals. The
 borrow ends when the entry returns, is never stored in the instance, and is
 not reused when a self tail call replaces those locals. Nested calls have
 independent frames. Admission remains bounded by the module's existing limits;
-the bridge performs no allocation or ownership transfer and writes no input
+argument transfer performs no allocation or ownership transfer and writes no input
 values. Trap/status handling remains at the invocation boundary.
 
 This removes the private native entry's arity and mixed-scalar argument limits
-without changing the installed API or its data layout. The separate direct-call
-helper signatures remain an independent restriction.
+without changing the installed API or its data layout. General scalar direct
+calls use the scratch protocol below; non-self tail calls remain separately limited.
 The alternative of generating every C signature combination scales
 exponentially with arity and does not solve mixed types or future reference
 carriers. The array boundary adds scalar loads at function entry. Regression
@@ -172,6 +172,32 @@ serialized format changes. Verification covers empty and mixed result tuples,
 natural and explicit returns, conditional/table branches, self tail calls,
 capacity rejection and fuel/trap parity against the interpreter. Rollback must
 revert all three emitters and their common invocation bridge together.
+
+### MIR direct-call scratch ownership
+
+General scalar calls marshal ordered values into two disjoint invocation-owned
+arrays. Compilation records the largest argument and result tuples among direct
+call sites, plus the total number of result registers needed by those sites.
+These are derived from validated signatures, never independently mutable state.
+The invocation bridge allocates the checked sum of both array capacities through
+the Runtime allocator, once per invocation containing general calls, and frees
+it on every exit. Allocation failure returns OUT_OF_MEMORY before guest execution;
+the existing Runtime allocation quota and call-depth limit bound retained frames.
+
+Generated code fills arguments, invokes the existing Runtime dispatcher, checks
+status and result shape, then copies successful results into private registers.
+The arrays are reused only after the synchronous call completes. Nested native,
+interpreted and host calls borrow the current arguments while owning independent
+scratch frames, so callbacks cannot overwrite their caller's pending values.
+This is a single-threaded protocol; no pointers escape return, trap, interruption
+or cancellation. Scalars need no retain/release or GC root registration. Shared
+fuel, trap, exception and call-depth semantics remain owned by Runtime.
+
+This replaces signature enumeration for general calls while preserving the
+existing small straight-line specializations. No public API or wire format
+changes. Tests must require compiled callers, exercise nested mixed and empty
+tuples, compare fuel/trap behavior, and verify allocation failure and cleanup.
+Rollback removes general-call admission, emission and scratch allocation together.
 
 ## Reusable compiled-artifact policy
 

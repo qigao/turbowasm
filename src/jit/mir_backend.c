@@ -7,6 +7,7 @@
 #include "../simd_exec_table.h"
 
 #include "../reader.h"
+#include "../runtime_alloc.h"
 #include "../validation_context.h"
 
 #include <mir-gen.h>
@@ -29,6 +30,12 @@ typedef struct turbowasm_mir_backend_context {
     uint32_t next_module_id;
 } turbowasm_mir_backend_context;
 
+typedef struct turbowasm_mir_call_budget {
+    uint32_t arguments;
+    uint32_t results;
+    uint32_t registers;
+} turbowasm_mir_call_budget;
+
 typedef struct turbowasm_mir_compiled {
     void *generated;
     uint32_t result_count;
@@ -36,6 +43,7 @@ typedef struct turbowasm_mir_compiled {
     /* Borrowed from the validated module, like the function's retained code. */
     const uint8_t *param_types;
     uint32_t simd_slot_count;
+    turbowasm_mir_call_budget calls;
 } turbowasm_mir_compiled;
 
 typedef struct turbowasm_mir_stack_value {
@@ -326,7 +334,7 @@ static bool turbowasm_mir_emit_argument_locals(
     turbowasm_mir_text *text,
     const turbowasm_validation_function *function) {
     uint32_t index;
-    if (!turbowasm_mir_text_appendf(text, ", p:jit_args, p:jit_results\n"))
+    if (!turbowasm_mir_text_appendf(text, ", p:jit_args, p:jit_results, p:jit_call_args, p:jit_call_results\n"))
         return false;
     for (index = 0u; index < function->local_count; ++index) {
         const char *name = turbowasm_mir_type_name(function->local_types[index]);
@@ -363,8 +371,8 @@ static bool turbowasm_mir_emit_argument_loads(
 }
 
 
-static bool turbowasm_mir_emit_result_store(
-    turbowasm_mir_text *text, uint32_t index, uint8_t type,
+static bool turbowasm_mir_emit_value_store(
+    turbowasm_mir_text *text, const char *array, uint32_t index, uint8_t type,
     const char *prefix, uint32_t reg) {
     const char *move = turbowasm_mir_move_name(type);
     const char *memory_type = type == 0x7fu
@@ -385,10 +393,10 @@ static bool turbowasm_mir_emit_result_store(
     }
     base = (size_t)index * sizeof(turbowasm_value);
     return turbowasm_mir_text_appendf(text,
-        "mov i32:%zu(jit_results), %u\n"
-        "%s %s:%zu(jit_results), %s%u\n",
-        base + offsetof(turbowasm_value, kind), (unsigned)kind,
-        move, memory_type, base + offsetof(turbowasm_value, as), prefix, reg);
+        "mov i32:%zu(%s), %u\n"
+        "%s %s:%zu(%s), %s%u\n",
+        base + offsetof(turbowasm_value, kind), array, (unsigned)kind,
+        move, memory_type, base + offsetof(turbowasm_value, as), array, prefix, reg);
 }
 
 
@@ -448,6 +456,65 @@ turbowasm_mir_context_function_type(
 
     return turbowasm_validation_context_function_type(
         &module->validation, function_index);
+}
+
+static bool turbowasm_mir_argument_matches(
+    const turbowasm_value *value,
+    uint8_t type) {
+    if (value == NULL)
+        return false;
+
+    switch (type) {
+        case 0x7fu: return value->kind == TURBOWASM_VALUE_I32;
+        case 0x7eu: return value->kind == TURBOWASM_VALUE_I64;
+        case 0x7du: return value->kind == TURBOWASM_VALUE_F32;
+        case 0x7cu: return value->kind == TURBOWASM_VALUE_F64;
+        default: return false;
+    }
+}
+
+static bool turbowasm_mir_scalar_signature(
+    const turbowasm_validation_func_type *type) {
+    uint32_t index;
+    if (type == NULL || !type->defined)
+        return false;
+    for (index = 0u; index < type->param_count; ++index) {
+        if (!turbowasm_mir_scalar_type(type->params[index]))
+            return false;
+    }
+    for (index = 0u; index < type->result_count; ++index) {
+        if (!turbowasm_mir_scalar_type(type->results[index]))
+            return false;
+    }
+    return true;
+}
+
+static int64_t turbowasm_mir_call_values(
+    turbowasm_jit_invocation_context *context, int64_t function_index,
+    const turbowasm_value *arguments, turbowasm_value *results) {
+    const turbowasm_validation_func_type *type;
+    turbowasm_status status;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    size_t count = 0u;
+    uint32_t index;
+    type = function_index < 0 || (uint64_t)function_index > UINT32_MAX ? NULL :
+        turbowasm_mir_context_function_type(context, (uint32_t)function_index);
+    if (!turbowasm_mir_scalar_signature(type)) {
+        turbowasm_mir_record_call(context, TURBOWASM_TYPE_MISMATCH, trap);
+        return TURBOWASM_TYPE_MISMATCH;
+    }
+    status = turbowasm_jit_direct_call(context, (uint32_t)function_index,
+        arguments, type->param_count, results, type->result_count, &count, &trap);
+    if (status == TURBOWASM_OK) {
+        if (count != type->result_count)
+            status = TURBOWASM_TYPE_MISMATCH;
+        for (index = 0u; status == TURBOWASM_OK && index < count; ++index) {
+            if (!turbowasm_mir_argument_matches(&results[index], type->results[index]))
+                status = TURBOWASM_TYPE_MISMATCH;
+        }
+    }
+    turbowasm_mir_record_call(context, status, trap);
+    return (int64_t)status;
 }
 
 static int64_t turbowasm_mir_call_integer(
@@ -1555,19 +1622,10 @@ static bool turbowasm_mir_scalar_function_shape(
 
     type = turbowasm_validation_context_function_type(
         validation, function_index);
-    if (type == NULL || !type->defined ||
+    if (!turbowasm_mir_scalar_signature(type) ||
         function->local_count < type->param_count)
         return false;
 
-    for (index = 0u; index < type->result_count; ++index) {
-        if (!turbowasm_mir_scalar_type(type->results[index]))
-            return false;
-    }
-
-    for (index = 0u; index < type->param_count; ++index) {
-        if (!turbowasm_mir_scalar_type(type->params[index]))
-            return false;
-    }
     for (index = 0u; index < function->local_count; ++index) {
         if (!turbowasm_mir_scalar_type(function->local_types[index]))
             return false;
@@ -1579,12 +1637,14 @@ static bool turbowasm_mir_scalar_function_shape(
 static bool turbowasm_mir_scan_structured_scalar(
     const turbowasm_validation_context *validation,
     uint32_t function_index,
-    const turbowasm_validation_function *function) {
+    const turbowasm_validation_function *function,
+    turbowasm_mir_call_budget *out_calls) {
     const turbowasm_validation_func_type *type;
     turbowasm_mir_scan_control *controls = NULL;
     turbowasm_reader reader;
     uint32_t control_size = 0u;
     bool ok = false;
+    turbowasm_mir_call_budget calls = {0};
 
     if (!turbowasm_mir_scalar_function_shape(
             validation, function_index, function) ||
@@ -1747,9 +1807,15 @@ static bool turbowasm_mir_scan_structured_scalar(
                 callee_type =
                     turbowasm_validation_context_function_type(
                         validation, callee_index);
-                if (callee == NULL || callee->imported ||
-                    !turbowasm_mir_call_signature_supported(callee_type))
+                if (callee == NULL ||
+                    !turbowasm_mir_scalar_signature(callee_type) ||
+                    callee_type->result_count > UINT32_MAX - calls.registers)
                     goto done;
+                if (callee_type->param_count > calls.arguments)
+                    calls.arguments = callee_type->param_count;
+                if (callee_type->result_count > calls.results)
+                    calls.results = callee_type->result_count;
+                calls.registers += callee_type->result_count;
                 break;
             }
 
@@ -1886,6 +1952,8 @@ static bool turbowasm_mir_scan_structured_scalar(
 
 done:
     free(controls);
+    if (ok && out_calls != NULL)
+        *out_calls = calls;
     return ok;
 }
 
@@ -1914,7 +1982,7 @@ static bool turbowasm_mir_is_function_eligible(
     return turbowasm_mir_scan_scalar_locals(
                validation, function_index, function, NULL, NULL) ||
            turbowasm_mir_scan_structured_scalar(
-               validation, function_index, function) ||
+               validation, function_index, function, NULL) ||
            turbowasm_mir_scan_simd_straightline(
                validation, function_index, function,
                NULL, NULL, NULL);
@@ -2217,107 +2285,47 @@ static bool turbowasm_mir_control_location_budget(
 static bool turbowasm_mir_structured_emit_call(
     turbowasm_mir_text *text,
     const turbowasm_validation_context *validation,
-    uint32_t callee_index,
-    turbowasm_mir_stack_value *stack,
-    uint32_t *stack_size,
-    uint32_t *next_reg) {
-    const turbowasm_validation_function *callee;
-    const turbowasm_validation_func_type *callee_type;
-    const char *proto_name = NULL;
-    const char *external_name = NULL;
-    const char *result_prefix;
-    uint32_t arg_index;
-    uint32_t base;
-
-    if (text == NULL || validation == NULL || stack == NULL ||
-        stack_size == NULL || next_reg == NULL)
+    uint32_t callee_index, turbowasm_mir_stack_value *stack,
+    uint32_t *stack_size, uint32_t *next_reg, uint32_t register_limit) {
+    const turbowasm_validation_func_type *type =
+        turbowasm_validation_context_function_type(validation, callee_index);
+    uint32_t index, base;
+    if (!turbowasm_mir_scalar_signature(type) ||
+        *stack_size < type->param_count || *next_reg > register_limit ||
+        type->result_count > register_limit - *next_reg)
         return false;
-
-    callee = turbowasm_validation_context_function(
-        validation, callee_index);
-    callee_type = turbowasm_validation_context_function_type(
-        validation, callee_index);
-    if (callee == NULL || callee->imported ||
-        !turbowasm_mir_call_signature_supported(callee_type) ||
-        *stack_size < callee_type->param_count)
-        return false;
-
-    base = *stack_size - callee_type->param_count;
-    for (arg_index = 0u;
-         arg_index < callee_type->param_count;
-         ++arg_index) {
-        if (stack[base + arg_index].type !=
-            callee_type->params[arg_index])
+    base = *stack_size - type->param_count;
+    for (index = 0u; index < type->param_count; ++index) {
+        turbowasm_mir_stack_value value = stack[base + index];
+        if (value.type != type->params[index] ||
+            !turbowasm_mir_emit_value_store(text, "jit_call_args", index,
+                value.type, turbowasm_mir_reg_prefix(value.type), value.reg))
             return false;
     }
-
-    if (turbowasm_mir_integer_type(callee_type->results[0])) {
-        if (callee_type->param_count == 0u) {
-            proto_name = "tw_call_i64_0_p";
-            external_name = "tw_jit_call_i64_0";
-        } else if (callee_type->param_count == 1u) {
-            proto_name = "tw_call_i64_1_p";
-            external_name = "tw_jit_call_i64_1";
-        } else if (callee_type->param_count == 2u) {
-            proto_name = "tw_call_i64_2_p";
-            external_name = "tw_jit_call_i64_2";
-        }
-    } else if (callee_type->results[0] == 0x7du) {
-        if (callee_type->param_count == 0u) {
-            proto_name = "tw_call_f32_0_p";
-            external_name = "tw_jit_call_f32_0";
-        } else if (callee_type->param_count == 1u) {
-            proto_name = "tw_call_f32_1_p";
-            external_name = "tw_jit_call_f32_1";
-        }
-    } else if (callee_type->results[0] == 0x7cu) {
-        if (callee_type->param_count == 0u) {
-            proto_name = "tw_call_f64_0_p";
-            external_name = "tw_jit_call_f64_0";
-        } else if (callee_type->param_count == 1u) {
-            proto_name = "tw_call_f64_1_p";
-            external_name = "tw_jit_call_f64_1";
-        }
-    }
-
-    result_prefix =
-        turbowasm_mir_reg_prefix(callee_type->results[0]);
-    if (proto_name == NULL || external_name == NULL ||
-        result_prefix == NULL)
+    if (!turbowasm_mir_text_appendf(text,
+            "call tw_call_values_p, tw_jit_call_values, jit_status, jit_ctx, "
+            "%u, jit_call_args, jit_call_results\n"
+            "bne jit_fail, jit_status, 0\n", callee_index))
         return false;
-
-    if (!turbowasm_mir_text_appendf(
-            text,
-            "call %s, %s, %s%u, jit_ctx, %u",
-            proto_name, external_name,
-            result_prefix, *next_reg, callee_index))
-        return false;
-
-    for (arg_index = 0u;
-         arg_index < callee_type->param_count;
-         ++arg_index) {
-        const char *prefix =
-            turbowasm_mir_reg_prefix(
-                stack[base + arg_index].type);
-        if (prefix == NULL ||
-            !turbowasm_mir_text_appendf(
-                text, ", %s%u",
-                prefix, stack[base + arg_index].reg))
-            return false;
-    }
-
-    if (!turbowasm_mir_text_appendf(
-            text,
-            "\n"
-            "call tw_call_status_p, tw_jit_call_status, "
-            "jit_status, jit_ctx\n"
-            "bne jit_fail, jit_status, 0\n"))
-        return false;
-
     *stack_size = base;
-    stack[*stack_size].reg = (*next_reg)++;
-    stack[*stack_size].type = callee_type->results[0];
-    ++*stack_size;
+    for (index = 0u; index < type->result_count; ++index) {
+        uint8_t value_type = type->results[index];
+        const char *memory_type = value_type == 0x7fu
+            ? "i32" : turbowasm_mir_type_name(value_type);
+        size_t offset;
+        if ((size_t)index > (SIZE_MAX - sizeof(turbowasm_value)) /
+                sizeof(turbowasm_value))
+            return false;
+        offset = (size_t)index * sizeof(turbowasm_value) + offsetof(turbowasm_value, as);
+        if (!turbowasm_mir_text_appendf(text,
+                "%s %s%u, %s:%zu(jit_call_results)\n",
+                turbowasm_mir_move_name(value_type),
+                turbowasm_mir_reg_prefix(value_type), *next_reg, memory_type, offset))
+            return false;
+        stack[*stack_size].type = value_type;
+        stack[*stack_size].reg = (*next_reg)++;
+        ++*stack_size;
+    }
     return true;
 }
 
@@ -2799,6 +2807,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     turbowasm_mir_stack_value *stack = NULL;
     turbowasm_mir_control_frame *controls = NULL;
     turbowasm_mir_text text = {0};
+    turbowasm_mir_call_budget calls = {0};
     turbowasm_reader reader;
     MIR_module_t module;
     MIR_item_t function_item;
@@ -2824,7 +2833,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     out->impl = NULL;
 
     if (!turbowasm_mir_scan_structured_scalar(
-            validation, function_index, function))
+            validation, function_index, function, &calls))
         return TURBOWASM_UNSUPPORTED;
 
     type = turbowasm_validation_context_function_type(
@@ -2838,13 +2847,13 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
         return TURBOWASM_UNSUPPORTED;
 
     if ((uint64_t)function->code_size + 1u +
-            (uint64_t)control_register_count + type->result_count >= UINT32_MAX ||
+            (uint64_t)control_register_count + type->result_count + calls.registers >= UINT32_MAX ||
         (uint64_t)function->code_size + 1u +
             (uint64_t)control_slot_count > UINT32_MAX)
         return TURBOWASM_OUT_OF_MEMORY;
 
     register_count =
-        function->code_size + 1u + control_register_count + type->result_count;
+        function->code_size + 1u + control_register_count + type->result_count + calls.registers;
     slot_limit =
         function->code_size + 1u + control_slot_count;
     stack = (turbowasm_mir_stack_value *)calloc(
@@ -2876,13 +2885,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     if (!turbowasm_mir_text_appendf(
             &text,
             "tw_jit_m_%u: module\n"
-            "tw_call_i64_0_p: proto i64, p:ctx, i64:index\n"
-            "tw_call_i64_1_p: proto i64, p:ctx, i64:index, i64:a0\n"
-            "tw_call_i64_2_p: proto i64, p:ctx, i64:index, i64:a0, i64:a1\n"
-            "tw_call_f32_0_p: proto f, p:ctx, i64:index\n"
-            "tw_call_f32_1_p: proto f, p:ctx, i64:index, f:a0\n"
-            "tw_call_f64_0_p: proto d, p:ctx, i64:index\n"
-            "tw_call_f64_1_p: proto d, p:ctx, i64:index, d:a0\n"
+            "tw_call_values_p: proto i64, p:ctx, i64:index, p:args, p:results\n"
             "tw_memory_p: proto i64, p:ctx, i64:op, i64:mem, i64:secondary, "
                 "i64:offset, i64:a, i64:b, i64:c\n"
             "tw_memory_load_f32_p: proto f, p:ctx, i64:mem, i64:offset, i64:address\n"
@@ -2903,10 +2906,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             "tw_simd_reduce_p: proto i64, p:ctx, i64:opcode, i64:slot\n"
             "tw_simd_memory_p: proto i64, p:ctx, i64:opcode, i64:memory, "
                 "i64:slot, i64:address, i64:offset\n"
-            "import tw_jit_call_i64_0, tw_jit_call_i64_1, "
-            "tw_jit_call_i64_2, tw_jit_call_f32_0, "
-            "tw_jit_call_f32_1, tw_jit_call_f64_0, "
-            "tw_jit_call_f64_1, tw_jit_call_status, "
+            "import tw_jit_call_values, tw_jit_call_status, "
             "tw_jit_checkpoint, tw_jit_simd_copy, tw_jit_simd_const, "
             "tw_jit_simd_splat_i64, tw_jit_simd_splat_f32, "
             "tw_jit_simd_splat_f64, tw_jit_simd_op, "
@@ -3069,8 +3069,8 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 if (!turbowasm_mir_text_appendf(&text, "jit_return:\n"))
                     goto oom;
                 for (index = 0u; index < type->result_count; ++index) {
-                    if (!turbowasm_mir_emit_result_store(
-                            &text, index, type->results[index],
+                    if (!turbowasm_mir_emit_value_store(
+                            &text, "jit_results", index, type->results[index],
                             turbowasm_mir_reg_prefix(type->results[index]), index))
                         goto oom;
                 }
@@ -3431,7 +3431,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                         &reader, &callee_index) ||
                     !turbowasm_mir_structured_emit_call(
                         &text, validation, callee_index,
-                        stack, &stack_size, &next_reg))
+                        stack, &stack_size, &next_reg, register_count))
                     goto done;
                 break;
             }
@@ -3764,6 +3764,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
         goto done;
 
     compiled->result_count = type->result_count;
+    compiled->calls = calls;
     compiled->simd_slot_count = next_slot;
     compiled->param_count = type->param_count;
     compiled->param_types = type->params;
@@ -4369,7 +4370,7 @@ static turbowasm_status turbowasm_mir_compile_simd_straightline(
             if (turbowasm_reader_remaining(&reader) != 0u ||
                 stack_size != 1u || stack[0].type != result_type)
                 goto done;
-            if (!turbowasm_mir_emit_result_store(&text, 0u, result_type,
+            if (!turbowasm_mir_emit_value_store(&text, "jit_results", 0u, result_type,
                     turbowasm_mir_reg_prefix(result_type), stack[0].reg) ||
                 !turbowasm_mir_text_appendf(&text,
                     "ret\njit_fail:\nret\nendfunc\nendmodule\n"))
@@ -4915,8 +4916,8 @@ static turbowasm_status turbowasm_mir_compile_function(
                 stack_size != 1u ||
                 stack[0].type != result_type)
                 goto done;
-            if (!turbowasm_mir_emit_result_store(
-                    &text, 0u, result_type, "r", stack[0].reg) ||
+            if (!turbowasm_mir_emit_value_store(
+                    &text, "jit_results", 0u, result_type, "r", stack[0].reg) ||
                 !turbowasm_mir_text_appendf(&text,
                     "ret\njit_fail:\nret\nendfunc\nendmodule\n"))
                 goto oom;
@@ -4975,21 +4976,6 @@ done:
     return status;
 }
 
-static bool turbowasm_mir_argument_matches(
-    const turbowasm_value *value,
-    uint8_t type) {
-    if (value == NULL)
-        return false;
-
-    switch (type) {
-        case 0x7fu: return value->kind == TURBOWASM_VALUE_I32;
-        case 0x7eu: return value->kind == TURBOWASM_VALUE_I64;
-        case 0x7du: return value->kind == TURBOWASM_VALUE_F32;
-        case 0x7cu: return value->kind == TURBOWASM_VALUE_F64;
-        default: return false;
-    }
-}
-
 static turbowasm_status turbowasm_mir_invoke_compiled_inner(
     const turbowasm_compiled_function *compiled,
     turbowasm_jit_invocation_context *context,
@@ -5002,6 +4988,8 @@ static turbowasm_status turbowasm_mir_invoke_compiled_inner(
     const turbowasm_mir_compiled *function;
     void *generated;
     uint32_t index;
+    uint64_t scratch_count;
+    turbowasm_value *scratch = NULL, *call_results = NULL;
 
     if (compiled == NULL || compiled->impl == NULL ||
         context == NULL || context->instance == NULL ||
@@ -5034,14 +5022,25 @@ static turbowasm_status turbowasm_mir_invoke_compiled_inner(
     if (generated == NULL)
         return TURBOWASM_UNSUPPORTED;
 
+    scratch_count = (uint64_t)function->calls.arguments + function->calls.results;
+    if (scratch_count != 0u) {
+        if (scratch_count > SIZE_MAX / sizeof(*scratch))
+            return TURBOWASM_OUT_OF_MEMORY;
+        scratch = (turbowasm_value *)turbowasm_rt_calloc((size_t)scratch_count, sizeof(*scratch));
+        if (scratch == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+        call_results = scratch + function->calls.arguments;
+    }
     {
         void (*entry)(turbowasm_jit_invocation_context *,
-                      const turbowasm_value *, turbowasm_value *);
+                      const turbowasm_value *, turbowasm_value *,
+                      turbowasm_value *, turbowasm_value *);
         _Static_assert(sizeof(entry) == sizeof(generated),
                        "MIR generated entry pointer size mismatch");
         memcpy(&entry, &generated, sizeof(entry));
-        entry(context, arguments, results);
+        entry(context, arguments, results, scratch, call_results);
     }
+    turbowasm_rt_free(scratch);
     if (context->call_status != TURBOWASM_OK) {
         *trap = context->call_trap;
         return context->call_status;
@@ -5119,6 +5118,13 @@ static bool turbowasm_mir_register_call_externals(
     if (backend == NULL || backend->mir == NULL)
         return false;
 
+    {
+        int64_t (*fn)(turbowasm_jit_invocation_context *, int64_t,
+            const turbowasm_value *, turbowasm_value *) = turbowasm_mir_call_values;
+        _Static_assert(sizeof(fn) == sizeof(address), "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(backend->mir, "tw_jit_call_values", address);
+    }
     {
         int64_t (*fn)(
             turbowasm_jit_invocation_context *,

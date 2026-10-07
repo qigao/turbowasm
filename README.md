@@ -53,8 +53,9 @@ atomic operations, wait/notify, imports and guarded growth. MIR admits unshared
 memory64 modules and lowers scalar load/store, size/grow, bulk memory and its
 existing SIMD memory subset through Runtime helpers. The private scalar entry
 accepts mixed scalar parameters, more than two arguments, and zero or multiple
-scalar results. Instruction admission limits, including separate direct-call
-helper limits, still apply. Shared memories continue to use the interpreter. Native MIR
+scalar results. Direct calls support the same scalar tuples through Runtime,
+including interpreted callees and host imports. Instruction admission and
+non-self tail-call limits still apply. Shared memories continue to use the interpreter. Native MIR
 memory64 verification passed the Linux and macOS MIR test profiles; see the
 [qualification record](tests/conformance/README.md). The Windows MIR dependency
 is not supported. The synchronous Component Model subset is exposed separately
