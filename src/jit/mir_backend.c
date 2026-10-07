@@ -1473,6 +1473,68 @@ static uint8_t turbowasm_mir_simd_splat_scalar_type(
     }
 }
 
+typedef struct turbowasm_mir_simd_immediate {
+    const uint8_t *code;
+    uint32_t size;
+    uint8_t inputs[2], input_count, output;
+} turbowasm_mir_simd_immediate;
+
+static bool turbowasm_mir_decode_simd_immediate(
+    const turbowasm_validation_context *validation, turbowasm_reader *reader,
+    turbowasm_mir_simd_immediate *out) {
+    turbowasm_reader peek = *reader;
+    turbowasm_mir_simd_immediate op = {0};
+    const turbowasm_simd_exec_descriptor *descriptor;
+    uint32_t opcode;
+    uint8_t lane;
+    bool has_lane = false;
+    op.code = peek.cursor;
+    if (!turbowasm_reader_uleb32(&peek, &opcode) ||
+        (descriptor = turbowasm_simd_exec_descriptor_find(opcode)) == NULL) return false;
+    op.output = 0x7bu;
+    switch (descriptor->kind) {
+        case TURBOWASM_SIMD_EXEC_MEMORY_EXTEND:
+        case TURBOWASM_SIMD_EXEC_MEMORY_SPLAT:
+        case TURBOWASM_SIMD_EXEC_MEMORY_ZERO:
+        case TURBOWASM_SIMD_EXEC_MEMORY_LOAD_LANE:
+        case TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE: {
+            uint32_t memory;
+            uint64_t offset;
+            if (!turbowasm_mir_read_indexed_memarg(validation, &peek, &memory, &offset)) return false;
+            op.inputs[0] = turbowasm_mir_memory_type(validation, memory); op.input_count = 1u;
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_LOAD_LANE ||
+                descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE) {
+                op.inputs[1] = 0x7bu; op.input_count = 2u; has_lane = true;
+            }
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE) op.output = 0u;
+            break;
+        }
+        case TURBOWASM_SIMD_EXEC_LANE_EXTRACT:
+        case TURBOWASM_SIMD_EXEC_LANE_REPLACE:
+            op.inputs[0] = 0x7bu; op.input_count = 1u; has_lane = true;
+            if (descriptor->kind == TURBOWASM_SIMD_EXEC_LANE_EXTRACT)
+                op.output = turbowasm_mir_simd_splat_scalar_type(descriptor);
+            else {
+                op.inputs[1] = turbowasm_mir_simd_splat_scalar_type(descriptor);
+                op.input_count = 2u;
+            }
+            break;
+        case TURBOWASM_SIMD_EXEC_SHUFFLE: {
+            uint32_t index;
+            for (index = 0; index < 16u; ++index)
+                if (!turbowasm_reader_u8(&peek, &lane) || lane >= 32u) return false;
+            op.inputs[0] = op.inputs[1] = 0x7bu; op.input_count = 2u;
+            break;
+        }
+        default: return false;
+    }
+    if (has_lane && (!turbowasm_reader_u8(&peek, &lane) ||
+            descriptor->vector_desc == NULL || lane >= descriptor->vector_desc->lane_count)) return false;
+    op.size = (uint32_t)(peek.cursor - op.code);
+    *reader = peek; *out = op;
+    return true;
+}
+
 static bool turbowasm_mir_simd_kind_unary(
     turbowasm_simd_exec_kind kind) {
     return kind == TURBOWASM_SIMD_EXEC_UNARY ||
@@ -1908,6 +1970,14 @@ static bool turbowasm_mir_scan_structured_scalar(
             turbowasm_numeric_signature signature;
             if (turbowasm_mir_decode_numeric(&reader, opcode, &numeric, &signature)) {
                 if (calls.arguments < signature.input_count) calls.arguments = signature.input_count;
+                if (calls.results == 0u) calls.results = 1u;
+                continue;
+            }
+        }
+        if (opcode == 0xfdu) {
+            turbowasm_mir_simd_immediate op;
+            if (turbowasm_mir_decode_simd_immediate(validation, &reader, &op)) {
+                if (calls.arguments < op.input_count) calls.arguments = op.input_count;
                 if (calls.results == 0u) calls.results = 1u;
                 continue;
             }
@@ -2608,6 +2678,32 @@ static bool turbowasm_mir_emit_call_results(turbowasm_mir_text *text,
         ++*stack_size;
     }
     return true;
+}
+
+static bool turbowasm_mir_emit_simd_immediate(turbowasm_mir_text *text,
+    const turbowasm_mir_simd_immediate *op, turbowasm_mir_stack_value *stack,
+    uint32_t *stack_size, uint32_t *next_reg, uint32_t *next_slot, uint32_t slot_limit) {
+    uint32_t index, base;
+    turbowasm_validation_func_type result_type = {0};
+    uint8_t result = op->output;
+    if (*stack_size < op->input_count) return false;
+    base = *stack_size - op->input_count;
+    for (index = 0; index < op->input_count; ++index) {
+        turbowasm_mir_stack_value value = stack[base + index];
+        if (value.type != op->inputs[index] || !turbowasm_mir_emit_value_store(text,
+                "jit_call_args", index, value.type, turbowasm_mir_reg_prefix(value.type), value.reg)) return false;
+    }
+    if (!turbowasm_mir_text_appendf(text,
+            "mov jit_ref_arg, %lld\n"
+            "call tw_simd_instruction_p, tw_simd_instruction, jit_status, jit_ctx, "
+            "jit_ref_arg, %u, jit_call_args, %u, jit_call_results\n"
+            "bne jit_fail, jit_status, 0\n",
+            (long long)(intptr_t)op->code, op->size, op->input_count)) return false;
+    *stack_size = base;
+    if (op->output == 0u) return true;
+    result_type.results = &result; result_type.result_count = 1u;
+    return turbowasm_mir_emit_call_results(text, &result_type, stack, stack_size,
+        next_reg, next_slot, slot_limit);
 }
 
 static bool turbowasm_mir_emit_numeric(turbowasm_mir_text *text, uint32_t opcode,
@@ -3340,6 +3436,8 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             "tw_simd_value_load_p: proto i64, p:ctx, i64:slot, p:value\n"
             "tw_numeric_p: proto i64, p:ctx, i64:op, p:args, p:result\n"
             "import tw_numeric\n"
+            "tw_simd_instruction_p: proto i64, p:ctx, p:code, i64:size, p:args, i64:count, p:result\n"
+            "import tw_simd_instruction\n"
             "tw_simd_value_store_p: proto i64, p:ctx, i64:slot, p:value\n"
             "import tw_simd_value_load, tw_simd_value_store\n"
             "tw_simd_copy_p: proto i64, p:ctx, i64:out_slot, i64:in_slot\n"
@@ -3609,6 +3707,14 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             if (turbowasm_mir_decode_numeric(&reader, opcode, &numeric, &signature)) {
                 if (next_reg >= register_count || !turbowasm_mir_emit_numeric(
                         &text, numeric, &signature, stack, &stack_size, &next_reg)) goto done;
+                continue;
+            }
+        }
+        if (opcode == 0xfdu) {
+            turbowasm_mir_simd_immediate op;
+            if (turbowasm_mir_decode_simd_immediate(validation, &reader, &op)) {
+                if (next_reg >= register_count || !turbowasm_mir_emit_simd_immediate(
+                        &text, &op, stack, &stack_size, &next_reg, &next_slot, slot_limit)) goto done;
                 continue;
             }
         }
@@ -5707,6 +5813,13 @@ static bool turbowasm_mir_register_call_externals(
     if (backend == NULL || backend->mir == NULL)
         return false;
 
+    {
+        int64_t (*fn)(turbowasm_jit_invocation_context *, const uint8_t *, int64_t,
+            const turbowasm_value *, int64_t, turbowasm_value *) = turbowasm_jit_simd_instruction;
+        _Static_assert(sizeof(fn) == sizeof(address), "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(backend->mir, "tw_simd_instruction", address);
+    }
     {
         int64_t (*fn)(turbowasm_jit_invocation_context *, int64_t,
             const turbowasm_value *, turbowasm_value *) = turbowasm_jit_numeric;

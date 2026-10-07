@@ -305,48 +305,6 @@ static void test_memory_trap_parity(
     backend->destroy_function(backend->context, &compiled);
 }
 
-static void test_shuffle_stays_interpreter_fallback(
-    turbowasm_jit_backend *backend,
-    turbowasm_module *module,
-    turbowasm_instance *instance) {
-    const turbowasm_module_impl *impl =
-        turbowasm_module_impl_get(module);
-    const turbowasm_validation_function *function =
-        function_at(impl, 7u);
-    turbowasm_compiled_function compiled = {0};
-    turbowasm_value interpreted = {0};
-    size_t interpreted_count = 0u;
-    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
-
-    assert(function != NULL);
-
-    /* The interpreter supports shuffle and produces zero bitmask. */
-    assert(turbowasm_instance_invoke(
-               instance, 7u,
-               NULL, 0u,
-               &interpreted, 1u,
-               &interpreted_count,
-               &trap) == TURBOWASM_OK);
-    assert(interpreted_count == 1u);
-    assert(interpreted.kind == TURBOWASM_VALUE_I32);
-    assert(interpreted.as.i32 == 0);
-    assert(trap == TURBOWASM_TRAP_NONE);
-
-    /* Immediate-special shuffle is intentionally outside this MIR slice. */
-    assert(!backend->is_function_eligible(
-        backend->context,
-        &impl->validation,
-        7u,
-        function));
-    assert(backend->compile_function(
-               backend->context,
-               &impl->validation,
-               7u,
-               function,
-               &compiled) == TURBOWASM_UNSUPPORTED);
-    assert(compiled.impl == NULL);
-}
-
 int main(void) {
     turbowasm_module module = {0};
     turbowasm_instance instance = {0};
@@ -390,8 +348,7 @@ int main(void) {
         &backend, &module, &instance);
     test_memory_trap_parity(
         &backend, &module, &instance);
-    test_shuffle_stays_interpreter_fallback(
-        &backend, &module, &instance);
+    compare_i32_success(&backend, &module, &instance, 7u, 0);
 
     {
         turbowasm_module relaxed_module = {0};

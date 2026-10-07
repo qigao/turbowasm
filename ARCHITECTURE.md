@@ -322,6 +322,30 @@ host/interpreted targets, long tail chains, GC, traps, fuel and allocation failu
 Rollback removes these four admission cases and their emitter together; Runtime
 interpreted behavior remains the compatibility baseline.
 
+### MIR immediate SIMD boundary
+
+Shuffle, lane extract/replace and extended SIMD memory instructions reuse the
+Runtime SIMD executor through a private single-instruction bridge. Generated code
+passes a bounded view of the already validated immutable instruction bytes and
+at most three complete scalar/vector values; the bridge uses a fixed local stack
+and commits at most one result. No host callback, suspension, GC reference or
+dynamic allocation is introduced. The invocation owns call scratch and SIMD
+slots; the module owns the instruction bytes and outlives the compiled function.
+This is an in-process pointer, consistent with MIR's unsupported artifact
+persistence contract, and is never serialized.
+
+The existing single execution owner pays one checkpoint before each instruction.
+Shared/unshared memory32/64 accesses use Runtime's existing address, bounds and
+shared-byte access rules. Memory writes commit only after those checks; errors
+propagate through invocation status/trap, without publishing a result. Destroying
+an instance/backend requires quiescence under the existing lifecycle contract.
+The alternative of duplicating immediate parsing and vector execution inside the
+backend would create another semantic implementation. The bridge trades bounded
+decoding/copy overhead for shared semantics and leaves installed APIs unchanged.
+Validation covers every descriptor and lane, vector shape/bit results, memory
+contents, overflow/bounds traps, fuel and native compilation. Rollback removes
+the new admission and bridge together, preserving the previous SIMD subset.
+
 ### MIR scalar numeric boundary
 
 Missing scalar instructions share the interpreter's numeric primitives through a

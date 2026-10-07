@@ -609,4 +609,11 @@ bool turbowasm_numeric_signature_get(uint32_t opcode, turbowasm_numeric_signatur
 int64_t turbowasm_jit_numeric(turbowasm_jit_invocation_context *context,
     int64_t opcode, const turbowasm_value *arguments, turbowasm_value *result);
 
+enum { TURBOWASM_JIT_SIMD_MAX_INPUTS = 3 };
+/* The module owns code until the compiled function is destroyed. The bounded
+ * view contains one validated SIMD instruction after its 0xfd prefix. */
+int64_t turbowasm_jit_simd_instruction(turbowasm_jit_invocation_context *context,
+    const uint8_t *code, int64_t size, const turbowasm_value *arguments,
+    int64_t count, turbowasm_value *result);
+
 #endif /* TURBOWASM_INSTANCE_INTERNAL_H */

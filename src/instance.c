@@ -4662,6 +4662,33 @@ static turbowasm_status turbowasm_exec_simd(
 }
 
 
+int64_t turbowasm_jit_simd_instruction(turbowasm_jit_invocation_context *context,
+    const uint8_t *code, int64_t size, const turbowasm_value *arguments,
+    int64_t count, turbowasm_value *result) {
+    turbowasm_value values[TURBOWASM_JIT_SIMD_MAX_INPUTS + 1u] = {0};
+    turbowasm_value_stack stack = {values, 0u, TURBOWASM_JIT_SIMD_MAX_INPUTS + 1u};
+    turbowasm_reader reader;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_status status;
+    if (context == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    if (context->instance == NULL || code == NULL || size <= 0 ||
+        (uint64_t)size > SIZE_MAX || count < 0 || count > TURBOWASM_JIT_SIMD_MAX_INPUTS ||
+        (count != 0 && arguments == NULL) || result == NULL) status = TURBOWASM_INVALID_ARGUMENT;
+    else {
+        if (count != 0) memcpy(values, arguments, (size_t)count * sizeof(*values));
+        stack.size = (uint32_t)count;
+        turbowasm_reader_init(&reader, code, (size_t)size);
+        status = turbowasm_exec_simd(context->instance, &reader, &stack, &trap);
+        if (status == TURBOWASM_OK) {
+            if (turbowasm_reader_remaining(&reader) != 0u || stack.size > 1u)
+                status = TURBOWASM_MALFORMED_MODULE;
+            else if (stack.size == 1u) *result = values[0];
+        }
+    }
+    context->call_status = status; context->call_trap = trap;
+    return status;
+}
+
 typedef struct turbowasm_host_call_impl {
     turbowasm_instance caller;
     turbowasm_jit_execution_control *execution;
