@@ -614,10 +614,29 @@ synchronous and resumable direct targets, new/drop preservation of resource-tabl
 ownership, legal representation reads, invalid new/rep cleanup signatures, and
 provider exclusion during realloc. Both modified fixtures pass wasm-tools
 validation. The MIR test variant attaches backends to the resource fixture too.
-The expanded Windows ASan selection passed 48/48 in 2.05 seconds; native
-qualification of these additional bindings and guards is pending.
+The expanded Windows ASan selection passed 48/48 in 2.05 seconds.
+At `5034ef6`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37652723361)
+passed all five jobs, including Linux MIR 173/173 in 2.07 seconds and macOS
+arm64 MIR 173/173 in 2.02 seconds. Android qualification is a cross-build.
 
 ```powershell
 cmake --build --preset win-core3-asan-user
 ctest --preset win-core3-asan-user -R "component|wasi02|resumable|host_wait" --output-on-failure
 ```
+
+## Resource destructor execution control
+
+`component_resource_reentry_test.c` exercises guest resource.drop calling a
+Core destructor under the original execution's control. Its seven cases cover
+fuel suspension, cancellation without handle restoration or destructor replay,
+trap and uncaught-exception propagation, cumulative caller/destructor depth,
+interleaved suspended calls, interruption, and nested host-wait completion and
+cancellation. The MIR variant additionally checks that the suspended destructor
+has reached compiled state. The WAT fixture passes wasm-tools 1.261.0 validation.
+
+Windows ASan passed the related 49/49 tests in 2.71 seconds and the complete
+151/151 suite in 245.59 seconds. The subsequently added host-wait case passed
+with all seven re-entry cases (3,398 assertions) in the same preset; production
+code was unchanged after the full run. Native MIR qualification is pending.
+This closes destructor budget/depth reset, not local-function canonical lowering
+or the remaining Component async and WASI 0.2 surface.

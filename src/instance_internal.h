@@ -317,6 +317,19 @@ turbowasm_status turbowasm_instance_invoke_internal(
     turbowasm_trap *trap,
     turbowasm_jit_execution_control *execution);
 
+/* Borrows the live host callback's control and depth until this nested call
+ * returns, including coroutine suspension. Must not outlive that callback. */
+turbowasm_status turbowasm_instance_invoke_from_host(
+    const turbowasm_host_call *call,
+    turbowasm_instance *instance,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap);
+
 turbowasm_status turbowasm_instance_state_init(
     turbowasm_instance_impl *instance,
     const turbowasm_module_impl *module);

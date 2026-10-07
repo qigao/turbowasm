@@ -100,6 +100,9 @@ resumable call's fuel/interruption control; failed cleanup discards unpublished
 results. Direct canonical cleanup targets are type checked and enforce the same
 leave restrictions as indirect calls from Core cleanup. Canonical lower and
 resource creation/deletion trap during cleanup or guest realloc.
+Guest resource destructors inherit the invoking call's fuel, interruption,
+host-wait ownership and call-depth limit. Consumed handles stay consumed if
+destruction traps or the suspended call is cancelled.
 This does not complete the Component Model: local-function canonical lowering,
 the full async/future/stream surface and broader WASI 0.2 interfaces remain work
 in progress.

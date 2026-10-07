@@ -44,6 +44,8 @@ typedef struct turbowasm_component_exec_realloc_context {
 typedef struct turbowasm_component_exec_resource_context {
     struct turbowasm_component_exec *exec;
     uint32_t resource_type;
+    turbowasm_host_call *call;
+    turbowasm_trap *trap;
 } turbowasm_component_exec_resource_context;
 
 typedef struct turbowasm_component_exec_resource_builtin_context {

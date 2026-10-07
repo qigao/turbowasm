@@ -4767,7 +4767,51 @@ int64_t turbowasm_jit_simd_instruction(turbowasm_jit_invocation_context *context
 typedef struct turbowasm_host_call_impl {
     turbowasm_instance caller;
     turbowasm_jit_execution_control *execution;
+    uint32_t depth;
 } turbowasm_host_call_impl;
+
+turbowasm_status turbowasm_instance_invoke_from_host(
+    const turbowasm_host_call *call,
+    turbowasm_instance *instance,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    const turbowasm_host_call_impl *parent;
+    turbowasm_instance_impl *impl;
+    const turbowasm_module_impl *module;
+    turbowasm_runtime_scope scope;
+    turbowasm_status status;
+
+    if (call == NULL || call->impl == NULL ||
+        instance == NULL || instance->impl == NULL ||
+        result_count == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    *result_count = 0u;
+    *trap = TURBOWASM_TRAP_NONE;
+    parent = (const turbowasm_host_call_impl *)call->impl;
+    impl = (turbowasm_instance_impl *)instance->impl;
+    if (impl->store != NULL && !turbowasm_store_is_owner(impl->store))
+        return TURBOWASM_INVALID_ARGUMENT;
+    module = turbowasm_module_impl_get(impl->module);
+    if (module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (parent->depth >= TURBOWASM_EXEC_MAX_CALL_DEPTH - 1u) {
+        *trap = TURBOWASM_TRAP_CALL_STACK_EXHAUSTED;
+        return TURBOWASM_TRAPPED;
+    }
+    impl->pending_exception = NULL;
+    scope = turbowasm_runtime_scope_enter(&module->config);
+    status = turbowasm_dispatch_function(
+        impl, function_index, arguments, argument_count,
+        results, result_capacity, result_count, trap,
+        parent->execution, parent->depth + 1u);
+    turbowasm_runtime_scope_leave(scope);
+    return status;
+}
 
 turbowasm_instance *turbowasm_host_call_instance(
     turbowasm_host_call *call) {
@@ -4888,6 +4932,7 @@ static turbowasm_status turbowasm_exec_host_function(
     const turbowasm_linked_function *binding,
     const turbowasm_validation_func_type *type,
     turbowasm_jit_execution_control *execution,
+    uint32_t depth,
     const turbowasm_value *arguments,
     size_t argument_count,
     turbowasm_value *results,
@@ -4921,6 +4966,7 @@ static turbowasm_status turbowasm_exec_host_function(
     *trap = TURBOWASM_TRAP_NONE;
     call_impl.caller.impl = instance;
     call_impl.execution = execution;
+    call_impl.depth = depth;
     call.impl = &call_impl;
 
     status = binding->host_function(
@@ -5029,6 +5075,7 @@ restart_frame:
                 binding,
                 type,
                 execution,
+                depth,
                 arguments,
                 argument_count,
                 results,

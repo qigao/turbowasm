@@ -654,6 +654,32 @@ is being allocated. This changes previously admitted invalid canonical behavior
 into a trap before provider or handle side effects. The private context gains
 only a borrowed gate pointer; the exec already owns and outlives that context.
 
+## Nested canonical Core execution
+
+Guest resource.drop consumes its canonical handle before invoking the resource
+destructor. The destructor re-enters Core through a private Runtime host-call
+boundary, borrowing the active call's execution control and adding one logical
+call level. Fuel, interruption, host waits, tier selection and stack limits
+therefore belong to the original execution. The ordinary public invoke API is
+reserved for host-owned resource destruction outside a running guest call.
+
+The borrowed host call and destructor context live on the original coroutine's
+stack until the callback returns, including suspension and cancellation unwind.
+They are single-threaded on the execution owner; no instance-global current-call
+pointer, new execution, queue or allocation is introduced. Capacity is bounded
+by the existing Runtime call/stack limits and resource-table quota. Cancellation
+or failure never restores or replays an already consumed resource handle;
+destructor traps propagate, and uncaught Core exceptions become Component traps.
+
+A fresh public invocation would reset fuel and depth. A shared mutable execution
+pointer would also mix independently suspended calls. The private borrowed-call
+boundary avoids both while preserving the public ABI and host destruction
+semantics. Validation covers suspension inside a destructor, cancellation,
+exactly-once consumption, traps/exceptions and call-depth exhaustion with native
+and interpreted execution. Reverting this boundary would require rejecting guest
+destructor re-entry under controlled execution rather than silently resetting
+the control state.
+
 ## Canonical string encodings
 
 The [pinned Canonical ABI](https://github.com/WebAssembly/component-model/blob/a25fc0b372dd21f07f0242c46e98bd0f1ea0c0e1/design/mvp/CanonicalABI.md#storing)

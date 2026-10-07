@@ -1,5 +1,6 @@
 #include "component_exec.h"
 
+#include "instance_internal.h"
 #include "runtime_alloc.h"
 
 #include <turbowasm/link.h>
@@ -223,6 +224,7 @@ static turbowasm_status component_guest_realloc(
 
 static turbowasm_status invoke_mapped_core_function(
     turbowasm_component_exec *exec,
+    turbowasm_host_call *call,
     uint32_t core_function_index,
     const turbowasm_value *arguments,
     size_t argument_count,
@@ -231,6 +233,8 @@ static turbowasm_status invoke_mapped_core_function(
     size_t *result_count,
     turbowasm_trap *trap) {
     const turbowasm_component_exec_core_function *function;
+    turbowasm_instance *instance;
+    turbowasm_status status;
 
     if (exec == NULL || result_count == NULL || trap == NULL ||
         core_function_index >= exec->core_function_count)
@@ -242,15 +246,21 @@ static turbowasm_status invoke_mapped_core_function(
         function->instance_index >= exec->core_instance_count)
         return TURBOWASM_UNSUPPORTED;
 
-    return turbowasm_instance_invoke(
-        &exec->core_instances[function->instance_index],
-        function->function_index,
-        arguments,
-        argument_count,
-        results,
-        result_capacity,
-        result_count,
-        trap);
+    instance = &exec->core_instances[function->instance_index];
+    if (call != NULL)
+        status = turbowasm_instance_invoke_from_host(call, instance,
+            function->function_index, arguments, argument_count,
+            results, result_capacity, result_count, trap);
+    else
+        status = turbowasm_instance_invoke(instance,
+            function->function_index, arguments, argument_count,
+            results, result_capacity, result_count, trap);
+    if (status == TURBOWASM_EXCEPTION) {
+        ((turbowasm_instance_impl *)instance->impl)->pending_exception = NULL;
+        *trap = TURBOWASM_TRAP_UNREACHABLE;
+        return TURBOWASM_TRAPPED;
+    }
+    return status;
 }
 
 static turbowasm_status component_resource_destructor_bridge(
@@ -280,6 +290,7 @@ static turbowasm_status component_resource_destructor_bridge(
 
     status = invoke_mapped_core_function(
         resource_context->exec,
+        resource_context->call,
         resource_type->as.resource.destructor_index,
         &rep,
         1u,
@@ -287,6 +298,8 @@ static turbowasm_status component_resource_destructor_bridge(
         0u,
         &result_count,
         &trap);
+    if (resource_context->trap != NULL)
+        *resource_context->trap = trap;
     if (status != TURBOWASM_OK)
         return status;
     if (trap != TURBOWASM_TRAP_NONE || result_count != 0u)
@@ -457,8 +470,6 @@ static turbowasm_status component_resource_builtin_host(
     turbowasm_component_resource_handle handle;
     turbowasm_status status;
 
-    (void)call;
-
     if (builtin_context == NULL ||
         result_count == NULL ||
         trap == NULL)
@@ -546,15 +557,25 @@ static turbowasm_status component_resource_builtin_host(
             *result_count = 1u;
             return TURBOWASM_OK;
 
-        case TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP:
+        case TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP: {
+            turbowasm_component_resource_binding binding = *builtin_context->binding;
+            turbowasm_component_exec_resource_context destructor_context;
             if (arguments == NULL ||
                 argument_count != 1u ||
                 arguments[0].kind != TURBOWASM_VALUE_I32)
                 return TURBOWASM_INVALID_ARGUMENT;
 
+            if (binding.destructor != NULL) {
+                destructor_context = *(const turbowasm_component_exec_resource_context *)
+                    binding.destructor_context;
+                destructor_context.call = call;
+                destructor_context.trap = trap;
+                binding.destructor_context = &destructor_context;
+            }
             return turbowasm_component_resource_binding_drop(
-                builtin_context->binding,
+                &binding,
                 (uint32_t)arguments[0].as.i32);
+        }
 
         default:
             return TURBOWASM_INVALID_ARGUMENT;
