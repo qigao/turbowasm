@@ -54,13 +54,13 @@ memory64 modules and lowers scalar load/store, size/grow, bulk memory and its
 existing SIMD memory subset through Runtime helpers. Shared memory32/memory64
 also use these helpers, including atomic load/store, RMW, compare-exchange,
 fence and interruptible wait/notify. The private entry
-accepts mixed scalar/reference parameters and zero or multiple results.
+accepts mixed scalar/reference/vector parameters and zero or multiple results.
 Direct, table-indirect and typed-reference calls and their tail forms support these tuples
 through Runtime, including interpreted callees and imports admitted by the
 existing host-signature API. Tail dispatch
 reuses the logical call depth. Reference locals, control merges and call scratch
-use complete value cells rooted in the owning store. Instruction admission still
-excludes vector call signatures. Indirect targets retain Runtime's table bounds,
+use complete value cells rooted in the owning store. Vector call cells preserve
+bits and shape through invocation-owned SIMD slots. Indirect targets retain Runtime's table bounds,
 null and subtype checks; cross-instance tails switch owners after the native
 frame unwinds. Each instance/backend retains one execution owner,
 while distinct instances can import the same shared backing. Native MIR

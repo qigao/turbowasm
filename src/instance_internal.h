@@ -248,7 +248,7 @@ typedef struct turbowasm_jit_invocation_context {
 
     /* Invocation-local v128 temporary frame used by helper-backed JIT
      * lowering. Nested compiled calls save/replace/restore this frame. */
-    cmeta_v128 *simd_slots;
+    turbowasm_v128 *simd_slots;
     uint32_t simd_slot_count;
 } turbowasm_jit_invocation_context;
 

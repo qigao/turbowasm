@@ -430,7 +430,7 @@ spec("memory64 execution") {
     }
     it("checks the native helper ABI on platforms without MIR") {
         turbowasm_jit_invocation_context context = {0};
-        cmeta_v128 slot;
+        turbowasm_v128 slot = {0};
         uint32_t expected_f32 = UINT32_C(0x7fc01234), actual_f32;
         uint64_t expected_f64 = UINT64_C(0x7ff8000000001234), actual_f64;
         float f32;

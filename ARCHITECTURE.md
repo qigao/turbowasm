@@ -322,6 +322,35 @@ host/interpreted targets, long tail chains, GC, traps, fuel and allocation failu
 Rollback removes these four admission cases and their emitter together; Runtime
 interpreted behavior remains the compatibility baseline.
 
+### MIR vector call cells
+
+Vector parameters/results use the same private pointer-based entry ABI as scalar
+and reference tuples. Generated code transfers complete `turbowasm_v128` values
+between call cells and invocation-owned SIMD slots; no platform vector calling
+convention or MIR vector register type is required. Each slot owns its 128 bits
+and shape metadata together. Copies preserve metadata; SIMD-producing operations
+derive the result shape from the shared descriptor used by the interpreter.
+
+Vector locals occupy a bounded prefix of the slot frame, function result merge
+slots follow, and expression/control/call-result slots are allocated from the
+remaining validated budget. Local gets materialize new slots; local assignments,
+branches, calls and self-tail resets never alias mutable operand slots. Checked
+counts include wide result tuples, and the Runtime allocator/quota owns and frees
+the complete frame on success, trap, interruption or allocation failure. The
+single execution owner saves/restores the parent's slot frame across nested
+invocation; vectors contain no GC references, while mixed reference cells remain
+traced by the existing dispatcher source.
+
+Passing platform vectors by value would introduce another target-specific ABI;
+discarding shape metadata at call boundaries would diverge from Runtime values.
+The chosen copy boundary preserves the installed layout and existing direct,
+indirect and tail dispatch contracts, at the cost of bounded cell/slot copies.
+Validation includes vector locals and control merges, bit/shape preservation,
+mixed and wide tuples, host/interpreted/native callees, all tail forms, imported
+targets, GC/re-entry, fuel/traps and allocation failure. Rollback removes vector
+signature/local admission and marshalling together; existing helper-backed SIMD
+operations retain their supported subset.
+
 ## Component host values and resource ownership (approved design)
 
 Approved by the user on 2026-10-07. Composite host values, status-returning

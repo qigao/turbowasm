@@ -23,7 +23,7 @@ static cmeta_v128 *turbowasm_jit_simd_slot(
     if (context == NULL || context->simd_slots == NULL ||
         index < 0 || (uint64_t)index >= context->simd_slot_count)
         return NULL;
-    return &context->simd_slots[(uint32_t)index];
+    return &context->simd_slots[(uint32_t)index].bits;
 }
 
 static const cmeta_v128 *turbowasm_jit_simd_slot_const(
@@ -32,7 +32,7 @@ static const cmeta_v128 *turbowasm_jit_simd_slot_const(
     if (context == NULL || context->simd_slots == NULL ||
         index < 0 || (uint64_t)index >= context->simd_slot_count)
         return NULL;
-    return &context->simd_slots[(uint32_t)index];
+    return &context->simd_slots[(uint32_t)index].bits;
 }
 
 static int64_t turbowasm_jit_simd_status(
@@ -104,6 +104,7 @@ int64_t turbowasm_jit_simd_const(
     }
 
     cmeta_simd_v128_load(out, bytes);
+    context->simd_slots[out_slot].shape = TURBOWASM_V128_RAW;
     return (int64_t)TURBOWASM_OK;
 }
 
@@ -123,7 +124,28 @@ int64_t turbowasm_jit_simd_copy(
     }
 
     *out = *in;
+    context->simd_slots[out_slot].shape = context->simd_slots[in_slot].shape;
     return (int64_t)TURBOWASM_OK;
+}
+
+int64_t turbowasm_jit_simd_value_load(turbowasm_jit_invocation_context *context,
+    int64_t slot, const turbowasm_value *value) {
+    if (turbowasm_jit_simd_slot(context, slot) == NULL || value == NULL)
+        return turbowasm_jit_simd_status(context, TURBOWASM_INVALID_ARGUMENT, TURBOWASM_TRAP_NONE);
+    if (value->kind != TURBOWASM_VALUE_V128)
+        return turbowasm_jit_simd_status(context, TURBOWASM_TYPE_MISMATCH, TURBOWASM_TRAP_NONE);
+    context->simd_slots[slot] = value->as.v128;
+    return TURBOWASM_OK;
+}
+
+int64_t turbowasm_jit_simd_value_store(turbowasm_jit_invocation_context *context,
+    int64_t slot, turbowasm_value *value) {
+    if (turbowasm_jit_simd_slot(context, slot) == NULL || value == NULL)
+        return turbowasm_jit_simd_status(context, TURBOWASM_INVALID_ARGUMENT, TURBOWASM_TRAP_NONE);
+    *value = (turbowasm_value){0};
+    value->kind = TURBOWASM_VALUE_V128;
+    value->as.v128 = context->simd_slots[slot];
+    return TURBOWASM_OK;
 }
 
 int64_t turbowasm_jit_simd_splat_i64(
@@ -148,6 +170,7 @@ int64_t turbowasm_jit_simd_splat_i64(
             TURBOWASM_TRAP_NONE);
     }
 
+    context->simd_slots[out_slot].shape = descriptor->result_shape;
     return (int64_t)TURBOWASM_OK;
 }
 
@@ -177,6 +200,7 @@ int64_t turbowasm_jit_simd_splat_f32(
             context, TURBOWASM_UNSUPPORTED,
             TURBOWASM_TRAP_NONE);
 
+    context->simd_slots[out_slot].shape = descriptor->result_shape;
     return (int64_t)TURBOWASM_OK;
 }
 
@@ -206,6 +230,7 @@ int64_t turbowasm_jit_simd_splat_f64(
             context, TURBOWASM_UNSUPPORTED,
             TURBOWASM_TRAP_NONE);
 
+    context->simd_slots[out_slot].shape = descriptor->result_shape;
     return (int64_t)TURBOWASM_OK;
 }
 
@@ -361,6 +386,7 @@ int64_t turbowasm_jit_simd_op(
             context, TURBOWASM_UNSUPPORTED,
             TURBOWASM_TRAP_NONE);
 
+    context->simd_slots[out_slot].shape = descriptor->result_shape;
     return (int64_t)TURBOWASM_OK;
 }
 
@@ -457,6 +483,7 @@ int64_t turbowasm_jit_simd_memory(
                     : TURBOWASM_TRAP_NONE);
         }
         cmeta_simd_v128_load(value, memory);
+        context->simd_slots[slot].shape = TURBOWASM_V128_RAW;
         return (int64_t)TURBOWASM_OK;
     }
 
