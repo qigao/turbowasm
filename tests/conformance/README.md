@@ -49,13 +49,14 @@ Instrumented native executables and resumable coroutine stacks use an explicit
 8 MiB budget (`TURBOWASM_SANITIZER_STACK_BYTES`): MSVC's default executable stack
 was exhausted by ASan frames before the interpreter's Wasm call-depth trap.
 The ordinary build keeps its existing stack/depth policy.
-On Windows with the Salts 2.1.0 SDK, the complete ASan run passed 133/133 tests,
-including the Core 3.0 gates, GC lifecycle and optional CNet adapter tests.
+On Windows with the Salts 2.1.0 SDK, the complete ASan run at `609599d` passed
+134/134 tests in 182.39 seconds, including the Core 3.0 gates, GC lifecycle,
+scalar result/call tuples and optional CNet adapter tests.
 The earlier CNet timeout was a process-launch failure: its CTest `ENVIRONMENT`
 property split Windows `PATH` at semicolons and removed the ASan runtime DLL
 directory. `ENVIRONMENT_MODIFICATION` now prepends SDK paths while preserving
 the launch-time developer-shell environment. The existing adapter test passed
-in 0.14 seconds after the fix; the full regression completed in 231.22 seconds.
+in 0.14 seconds after the fix.
 The smaller `turbowasm_conformance_core3_references` test gives fast feedback on
 reference control, recursive types, bit operations and validation. Its success
 does not substitute for the full gate. `test_run_core.py` tests strict failure
@@ -109,15 +110,19 @@ before invoking its setup action; hosted runner tool updates cannot silently
 change that contract. Shared memories remain interpreter-only, independent of
 their address width.
 
-At revision `bade74d`, [native CI](https://github.com/qigao/turbowasm/actions/runs/37597104249)
+At revision `609599d`, [native CI](https://github.com/qigao/turbowasm/actions/runs/37599801722)
 passed all five jobs: Windows qualification and installed consumers, Linux
 qualification and installed consumers, Android build/installed consumers, and
-Linux/macOS MIR. Both MIR jobs passed 143/143 tests, including mandatory native
+Linux/macOS MIR. Both MIR jobs passed 145/145 tests, including mandatory native
 memory64 execution, mixed scalar arguments, four-argument calls, NaN payloads,
-negative zero and bounds traps. The separate
-[Core 3.0 memory64 differential gate](https://github.com/qigao/turbowasm/actions/runs/37597109803)
+negative zero and bounds traps. `scalar_results_test.c` additionally requires
+compiled callers for empty and mixed scalar result tuples, eight-result calls,
+function-label branches, self tail calls, nested compiled/interpreted calls,
+host re-entry, allocation failure/recovery and fuel/trap parity. The separate
+[Core 3.0 memory64 differential gate](https://github.com/qigao/turbowasm/actions/runs/37599807004)
 also passed. These results do not qualify the unimplemented native GC/table64,
-shared-memory/atomic, full exception or general multi-result paths.
+shared-memory/atomic, full exception, reference/vector call boundaries or general
+non-self tail-call paths.
 
 The local Windows build can execute Runtime/helper regressions, but cannot
 build MIR: the configured `mir-jit` vcpkg port supports Linux, macOS and Android.
