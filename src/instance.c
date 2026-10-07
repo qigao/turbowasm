@@ -149,7 +149,7 @@ static bool turbowasm_value_matches_type(
         (kind == TURBOWASM_VALUE_EXTERNREF && value->kind == TURBOWASM_VALUE_MANAGED_EXTERNREF));
 }
 
-static turbowasm_status turbowasm_reference_is_null(
+turbowasm_status turbowasm_reference_is_null(
     const turbowasm_value *value,
     bool *is_null) {
     switch (value->kind) {
@@ -267,14 +267,18 @@ turbowasm_status turbowasm_jit_request_tail_call(
     }
 
     for (index = 0u; index < argument_count; ++index) {
-        if (!turbowasm_value_matches_type(
-                &arguments[index], type->params[index])) {
+        if (!turbowasm_value_matches_semantic(context->instance,
+                &arguments[index], &type->param_semantics[index])) {
             context->call_status = TURBOWASM_TYPE_MISMATCH;
             context->call_trap = TURBOWASM_TRAP_NONE;
             return TURBOWASM_TYPE_MISMATCH;
         }
     }
 
+    /* Generated code has finished using its incoming argument view. Its rooted
+     * native cells own the outgoing values while tail storage may relocate. */
+    context->arguments = NULL;
+    context->argument_count = 0u;
     if (argument_count > TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS) {
         if (context->tail_storage == NULL) {
             context->call_status = TURBOWASM_INVALID_ARGUMENT;
@@ -301,7 +305,7 @@ turbowasm_status turbowasm_jit_request_tail_call(
     return TURBOWASM_OK;
 }
 
-static bool turbowasm_zero_value(uint8_t type, turbowasm_value *out) {
+bool turbowasm_zero_value(uint8_t type, turbowasm_value *out) {
     turbowasm_value_kind kind;
 
     if (out == NULL)
@@ -6080,6 +6084,19 @@ static void turbowasm_jit_artifact_try_store(
     turbowasm_rt_free(bytes);
 }
 
+static void turbowasm_jit_trace_frame(turbowasm_store_impl *store, void *opaque) {
+    const turbowasm_jit_invocation_context *context = opaque;
+    turbowasm_gc_mark_values(store, context->arguments, context->argument_count);
+    turbowasm_gc_mark_values(store, context->native_values, context->native_value_count);
+    turbowasm_gc_mark_values(store, context->results, context->result_count);
+    if (context->tail_call_pending) {
+        const turbowasm_value *values = context->tail_argument_count >
+            TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS
+            ? context->tail_storage->values : context->tail_arguments;
+        turbowasm_gc_mark_values(store, values, context->tail_argument_count);
+    }
+}
+
 static turbowasm_status turbowasm_dispatch_function(
     turbowasm_instance_impl *instance,
     uint32_t function_index,
@@ -6097,11 +6114,25 @@ static turbowasm_status turbowasm_dispatch_function(
     turbowasm_value tail_arguments[TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS];
     turbowasm_value_stack tail_storage = {0};
     turbowasm_status status;
+    turbowasm_jit_invocation_context context = {
+        instance, execution, depth, TURBOWASM_OK, TURBOWASM_TRAP_NONE};
+    turbowasm_gc_source source = {NULL, execution, &context, turbowasm_jit_trace_frame};
+    bool rooted = false;
 
     if (instance == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+    if (depth >= TURBOWASM_EXEC_MAX_CALL_DEPTH) {
+        *result_count = 0u;
+        *trap = TURBOWASM_TRAP_CALL_STACK_EXHAUSTED;
+        return TURBOWASM_TRAPPED;
+    }
 
 dispatch_again:
+    context.arguments = arguments;
+    context.argument_count = argument_count;
+    context.results = results;
+    context.result_count = 0u;
+    context.tail_call_pending = false;
     if (!instance->jit_backend_attached ||
         instance->jit_functions == NULL ||
         function_index >= instance->jit_function_count ||
@@ -6174,11 +6205,14 @@ dispatch_again:
 
 invoke_compiled:
     {
-        turbowasm_jit_invocation_context context = {
-            instance, execution, depth,
-            TURBOWASM_OK, TURBOWASM_TRAP_NONE
-        };
-
+        if (!rooted && instance->store != NULL) {
+            status = turbowasm_gc_source_add(instance->store, &source);
+            if (status != TURBOWASM_OK)
+                goto done;
+            rooted = true;
+        }
+        context.call_status = TURBOWASM_OK;
+        context.call_trap = TURBOWASM_TRAP_NONE;
         context.tail_storage = &tail_storage;
         status = instance->jit_backend.invoke(
             &entry->compiled,
@@ -6223,11 +6257,20 @@ invoke_compiled:
     }
 
 interpret:
+    if (rooted) {
+        turbowasm_gc_source_remove(instance->store, &source);
+        rooted = false;
+    }
     status = turbowasm_exec_function(instance, function_index,
         arguments, argument_count, results, result_capacity,
         result_count, trap, execution, depth);
 done:
+    context.arguments = NULL;
+    context.argument_count = 0u;
+    context.tail_call_pending = false;
     turbowasm_rt_free(tail_storage.values);
+    if (rooted)
+        turbowasm_gc_source_remove(instance->store, &source);
     return status;
 }
 

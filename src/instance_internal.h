@@ -237,11 +237,22 @@ typedef struct turbowasm_jit_invocation_context {
     /* Larger pending tuples belong to the enclosing Runtime dispatcher. */
     struct turbowasm_value_stack *tail_storage;
 
+    /* Borrowed views traced by the enclosing dispatcher's store source. */
+    const turbowasm_value *arguments;
+    size_t argument_count;
+    turbowasm_value *results;
+    size_t result_count;
+    turbowasm_value *native_values;
+    size_t native_value_count;
+
     /* Invocation-local v128 temporary frame used by helper-backed JIT
      * lowering. Nested compiled calls save/replace/restore this frame. */
     cmeta_v128 *simd_slots;
     uint32_t simd_slot_count;
 } turbowasm_jit_invocation_context;
+
+bool turbowasm_zero_value(uint8_t type, turbowasm_value *out);
+turbowasm_status turbowasm_reference_is_null(const turbowasm_value *value, bool *is_null);
 
 bool turbowasm_value_matches_semantic(turbowasm_instance_impl *instance,
     const turbowasm_value *value,const turbowasm_validation_value_type *type);

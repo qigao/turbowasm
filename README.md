@@ -53,12 +53,13 @@ atomic operations, wait/notify, imports and guarded growth. MIR admits unshared
 memory64 modules and lowers scalar load/store, size/grow, bulk memory and its
 existing SIMD memory subset through Runtime helpers. Shared memory32/memory64
 also use these helpers, including atomic load/store, RMW, compare-exchange,
-fence and interruptible wait/notify. The private scalar entry
-accepts mixed scalar parameters, more than two arguments, and zero or multiple
-scalar results. Direct calls and direct tail calls support the same scalar tuples
+fence and interruptible wait/notify. The private entry
+accepts mixed scalar/reference parameters and zero or multiple results.
+Direct calls and direct tail calls support these tuples
 through Runtime, including interpreted callees and host imports. Tail dispatch
-reuses the logical call depth. Instruction admission still excludes reference/vector
-call signatures and indirect tail calls. Each instance/backend retains one execution owner,
+reuses the logical call depth. Reference locals, control merges and call scratch
+use complete value cells rooted in the owning store. Instruction admission still
+excludes vector call signatures and indirect tail calls. Each instance/backend retains one execution owner,
 while distinct instances can import the same shared backing. Native MIR
 memory64 verification passed the Linux and macOS MIR test profiles; see the
 [qualification record](tests/conformance/README.md). The Windows MIR dependency
@@ -66,10 +67,10 @@ is not supported. The synchronous Component Model subset is exposed separately
 through the optional `TurboWasm::Component` façade; it does not enter the
 `TurboWasm::Runtime` public ABI. WASI 0.2 remains a separate capability layer
 tracked by Runtime v2 (#301). GC and all table64 operations execute in the
-interpreter. MIR also lowers table.size, table.init, table.copy and elem.drop
+interpreter. MIR also lowers table.size, table.init, table.copy, elem.drop and
+table.get/set/grow/fill
 through Runtime for table32/table64, including mixed-width and imported tables.
-Native reference operands (table.get/set/grow/fill) and GC instruction lowering
-remain incomplete.
+Native GC instruction lowering and general indirect calls remain incomplete.
 
 ## Core 3.0 and managed references
 

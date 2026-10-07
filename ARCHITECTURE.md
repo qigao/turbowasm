@@ -248,14 +248,47 @@ failure, and TABLE_OUT_OF_BOUNDS traps retain the interpreter contract. Each
 instruction's existing checkpoint runs before the helper can mutate storage.
 There are no new buffers, retained references, locks or public APIs in this boundary.
 
-The first admitted operations are size, init, copy and element drop. get/set/grow/
-fill still require the planned native reference-value frame and remain rejected
-by MIR admission until that frame is implemented and rooted. This is an explicit
-native subset, not a claim of complete table64 lowering. Tests compare table
+The first admitted operations were size, init, copy and element drop. The managed
+reference frame below adds get/set/grow/fill using the same Runtime backing.
+This does not admit general indirect calls or GC instructions. Tests compare table
 contents and drop state as well as status/results, including table32/table64
 mixing, imported backing, overlap, full-width bounds, fuel and allocation failure.
 Rollback removes table decoder admission and emission with the helper registration;
 Runtime table ownership and the public API are unchanged.
+
+### MIR managed reference frame
+
+Native references use complete `turbowasm_value` cells, never unrooted integer
+handles or pointers to temporary operand values. Each invocation owns separate
+local and register cells plus its existing call argument/result scratch. Counts
+derive from validated locals, code and merge-register budgets; checked allocation
+uses the Runtime allocator and quota. Scalar-only functions keep their existing
+register path. Copies materialize independent cells at local assignment, control
+merges and calls, so loop iteration cannot mutate a previously saved reference.
+Unused initialized cells may conservatively retain a reference until overwrite
+or frame exit; retained storage is bounded by the compiled function's cell budget.
+
+The Runtime dispatcher registers one source with the owning store while compiled
+code is active. It traces current arguments, the native cell array, pending tail
+arguments and completed results. The source is owned by the current execution for
+coroutine teardown. Native scratch is unpublished before freeing it; successful
+outputs and tail handoffs remain visible to that source during cleanup. Before
+entering the interpreter the dispatcher removes its source and the interpreter
+installs its ordinary frame source before allocating. Nested calls have separate
+frames; tail chains reuse one dispatcher source. All access follows the store's
+single-owner thread contract, and root-budget exhaustion returns OUT_OF_MEMORY.
+
+The validated semantic types remain authoritative at entry and call boundaries:
+nullability, store/generation identity and nominal function/GC subtyping must be
+checked, not just the carrier byte. Reference-bearing table operations continue
+to use Runtime's semantic checks and shared backing. No installed type, lifetime,
+configuration or binary format changes. Tests must cover native locals/branches,
+direct and tail calls, host-triggered collection, fuel/interruption, root and allocation
+limits, invalid reference arguments and table32/table64 reference operations.
+Public resumable executions continue to use the interpreter; this increment does
+not admit native frames into the public yield/resume path.
+Rollback removes reference admission and emission together with frame allocation
+and root registration; it must not leave admitted code with untraced cells.
 
 ## Component host values and resource ownership (approved design)
 

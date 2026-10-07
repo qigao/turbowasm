@@ -1,5 +1,7 @@
 #include "jit_table_helper.h"
 
+#include <string.h>
+
 static uint64_t table_address(const turbowasm_validation_context *validation,
     uint32_t table, int64_t bits) {
     return validation->tables[table].limits.table64
@@ -8,11 +10,14 @@ static uint64_t table_address(const turbowasm_validation_context *validation,
 
 int64_t turbowasm_jit_table(
     turbowasm_jit_invocation_context *context, int64_t opcode,
-    int64_t table, int64_t secondary, int64_t a, int64_t b, int64_t c) {
+    int64_t table, int64_t secondary, int64_t a, int64_t b, int64_t c,
+    turbowasm_value *reference) {
     turbowasm_status status = TURBOWASM_INVALID_ARGUMENT;
     const turbowasm_module_impl *module;
     turbowasm_instance_impl *instance;
     uint32_t size = 0u;
+    uint64_t result = 0u;
+    int64_t result_bits;
     if (context == NULL)
         return 0;
     instance = context->instance;
@@ -28,7 +33,28 @@ int64_t turbowasm_jit_table(
     }
     if ((uint64_t)table >= module->validation.table_count)
         goto done;
+    if ((opcode == TURBOWASM_JIT_TABLE_GET || opcode == TURBOWASM_JIT_TABLE_SET ||
+         opcode == TURBOWASM_JIT_TABLE_GROW || opcode == TURBOWASM_JIT_TABLE_FILL) &&
+        reference == NULL)
+        goto done;
     switch (opcode) {
+        case TURBOWASM_JIT_TABLE_GET:
+            status = turbowasm_instance_table_get_value(instance, (uint32_t)table,
+                table_address(&module->validation, (uint32_t)table, a), reference);
+            break;
+        case TURBOWASM_JIT_TABLE_SET:
+            status = turbowasm_instance_table_set_value(instance, (uint32_t)table,
+                table_address(&module->validation, (uint32_t)table, a), *reference);
+            break;
+        case TURBOWASM_JIT_TABLE_GROW:
+            status = turbowasm_instance_table_grow_wide(instance, (uint32_t)table,
+                *reference, table_address(&module->validation, (uint32_t)table, b), &result);
+            break;
+        case TURBOWASM_JIT_TABLE_FILL:
+            status = turbowasm_instance_table_fill(instance, (uint32_t)table,
+                table_address(&module->validation, (uint32_t)table, a), *reference,
+                table_address(&module->validation, (uint32_t)table, c));
+            break;
         case TURBOWASM_JIT_TABLE_INIT:
             status = turbowasm_instance_table_init(instance, (uint32_t)secondary,
                 (uint32_t)table, table_address(&module->validation, (uint32_t)table, a),
@@ -49,6 +75,7 @@ int64_t turbowasm_jit_table(
         }
         case TURBOWASM_JIT_TABLE_SIZE:
             status = turbowasm_instance_table_size(instance, (uint32_t)table, &size);
+            result = size;
             break;
         default:
             status = TURBOWASM_UNSUPPORTED;
@@ -58,5 +85,6 @@ done:
     context->call_status = status;
     context->call_trap = status == TURBOWASM_TRAPPED
         ? TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS : TURBOWASM_TRAP_NONE;
-    return (int64_t)size;
+    memcpy(&result_bits, &result, sizeof(result_bits));
+    return result_bits;
 }

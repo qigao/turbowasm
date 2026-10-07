@@ -58,6 +58,7 @@ add_library(turbowasm
   src/execution.c
   src/instance.c
   src/instance_state.c
+  src/jit_reference_helper.c
   src/jit_table_helper.c
   src/jit_memory_helper.c
   src/jit_simd_helper.c

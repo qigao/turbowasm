@@ -262,19 +262,19 @@ spec("native table storage") {
     it("rejects invalid helper identities and preserves unsigned table64 addresses") {
         turbowasm_jit_invocation_context context = {0};
         context.instance = instance.impl;
-        check_equal(turbowasm_jit_table(&context, TURBOWASM_JIT_TABLE_SIZE, 0, 0, 0, 0, 0),
+        check_equal(turbowasm_jit_table(&context, TURBOWASM_JIT_TABLE_SIZE, 0, 0, 0, 0, 0, NULL),
             (int64_t)INITIAL_SIZE);
         check_equal(context.call_status, TURBOWASM_OK);
         turbowasm_jit_table(&context, TURBOWASM_JIT_TABLE_COPY, 0, 0,
-            INT64_MIN, 0, 1);
+            INT64_MIN, 0, 1, NULL);
         check_equal(context.call_status, TURBOWASM_TRAPPED);
         check_equal(context.call_trap, TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS);
-        turbowasm_jit_table(&context, TURBOWASM_JIT_TABLE_COPY, 0, TABLE_COUNT, 0, 0, 0);
+        turbowasm_jit_table(&context, TURBOWASM_JIT_TABLE_COPY, 0, TABLE_COUNT, 0, 0, 0, NULL);
         check_equal(context.call_status, TURBOWASM_INVALID_ARGUMENT);
         check_equal(context.call_trap, TURBOWASM_TRAP_NONE);
-        turbowasm_jit_table(&context, TURBOWASM_JIT_TABLE_SIZE, -1, 0, 0, 0, 0);
+        turbowasm_jit_table(&context, TURBOWASM_JIT_TABLE_SIZE, -1, 0, 0, 0, 0, NULL);
         check_equal(context.call_status, TURBOWASM_INVALID_ARGUMENT);
-        turbowasm_jit_table(&context, TURBOWASM_JIT_TABLE_SIZE, INT64_C(1) << 32, 0, 0, 0, 0);
+        turbowasm_jit_table(&context, TURBOWASM_JIT_TABLE_SIZE, INT64_C(1) << 32, 0, 0, 0, 0, NULL);
         check_equal(context.call_status, TURBOWASM_INVALID_ARGUMENT);
         compare_tables();
     }
@@ -301,7 +301,7 @@ spec("native table storage") {
             status = turbowasm_instance_invoke(&reference, steps[i].function,
                 argc == 0u ? NULL : args, argc, NULL, 0u, &count, &trap);
             turbowasm_jit_table(&context, steps[i].opcode, 0, 0,
-                steps[i].a, steps[i].b, steps[i].c);
+                steps[i].a, steps[i].b, steps[i].c, NULL);
             check_equal(context.call_status, status);
             check_equal(context.call_trap, trap);
             check_equal(count, (size_t)0);
