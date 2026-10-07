@@ -1966,6 +1966,13 @@ target_include_directories(turbowasm_resumable_native_test PRIVATE "${PROJECT_SO
 target_link_libraries(turbowasm_resumable_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
 add_test(NAME turbowasm_resumable_native_test COMMAND turbowasm_resumable_native_test)
 
+if(TARGET TurboWasm::Component)
+  add_executable(turbowasm_component_encoding_test component_encoding_test.c)
+  target_include_directories(turbowasm_component_encoding_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_component_encoding_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  add_test(NAME turbowasm_component_encoding_test COMMAND turbowasm_component_encoding_test)
+endif()
+
 add_executable(turbowasm_gc_native_test gc_native_test.c)
 target_include_directories(turbowasm_gc_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(turbowasm_gc_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)

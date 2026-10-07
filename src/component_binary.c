@@ -1261,16 +1261,13 @@ static turbowasm_status decode_canon_section(
 
                 switch (option) {
                     case 0x00u: /* string-encoding=utf8 */
+                    case 0x01u: /* utf16 */
+                    case 0x02u: /* latin1+utf16 */
                         if (string_encoding_seen)
                             return TURBOWASM_MALFORMED_MODULE;
                         string_encoding_seen = true;
-                        lift.string_encoding =
-                            TURBOWASM_COMPONENT_STRING_UTF8;
+                        lift.string_encoding = (turbowasm_component_string_encoding)option;
                         break;
-
-                    case 0x01u: /* utf16 */
-                    case 0x02u: /* latin1+utf16 */
-                        return TURBOWASM_UNSUPPORTED;
 
                     case 0x03u: /* memory */
                         if (lift.has_memory ||
@@ -1351,16 +1348,13 @@ static turbowasm_status decode_canon_section(
 
                 switch (option) {
                     case 0x00u: /* string-encoding=utf8 */
+                    case 0x01u: /* utf16 */
+                    case 0x02u: /* latin1+utf16 */
                         if (string_encoding_seen)
                             return TURBOWASM_MALFORMED_MODULE;
                         string_encoding_seen = true;
-                        lower.string_encoding =
-                            TURBOWASM_COMPONENT_STRING_UTF8;
+                        lower.string_encoding = (turbowasm_component_string_encoding)option;
                         break;
-
-                    case 0x01u: /* utf16 */
-                    case 0x02u: /* latin1+utf16 */
-                        return TURBOWASM_UNSUPPORTED;
 
                     case 0x03u: /* memory */
                         if (lower.has_memory ||

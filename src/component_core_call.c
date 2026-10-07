@@ -1,4 +1,5 @@
 #include "component_core_call.h"
+#include "component_string.h"
 
 #include "instance_internal.h"
 #include "module_internal.h"
@@ -582,7 +583,7 @@ static turbowasm_status validate_memory_binding(
     if (memory == NULL ||
         memory->instance == NULL ||
         memory->instance->impl == NULL ||
-        memory->string_encoding != TURBOWASM_COMPONENT_STRING_UTF8)
+        !turbowasm_component_string_encoding_valid(memory->string_encoding))
         return TURBOWASM_INVALID_ARGUMENT;
 
     /*

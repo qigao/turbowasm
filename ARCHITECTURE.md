@@ -607,6 +607,43 @@ with retained-owner bookkeeping; no persisted data format requires migration.
 The imported-resource table routing and consuming canonical destructors must roll
 back together; mixing raw provider handles with canonical handles is invalid.
 
+## Canonical string encodings
+
+The [pinned Canonical ABI](https://github.com/WebAssembly/component-model/blob/a25fc0b372dd21f07f0242c46e98bd0f1ea0c0e1/design/mvp/CanonicalABI.md#storing)
+defines UTF-8, UTF-16LE and tagged Latin-1/UTF-16 strings. Binary canonical options
+select the encoding; the existing canonical value boundary owns conversion.
+Host values remain UTF-8. Private strings additionally retain their source
+encoding, so forwarding a lifted string preserves source-dependent guest realloc
+behavior. Source code-unit counts are derived from the immutable UTF-8 value,
+not maintained as a second independently mutable length.
+
+The private string codec validates Unicode and lengths before lowering. It
+preserves the canonical allocation/growth/shrink sequence, source/destination
+alignment and pointer-width tag. Guest realloc can move/grow memory; no guest
+view survives a callback. Lift takes a bounded owned copy before conversion, so
+the result never borrows guest memory. Host-side temporary/output buffers use
+the existing Runtime allocator and limits, with one cleanup path. Source byte
+length is bounded by the canonical string limit; transcoded storage and guest
+allocation sizes use checked arithmetic. Unicode decoding and conversion take
+O(n) time and bounded O(n) owned storage. Access is single-owner-threaded.
+
+Available Salts string APIs validate/iterate UTF-8 but do not supply the required
+UTF-16LE/tagged canonical allocator protocol. Adding a general encoding library
+would not replace that protocol. The codec therefore factors the existing
+canonical UTF-8 validation into a scalar decoder and adds the narrowly scoped
+UTF-16/Latin-1 adapter; it introduces no dependency, general string container or
+installed type. Invalid host strings return INVALID_ARGUMENT, malformed guest
+strings/pointers trap, and allocator errors propagate. Failed lowering does not
+publish a pointer/length tuple; guest allocations and realloc side effects are
+not rolled back. Flat, indirect and nested composite values share this codec.
+
+Validation covers every source/destination encoding pair on memory32/memory64,
+Unicode boundaries and embedded NUL, malformed surrogates/UTF-8, tagged lengths,
+alignment/bounds, moving realloc with exact callback traces, allocation failure,
+and loaded components using both canonical lift and lower options. Public host
+layouts remain unchanged. Rollback must revert option admission and codec use
+together so an admitted encoding cannot silently take a UTF-8 path.
+
 ## Reusable compiled-artifact policy
 
 Validated-module artifacts and compiled-function artifacts are separate layers.

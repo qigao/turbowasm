@@ -1,4 +1,5 @@
 #include "component_canonical.h"
+#include "component_string.h"
 
 #include "instance_internal.h"
 #include "module_internal.h"
@@ -12,8 +13,6 @@ enum {
     TURBOWASM_COMPONENT_CANONICAL_MAX_DEPTH = 64u
 };
 
-#define TURBOWASM_COMPONENT_MAX_STRING_BYTE_LENGTH \
-    (UINT64_C(1) << 28u) - UINT64_C(1)
 #define TURBOWASM_COMPONENT_MAX_LIST_BYTE_LENGTH \
     (UINT64_C(1) << 28u) - UINT64_C(1)
 
@@ -763,85 +762,6 @@ static bool unicode_scalar_valid(uint32_t value) {
              value <= UINT32_C(0xdfff));
 }
 
-static bool utf8_bytes_valid(const uint8_t *bytes, size_t size) {
-    size_t i = 0u;
-
-    if (size != 0u && bytes == NULL)
-        return false;
-
-    while (i < size) {
-        uint8_t a = bytes[i++];
-
-        if (a < UINT8_C(0x80))
-            continue;
-        if (a >= UINT8_C(0xc2) && a <= UINT8_C(0xdf)) {
-            if (i >= size ||
-                (bytes[i] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            ++i;
-            continue;
-        }
-        if (a == UINT8_C(0xe0)) {
-            if (i + 1u >= size ||
-                bytes[i] < UINT8_C(0xa0) ||
-                bytes[i] > UINT8_C(0xbf) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 2u;
-            continue;
-        }
-        if ((a >= UINT8_C(0xe1) && a <= UINT8_C(0xec)) ||
-            (a >= UINT8_C(0xee) && a <= UINT8_C(0xef))) {
-            if (i + 1u >= size ||
-                (bytes[i] & UINT8_C(0xc0)) != UINT8_C(0x80) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 2u;
-            continue;
-        }
-        if (a == UINT8_C(0xed)) {
-            if (i + 1u >= size ||
-                bytes[i] < UINT8_C(0x80) ||
-                bytes[i] > UINT8_C(0x9f) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 2u;
-            continue;
-        }
-        if (a == UINT8_C(0xf0)) {
-            if (i + 2u >= size ||
-                bytes[i] < UINT8_C(0x90) ||
-                bytes[i] > UINT8_C(0xbf) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80) ||
-                (bytes[i + 2u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 3u;
-            continue;
-        }
-        if (a >= UINT8_C(0xf1) && a <= UINT8_C(0xf3)) {
-            if (i + 2u >= size ||
-                (bytes[i] & UINT8_C(0xc0)) != UINT8_C(0x80) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80) ||
-                (bytes[i + 2u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 3u;
-            continue;
-        }
-        if (a == UINT8_C(0xf4)) {
-            if (i + 2u >= size ||
-                bytes[i] < UINT8_C(0x80) ||
-                bytes[i] > UINT8_C(0x8f) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80) ||
-                (bytes[i + 2u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 3u;
-            continue;
-        }
-        return false;
-    }
-    return true;
-}
-
 static uint64_t read_le(const uint8_t *bytes, size_t width) {
     uint64_t value = 0u;
     size_t i;
@@ -865,7 +785,7 @@ static turbowasm_status canonical_memory_validate(
     if (memory == NULL || memory->instance == NULL ||
         memory->instance->impl == NULL || out_instance == NULL ||
         !pointer_type_valid(memory->pointer_type) ||
-        memory->string_encoding != TURBOWASM_COMPONENT_STRING_UTF8)
+        !turbowasm_component_string_encoding_valid(memory->string_encoding))
         return TURBOWASM_INVALID_ARGUMENT;
 
     module = turbowasm_instance_module(memory->instance);
@@ -1362,43 +1282,15 @@ static turbowasm_status lift_string_range(
     uint64_t pointer,
     uint64_t length,
     turbowasm_component_value *out) {
+    turbowasm_component_owned_string string = {0};
     turbowasm_status status;
-    uint8_t *copy = NULL;
-
-    if (length > TURBOWASM_COMPONENT_MAX_STRING_BYTE_LENGTH ||
-        length > (uint64_t)SIZE_MAX)
-        return TURBOWASM_TRAPPED;
-
-    {
-        uint8_t *range = NULL;
-        status = turbowasm_instance_memory_bounds(
-            instance, memory->memory_index,
-            pointer, 0u, (size_t)length, &range);
-        if (status != TURBOWASM_OK)
-            return status;
-    }
-
-    if (length != 0u) {
-        copy = (uint8_t *)turbowasm_rt_malloc((size_t)length);
-        if (copy == NULL)
-            return TURBOWASM_OUT_OF_MEMORY;
-        status = read_memory(
-            instance, memory->memory_index,
-            pointer, copy, (size_t)length);
-        if (status != TURBOWASM_OK) {
-            turbowasm_rt_free(copy);
-            return status;
-        }
-        if (!utf8_bytes_valid(copy, (size_t)length)) {
-            turbowasm_rt_free(copy);
-            return TURBOWASM_TRAPPED;
-        }
-    }
-
+    (void)instance;
+    status = turbowasm_component_string_lift(memory, pointer, length, &string);
+    if (status != TURBOWASM_OK)
+        return status;
     memset(out, 0, sizeof(*out));
     out->kind = TURBOWASM_COMPONENT_TYPE_STRING;
-    out->as.string.data = copy;
-    out->as.string.size = (size_t)length;
+    out->as.string = string;
     return TURBOWASM_OK;
 }
 
@@ -1432,34 +1324,10 @@ static turbowasm_status lower_string_range(
     const turbowasm_component_value *value,
     uint64_t *out_pointer,
     uint64_t *out_length) {
-    uint64_t pointer = 0u;
-    turbowasm_status status;
-
-    if (value == NULL || out_pointer == NULL || out_length == NULL ||
-        value->kind != TURBOWASM_COMPONENT_TYPE_STRING)
+    (void)instance;
+    if (value == NULL || value->kind != TURBOWASM_COMPONENT_TYPE_STRING)
         return TURBOWASM_TYPE_MISMATCH;
-    if (value->as.string.size >
-            TURBOWASM_COMPONENT_MAX_STRING_BYTE_LENGTH ||
-        !utf8_bytes_valid(
-            value->as.string.data, value->as.string.size))
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    status = guest_allocate(
-        memory, 1u, (uint64_t)value->as.string.size, &pointer);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    if (value->as.string.size != 0u) {
-        status = write_memory(
-            instance, memory->memory_index, pointer,
-            value->as.string.data, value->as.string.size);
-        if (status != TURBOWASM_OK)
-            return status;
-    }
-
-    *out_pointer = pointer;
-    *out_length = (uint64_t)value->as.string.size;
-    return TURBOWASM_OK;
+    return turbowasm_component_string_lower(memory, &value->as.string, out_pointer, out_length);
 }
 
 static turbowasm_status lower_string(
@@ -3290,9 +3158,7 @@ static turbowasm_status validate_host_value(
     }
     switch (kind) {
         case TURBOWASM_COMPONENT_TYPE_STRING:
-            return value->as.string.size <= TURBOWASM_COMPONENT_MAX_STRING_BYTE_LENGTH &&
-                utf8_bytes_valid(value->as.string.data, value->as.string.size)
-                ? TURBOWASM_OK : TURBOWASM_INVALID_ARGUMENT;
+            return turbowasm_component_string_validate(&value->as.string);
         case TURBOWASM_COMPONENT_TYPE_LIST:
             sequence = &value->as.list;
             count = sequence->count;

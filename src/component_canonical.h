@@ -62,15 +62,26 @@ typedef struct turbowasm_component_flat_signature {
 } turbowasm_component_flat_signature;
 
 typedef enum turbowasm_component_string_encoding {
-    TURBOWASM_COMPONENT_STRING_UTF8 = 0
+    TURBOWASM_COMPONENT_STRING_UTF8 = 0,
+    TURBOWASM_COMPONENT_STRING_UTF16,
+    TURBOWASM_COMPONENT_STRING_LATIN1_UTF16
 } turbowasm_component_string_encoding;
 
 typedef struct turbowasm_component_value turbowasm_component_value;
 
-typedef struct turbowasm_component_owned_bytes {
+typedef enum turbowasm_component_string_origin {
+    TURBOWASM_COMPONENT_STRING_ORIGIN_UTF8 = 0,
+    TURBOWASM_COMPONENT_STRING_ORIGIN_UTF16,
+    TURBOWASM_COMPONENT_STRING_ORIGIN_LATIN1,
+    TURBOWASM_COMPONENT_STRING_ORIGIN_COMPACT_UTF16
+} turbowasm_component_string_origin;
+
+typedef struct turbowasm_component_owned_string {
     uint8_t *data;
     size_t size;
-} turbowasm_component_owned_bytes;
+    /* Bytes are always UTF-8; origin preserves the canonical realloc protocol. */
+    turbowasm_component_string_origin origin;
+} turbowasm_component_owned_string;
 
 typedef struct turbowasm_component_value_list {
     turbowasm_component_value *items;
@@ -99,7 +110,7 @@ struct turbowasm_component_value {
         float f32;
         double f64;
         uint32_t character;
-        turbowasm_component_owned_bytes string;
+        turbowasm_component_owned_string string;
         turbowasm_component_value_list list;
         turbowasm_component_value_list record;
         turbowasm_component_value_list tuple;
