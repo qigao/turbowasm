@@ -393,3 +393,42 @@ ctest --preset win-core3-asan-user -R "simd_native|jit_simd_helper|vector_calls|
 This qualifies instruction admission through Runtime helpers, not platform SIMD
 register generation or full native Core 3.0. Native GC/EH, remaining reference
 control/globals and resumable native execution remain separate work.
+
+## MIR globals and nullable-reference control
+
+Implementation `422ad86` admits `global.get/set`, `br_on_null`,
+`br_on_non_null` and `unreachable` in the structured MIR backend. Global access
+uses Runtime accessors and complete value cells, including imported aliases,
+vector shape, managed externrefs and function owners. Nullable branches reuse
+the existing taken-edge merge assignments. Traps and mutations follow each
+instruction's fuel checkpoint.
+
+The extended `reference_native_test.c` requires compiled functions in its MIR
+variant. It compares both branch outcomes at block/function/loop targets against
+the interpreter and checks explicit expected results. Global coverage includes
+scalar bit patterns, vector shape, reference carriers, provider/consumer
+mutation, collection after native writes, rejected immutable/wrong-type/foreign-
+store writes and mutation ordering across all tested fuel boundaries. Reachable
+and untaken `unreachable` paths verify trap and fuel priority. The fixture binaries
+are generated and validated by pinned wasm-tools 1.261.0.
+
+Windows ASan passed the three focused tests in 0.40 seconds and all 145 tests in
+203.53 seconds, including both Core 3.0 gates. The
+[native CI run](https://github.com/qigao/turbowasm/actions/runs/37635567464)
+at `422ad86` passed all five jobs:
+
+- Linux MIR: 164/164 tests, 1.98 seconds.
+- macOS arm64 MIR: 164/164 tests, 2.80 seconds.
+- Windows qualification: 143/143 tests; installed package: 16/16.
+- Linux qualification: 144/144 tests; installed package: 17/17.
+- Android arm64: cross-build and installed consumer build; no device execution.
+
+```powershell
+cmake --build --preset win-core3-asan-user
+ctest --preset win-core3-asan-user -R "reference_native|vector_calls|scalar_results" --output-on-failure
+```
+
+This closes the globals and nullable-reference control gaps. Native GC instructions
+(including cast branches), EH and resumable native execution remain incomplete.
+Component encoding/post-return/async and broader WASI 0.2 coverage remain separate
+work; these test counts do not qualify those features.

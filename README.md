@@ -77,6 +77,10 @@ table.get/set/grow/fill
 through Runtime for table32/table64, including mixed-width and imported tables.
 Native GC instruction lowering remains incomplete.
 
+MIR also executes scalar/vector/reference global reads and writes through Runtime,
+including imported globals, nullable-reference branches and `unreachable` traps.
+Provider state, reference owners and GC roots follow the same Runtime contracts.
+
 MIR admits the complete helper-backed SIMD instruction set, including shuffle,
 lane extraction/replacement, extending/splat/zero loads and lane loads/stores.
 Immediate SIMD operations reuse Runtime's validated instruction semantics; this
