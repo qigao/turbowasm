@@ -842,3 +842,35 @@ cases also passed with the complete codec target: 14 cases, 630 assertions in
 These are private endpoint-value codecs, not guest stream/future read/write
 buffer execution. Guest buffer rendezvous, canonical async instruction bindings,
 task scheduling and public host lifetime/transfer APIs remain under implementation.
+At `325e6dc`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37669417367)
+passed all five jobs, including Windows, ordinary Linux, Android cross-build,
+Linux MIR (186/186 in 1.21 seconds) and macOS arm64 MIR (186/186 in 1.95 seconds).
+
+## Private guest and host transfer buffers
+
+Endpoint rendezvous now copies between host value arrays and checked guest
+regions under memory32 and memory64. Guest reads lift the whole batch before
+any destination write, including overlapping numeric regions. Guest writes
+reuse canonical encoding and explicit ownership commit/rollback hooks. Conversion
+callbacks guard both endpoints against reentrant mutation, and no guest memory
+pointer survives realloc or memory growth. Copy failure terminates both operations;
+error delivery releases their buffer borrows without publishing a successful event.
+
+`component_buffer_test.c` covers all four host/guest source/destination combinations,
+both arrival orders and memory widths, overlapping regions, range admission,
+unit/zero-length copies, coalesced progress, cancellation before destructive lift,
+UTF-8/UTF-16 conversion across realloc and growth, snapshot allocation failure,
+nested endpoint batch commit/rollback, and actual owned resource transfer. It also
+checks failed destination lowering and failed commit after destructive guest reads:
+source handles stay consumed, destination reservations are removed, and temporary
+owners close exactly once. The async type tests distinguish an endpoint handle's
+codec requirements from those of its future payload. Fixtures track all Runtime
+allocations through cleanup.
+
+Windows ASan passed the related 58/58 targets in 2.96 seconds. After adding the
+destructive-read failure and type-feature cases, all seven focused targets passed
+in 0.28 seconds, with production behavior unchanged since the broader regression.
+The buffers and callbacks remain private borrowed objects. Canonical async guest
+bindings, task scheduling, and retained public host lifetime/transfer APIs still
+need implementation and end-to-end qualification; these tests do not qualify that
+complete surface.

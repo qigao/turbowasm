@@ -272,6 +272,13 @@ set_target_properties(turbowasm_component_endpoint_codec_test PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 add_test(NAME turbowasm_component_endpoint_codec_test COMMAND turbowasm_component_endpoint_codec_test)
 
+add_executable(turbowasm_component_buffer_test component_buffer_test.c)
+target_link_libraries(turbowasm_component_buffer_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_buffer_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_buffer_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_buffer_test COMMAND turbowasm_component_buffer_test)
+
 if(TARGET turbowasm_wasi02_core)
   add_executable(turbowasm_wasi02_descriptor_test
     wasi02_descriptor_test.c)

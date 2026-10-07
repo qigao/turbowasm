@@ -199,6 +199,14 @@ turbowasm_status turbowasm_component_canonical_layout(
     turbowasm_component_pointer_type pointer_type,
     turbowasm_component_layout *out);
 
+/* Validate a nonempty typed guest region, returning its element stride only on
+ * success. Checks memory width, alignment, count multiplication and full bounds.
+ * No raw view survives this call; codecs reacquire memory for each access. */
+turbowasm_status turbowasm_component_canonical_validate_range(
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref type,
+    const turbowasm_component_canonical_memory *memory,
+    uint64_t address, uint32_t count, uint64_t *out_stride);
+
 turbowasm_status turbowasm_component_canonical_parameter_layout(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_id function_type,

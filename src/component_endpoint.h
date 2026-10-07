@@ -1,20 +1,8 @@
 #ifndef TURBOWASM_COMPONENT_ENDPOINT_H
 #define TURBOWASM_COMPONENT_ENDPOINT_H
 
-#include "component_canonical.h"
+#include "component_buffer.h"
 #include "component_waitable.h"
-
-/* Transfer-owned host storage, exclusively borrowed from submit through event
- * delivery. Source values are unique owned canonical values; destinations start
- * empty. Successful moves clear source cells. Untransferred cells remain owned
- * by the caller, including cancellation and peer closure. Unit buffers may use
- * NULL values regardless of length. Do not mutate a leased buffer or its cells. */
-typedef struct turbowasm_component_host_buffer {
-    turbowasm_component_value *values;
-    uint32_t length;
-    uint32_t progress;
-    bool leased;
-} turbowasm_component_host_buffer;
 
 typedef struct turbowasm_component_endpoint_codec turbowasm_component_endpoint_codec;
 
@@ -24,8 +12,9 @@ typedef struct turbowasm_component_endpoint {
     const turbowasm_component_type_graph *graph;
     turbowasm_component_type_id type;
     turbowasm_component_type_ref payload;
-    turbowasm_component_host_buffer *available;
-    turbowasm_component_host_buffer *operation;
+    turbowasm_component_buffer *available;
+    turbowasm_component_buffer *operation;
+    turbowasm_status failure;
     bool has_payload;
     bool readable;
     bool initialized;
@@ -48,11 +37,13 @@ turbowasm_status turbowasm_component_endpoint_pair_open(
 
 /* Submit a read/write according to the endpoint direction. OK admits a pending
  * operation; use take or the registered waitable set to obtain its event. The
- * entire host buffer is checked before admission. No allocation or guest calls
- * occur. Completion may be partial; an older operation may accumulate further
- * progress until its pending event is consumed. */
+ * entire range is checked before admission. Guest copies may allocate, convert
+ * values and call guest realloc. Completion may be partial; an older operation
+ * may accumulate progress before delivery. OK means admitted, including a copy
+ * trap subsequently returned by take/poll on both ends. Those error deliveries
+ * release buffer borrows; the failed pair can close but cannot copy or move. */
 turbowasm_status turbowasm_component_endpoint_submit(
-    turbowasm_component_endpoint *endpoint, turbowasm_component_host_buffer *buffer);
+    turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer);
 turbowasm_status turbowasm_component_endpoint_take(
     turbowasm_component_endpoint *endpoint, turbowasm_component_event *out_event);
 /* Internal owner transitions for readable ends. Only IDLE, unjoined ends with

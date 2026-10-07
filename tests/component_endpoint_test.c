@@ -10,7 +10,7 @@ static turbowasm_component_resource_table tables[2];
 static turbowasm_component_waitable_set set;
 static turbowasm_component_endpoint reader, writer;
 static turbowasm_component_endpoint nested_reader, nested_writer;
-static turbowasm_component_host_buffer buffers[6];
+static turbowasm_component_buffer buffers[6];
 static turbowasm_component_value cells[3][8];
 static turbowasm_runtime_config config;
 static turbowasm_runtime_scope scope;

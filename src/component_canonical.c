@@ -886,6 +886,31 @@ static turbowasm_status canonical_memory_validate(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_component_canonical_validate_range(
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref type,
+    const turbowasm_component_canonical_memory *memory,
+    uint64_t address, uint32_t count, uint64_t *out_stride) {
+    turbowasm_component_layout layout;
+    turbowasm_instance_impl *instance;
+    turbowasm_status status;
+    uint64_t size;
+    uint8_t *range = NULL;
+    if (count == 0u || out_stride == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    status = canonical_memory_validate(memory, &instance);
+    if (status != TURBOWASM_OK) return status;
+    status = turbowasm_component_canonical_layout(graph, type, memory->pointer_type, &layout);
+    if (status != TURBOWASM_OK) return status;
+    if (layout.alignment == 0u || address % layout.alignment != 0u ||
+        layout.size > UINT64_MAX / count ||
+        (memory->pointer_type == TURBOWASM_COMPONENT_POINTER_I32 && address > UINT32_MAX))
+        return TURBOWASM_TRAPPED;
+    size = layout.size * count;
+    if (size > SIZE_MAX || address > UINT64_MAX - size) return TURBOWASM_TRAPPED;
+    status = turbowasm_instance_memory_bounds(instance, memory->memory_index, address, 0u, (size_t)size, &range);
+    if (status == TURBOWASM_OK) *out_stride = layout.size;
+    return status;
+}
+
 static turbowasm_status read_memory(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,

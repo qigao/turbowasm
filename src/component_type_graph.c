@@ -999,10 +999,15 @@ static bool value_type_features(
      * admission predicate must keep rejecting endpoint values until their
      * transfer and execution lifecycle is implemented. */
     if (type->kind == TURBOWASM_COMPONENT_TYPE_FUTURE ||
-        type->kind == TURBOWASM_COMPONENT_TYPE_STREAM)
+        type->kind == TURBOWASM_COMPONENT_TYPE_STREAM) {
+        uint32_t payload_features = 0u;
+        *features |= TURBOWASM_COMPONENT_VALUE_ENDPOINTS;
+        /* The payload must be valid, but transferring the endpoint only moves
+         * its handle; it does not encode the endpoint's future elements. */
         return allow_async && (!type->as.async_value.has_payload ||
             value_type_features(graph, type->as.async_value.payload,
-                depth + 1u, true, features));
+                depth + 1u, true, &payload_features));
+    }
 
     if (type->kind == TURBOWASM_COMPONENT_TYPE_STRING ||
         type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
@@ -1060,6 +1065,16 @@ bool turbowasm_component_value_type_features(
     uint32_t *out_features) {
     uint32_t features = 0u;
     if (out_features == NULL || !value_type_features(graph, ref, 0u, false, &features))
+        return false;
+    *out_features = features;
+    return true;
+}
+
+bool turbowasm_component_transfer_type_features(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref, uint32_t *out_features) {
+    uint32_t features = 0u;
+    if (out_features == NULL || !value_type_features(graph, ref, 0u, true, &features))
         return false;
     *out_features = features;
     return true;

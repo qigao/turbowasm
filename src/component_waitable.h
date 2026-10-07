@@ -33,6 +33,7 @@ typedef struct turbowasm_component_waitable {
     turbowasm_component_resource_handle handle;
     turbowasm_component_resource_handle set_handle;
     bool sync_waiter;
+    /* Exclusive callback guard during event cleanup and endpoint conversion. */
     bool delivering;
     union {
         turbowasm_component_subtask_state subtask;

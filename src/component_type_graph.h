@@ -170,7 +170,8 @@ const turbowasm_component_type *turbowasm_component_resource_definition(
 enum {
     TURBOWASM_COMPONENT_VALUE_MAX_DEPTH = 64,
     TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY = 1u,
-    TURBOWASM_COMPONENT_VALUE_RESOURCES = 2u
+    TURBOWASM_COMPONENT_VALUE_RESOURCES = 2u,
+    TURBOWASM_COMPONENT_VALUE_ENDPOINTS = 4u
 };
 
 /* Inspect a synchronous value tree without allocation. False rejects non-value
@@ -180,6 +181,11 @@ bool turbowasm_component_value_type_features(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
     uint32_t *out_features);
+/* Private transfer planning also visits endpoint payloads. This does not enable
+ * synchronous public admission, which keeps using value_type_features above. */
+bool turbowasm_component_transfer_type_features(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref, uint32_t *out_features);
 
 /* Structural equality of value types in validated immutable graphs, including
  * nested future/stream types. Resource leaves compare nominal identity, not

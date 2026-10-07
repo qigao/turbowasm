@@ -239,6 +239,32 @@ spec("private Component future and stream types") {
         check_equal(features, TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY);
     }
 
+    it("requires codecs for transferred handles without encoding their future payloads") {
+        uint32_t features = UINT32_MAX;
+        turbowasm_component_type_ref fields[3] = {indexed(2u), indexed(3u), indexed(1u)};
+        check_true(turbowasm_component_type_graph_allocate(&graph, 6u));
+        check_true(turbowasm_component_type_graph_define_resource(&graph, 0u, 42u));
+        check_true(turbowasm_component_type_graph_define_handle(&graph, 1u, TURBOWASM_COMPONENT_TYPE_OWN, 0u));
+        check_true(turbowasm_component_type_graph_define_async_value(&graph, 2u,
+            TURBOWASM_COMPONENT_TYPE_FUTURE, true, indexed(1u)));
+        check_true(turbowasm_component_type_graph_define_async_value(&graph, 3u,
+            TURBOWASM_COMPONENT_TYPE_STREAM, true, scalar(TURBOWASM_COMPONENT_TYPE_STRING)));
+        check_true(turbowasm_component_type_graph_define_tuple(&graph, 4u, fields, 3u));
+        check_true(turbowasm_component_type_graph_define_list_ref(&graph, 5u, indexed(4u)));
+        check_true(turbowasm_component_type_graph_validate(&graph));
+        check_true(turbowasm_component_transfer_type_features(&graph, indexed(2u), &features));
+        check_equal(features, TURBOWASM_COMPONENT_VALUE_ENDPOINTS);
+        check_true(turbowasm_component_transfer_type_features(&graph, indexed(3u), &features));
+        check_equal(features, TURBOWASM_COMPONENT_VALUE_ENDPOINTS);
+        check_true(turbowasm_component_transfer_type_features(&graph, indexed(5u), &features));
+        check_equal(features, TURBOWASM_COMPONENT_VALUE_ENDPOINTS |
+            TURBOWASM_COMPONENT_VALUE_RESOURCES | TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY);
+        graph.types[2].as.async_value.payload = indexed(2u);
+        features = UINT32_MAX;
+        check_false(turbowasm_component_transfer_type_features(&graph, indexed(2u), &features));
+        check_equal(features, UINT32_MAX);
+    }
+
     it("compares primitive types across inline and independently indexed graphs") {
         turbowasm_component_type_kind a, b;
         check_true(turbowasm_component_type_graph_allocate(&graph, 1u));

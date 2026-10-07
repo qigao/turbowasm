@@ -823,6 +823,33 @@ abort. The composition layer must finish the scope before publishing results or
 destroying inputs. Public async and binary admission remain closed until task,
 guest-copy and lifetime integration is complete.
 
+Private endpoint buffers distinguish host value arrays from guest memory regions.
+Guest regions retain their canonical options, graph/type reference and checked
+offset/count, never a raw linear-memory pointer. Admission validates the complete
+nonempty typed range and conversion callbacks before lending it; unit and
+zero-length buffers ignore the pointer/options as specified. Reads snapshot a
+whole rendezvous batch before any destination write, preserving eager canonical
+semantics even for overlapping numeric guest regions. Host-only copies keep the
+existing allocation-free move. Guest snapshots use checked Runtime allocations
+bounded by the 28-bit element limit and the configured allocation budget.
+
+Guest destinations with owned resources or endpoints require explicit batch
+commit/rollback callbacks from their composition owner. Lowering reserves all
+handles before commit. A failed lower rolls back destination reservations; a
+failed guest lift destroys values already lifted, without restoring consumed
+source handles. Successful host-to-guest copies destroy the old host cells only
+after the batch commit transfers their release obligations. Source and destination
+progress follow their respective complete batch read/write, so a trapping write
+may follow a successful destructive read. Such a trap is terminal for the pair:
+both pending operations retain their buffer borrows until error delivery, report
+the primary status without publishing a success/cancel event, and then permit
+closure. The pair cannot start another transfer or move after that failure.
+Admission failures before an operation is accepted leave the existing peer
+operation unchanged. Realloc, resource and cleanup callbacks run with both
+endpoints guarded against reentrant take/cancel/close or another submit. Their
+enclosing execution owner must retain Component instances and callback contexts
+through suspension; no independent worker or raw guest-memory view is introduced.
+
 ## Canonical post-return lifecycle
 
 Synchronous lifts with `post-return` copy/lift the Core results before invoking
