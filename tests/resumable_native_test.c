@@ -321,7 +321,7 @@ spec("resumable native frames") {
         impl->jit_backend.supports_resumable_execution = false;
         create("direct", &arg, 1);
         check_equal(turbowasm_execution_resume(&execution, NULL), TURBOWASM_YIELDED);
-        check_equal(impl->jit_functions[function_index("direct")].state, TURBOWASM_JIT_COLD);
+        check_equal(impl->jit_functions[function_index("direct")].state, TURBOWASM_JIT_INTERPRET);
         complete_wait(); check_equal(turbowasm_execution_resume(&execution, NULL), TURBOWASM_OK);
         check_equal(turbowasm_execution_result_at(&execution, 0)->as.i32, ITERATIONS + COMPLETION);
     }
