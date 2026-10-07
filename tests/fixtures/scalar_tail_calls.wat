@@ -2,10 +2,8 @@
   (import "host" "tuple" (func $host (param i32 i64 f32 f64) (result i32 i64 f32 f64)))
   ;; Alternating arities exercise retained dispatcher storage across native returns.
   (func $left (param i32 i64 f32 f64) (result i32 i64 f32 f64)
-    local.get 0 i32.eqz
+    local.get 0
     if (result i32 i64 f32 f64)
-      local.get 0 local.get 1 local.get 2 local.get 3
-    else
       local.get 0 i32.const 1 i32.sub
       local.get 1 local.get 2 local.get 3
       i32.const 0
@@ -26,6 +24,8 @@
       i32.const 0
       i32.const 0
       return_call $right
+    else
+      local.get 0 local.get 1 local.get 2 local.get 3
     end)
   (func $right (param i32 i64 f32 f64 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32 i64 f32 f64)
     local.get 0 local.get 1 local.get 2 local.get 3 return_call $left)

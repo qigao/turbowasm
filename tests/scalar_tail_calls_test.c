@@ -190,7 +190,9 @@ static void compare(uint32_t function, const turbowasm_value *args, size_t argc,
     }
     if (actual_status != TURBOWASM_OK)
         check_equal(memcmp(actual, untouched, sizeof(actual)), 0);
-    check_equal(impl->jit_functions[function].state, TURBOWASM_JIT_COMPILED);
+    check(impl->jit_functions[function].state == TURBOWASM_JIT_COMPILED,
+        "function %u must compile; state %d", function,
+        (int)impl->jit_functions[function].state);
     check_not_null(impl->jit_functions[function].compiled.impl);
 }
 
