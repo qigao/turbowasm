@@ -847,6 +847,35 @@ copy before releasing its memory borrow; destruction is rejected if a peer is in
 conversion. Canonical resource/endpoint transactions and guest realloc contexts
 remain borrowed from the binding and must outlive all pending operations.
 
+Private async instantiation reuses the existing Core module/instance and alias
+resolver. The exec owns one task domain, stable builtin bindings and async lift
+bindings; tasks borrow this owner and register against its explicit task quota.
+Sharing this resolver keeps function indices, memory identity and rollback under
+one owner rather than introducing a second instantiation path.
+The shared canonical table has an explicit handle quota. Async exports are
+resolved to validated task bindings, including callback and memory32/memory64
+options. Argument preparation remains invocation-owned and runs through the
+existing retained task hook. Sync invocation rejects async exports.
+
+Builtin memory options are resolved only after their provider instance exists,
+before linking the consuming Core module. Realloc borrows the active task's
+execution control, saves and clears its context slots and restores them when the
+retained auxiliary invocation returns or unwinds. It forbids leaving the
+Component during that invocation. An auxiliary owner excludes other tasks in
+the domain across suspension until context restoration. No transient host-call
+pointer is retained.
+This stage admits same-domain task/endpoint execution; async canon lower and
+automatic resource/endpoint-valued argument/result transactions remain closed
+until their per-invocation ownership contexts are integrated. The private entry
+does not change public loading or host API admission.
+
+Exec destruction rejects registered tasks and live async table entries before
+reclaiming memory. Transferred endpoints also retain their domain-owned pair and
+prevent destruction even after their handle leaves the local table. The caller
+must drain/drop these owners and retry; no forced cancellation or silent reclaim
+is performed. Constructor failure has no active task and rolls back all allocated
+bindings, Core instances and tables in the existing cleanup path.
+
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and
 terminal-event delivery separately. Subtask start and resolve notifications

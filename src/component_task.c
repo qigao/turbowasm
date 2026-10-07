@@ -50,7 +50,7 @@ bool turbowasm_component_task_domain_init(turbowasm_component_task_domain *domai
 
 turbowasm_status turbowasm_component_task_domain_destroy(turbowasm_component_task_domain *domain) {
     if (domain == NULL) return TURBOWASM_INVALID_ARGUMENT;
-    if (domain->count != 0u || domain->active != NULL || domain->exclusive != NULL)
+    if (domain->count != 0u || domain->active != NULL || domain->exclusive != NULL || domain->auxiliary != NULL)
         return TURBOWASM_TRAPPED;
     turbowasm_component_endpoint_domain_collect(domain);
     if (domain->pairs != NULL) return TURBOWASM_TRAPPED;
@@ -101,13 +101,12 @@ turbowasm_status turbowasm_component_task_backpressure(turbowasm_component_task_
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_component_task_create(turbowasm_component_task *task,
-    turbowasm_component_task_domain *domain, const turbowasm_component_task_binding *binding) {
+turbowasm_status turbowasm_component_task_binding_validate(
+    const turbowasm_component_task_binding *binding, turbowasm_component_flat_signature *out) {
     const turbowasm_component_type *type;
     turbowasm_component_flat_signature signature;
     turbowasm_status status;
-    if (task == NULL || task->domain != NULL || domain == NULL || domain->table == NULL ||
-        binding == NULL || binding->instance == NULL || binding->graph == NULL)
+    if (binding == NULL || binding->instance == NULL || binding->graph == NULL || out == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     type = turbowasm_component_type_graph_get(binding->graph, binding->function_type);
     if (type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION || !type->as.function.is_async)
@@ -124,6 +123,18 @@ turbowasm_status turbowasm_component_task_create(turbowasm_component_task *task,
         if (!signature_matches(binding->callback_instance, binding->callback_index, &callback))
             return TURBOWASM_TYPE_MISMATCH;
     }
+    *out = signature;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_task_create(turbowasm_component_task *task,
+    turbowasm_component_task_domain *domain, const turbowasm_component_task_binding *binding) {
+    turbowasm_component_flat_signature signature;
+    turbowasm_status status;
+    if (task == NULL || task->domain != NULL || domain == NULL || domain->table == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    status = turbowasm_component_task_binding_validate(binding, &signature);
+    if (status != TURBOWASM_OK) return status;
     if (signature.param_count != 0u && binding->prepare == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if ((binding->resolve == NULL) != (binding->abandon == NULL))
@@ -345,6 +356,10 @@ static turbowasm_status resume_task(turbowasm_component_task *task,
     if ((task->domain->active != NULL && parent == NULL) ||
         task->state == TURBOWASM_EXECUTION_RUNNING || task->destroying) return TURBOWASM_TRAPPED;
     if (task->state >= TURBOWASM_EXECUTION_COMPLETED) return task->status;
+    if (task->domain->auxiliary != NULL && task->domain->auxiliary != task) {
+        task->state = TURBOWASM_EXECUTION_YIELDED;
+        return TURBOWASM_YIELDED;
+    }
     module = turbowasm_module_impl_get(turbowasm_instance_module(task->binding.instance));
     if (module == NULL) return TURBOWASM_INVALID_ARGUMENT;
     scope = turbowasm_runtime_scope_enter(&module->config);

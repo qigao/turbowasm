@@ -13,6 +13,8 @@ typedef struct turbowasm_component_task_domain {
     turbowasm_component_resource_table *table;
     bool *may_leave;
     turbowasm_component_task *active, *exclusive;
+    /* Auxiliary realloc retains may_leave/context isolation across suspension. */
+    turbowasm_component_task *auxiliary;
     struct turbowasm_component_task_owned_set *sets;
     struct turbowasm_component_task_owned_pair *pairs;
     uint32_t pair_count;
@@ -98,6 +100,10 @@ turbowasm_status turbowasm_component_task_set_new(turbowasm_component_task_domai
 turbowasm_status turbowasm_component_task_set_drop(turbowasm_component_task_domain *domain,
     turbowasm_component_resource_handle handle);
 
+/* Validate the immutable lift/callback ABI without requiring invocation hooks.
+ * Used by instantiation before any argument owner/task exists. */
+turbowasm_status turbowasm_component_task_binding_validate(
+    const turbowasm_component_task_binding *binding, turbowasm_component_flat_signature *out);
 /* Zero-initialized stable task, borrowed immutable binding/context/instances.
  * No argument preparation or guest execution occurs on create. Capacity and
  * signature failures preserve the empty task. */

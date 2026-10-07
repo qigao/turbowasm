@@ -1154,9 +1154,9 @@ Windows ASan passed 22 call cases with 1903 assertions and the existing 50 task
 cases with 5988 assertions. The related Component/WASI/resumable/host-wait/memory/
 link/fuel/interrupt regression passed 77/77 targets in 3.18 seconds. At `5ee8469`,
 the [native run](https://github.com/qigao/turbowasm/actions/runs/37691360677) passed
-Windows, Android, ordinary Linux and macOS arm64 MIR. macOS passed 192/192 in
-3.28 seconds, including the compiled async call target in 0.02 seconds. Linux MIR
-is still pending in dependency setup. This is still a private invocation
+all five native matrix jobs. macOS passed 192/192 in 3.28 seconds and Linux MIR
+passed 192/192 in 2.18 seconds, both including the compiled async call target in
+0.02 seconds. This is still a private invocation
 boundary: automatic binary binding, per-instance call ownership, endpoint builtin
 dispatch and retained public async handles remain incomplete. Public async
 admission remains closed until those integration requirements are verified.
@@ -1186,9 +1186,43 @@ string rendezvous checks retained realloc options, copy failures and reentrant
 event/destruction exclusion. Unit payloads ignore pointer values as specified.
 Windows ASan passed 16 builtin cases with 2977 assertions; the related
 Component/WASI/resumable/host-wait/memory/link/fuel/interrupt regression passed
-78/78 targets in 3.35 seconds. Native MIR verification of this increment is pending.
+78/78 targets in 3.35 seconds. At `7edcf37`, the
+[native run](https://github.com/qigao/turbowasm/actions/runs/37693201902) passed all
+five matrix jobs. Linux MIR passed 194/194 in 1.19 seconds and macOS arm64 MIR
+passed 194/194 in 3.00 seconds, including the compiled endpoint builtin suite.
 
 These bindings remain private. Automatic Component binary instantiation, public
 async task/endpoint owners and per-instance retained callback contexts are still
 required before enabling public async admission. The broader Component/WASI
 completion goal is not established by this primitive-level qualification.
+
+## Private async Component instantiation
+
+The internal async exec entry reuses the normal module/instance loader, alias
+maps and canonical memory/realloc resolution. Stable task/endpoint builtin host
+bindings are linked from actual Component binary definitions; async lifts resolve
+to validated stackful/callback task bindings. Explicit task and canonical handle
+limits bound the domain. Synchronous invocation rejects async exports, and
+destruction rejects registered tasks, live async handles and transferred ends
+whose pair storage still belongs to the exec.
+
+Guest realloc inherits the running task's retained Core execution control and
+uses fresh context slots. Auxiliary ownership excludes other tasks in the domain
+through fuel/interruption suspension, then restores context and may_leave on
+success, trap or unwind. Non-numeric stream copies within the same Component
+retain their canonical trap; host string delivery exercises resolved builtin
+realloc and forbids destroying the waiting reader during conversion.
+
+`component_async_exec_test` uses a generated Component fixture containing Core
+imports, canonical builtins and async exports. Windows ASan passed 16 cases with
+1837 assertions, covering scalar/callback/yield/cancellation, memory32/memory64
+strings and mixed-width stream copies, auxiliary suspension/unwind, task/handle
+capacity, moved endpoint lifetime, malformed callback/import signatures, missing
+realloc options and every constructor allocation failure. Related Component/WASI/resumable/host-wait/
+memory/link/fuel/interrupt regression passed 79/79 targets in 3.49 seconds.
+The MIR target runs this same suite with compiled-function assertions; native
+verification of this increment is pending.
+
+This is an internal integration stage. Automatic async canon lower, per-call
+resource/endpoint-value transactions, retained public async owners and nested
+Component instantiation remain incomplete. Public async admission stays closed.

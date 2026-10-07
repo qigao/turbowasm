@@ -1,6 +1,8 @@
 #include "component_exec.h"
 
 #include "instance_internal.h"
+#include "execution_internal.h"
+#include "component_endpoint_builtin.h"
 #include "runtime_alloc.h"
 
 #include <turbowasm/link.h>
@@ -14,6 +16,7 @@
 
 static turbowasm_status initialize_lift_adapter(
     turbowasm_component_exec *exec, const turbowasm_component_binary *binary, uint32_t index);
+static turbowasm_status bind_async_builtin(turbowasm_component_exec *exec, uint32_t index);
 
 static bool component_name_equal(
     turbowasm_component_name left,
@@ -204,7 +207,23 @@ static turbowasm_status component_guest_realloc(
         }
         *realloc_context->may_leave = false;
     }
-    if (realloc_context->call != NULL)
+    if (realloc_context->domain != NULL) {
+        turbowasm_component_task *task = realloc_context->domain->active;
+        uint64_t saved_context[2];
+        if (task == NULL || task->destroying || task->core.impl == NULL) {
+            *realloc_context->may_leave = true;
+            return TURBOWASM_TRAPPED;
+        }
+        memcpy(saved_context, task->context_storage, sizeof(saved_context));
+        memset(task->context_storage, 0, sizeof(task->context_storage));
+        realloc_context->domain->auxiliary = task;
+        status = turbowasm_instance_invoke_internal(realloc_context->instance->impl,
+            realloc_context->function_index, arguments, 4u, &result, 1u, &result_count, &trap,
+            turbowasm_execution_control_get(&task->core));
+        memcpy(task->context_storage, saved_context, sizeof(saved_context));
+        realloc_context->domain->auxiliary = NULL;
+        if (trap != TURBOWASM_TRAP_NONE) task->trap = trap;
+    } else if (realloc_context->call != NULL)
         status = turbowasm_instance_invoke_from_host(
             realloc_context->call, realloc_context->instance,
             realloc_context->function_index, arguments, 4u,
@@ -1102,6 +1121,15 @@ static turbowasm_status define_inline_provider(
             host_function = component_resource_builtin_host;
             host_context = (void *)context;
         } else if (function->kind ==
+                       TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_ASYNC_BUILTIN) {
+            turbowasm_status status = bind_async_builtin(exec, function->async_builtin_index);
+            turbowasm_component_task_builtin *binding;
+            if (status != TURBOWASM_OK) return status;
+            binding = &exec->async_builtins[function->async_builtin_index].binding;
+            type = binding->type;
+            host_function = turbowasm_component_task_builtin_invoke;
+            host_context = binding;
+        } else if (function->kind ==
                        TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_CANON_LOWER) {
             turbowasm_component_exec_canon_lower_context *context;
 
@@ -1311,14 +1339,14 @@ done:
 
 static turbowasm_status initialize_resource_state(
     turbowasm_component_exec *exec,
-    const turbowasm_component_binary *binary) {
+    const turbowasm_component_binary *binary, uint32_t handle_limit) {
     uint32_t i;
 
     if (exec == NULL || binary == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     if (!turbowasm_component_resource_table_init(
-            &exec->resource_table, 0u))
+            &exec->resource_table, handle_limit))
         return TURBOWASM_INVALID_ARGUMENT;
 
     exec->resource_binding_count = binary->type_graph.count;
@@ -1721,6 +1749,85 @@ static turbowasm_status configure_canon_lower_memory(
     return TURBOWASM_OK;
 }
 
+/* Automatic ownership transactions are integrated separately. */
+static turbowasm_status async_plain_value(const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref) {
+    uint32_t features;
+    if (!turbowasm_component_transfer_type_features(graph, ref, &features))
+        return TURBOWASM_UNSUPPORTED;
+    return (features & (TURBOWASM_COMPONENT_VALUE_RESOURCES | TURBOWASM_COMPONENT_VALUE_ENDPOINTS))
+        ? TURBOWASM_UNSUPPORTED : TURBOWASM_OK;
+}
+
+static turbowasm_status initialize_async_state(turbowasm_component_exec *exec,
+    const turbowasm_component_exec_async_limits *limits) {
+    const turbowasm_component_binary *binary = exec->binary;
+    uint32_t i;
+    if (!turbowasm_component_task_domain_init(&exec->task_domain,
+            &exec->resource_table, &exec->may_leave, limits->tasks))
+        return TURBOWASM_INVALID_ARGUMENT;
+    if ((size_t)binary->async_builtin_count > SIZE_MAX / sizeof(*exec->async_builtins) ||
+        (size_t)exec->adapter_count > SIZE_MAX / sizeof(*exec->async_functions))
+        return TURBOWASM_OUT_OF_MEMORY;
+    if (binary->async_builtin_count != 0u) {
+        exec->async_builtins = turbowasm_rt_calloc(binary->async_builtin_count, sizeof(*exec->async_builtins));
+        if (exec->async_builtins == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    }
+    if (exec->adapter_count != 0u) {
+        exec->async_functions = turbowasm_rt_calloc(exec->adapter_count, sizeof(*exec->async_functions));
+        if (exec->async_functions == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    }
+    for (i = 0; i < binary->async_builtin_count; ++i) {
+        const turbowasm_component_async_builtin *definition = &binary->async_builtins[i];
+        turbowasm_component_exec_core_function *function;
+        turbowasm_status status = TURBOWASM_OK;
+        bool future;
+        const turbowasm_component_type *type = turbowasm_component_type_graph_get(
+            &binary->type_graph, definition->type_index);
+        if (definition->kind == TURBOWASM_COMPONENT_TASK_RETURN && definition->has_result)
+            status = async_plain_value(&binary->type_graph, definition->result);
+        else if (turbowasm_component_endpoint_builtin_kind(definition->kind, &future) && type != NULL &&
+                 (type->kind == TURBOWASM_COMPONENT_TYPE_STREAM || type->kind == TURBOWASM_COMPONENT_TYPE_FUTURE) &&
+                 type->as.async_value.has_payload)
+            status = async_plain_value(&binary->type_graph, type->as.async_value.payload);
+        if (status != TURBOWASM_OK) return status;
+        if (definition->core_function_index >= exec->core_function_count)
+            return TURBOWASM_MALFORMED_MODULE;
+        function = &exec->core_functions[definition->core_function_index];
+        if (function->kind != TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INVALID)
+            return TURBOWASM_MALFORMED_MODULE;
+        function->kind = TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_ASYNC_BUILTIN;
+        function->async_builtin_index = i;
+    }
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status bind_async_builtin(turbowasm_component_exec *exec, uint32_t index) {
+    const turbowasm_component_async_builtin *definition;
+    turbowasm_component_exec_async_builtin *context;
+    turbowasm_component_exec_canon_lower_context options = {0};
+    turbowasm_component_canon_lower lower = {0};
+    turbowasm_status status;
+    if (index >= exec->binary->async_builtin_count || exec->async_builtins == NULL)
+        return TURBOWASM_MALFORMED_MODULE;
+    context = &exec->async_builtins[index];
+    if (context->binding.domain != NULL) return TURBOWASM_OK;
+    definition = &exec->binary->async_builtins[index];
+    lower.has_memory = definition->has_memory; lower.memory_index = definition->memory_index;
+    lower.has_realloc = definition->has_realloc; lower.realloc_function_index = definition->realloc_function_index;
+    lower.string_encoding = definition->string_encoding;
+    status = configure_canon_lower_memory(exec, exec->binary, &lower, &options);
+    if (status != TURBOWASM_OK) return status;
+    if (definition->has_realloc) {
+        if (options.realloc_context.instance->impl == NULL) return TURBOWASM_MALFORMED_MODULE;
+        context->realloc_context = options.realloc_context;
+        context->realloc_context.domain = &exec->task_domain;
+        options.memory.realloc_context = &context->realloc_context;
+    }
+    return turbowasm_component_task_builtin_bind(&context->binding, &exec->task_domain,
+        &exec->binary->type_graph, definition, definition->has_memory ? &options.memory : NULL);
+}
+
 static bool flat_kind_to_value_kind(
     turbowasm_component_flat_type flat,
     turbowasm_value_kind *out) {
@@ -1829,6 +1936,7 @@ static turbowasm_status initialize_canon_lower_state(
         function_type = turbowasm_component_type_graph_get(context->graph, context->function_type);
         if (function_type == NULL || function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
             return TURBOWASM_MALFORMED_MODULE;
+        if (function_type->as.function.is_async) return TURBOWASM_UNSUPPORTED;
 
         if (lower->has_realloc && !lower->has_memory)
             return TURBOWASM_MALFORMED_MODULE;
@@ -2044,6 +2152,8 @@ static void destroy_partial(
     }
 
     turbowasm_rt_free(exec->import_sets);
+    turbowasm_rt_free(exec->async_builtins);
+    turbowasm_rt_free(exec->async_functions);
     turbowasm_rt_free(exec->function_adapter_indices);
     turbowasm_rt_free(exec->functions);
     turbowasm_rt_free(exec->realloc_contexts);
@@ -2313,12 +2423,14 @@ static turbowasm_status initialize_lift_adapter(
     turbowasm_component_exec *exec, const turbowasm_component_binary *binary, uint32_t i) {
     turbowasm_status status;
     if (i >= exec->adapter_count) return TURBOWASM_MALFORMED_MODULE;
-    if (exec->functions[i].initialized) return TURBOWASM_OK;
+    if (exec->functions[i].initialized ||
+        (exec->async_functions != NULL && exec->async_functions[i].instance != NULL)) return TURBOWASM_OK;
     const turbowasm_component_canon_lift *lift =
         &binary->canon_lifts[i];
     const turbowasm_component_exec_core_function *core_function;
     turbowasm_component_canonical_memory memory = {0};
     const turbowasm_component_canonical_memory *memory_option = NULL;
+    memory.string_encoding = lift->string_encoding;
 
     if (lift->component_function_index >= exec->function_count ||
         lift->core_function_index >= exec->core_function_count ||
@@ -2420,6 +2532,7 @@ static turbowasm_status initialize_lift_adapter(
                 realloc_function->function_index;
             context->pointer_type = memory.pointer_type;
             context->may_leave = &exec->may_leave;
+            if (lift->is_async) context->domain = &exec->task_domain;
 
             if (!core_function_has_pointer_signature(
                     context->instance,
@@ -2434,6 +2547,46 @@ static turbowasm_status initialize_lift_adapter(
         }
 
         memory_option = &memory;
+    }
+
+    if (lift->is_async) {
+        turbowasm_component_task_binding binding = {0};
+        turbowasm_component_flat_signature signature;
+        const turbowasm_component_type *type = turbowasm_component_type_graph_get(&binary->type_graph, lift->type_index);
+        uint32_t parameter;
+        if (exec->async_functions == NULL || type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
+            return TURBOWASM_UNSUPPORTED;
+        for (parameter = 0; parameter < type->as.function.param_count; ++parameter) {
+            status = async_plain_value(&binary->type_graph, type->as.function.params[parameter]);
+            if (status != TURBOWASM_OK) return status;
+        }
+        if (type->as.function.has_result) {
+            status = async_plain_value(&binary->type_graph, type->as.function.result);
+            if (status != TURBOWASM_OK) return status;
+        }
+        binding.graph = &binary->type_graph; binding.function_type = lift->type_index;
+        binding.instance = &exec->core_instances[core_function->instance_index];
+        binding.function_index = core_function->function_index; binding.memory = memory;
+        if (lift->has_callback) {
+            const turbowasm_component_exec_core_function *callback;
+            if (lift->callback_function_index >= exec->core_function_count) return TURBOWASM_MALFORMED_MODULE;
+            callback = &exec->core_functions[lift->callback_function_index];
+            if (callback->kind != TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INSTANCE ||
+                callback->instance_index >= exec->core_instance_count) return TURBOWASM_TYPE_MISMATCH;
+            binding.callback_instance = &exec->core_instances[callback->instance_index];
+            binding.callback_index = callback->function_index;
+        }
+        status = turbowasm_component_task_binding_validate(&binding, &signature);
+        if (status != TURBOWASM_OK) return status;
+        if (signature.params_indirect && (!lift->has_memory || !lift->has_realloc)) return TURBOWASM_UNSUPPORTED;
+        for (parameter = 0; parameter < type->as.function.param_count; ++parameter)
+            if (type_ref_contains_dynamic_memory(&binary->type_graph, type->as.function.params[parameter]) &&
+                (!lift->has_memory || !lift->has_realloc)) return TURBOWASM_UNSUPPORTED;
+        if (type->as.function.has_result &&
+            type_ref_contains_dynamic_memory(&binary->type_graph, type->as.function.result) && !lift->has_memory)
+            return TURBOWASM_UNSUPPORTED;
+        exec->async_functions[i] = binding;
+        return TURBOWASM_OK;
     }
 
     status =
@@ -2490,11 +2643,11 @@ static turbowasm_status initialize_lift_adapter(
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_component_exec_init_with_import_sets(
+static turbowasm_status initialize_exec(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
     const turbowasm_component_exec_imports *import_sets,
-    size_t import_set_count) {
+    size_t import_set_count, const turbowasm_component_exec_async_limits *limits) {
     turbowasm_runtime_scope scope;
     turbowasm_status status = TURBOWASM_OK;
     uint32_t i;
@@ -2504,8 +2657,14 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
         binary->bytes == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    if (binary->async_metadata)
+    if (binary->async_metadata && limits == NULL)
         return TURBOWASM_UNSUPPORTED;
+    if (limits != NULL) {
+        if (limits->tasks == 0u || limits->handles == 0u ||
+            limits->handles > TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS) return TURBOWASM_INVALID_ARGUMENT;
+        for (i = 0; i < binary->canon_lower_count; ++i)
+            if (binary->canon_lowers[i].is_async) return TURBOWASM_UNSUPPORTED;
+    }
 
     if ((import_set_count != 0u && import_sets == NULL) ||
         import_set_count > UINT32_MAX ||
@@ -2733,9 +2892,14 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
     status = resolve_component_function_aliases(exec, binary);
     if (status != TURBOWASM_OK) goto fail;
 
-    status = initialize_resource_state(exec, binary);
+    status = initialize_resource_state(exec, binary, limits != NULL ? limits->handles : 0u);
     if (status != TURBOWASM_OK)
         goto fail;
+
+    if (limits != NULL) {
+        status = initialize_async_state(exec, limits);
+        if (status != TURBOWASM_OK) goto fail;
+    }
 
     status = initialize_canon_lower_state(exec, binary);
     if (status != TURBOWASM_OK)
@@ -2758,6 +2922,11 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
             exec, binary, i);
         if (status != TURBOWASM_OK)
             goto fail;
+    }
+
+    for (i = 0u; i < binary->async_builtin_count; ++i) {
+        status = bind_async_builtin(exec, i);
+        if (status != TURBOWASM_OK) goto fail;
     }
 
     for (i = 0u; i < binary->core_function_alias_count; ++i) {
@@ -2824,6 +2993,18 @@ fail:
     return status;
 }
 
+turbowasm_status turbowasm_component_exec_init_with_import_sets(
+    turbowasm_component_exec *exec, const turbowasm_component_binary *binary,
+    const turbowasm_component_exec_imports *import_sets, size_t import_set_count) {
+    return initialize_exec(exec, binary, import_sets, import_set_count, NULL);
+}
+
+turbowasm_status turbowasm_component_exec_init_async(turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary, const turbowasm_component_exec_async_limits *limits) {
+    if (limits == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    return initialize_exec(exec, binary, NULL, 0u, limits);
+}
+
 turbowasm_status turbowasm_component_exec_init_with_imports(
     turbowasm_component_exec *exec,
     const turbowasm_component_binary *binary,
@@ -2842,11 +3023,45 @@ turbowasm_status turbowasm_component_exec_init(
         exec, binary, NULL, 0u);
 }
 
-void turbowasm_component_exec_destroy(
+turbowasm_status turbowasm_component_exec_destroy(
     turbowasm_component_exec *exec) {
     if (exec == NULL)
-        return;
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (exec->task_domain.table != NULL) {
+        uint32_t i;
+        turbowasm_status status;
+        if (exec->task_domain.count != 0u) return TURBOWASM_TRAPPED;
+        for (i = 0; i < exec->resource_table.capacity; ++i) {
+            const turbowasm_component_resource_entry *entry = &exec->resource_table.entries[i];
+            if (entry->occupied && entry->kind != TURBOWASM_COMPONENT_HANDLE_RESOURCE)
+                return TURBOWASM_TRAPPED;
+        }
+        status = turbowasm_component_task_domain_destroy(&exec->task_domain);
+        if (status != TURBOWASM_OK) return status;
+    }
     destroy_partial(exec);
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_exec_async_export(const turbowasm_component_exec *exec,
+    const uint8_t *name, uint32_t name_size, const turbowasm_component_task_binding **out) {
+    uint32_t i;
+    if (exec == NULL || !exec->initialized || out == NULL || (name_size != 0u && name == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+    for (i = 0; i < exec->binary->export_count; ++i) {
+        const turbowasm_component_export *definition = &exec->binary->exports[i];
+        uint32_t adapter;
+        if (definition->kind != TURBOWASM_COMPONENT_EXTERN_FUNCTION ||
+            !component_name_equal(definition->name, name, name_size)) continue;
+        if (definition->item_index >= exec->function_count) return TURBOWASM_MALFORMED_MODULE;
+        adapter = exec->function_adapter_indices[definition->item_index];
+        if (adapter >= exec->adapter_count) return TURBOWASM_MALFORMED_MODULE;
+        if (exec->async_functions == NULL || exec->async_functions[adapter].instance == NULL)
+            return TURBOWASM_UNSUPPORTED;
+        *out = &exec->async_functions[adapter];
+        return TURBOWASM_OK;
+    }
+    return TURBOWASM_INVALID_ARGUMENT;
 }
 
 turbowasm_status turbowasm_component_exec_invoke_export(
@@ -2882,6 +3097,7 @@ turbowasm_status turbowasm_component_exec_invoke_export(
             if (adapter_index == UINT32_MAX ||
                 adapter_index >= exec->adapter_count)
                 return TURBOWASM_MALFORMED_MODULE;
+            if (exec->binary->canon_lifts[adapter_index].is_async) return TURBOWASM_UNSUPPORTED;
             return turbowasm_component_core_call_invoke(
                 &exec->functions[adapter_index],
                 arguments,
@@ -2933,6 +3149,7 @@ turbowasm_status turbowasm_component_exec_call_create(
                 adapter_index >= exec->adapter_count)
                 return TURBOWASM_MALFORMED_MODULE;
 
+            if (exec->binary->canon_lifts[adapter_index].is_async) return TURBOWASM_UNSUPPORTED;
             status = turbowasm_component_core_execution_create(
                 &call->core,
                 &exec->functions[adapter_index],

@@ -4,6 +4,7 @@
 #include "component_binary.h"
 #include "component_core_call.h"
 #include "component_resource_binding.h"
+#include "component_task_builtin.h"
 
 #include <turbowasm/instance.h>
 #include <turbowasm/link.h>
@@ -18,7 +19,8 @@ typedef enum turbowasm_component_exec_core_function_kind {
     TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INVALID = 0,
     TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INSTANCE,
     TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_RESOURCE_BUILTIN,
-    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_CANON_LOWER
+    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_CANON_LOWER,
+    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_ASYNC_BUILTIN
 } turbowasm_component_exec_core_function_kind;
 
 typedef struct turbowasm_component_exec_core_function {
@@ -27,6 +29,7 @@ typedef struct turbowasm_component_exec_core_function {
     uint32_t function_index;
     uint32_t resource_builtin_index;
     uint32_t canon_lower_index;
+    uint32_t async_builtin_index;
 } turbowasm_component_exec_core_function;
 
 typedef struct turbowasm_component_exec_core_memory {
@@ -41,7 +44,18 @@ typedef struct turbowasm_component_exec_realloc_context {
     bool *may_leave;
     turbowasm_host_call *call;
     turbowasm_trap *trap;
+    turbowasm_component_task_domain *domain;
 } turbowasm_component_exec_realloc_context;
+
+typedef struct turbowasm_component_exec_async_builtin {
+    turbowasm_component_task_builtin binding;
+    turbowasm_component_exec_realloc_context realloc_context;
+} turbowasm_component_exec_async_builtin;
+
+typedef struct turbowasm_component_exec_async_limits {
+    uint32_t tasks;
+    uint32_t handles;
+} turbowasm_component_exec_async_limits;
 
 typedef struct turbowasm_component_exec_resource_context {
     struct turbowasm_component_exec *exec;
@@ -166,17 +180,19 @@ typedef struct turbowasm_component_exec {
     uint32_t *function_adapter_indices;
     uint32_t function_count;
 
+    turbowasm_component_task_domain task_domain;
+    turbowasm_component_task_binding *async_functions;
+    turbowasm_component_exec_async_builtin *async_builtins;
+
     bool may_leave;
     bool initialized;
 } turbowasm_component_exec;
 
 /*
- * Instantiate the C5c1 executable subset:
- * - no Component imports;
- * - Core instance definitions are zero-argument module instantiations;
- * - Core function definitions come from core-export aliases;
- * - Component functions come from synchronous canon lift with no options.
- *
+ * Instantiate the supported synchronous Component graph using the shared Core
+ * linker and alias resolver. Capability imports use the typed entries below.
+ * Async metadata requires the explicit private async entry; public admission
+ * remains gated until retained host ownership is integrated.
  * The executable borrows the decoded Component binary and its source bytes.
  */
 turbowasm_status turbowasm_component_exec_init(
@@ -203,7 +219,20 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
 turbowasm_status turbowasm_component_exec_resource_release(
     turbowasm_component_exec *exec, uint64_t identity, turbowasm_value rep);
 
-void turbowasm_component_exec_destroy(
+/* Private staged async integration. Explicit nonzero bounded quotas; borrows
+ * binary/source bytes. Async lower and ownership-bearing boundary values remain
+ * unsupported until their automatic invocation transactions are connected.
+ * No public Component loader calls this entry. */
+turbowasm_status turbowasm_component_exec_init_async(
+    turbowasm_component_exec *exec, const turbowasm_component_binary *binary,
+    const turbowasm_component_exec_async_limits *limits);
+/* Returns a borrowed immutable lift binding. Copy it and install invocation
+ * prepare/resolve hooks before task_create against exec->task_domain. */
+turbowasm_status turbowasm_component_exec_async_export(
+    const turbowasm_component_exec *exec, const uint8_t *name, uint32_t name_size,
+    const turbowasm_component_task_binding **out);
+/* Refuses live async owners without destroying instances or bindings. */
+turbowasm_status turbowasm_component_exec_destroy(
     turbowasm_component_exec *exec);
 
 turbowasm_status turbowasm_component_exec_invoke_export(
