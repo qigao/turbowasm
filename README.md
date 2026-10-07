@@ -79,7 +79,9 @@ MIR lowers the complete GC instruction family through Runtime: struct/array
 construction and access, segment operations, casts/tests and cast branches,
 external-reference conversions and i31. Constructor operands and intermediate
 references use the native frame's rooted value cells; store quotas and collection
-remain Runtime-owned. Native EH and resumable native execution remain incomplete.
+remain Runtime-owned. MIR also lowers typed exceptions with lexical catch
+dispatch, Runtime tag identity/payload ownership and mixed-tier unwind. Native EH
+passed Linux/macOS MIR and the complete pinned Core 3.0 differential suite.
 
 MIR also executes scalar/vector/reference global reads and writes through Runtime,
 including imported globals, nullable-reference branches and `unreachable` traps.

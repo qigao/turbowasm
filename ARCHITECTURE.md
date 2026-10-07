@@ -285,10 +285,46 @@ to use Runtime's semantic checks and shared backing. No installed type, lifetime
 configuration or binary format changes. Tests must cover native locals/branches,
 direct and tail calls, host-triggered collection, fuel/interruption, root and allocation
 limits, invalid reference arguments and table32/table64 reference operations.
-Public resumable executions continue to use the interpreter; this increment does
-not admit native frames into the public yield/resume path.
+Resumable execution uses the tiered entry described below; native frame sources
+remain registered while the owning coroutine is suspended.
 Rollback removes reference admission and emission together with frame allocation
 and root registration; it must not leave admitted code with untraced cells.
+
+### Resumable native execution
+
+The execution handle owns copied arguments, result storage, execution control and
+one bounded Salts coroutine stack. The Runtime dispatcher selects the tier at
+entry. Backends must separately opt into resumable execution; ordinary execution
+control support alone does not certify native frame suspension. MIR uses the
+same checkpoint and host-wait callbacks as the interpreter. Yield retains the
+native return address, scalar registers, invocation-local vector slots, reference
+cells and lexical EH frames; resume continues that callback without replaying an
+instruction or host effect. Reconstructing frames in a second continuation engine
+would duplicate Runtime control/ownership state and is unnecessary with the
+existing stackful coroutine.
+
+All operations remain on the execution/store owner thread. The instance, module,
+linked providers and attached backend must outlive the execution, including its
+suspended state; backend destruction is a quiescent control-plane operation.
+The execution control owns every active frame's root registration. Those sources
+borrow stack contexts and heap cells whose lifetime crosses yield, allowing store
+collection between resumes. The existing stack size, call-depth, allocation and
+store-root budgets bound retained storage; exhaustion keeps the existing explicit
+error/trap semantics. No new queue, lock, allocator or unbounded continuation list
+is introduced. Yield preserves state; only the next resume replaces fuel and
+interrupt policy. Pending host-wait completion records status without executing
+Wasm. Destroy resumes the suspended callback with INTERRUPTED and follows normal
+native/interpreter cleanup before releasing the coroutine stack. Trap, exception
+and allocation failure are terminal, not suspension reasons.
+
+The installed signatures and handle layout do not change. Calls with an attached
+resumable backend now participate in its existing per-function tiering policy;
+without one the interpreter behavior remains. Tests require actual MIR compilation
+and exercise repeated fuel/interruption, nested/mixed-tier host waits, vectors and
+GC collection during suspension, EH, tail calls, cancellation and allocation
+failure. Linux and macOS native CI qualify generated frames; Windows ASan checks
+the common ownership path. Rollback restores the interpreter entry and removes
+MIR's resumable opt-in together, without changing stored data or public handles.
 
 ### MIR indirect call ownership
 
@@ -684,6 +720,7 @@ optional NativeIO host-wait bridge      implemented
 lazy per-function MIR JIT               implemented
 scalar/helper-backed SIMD MIR           implemented
 helper-backed GC MIR                    implemented
+lexical EH MIR                          implemented + upstream differential qualified
 per-function fallback isolation         implemented
 backend-neutral JIT artifact cache       implemented for opt-in backends
 MIR native artifact persistence          intentionally unsupported

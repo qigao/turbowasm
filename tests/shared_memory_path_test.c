@@ -42,7 +42,7 @@ static turbowasm_value invoke_synthetic(
     size_t result_count = 0u;
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
 
-    assert(turbowasm_instance_invoke_interpreter_internal(
+    assert(turbowasm_instance_invoke_internal(
                instance,
                function_index,
                NULL, 0u,

@@ -182,7 +182,7 @@ static void turbowasm_execution_entry(coro_t *co, void *arg) {
         return;
 
     execution->instance->pending_exception = NULL;
-    status = turbowasm_instance_invoke_interpreter_internal(
+    status = turbowasm_instance_invoke_internal(
         execution->instance,
         execution->function_index,
         execution->arguments,
@@ -331,7 +331,7 @@ void turbowasm_execution_destroy(turbowasm_execution *execution) {
     if (impl->state == TURBOWASM_EXECUTION_YIELDED) {
         const turbowasm_module_impl *module = turbowasm_module_impl_get(impl->instance->module);
         turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(&module->config);
-        /* Unwind at the suspended safe point so every interpreter allocation
+        /* Unwind at the suspended safe point so every frame allocation
          * and root registration follows its ordinary cleanup path. Host waits
          * return INTERRUPTED; their callbacks must propagate that status. */
         impl->destroying = true;

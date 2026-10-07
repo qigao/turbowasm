@@ -1961,6 +1961,11 @@ target_include_directories(turbowasm_eh_native_test PRIVATE "${PROJECT_SOURCE_DI
 target_link_libraries(turbowasm_eh_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
 add_test(NAME turbowasm_eh_native_test COMMAND turbowasm_eh_native_test)
 
+add_executable(turbowasm_resumable_native_test resumable_native_test.c)
+target_include_directories(turbowasm_resumable_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_resumable_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_resumable_native_test COMMAND turbowasm_resumable_native_test)
+
 add_executable(turbowasm_gc_native_test gc_native_test.c)
 target_include_directories(turbowasm_gc_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(turbowasm_gc_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
@@ -2029,6 +2034,12 @@ if(TURBOWASM_ENABLE_MIR_JIT)
   target_compile_definitions(turbowasm_mir_eh_test PRIVATE TURBOWASM_TEST_MIR=1)
   target_link_libraries(turbowasm_mir_eh_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
   add_test(NAME turbowasm_mir_eh_test COMMAND turbowasm_mir_eh_test)
+
+  add_executable(turbowasm_mir_resumable_test resumable_native_test.c)
+  target_include_directories(turbowasm_mir_resumable_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_resumable_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_resumable_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_resumable_test COMMAND turbowasm_mir_resumable_test)
 
   add_executable(turbowasm_mir_vector_calls_test vector_calls_test.c)
   target_include_directories(turbowasm_mir_vector_calls_test PRIVATE "${PROJECT_SOURCE_DIR}/src")

@@ -32,15 +32,16 @@ typedef enum turbowasm_yield_reason {
 } turbowasm_yield_reason;
 
 /*
- * Create a restartable interpreter invocation.
+ * Create a restartable invocation on the instance's execution owner thread.
  *
  * Arguments are copied into execution-owned storage. The instance and its
- * module are borrowed and must outlive the execution handle. Result storage is
- * owned by the execution until destroy.
+ * module, linked providers and attached backend are borrowed and must outlive
+ * the execution handle, including while suspended. Result storage is owned by
+ * the execution until destroy.
  *
- * Resumable execution intentionally uses the interpreter reference path even
- * when a JIT backend is attached. Native-frame resume is not part of this
- * contract; eligible one-shot invoke calls keep their existing tiering path.
+ * An attached backend that supports resumable execution uses the instance's
+ * ordinary per-function tiering policy. Other invocations use the interpreter.
+ * Suspended frames retain their GC roots and continue without replaying effects.
  */
 turbowasm_status turbowasm_execution_create(
     turbowasm_execution *execution,

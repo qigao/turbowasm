@@ -6491,6 +6491,7 @@ turbowasm_status turbowasm_mir_backend_create(
 
     out_backend->context = context;
     out_backend->supports_execution_control = true;
+    out_backend->supports_resumable_execution = true;
     out_backend->is_function_eligible =
         turbowasm_mir_is_function_eligible;
     out_backend->compile_function =

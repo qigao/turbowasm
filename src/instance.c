@@ -6144,7 +6144,7 @@ done:
     return status;
 }
 
-turbowasm_status turbowasm_instance_invoke_interpreter_internal(
+turbowasm_status turbowasm_instance_invoke_internal(
     turbowasm_instance_impl *instance,
     uint32_t function_index,
     const turbowasm_value *arguments,
@@ -6157,7 +6157,7 @@ turbowasm_status turbowasm_instance_invoke_interpreter_internal(
     if (instance == NULL || result_count == NULL || trap == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    return turbowasm_exec_function(
+    return turbowasm_dispatch_function(
         instance,
         function_index,
         arguments,
@@ -6384,7 +6384,9 @@ dispatch_again:
         instance->jit_functions == NULL ||
         function_index >= instance->jit_function_count ||
         (execution != NULL &&
-         !instance->jit_backend.supports_execution_control)) {
+         (!instance->jit_backend.supports_execution_control ||
+          (execution->suspend != NULL &&
+           !instance->jit_backend.supports_resumable_execution)))) {
         goto interpret;
     }
 

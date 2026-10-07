@@ -493,3 +493,34 @@ With the pinned tool/spec environment on Linux, reproduce the full differential
 gate using `cmake --preset ci-core3-mir-user`,
 `cmake --build --preset ci-core3-mir-user` and
 `ctest --preset ci-core3-mir-user --verbose -R "^turbowasm_conformance_core3-mir$"`.
+
+## MIR typed exceptions and native admission audit
+
+Implementation `4f01c65` lowers `try_table`, `throw` and `throw_ref` with static
+lexical catch dispatch. Runtime retains tag identity, exception payload ownership
+and cross-instance transfer. Tail calls exit their caller's protected region.
+`eh_native_test.c` covers all four catch variants, nested/ordered catches,
+rethrow, null/trap distinction, direct/indirect/reference/tail/mixed-tier calls,
+imported tag identity, mixed scalar/vector/GC payloads, fuel and allocation failure.
+
+Windows ASan passed 147/147 tests in 265.37 seconds, including both Core 3.0 gates.
+The [native CI run](https://github.com/qigao/turbowasm/actions/runs/37641495192)
+passed all five jobs. Linux MIR passed 168/168 tests in 1.15 seconds; macOS arm64
+MIR passed 168/168 in 2.69 seconds. Android remains cross-build validation only.
+The [full differential gate](https://github.com/qigao/turbowasm/actions/runs/37641504405)
+reported:
+
+```text
+CORE_CONFORMANCE pass=63970 fail=0 unsupported=0 total=63970 files=258
+TEXT_FRONTEND_CONFORMANCE pass=1229 fail=0 provider=wasm-tools (excluded from TurboWasm binary counts)
+MIR_REPLAY compiled=6606 interpret_only=230 cold=2179 calls=6836 files=258
+DIFFERENTIAL_REPLAY files=258 commands=63970 mismatches=0
+```
+
+All 230 interpret-only entries were imported functions (`imported=1 eligible=0`),
+whose dispatch remains Runtime-owned; no observed defined-function entry was
+interpret-only. These are function-state counts, not instruction coverage. EH
+admission also lets previously cold callees enter tiering, so the totals cannot
+be computed by simply subtracting the former 44 EH definitions from 272.
+Resumable native execution, Component encoding/post-return/async and broader
+WASI 0.2 coverage still require their separate qualification.

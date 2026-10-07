@@ -306,7 +306,7 @@ int64_t turbowasm_jit_indirect_call(turbowasm_jit_invocation_context *context,
     int64_t opcode, int64_t type_index, int64_t table_index,
     const turbowasm_value *arguments, turbowasm_value *results);
 
-turbowasm_status turbowasm_instance_invoke_interpreter_internal(
+turbowasm_status turbowasm_instance_invoke_internal(
     turbowasm_instance_impl *instance,
     uint32_t function_index,
     const turbowasm_value *arguments,
