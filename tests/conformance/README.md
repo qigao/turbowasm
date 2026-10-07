@@ -220,9 +220,53 @@ and all supported null carriers are preserved. The table storage, scalar, SIMD,
 memory64 and atomic native regressions also passed with the expanded private ABI.
 
 This qualifies rooted reference cells and the listed operations, not a complete
-native Core 3.0 backend. Native GC instructions, full EH, reference globals and
-remaining reference-control instructions, general indirect calls/tails, vector
+native Core 3.0 backend. General indirect calls/tails have the subsequent
+qualification below. Native GC instructions, full EH, reference globals and
+remaining reference-control instructions, vector
 call signatures and remaining numeric instructions still need implementation and
 qualification. Public resumable execution continues to use the interpreter.
 Component UTF-16/Latin1+UTF-16, post-return and full async/future/stream coverage,
 and broader WASI 0.2 data paths remain separate work.
+
+## Native indirect call qualification
+
+At revision `e4b7777`, [native CI](https://github.com/qigao/turbowasm/actions/runs/37625269227)
+passed all five jobs. Linux MIR passed 158/158 tests in 1.44 seconds and macOS
+arm64 MIR passed 158/158 in 1.98 seconds. Windows qualification passed 140/140
+plus 16/16 installed-package tests; Linux qualification passed 141/141 plus
+17/17 installed-package tests. Android cross-compilation and installed-consumer
+builds passed; no Android runtime execution is claimed.
+
+The shared resolver and initial implementation at `f05eeb3` passed the complete
+Windows ASan profile: 142/142 tests in 236.49 seconds, including both Core 3.0
+gates. Its [first native run](https://github.com/qigao/turbowasm/actions/runs/37624273321)
+also passed all five jobs. Follow-up `e4b7777` resolves imported function aliases
+inside the native tail dispatcher, preventing a tail chain from accumulating
+interpreter wrapper frames. That follow-up passed six local ASan regressions in
+4.07 seconds and the complete native CI above.
+
+`indirect_native_test.c` has ten cases and requires compiled callers in its MIR
+variant. It covers `call_indirect`, `call_ref`, `return_call_indirect` and
+`return_call_ref` with table32/table64, seven-value mixed scalar/reference tuples,
+NaN payloads and negative zero, empty results, zero-argument host targets,
+interpreted targets, host collection/re-entry, function subtyping and null/bounds/
+signature traps. Imported tables retain their original provider; tests require
+compiled provider functions and verify pending exceptions return to the caller.
+Cross-store scalar targets release their temporary root registration, and legacy
+instance-relative funcrefs bind their owner before a cross-instance transfer.
+
+Long table/reference tail chains and a provider/imported-alias cycle run for 1024
+transfers under a 32-root limit. Native-only managed values survive host-triggered
+collections, while frame registrations and unreachable objects are released at
+completion. Fuel boundaries are compared with the interpreter and every Runtime
+allocation failure in ordinary and tail reference calls is checked for cleanup
+and recovery. The fixture binaries were generated and validated with wasm-tools
+1.261.0. Host tests use the existing host-signature API; this increment does not
+add GC carriers to host signature declarations.
+
+These results qualify scalar/reference indirect calls and tails through Runtime,
+not full native Core 3.0 execution. Native GC and EH instructions, reference
+globals and remaining reference control, vector call signatures and remaining
+numeric instructions are still gaps. Public resumable execution remains on the
+interpreter. Component encoding/post-return/async coverage and broader WASI 0.2
+data paths remain separate work.
