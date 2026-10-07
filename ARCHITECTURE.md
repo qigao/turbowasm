@@ -199,6 +199,92 @@ changes. Tests must require compiled callers, exercise nested mixed and empty
 tuples, compare fuel/trap behavior, and verify allocation failure and cleanup.
 Rollback removes general-call admission, emission and scratch allocation together.
 
+## Component host values and resource ownership (approved design)
+
+Approved by the user on 2026-10-07; implementation is pending. This design closes
+the current scalar/string/list-only host boundary in `component_api.c`; it does
+not change Core Runtime value layouts. The existing canonical codec, type graph,
+resource table and call-scope rollback remain the semantic implementation.
+The reference contract is the [Component Model Canonical ABI](https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md).
+
+The public `turbowasm_component_host_value` enum/union gains record, tuple,
+variant, option, result, enum, flags, own and borrow. Record and tuple items use
+the declared type order. Variant/option/result contain a case index and optional
+payload pointer; validation rejects inconsistent payload presence and invalid
+case indices. Enum carries its case index. Flags use a counted `uint32_t` word
+array, with unused high bits rejected. All lengths, recursive traversal and
+allocation sizes are bounded by declared types and configured Runtime limits;
+no arbitrary map or raw representation integer serves as a resource value.
+
+An own value contains an opaque, uniquely owned host resource handle. Its private
+state records the originating live instance, nominal resource identity and the
+abstract representation. Returned resources retain that instance, its decoded
+component and capability owner until transfer or release. Callers must not copy
+own handles with struct assignment; nested own values follow the same rule.
+Nominal checks include instance provenance, so a matching numeric type index in
+an unrelated instance cannot admit a handle. Legitimate linked identities must
+be resolved through the existing instance graph, never structural equality.
+
+The public operations are:
+
+| Operation | Contract |
+| --- | --- |
+| Existing `turbowasm_component_instance_invoke` and `turbowasm_component_call_create` | Keep const, non-consuming arguments. Accept composites and borrow values; reject any own argument before lowering. |
+| New `turbowasm_component_instance_invoke_move` | Same outputs/status/trap parameters as invoke, with mutable host-value arguments. Consume own leaves only after successful admission; other input storage remains caller-owned. |
+| New `turbowasm_component_call_create_move` | Same parameters as call_create, with mutable arguments. Successful creation transfers own leaves to the retained call; later resume never repeats that transfer. |
+| New `turbowasm_component_host_value_borrow(const own*, borrow*)` | Create a non-owning view of one live own handle; reject non-own, moved or invalid sources. The source must outlive the view's use at call admission. |
+| `turbowasm_component_host_value_destroy` returns `turbowasm_status` | Recursively release returned storage/resources, clear consumed values, and report a destructor failure rather than silently discard it. Existing scalar/string/list callers may continue ignoring its always-successful normal return. |
+
+The move transaction has three phases: validate the complete argument tree and
+nominal identities; prepare canonical handles and all bounded bookkeeping; commit
+ownership and clear the caller's own leaves. Failure before commit leaves those
+leaves owned by the caller and rolls back prepared handles. Guest realloc may
+already have run during preparation; guest memory and external side effects are
+not promised to roll back. After commit, execution failure does not return
+ownership to the caller. A not-yet-started restartable call owns its transferred
+resources and must release them if destroyed before execution.
+
+Borrow admission pins the originating owner for the entire call, including fuel
+yields and host waits. Moving or destroying an own value with active loans
+returns INVALID_ARGUMENT without changing it. A call retains the instance, so
+releasing the public instance handle cannot leave a suspended call dangling.
+Terminal completion, trap, cancellation and call destruction each end the borrow
+scope exactly once. Borrow values cannot escape as results where the declared
+Component function type forbids them.
+
+Destroy preflights the complete value tree for active loans before changing it.
+Once destruction begins, each own handle is invalidated before invoking its
+destructor, preventing reentrant double destruction. Cleanup continues through
+the remaining children after a destructor failure and returns the first error;
+the released value stays empty and is not retryable. No implicit guest callbacks
+are added to instance teardown. Existing internal instance-owned resources remain
+governed by the exec/capability teardown contract. Lift/allocation failures after
+a resource has left a canonical table must release the lifted owner, including
+when a later sibling conversion fails.
+
+The model remains single-threaded per instance; retaining an instance is not a
+thread-safety guarantee. Checked retain/lend counters fail before overflow.
+Resource handles and borrow records use existing bounded table/call capacities
+and Runtime allocation limits. Result conversion moves codec-owned storage when
+its representation matches, otherwise uses bounded copies with one cleanup path.
+
+Alternatives considered: retaining const arguments while silently consuming own
+values violates the current contract; exposing raw reps loses nominal identity
+and lifetime protection; duplicating owned resources invents unsupported cloning
+semantics. Explicit move entry points keep existing non-consuming callers stable.
+The cost is additional bookkeeping and retained instance lifetime for resources
+and suspended calls. These are ownership costs, not claimed speed improvements.
+
+Compatibility: enum additions and union growth require rebuilding Component
+consumers; changing destroy's return type also affects stored function pointers.
+Existing names, scalar/string/list behavior, synchronous result cardinality and
+Core Runtime ABI remain unchanged. C/C++ headers, installed consumers, nested
+composite round trips, wrong nominal identity, duplicate ownership, move rollback,
+borrowed-owner release, destructor traps/reentry, cancellation and allocation
+failure must be tested. Old source examples remain valid; ownership examples must
+check destroy status. Rollback removes the added host kinds and move APIs together
+with retained-owner bookkeeping; no persisted data format requires migration.
+
 ## Reusable compiled-artifact policy
 
 Validated-module artifacts and compiled-function artifacts are separate layers.

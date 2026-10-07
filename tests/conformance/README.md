@@ -49,9 +49,9 @@ Instrumented native executables and resumable coroutine stacks use an explicit
 8 MiB budget (`TURBOWASM_SANITIZER_STACK_BYTES`): MSVC's default executable stack
 was exhausted by ASan frames before the interpreter's Wasm call-depth trap.
 The ordinary build keeps its existing stack/depth policy.
-On Windows with the Salts 2.1.0 SDK, the complete ASan run at `609599d` passed
-134/134 tests in 182.39 seconds, including the Core 3.0 gates, GC lifecycle,
-scalar result/call tuples and optional CNet adapter tests.
+On Windows with the Salts 2.1.0 SDK, the complete ASan run at `051d149` passed
+135/135 tests in 370.34 seconds, including the Core 3.0 gates, GC lifecycle,
+scalar result/call tuples, all atomic descriptors and optional CNet adapter tests.
 The earlier CNet timeout was a process-launch failure: its CTest `ENVIRONMENT`
 property split Windows `PATH` at semicolons and removed the ASan runtime DLL
 directory. `ENVIRONMENT_MODIFICATION` now prepends SDK paths while preserving
@@ -95,9 +95,9 @@ specification checkout and `TURBOWASM_CORE3_TOOLS` before configuration.
 `memory64_execution_test.c` covers shared memory64 atomic operations, imported
 concurrent increments, wait/notify across growth, artifact restore, 64-bit
 address/offset bounds, bulk memory, and the native helper ABI. The MIR build
-compiles this same suite as `turbowasm_mir_memory64_test`: every native-fixture
-invocation additionally requires `TURBOWASM_JIT_COMPILED`, including trapping
-calls, so interpreter fallback cannot pass the native gate. WAT fixture sources
+compiles this same suite as `turbowasm_mir_memory64_test`: shared and unshared
+invocations additionally require `TURBOWASM_JIT_COMPILED`, including trapping
+calls and imported concurrent workers, so interpreter fallback cannot pass the native gate. WAT fixture sources
 and generated C byte arrays are kept together under `tests/fixtures/`.
 
 The `core3-mir` CI entry uses `ci-core3-mir-user` and the pinned Core 3.0
@@ -107,21 +107,26 @@ commands and nonzero native compilation required. Existing Linux/macOS
 The macOS profile uses GCC 15 to match the published Salts TinyTest thread-local
 ABI. Unix CI bootstraps the shared cache contract's hash-verified vcpkg tool
 before invoking its setup action; hosted runner tool updates cannot silently
-change that contract. Shared memories remain interpreter-only, independent of
-their address width.
+change that contract. Shared backing uses Runtime synchronization in both tiers;
+each concurrent instance owns a distinct MIR backend/context.
 
-At revision `609599d`, [native CI](https://github.com/qigao/turbowasm/actions/runs/37599801722)
+At revision `051d149`, [native CI](https://github.com/qigao/turbowasm/actions/runs/37601573736)
 passed all five jobs: Windows qualification and installed consumers, Linux
 qualification and installed consumers, Android build/installed consumers, and
-Linux/macOS MIR. Both MIR jobs passed 145/145 tests, including mandatory native
+Linux/macOS MIR. Both MIR jobs passed 147/147 tests, including mandatory native
 memory64 execution, mixed scalar arguments, four-argument calls, NaN payloads,
 negative zero and bounds traps. `scalar_results_test.c` additionally requires
 compiled callers for empty and mixed scalar result tuples, eight-result calls,
 function-label branches, self tail calls, nested compiled/interpreted calls,
-host re-entry, allocation failure/recovery and fuel/trap parity. The separate
-[Core 3.0 memory64 differential gate](https://github.com/qigao/turbowasm/actions/runs/37599807004)
+host re-entry, allocation failure/recovery and fuel/trap parity.
+`atomic_lowering_test.c` checks all 63 atomic descriptors against interpreter
+results and backing bytes, in shared/unshared memory32/memory64, with alignment
+and bounds traps. The memory64 suite additionally checks concurrent increments,
+wait/notify across growth, fence, wait interruption cleanup and fuel before an
+atomic side effect. The separate
+[Core 3.0 memory64 differential gate](https://github.com/qigao/turbowasm/actions/runs/37601580290)
 also passed. These results do not qualify the unimplemented native GC/table64,
-shared-memory/atomic, full exception, reference/vector call boundaries or general
+full exception, reference/vector call boundaries or general
 non-self tail-call paths.
 
 The local Windows build can execute Runtime/helper regressions, but cannot
