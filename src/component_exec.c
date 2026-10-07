@@ -1781,15 +1781,14 @@ static turbowasm_status configure_canon_lower_memory(
     return TURBOWASM_OK;
 }
 
-/* Calls have retained ownership scopes; stream payloads still need independent
- * per-operation scopes before they can carry resources or endpoints. */
+/* The canonical transfer walker admits resources and endpoint values while
+ * retaining recursive type validation for both calls and buffer payloads. */
 static turbowasm_status async_value_supported(const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_ref ref, bool ownership) {
+    turbowasm_component_type_ref ref) {
     uint32_t features;
     if (!turbowasm_component_transfer_type_features(graph, ref, &features))
         return TURBOWASM_UNSUPPORTED;
-    return (!ownership && (features & (TURBOWASM_COMPONENT_VALUE_RESOURCES | TURBOWASM_COMPONENT_VALUE_ENDPOINTS)))
-        ? TURBOWASM_UNSUPPORTED : TURBOWASM_OK;
+    return TURBOWASM_OK;
 }
 
 static turbowasm_status initialize_async_state(turbowasm_component_exec *exec,
@@ -1819,11 +1818,11 @@ static turbowasm_status initialize_async_state(turbowasm_component_exec *exec,
         const turbowasm_component_type *type = turbowasm_component_type_graph_get(
             &binary->type_graph, definition->type_index);
         if (definition->kind == TURBOWASM_COMPONENT_TASK_RETURN && definition->has_result)
-            status = async_value_supported(&binary->type_graph, definition->result, true);
+            status = async_value_supported(&binary->type_graph, definition->result);
         else if (turbowasm_component_endpoint_builtin_kind(definition->kind, &future) && type != NULL &&
                  (type->kind == TURBOWASM_COMPONENT_TYPE_STREAM || type->kind == TURBOWASM_COMPONENT_TYPE_FUTURE) &&
                  type->as.async_value.has_payload)
-            status = async_value_supported(&binary->type_graph, type->as.async_value.payload, false);
+            status = async_value_supported(&binary->type_graph, type->as.async_value.payload);
         if (status != TURBOWASM_OK) return status;
         if (definition->core_function_index >= exec->core_function_count)
             return TURBOWASM_MALFORMED_MODULE;
@@ -1865,6 +1864,19 @@ static turbowasm_status bind_async_builtin(turbowasm_component_exec *exec, uint3
         context->binding.memory.endpoint_context = &exec->async_endpoint_lift;
         turbowasm_component_exec_resource_codec_bind(&exec->async_resource_lift, exec, &context->binding.memory);
         context->binding.memory.resource_lower = NULL;
+    }
+    if (status == TURBOWASM_OK &&
+        (definition->kind == TURBOWASM_COMPONENT_STREAM_READ || definition->kind == TURBOWASM_COMPONENT_STREAM_WRITE ||
+         definition->kind == TURBOWASM_COMPONENT_FUTURE_READ || definition->kind == TURBOWASM_COMPONENT_FUTURE_WRITE)) {
+        const turbowasm_component_type *type = turbowasm_component_type_graph_get(&exec->binary->type_graph, definition->type_index);
+        uint32_t features = 0u;
+        if (type->as.async_value.has_payload &&
+            !turbowasm_component_transfer_type_features(&exec->binary->type_graph, type->as.async_value.payload, &features))
+            return TURBOWASM_UNSUPPORTED;
+        if ((features & (TURBOWASM_COMPONENT_VALUE_RESOURCES | TURBOWASM_COMPONENT_VALUE_ENDPOINTS)) != 0u) {
+            context->binding.buffer_prepare = turbowasm_component_exec_async_buffer_prepare;
+            context->binding.buffer_prepare_context = exec;
+        }
     }
     return status;
 }
@@ -2603,11 +2615,11 @@ static turbowasm_status initialize_lift_adapter(
         if (exec->async_functions == NULL || type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
             return TURBOWASM_UNSUPPORTED;
         for (parameter = 0; parameter < type->as.function.param_count; ++parameter) {
-            status = async_value_supported(&binary->type_graph, type->as.function.params[parameter], true);
+            status = async_value_supported(&binary->type_graph, type->as.function.params[parameter]);
             if (status != TURBOWASM_OK) return status;
         }
         if (type->as.function.has_result) {
-            status = async_value_supported(&binary->type_graph, type->as.function.result, true);
+            status = async_value_supported(&binary->type_graph, type->as.function.result);
             if (status != TURBOWASM_OK) return status;
         }
         binding.graph = &binary->type_graph; binding.function_type = lift->type_index;
@@ -3075,7 +3087,7 @@ turbowasm_status turbowasm_component_exec_destroy(
     turbowasm_component_exec *exec) {
     if (exec == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (exec->async_call_count != 0u || exec->async_driving || exec->async_resource_owners != 0u)
+    if (exec->async_call_count != 0u || exec->async_driving || exec->async_resource_owners != 0u || exec->async_buffer_owners != 0u)
         return TURBOWASM_TRAPPED;
     if (exec->task_domain.table != NULL) {
         uint32_t i;

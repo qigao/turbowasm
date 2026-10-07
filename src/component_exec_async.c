@@ -14,11 +14,11 @@ typedef struct turbowasm_component_exec_async_call {
     turbowasm_status failure;
 } turbowasm_component_exec_async_call;
 
-static turbowasm_status commit_values(void *context, turbowasm_component_task *task,
+static turbowasm_status commit_buffer(void *context,
     turbowasm_component_value *values, uint32_t count) {
     turbowasm_component_exec_async_transaction *transaction = context;
     turbowasm_status status;
-    (void)task; (void)values; (void)count;
+    (void)values; (void)count;
     status = turbowasm_component_exec_resource_codec_preflight(&transaction->resources);
     if (status != TURBOWASM_OK) return status;
     status = turbowasm_component_endpoint_codec_commit(&transaction->endpoints);
@@ -27,26 +27,64 @@ static turbowasm_status commit_values(void *context, turbowasm_component_task *t
     return turbowasm_component_exec_resource_codec_commit(&transaction->resources);
 }
 
-static turbowasm_status rollback_values(void *context, turbowasm_component_task *task) {
+static turbowasm_status rollback_buffer(void *context) {
     turbowasm_component_exec_async_transaction *transaction = context;
     turbowasm_status status, cleanup;
-    (void)task;
     status = turbowasm_component_endpoint_codec_rollback(&transaction->endpoints);
     cleanup = turbowasm_component_exec_resource_codec_rollback(&transaction->resources);
     return status != TURBOWASM_OK ? status : cleanup;
 }
 
-static void bind_values(turbowasm_component_canonical_memory *memory,
-    turbowasm_component_async_transaction *transaction, turbowasm_component_exec_async_transaction *codec,
+static turbowasm_status commit_values(void *context, turbowasm_component_task *task,
+    turbowasm_component_value *values, uint32_t count) {
+    (void)task;
+    return commit_buffer(context, values, count);
+}
+
+static turbowasm_status rollback_values(void *context, turbowasm_component_task *task) {
+    (void)task;
+    return rollback_buffer(context);
+}
+
+static void bind_codec(turbowasm_component_canonical_memory *memory, turbowasm_component_exec_async_transaction *codec,
     turbowasm_component_exec *exec) {
     codec->endpoints.table = &exec->resource_table;
     memory->endpoint_lift = turbowasm_component_endpoint_codec_lift;
     memory->endpoint_lower = turbowasm_component_endpoint_codec_lower;
     memory->endpoint_context = &codec->endpoints;
     turbowasm_component_exec_resource_codec_bind(&codec->resources, exec, memory);
+}
+
+static void bind_values(turbowasm_component_canonical_memory *memory,
+    turbowasm_component_async_transaction *transaction, turbowasm_component_exec_async_transaction *codec,
+    turbowasm_component_exec *exec) {
+    bind_codec(memory, codec, exec);
     transaction->commit = commit_values;
     transaction->rollback = rollback_values;
     transaction->context = codec;
+}
+
+static turbowasm_status release_buffer(void *context) {
+    turbowasm_component_exec_async_transaction *codec = context;
+    turbowasm_status status = rollback_buffer(codec);
+    --codec->resources.exec->async_buffer_owners;
+    turbowasm_rt_free(codec);
+    return status;
+}
+
+turbowasm_status turbowasm_component_exec_async_buffer_prepare(void *context, turbowasm_component_buffer *buffer) {
+    turbowasm_component_exec *exec = context;
+    turbowasm_component_exec_async_transaction *codec;
+    if (exec == NULL || buffer == NULL || buffer->kind != TURBOWASM_COMPONENT_BUFFER_GUEST ||
+        buffer->guest.release != NULL) return TURBOWASM_INVALID_ARGUMENT;
+    if (exec->async_buffer_owners >= exec->resource_table.max_entries) return TURBOWASM_OUT_OF_MEMORY;
+    codec = turbowasm_rt_calloc(1u, sizeof(*codec));
+    if (codec == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    bind_codec(&buffer->guest.memory, codec, exec);
+    buffer->guest.commit = commit_buffer; buffer->guest.rollback = rollback_buffer;
+    buffer->guest.release = release_buffer; buffer->guest.context = codec;
+    ++exec->async_buffer_owners;
+    return TURBOWASM_OK;
 }
 
 static void append(turbowasm_component_exec *exec, turbowasm_component_exec_async_call *frame) {

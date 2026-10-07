@@ -905,7 +905,7 @@ handles already consumed by lifting stay invalid on failure. This is owner-threa
 state; no codec with pending lower reservations is shared between calls. A separate
 instance-owned lift-only codec lets task.return consume endpoints without retaining
 a transient host-call context. Ownership-bearing stream/future payload conversion
-remains separate integration work; the public async gate stays closed.
+uses the per-operation transactions described below; the public async gate stays closed.
 
 Local async resource conversion retains one owner record per lifted own/borrow
 value, bounded by the exec handle quota even while values are outside the table.
@@ -932,6 +932,23 @@ waits so a destructor cannot resolve or suspend its caller's async task. Nested
 destructors save/restore the enclosing context and auxiliary owner. Explicit async
 lowering from this synchronous destructor context remains gated until sync/async
 cross-call integration is complete.
+
+Ownership-bearing stream/future read/write buffers use the same combined resource
+and endpoint codec as async calls, with one separately allocated context per
+admitted endpoint operation. Context count is bounded by the exec handle quota;
+allocation failure leaves the endpoint and source values unchanged. The builtin
+prepares the context, then transfers its cleanup obligation to the endpoint's
+stable guest-buffer copy only on successful submission. Failed admission frees it
+immediately. Event/error delivery or cancellation releases it after any conversion
+has finished; a peer suspended in realloc keeps both endpoints guarded.
+
+All resource/endpoint reservations in a rendezvous batch commit together. Failed
+lowering rolls them back before temporary values are destroyed. Pending operations
+on the same builtin never share a mutable reservation list. The context keeps its
+exec alive until release, and finalization performs only non-suspending rollback
+and storage release. Host endpoints can exchange local resource/endpoint values;
+same-Component nonnumeric guest-to-guest copies retain their specified trap.
+Cross-instance resource import identity and progress are separate integration work.
 
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and

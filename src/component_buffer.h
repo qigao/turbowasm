@@ -16,6 +16,7 @@ typedef enum turbowasm_component_buffer_kind {
 typedef turbowasm_status (*turbowasm_component_buffer_commit_fn)(void *context,
     turbowasm_component_value *values, uint32_t count);
 typedef turbowasm_status (*turbowasm_component_buffer_rollback_fn)(void *context);
+typedef turbowasm_status (*turbowasm_component_buffer_release_fn)(void *context);
 
 /* Caller-owned stable storage, lent from endpoint submit through event/error
  * delivery. Host values are uniquely owned and read destinations start empty.
@@ -35,6 +36,11 @@ typedef struct turbowasm_component_buffer {
         uint64_t address;
         turbowasm_component_buffer_commit_fn commit;
         turbowasm_component_buffer_rollback_fn rollback;
+        /* Optional owned context for submit_guest only. Successful admission
+         * transfers this obligation to the endpoint; failed admission leaves it
+         * with the caller. Runs once on delivery, never during conversion;
+         * cleanup must not suspend. */
+        turbowasm_component_buffer_release_fn release;
         void *context;
     } guest;
 } turbowasm_component_buffer;

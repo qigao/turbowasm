@@ -45,7 +45,8 @@ turbowasm_status turbowasm_component_endpoint_pair_open(
  * release buffer borrows; the failed pair can close but cannot copy or move. */
 turbowasm_status turbowasm_component_endpoint_submit(
     turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer);
-/* Own the descriptor (not guest memory/contexts) until event delivery. A sync
+/* Own the descriptor until event delivery; guest memory stays borrowed. A
+ * supplied guest.release transfers context cleanup on successful admission. A sync
  * submission pins before conversion; the caller must wait_end/cancel its pin.
  * Failure before admission preserves the endpoint and consumes no buffer. */
 turbowasm_status turbowasm_component_endpoint_submit_guest(

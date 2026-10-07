@@ -1296,9 +1296,33 @@ The related regression passed 80/80 targets in 4.21 seconds. New cases cover own
 round trips, mixed resource/endpoint commit and rollback, borrow lender timing,
 premature guest drop, host-owner lifetime/quota/failing destructor, inaccessible
 reservations, parameter/result realloc unwind, destructor context/fuel/trap/wait
-and allocation failures. Native MIR qualification of resource integration is
-pending; the same suite also asserts compiled resource callees and destructors.
+and allocation failures. At `8534118`, the
+[native run](https://github.com/qigao/turbowasm/actions/runs/37702027034)
+passed all five jobs. Linux MIR passed 198/198 targets in 1.96 seconds and macOS
+arm64 MIR passed 198/198 in 3.08 seconds. The compiled async-lower suite passed in
+0.13 seconds on each platform, including assertions for compiled resource callees
+and destructors.
 
-Async capability imports, cross-instance resource borrowing/progress, ownership-
-bearing stream/future payload conversion, public task/endpoint owners, synchronous
+## Instantiated ownership-bearing stream/future payloads
+
+Local stream/future builtins now retain independent resource/endpoint codecs for
+each admitted operation. Contexts share the instance handle quota as a bound and
+remain alive through event/error/cancellation delivery, including after the
+initiating task exits. Failed admission releases the prepared context immediately.
+Mixed payload conversion commits all handle reservations together or rolls them
+back before releasing values; suspended guest realloc retains both endpoint guards.
+Numeric and string-only copies keep their existing allocation behavior.
+
+`component_async_payload_test.c` executes validated Component binaries with
+memory32/64, owned-resource batches, mixed resource/endpoint/string values and
+owned-resource futures in both directions. It checks independent concurrent reads,
+realloc suspension/unwind, context lifetime after task exit, cancellation delivery,
+out-of-bounds admission, quota rollback, the same-Component nonnumeric copy trap,
+and allocation failures. Every case checks allocation cleanup. Windows ASan passed
+12 cases with 867 assertions; the related regression passed 81/81 targets in
+4.36 seconds. Native MIR qualification of this payload integration is pending;
+the MIR variant asserts that the exercised guest functions are compiled.
+
+Async capability imports, cross-instance resource borrowing/progress and payload
+conversion, public task/endpoint owners, synchronous
 destructor-to-async lowering and the broader Component/WASI gaps remain open.

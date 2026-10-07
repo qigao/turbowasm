@@ -104,6 +104,7 @@ static turbowasm_status copy_endpoint(turbowasm_component_task_builtin *binding,
     uint64_t length = future ? 1 : pointer_value(binding, &arguments[2]);
     bool synchronous = !binding->definition.is_async;
     if (length > TURBOWASM_COMPONENT_COPY_MAX_LENGTH ||
+        endpoint->operation != NULL || endpoint->guest_buffer.leased ||
         (synchronous && !turbowasm_host_call_can_wait(call))) return TURBOWASM_TRAPPED;
     buffer.kind = TURBOWASM_COMPONENT_BUFFER_GUEST; buffer.length = (uint32_t)length;
     buffer.guest.graph = binding->graph;
@@ -111,8 +112,15 @@ static turbowasm_status copy_endpoint(turbowasm_component_task_builtin *binding,
     buffer.guest.memory = binding->memory; buffer.guest.address = pointer_value(binding, &arguments[1]);
     buffer.guest.commit = binding->buffer_commit; buffer.guest.rollback = binding->buffer_rollback;
     buffer.guest.context = binding->buffer_context;
+    if (binding->buffer_prepare != NULL && length != 0u) {
+        status = binding->buffer_prepare(binding->buffer_prepare_context, &buffer);
+        if (status != TURBOWASM_OK) return status;
+    }
     status = turbowasm_component_endpoint_submit_guest(endpoint, &buffer, synchronous);
-    if (status != TURBOWASM_OK) return status == TURBOWASM_INVALID_ARGUMENT ? TURBOWASM_TRAPPED : status;
+    if (status != TURBOWASM_OK) {
+        if (buffer.guest.release != NULL) (void)buffer.guest.release(buffer.guest.context);
+        return status == TURBOWASM_INVALID_ARGUMENT ? TURBOWASM_TRAPPED : status;
+    }
     status = receive_event(binding, call, endpoint, synchronous, &payload);
     if (status == TURBOWASM_OK) {
         result->kind = binding->results[0];

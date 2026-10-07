@@ -187,7 +187,7 @@ typedef struct turbowasm_component_exec {
     /* Lift-only codec: no shared lower reservations across retained calls. */
     turbowasm_component_endpoint_codec async_endpoint_lift;
     turbowasm_component_exec_resource_codec async_resource_lift;
-    uint32_t async_resource_owners;
+    uint32_t async_resource_owners, async_buffer_owners;
     turbowasm_component_task_binding *async_functions;
     turbowasm_component_exec_async_builtin *async_builtins;
     struct turbowasm_component_exec_async_call *async_calls, *async_calls_tail;
@@ -230,8 +230,8 @@ turbowasm_status turbowasm_component_exec_resource_release(
     turbowasm_component_exec *exec, uint64_t identity, turbowasm_value rep);
 
 /* Private staged async integration. Explicit nonzero bounded quotas; borrows
- * binary/source bytes. Local resource/endpoint values use invocation-owned transactions;
- * async imports, cross-instance borrowing and ownership-bearing stream payloads remain gated.
+ * binary/source bytes. Local resource/endpoint values use invocation- or
+ * buffer-owned transactions; async imports and cross-instance borrowing remain gated.
  * No public Component loader calls this entry. */
 turbowasm_status turbowasm_component_exec_init_async(
     turbowasm_component_exec *exec, const turbowasm_component_binary *binary,
@@ -255,6 +255,9 @@ turbowasm_status turbowasm_component_exec_async_abort(turbowasm_component_exec *
 turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_host_call *call,
     const turbowasm_value *arguments, size_t argument_count, turbowasm_value *results,
     size_t result_capacity, size_t *result_count, turbowasm_trap *trap);
+/* Allocate one quota-bounded retained buffer transaction for an endpoint builtin.
+ * The caller releases it on failed admission; otherwise the endpoint owns it. */
+turbowasm_status turbowasm_component_exec_async_buffer_prepare(void *context, turbowasm_component_buffer *buffer);
 /* Refuses live async owners without destroying instances or bindings. */
 turbowasm_status turbowasm_component_exec_destroy(
     turbowasm_component_exec *exec);

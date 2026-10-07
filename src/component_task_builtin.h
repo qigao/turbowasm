@@ -22,6 +22,11 @@ typedef struct turbowasm_component_task_builtin {
     turbowasm_component_buffer_commit_fn buffer_commit;
     turbowasm_component_buffer_rollback_fn buffer_rollback;
     void *buffer_context;
+    /* Optional per-operation owner factory, overriding the borrowed codecs above.
+     * On success it supplies buffer.guest.release and stable context; on failure
+     * it retains no allocation. The endpoint adopts it only after admission. */
+    turbowasm_status (*buffer_prepare)(void *context, turbowasm_component_buffer *buffer);
+    void *buffer_prepare_context;
 } turbowasm_component_task_builtin;
 
 turbowasm_status turbowasm_component_task_builtin_bind(turbowasm_component_task_builtin *binding,

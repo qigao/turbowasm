@@ -5,12 +5,15 @@
 
 static turbowasm_status release_buffer(void *context) {
     turbowasm_component_endpoint *endpoint = context;
+    turbowasm_status cleanup = TURBOWASM_OK;
     if (endpoint->operation != NULL)
         endpoint->operation->leased = false;
+    if (endpoint->operation == &endpoint->guest_buffer && endpoint->guest_buffer.guest.release != NULL)
+        cleanup = endpoint->guest_buffer.guest.release(endpoint->guest_buffer.guest.context);
     endpoint->operation = NULL;
     endpoint->available = NULL;
     memset(&endpoint->guest_buffer, 0, sizeof(endpoint->guest_buffer));
-    return endpoint->failure;
+    return endpoint->failure != TURBOWASM_OK ? endpoint->failure : cleanup;
 }
 
 static turbowasm_component_handle_kind endpoint_kind(const turbowasm_component_endpoint *endpoint) {

@@ -422,4 +422,97 @@
   (func (export "resource-drop-trap") (type $number) (canon lift (core func $drop-trap) async (memory $m32)))
   (func (export "resource-drop-wait") (type $number) (canon lift (core func $drop-wait) async (memory $m32)))
   (func (export "resource-drop-return") (type $number) (canon lift (core func $drop-return) async (memory $m32)))
+  (type $own-stream (stream (own $resource)))
+  (type $mixed-stream (stream $mixed-value))
+  (type $own-future (future (own $resource)))
+  (type $payload-copy (func async (param "handle" u32) (param "address" u32) (param "count" u32) (result u32)))
+  (core func $own-stream-read (canon stream.read $own-stream (memory $m32)))
+  (core func $own-stream-read-async (canon stream.read $own-stream async (memory $m32)))
+  (core func $own-stream-write (canon stream.write $own-stream (memory $m64)))
+  (core func $mixed-stream-read (canon stream.read $mixed-stream (memory $m32) (realloc $r32)))
+  (core func $mixed-stream-write (canon stream.write $mixed-stream (memory $m64)))
+  (core func $own-future-read (canon future.read $own-future (memory $m32)))
+  (core func $own-future-write (canon future.write $own-future (memory $m64)))
+  (core instance $payload-imports
+    (export "read" (func $own-stream-read)) (export "read-async" (func $own-stream-read-async))
+    (export "write" (func $own-stream-write)) (export "mixed-read" (func $mixed-stream-read))
+    (export "mixed-write" (func $mixed-stream-write)) (export "future-read" (func $own-future-read))
+    (export "future-write" (func $own-future-write)) (export "new" (func $resource-new))
+    (export "drop" (func $resource-drop)) (export "stream-new" (func $stream-new))
+    (export "drop-read" (func $stream-drop-read)) (export "drop-write" (func $stream-drop-write))
+    (export "return32" (func $ret32)) (export "return64" (func $ret64)))
+  (core module $payload-worker
+    (import "a" "read" (func $read (param i32 i32 i32) (result i32)))
+    (import "a" "read-async" (func $read-async (param i32 i32 i32) (result i32)))
+    (import "a" "write" (func $write (param i32 i64 i64) (result i64)))
+    (import "a" "mixed-read" (func $mixed-read (param i32 i32 i32) (result i32)))
+    (import "a" "mixed-write" (func $mixed-write (param i32 i64 i64) (result i64)))
+    (import "a" "future-read" (func $future-read (param i32 i32) (result i32)))
+    (import "a" "future-write" (func $future-write (param i32 i64) (result i32)))
+    (import "a" "new" (func $new (param i32) (result i32))) (import "a" "drop" (func $drop (param i32)))
+    (import "a" "stream-new" (func $stream-new (result i64)))
+    (import "a" "drop-read" (func $drop-read (param i32))) (import "a" "drop-write" (func $drop-write (param i32)))
+    (import "a" "return32" (func $return32 (param i32))) (import "a" "return64" (func $return64 (param i32)))
+    (import "m" "m32" (memory $m32 1)) (import "m" "m64" (memory $m64 i64 1))
+    (data (memory $m64) (i64.const 4096) "hello")
+    (func $drop-values (param $addr i32) (param $count i32)
+      block $done loop $next
+        local.get $count i32.eqz br_if $done
+        local.get $addr i32.load $m32 call $drop
+        local.get $addr i32.const 4 i32.add local.set $addr
+        local.get $count i32.const 1 i32.sub local.set $count br $next
+      end end)
+    (func $write-values (param $addr i32) (param $count i32)
+      block $done loop $next
+        local.get $count i32.eqz br_if $done
+        local.get $addr i64.extend_i32_u i32.const 42 call $new i32.store $m64
+        local.get $addr i32.const 4 i32.add local.set $addr
+        local.get $count i32.const 1 i32.sub local.set $count br $next
+      end end)
+    (func (export "read") (param i32 i32 i32)
+      local.get 0 local.get 1 local.get 2 call $read drop
+      local.get 1 local.get 2 call $drop-values local.get 2 call $return32)
+    (func (export "read-async") (param i32 i32 i32)
+      local.get 0 local.get 1 local.get 2 call $read-async call $return32)
+    (func (export "write") (param i32 i32 i32)
+      local.get 1 local.get 2 call $write-values
+      local.get 0 local.get 1 i64.extend_i32_u local.get 2 i64.extend_i32_u call $write drop local.get 2 call $return64)
+    (func (export "mixed-read") (param i32 i32 i32)
+      local.get 0 local.get 1 local.get 2 call $mixed-read drop
+      local.get 1 i32.load $m32 call $drop
+      local.get 1 i32.const 4 i32.add i32.load $m32 call $drop-read
+      local.get 1 i32.const 8 i32.add i32.load $m32 i32.load8_u $m32 i32.const 104 i32.ne if unreachable end
+      local.get 2 call $return32)
+    (func (export "mixed-write") (param i32 i32 i32) (local $pair i64) (local $addr i64)
+      call $stream-new local.set $pair local.get 1 i64.extend_i32_u local.set $addr
+      local.get $addr i32.const 42 call $new i32.store $m64
+      local.get $addr i64.const 4 i64.add local.get $pair i32.wrap_i64 i32.store $m64
+      local.get $addr i64.const 8 i64.add i64.const 4096 i64.store $m64
+      local.get $addr i64.const 16 i64.add i64.const 5 i64.store $m64
+      local.get $pair i64.const 32 i64.shr_u i32.wrap_i64 call $drop-write
+      local.get 0 local.get $addr local.get 2 i64.extend_i32_u call $mixed-write drop local.get 2 call $return64)
+    (func (export "future-read") (param i32 i32 i32)
+      local.get 0 local.get 1 call $future-read drop local.get 1 i32.const 1 call $drop-values i32.const 1 call $return32)
+    (func (export "future-write") (param i32 i32 i32)
+      local.get 1 i32.const 1 call $write-values local.get 0 local.get 1 i64.extend_i32_u call $future-write drop
+      i32.const 1 call $return64)
+    (func (export "driver") i32.const 52 call $return32))
+  (core instance $payload-worker (instantiate $payload-worker
+    (with "a" (instance $payload-imports)) (with "m" (instance $memory))))
+  (alias core export $payload-worker "read" (core func $payload-read))
+  (alias core export $payload-worker "read-async" (core func $payload-read-async))
+  (alias core export $payload-worker "write" (core func $payload-write))
+  (alias core export $payload-worker "mixed-read" (core func $payload-mixed-read))
+  (alias core export $payload-worker "mixed-write" (core func $payload-mixed-write))
+  (alias core export $payload-worker "future-read" (core func $payload-future-read))
+  (alias core export $payload-worker "future-write" (core func $payload-future-write))
+  (alias core export $payload-worker "driver" (core func $payload-driver))
+  (func (export "payload-read") (type $payload-copy) (canon lift (core func $payload-read) async (memory $m32)))
+  (func (export "payload-read-async") (type $payload-copy) (canon lift (core func $payload-read-async) async (memory $m32)))
+  (func (export "payload-write") (type $payload-copy) (canon lift (core func $payload-write) async (memory $m64)))
+  (func (export "payload-mixed-read") (type $payload-copy) (canon lift (core func $payload-mixed-read) async (memory $m32)))
+  (func (export "payload-mixed-write") (type $payload-copy) (canon lift (core func $payload-mixed-write) async (memory $m64)))
+  (func (export "payload-future-read") (type $payload-copy) (canon lift (core func $payload-future-read) async (memory $m32)))
+  (func (export "payload-future-write") (type $payload-copy) (canon lift (core func $payload-future-write) async (memory $m64)))
+  (func (export "payload-driver") (type $number) (canon lift (core func $payload-driver) async (memory $m32)))
 )
