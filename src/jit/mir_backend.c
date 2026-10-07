@@ -5,6 +5,7 @@
 #include "../jit_memory_helper.h"
 #include "../jit_table_helper.h"
 #include "../jit_reference_helper.h"
+#include "../jit_gc_helper.h"
 #include "../relaxed_simd.h"
 #include "../simd_exec_table.h"
 
@@ -1965,6 +1966,15 @@ static bool turbowasm_mir_scan_structured_scalar(
         opcode_offset =
             (uint32_t)(reader.cursor - function->code - 1u);
 
+        if (opcode == TURBOWASM_JIT_GC_PREFIX) {
+            turbowasm_jit_gc_instruction op;
+            if (!turbowasm_jit_gc_decode(validation, &reader, &op) ||
+                (op.branches && op.label > control_size)) goto done;
+            calls.references = true;
+            if (calls.results == 0u) calls.results = 1u;
+            /* Constructor argument demand is collected only on reachable emission. */
+            continue;
+        }
         {
             uint32_t numeric;
             turbowasm_numeric_signature signature;
@@ -3290,6 +3300,40 @@ static turbowasm_status turbowasm_mir_structured_emit_simd(
     }
 }
 
+static bool turbowasm_mir_emit_gc(turbowasm_mir_text *text,
+    const turbowasm_jit_gc_instruction *op, turbowasm_mir_stack_value *stack,
+    uint32_t *stack_size, uint32_t *next_reg, uint32_t register_limit,
+    uint32_t *next_slot, uint32_t slot_limit,
+    turbowasm_mir_control_frame *controls, uint32_t control_size, uint32_t opcode_offset) {
+    uint32_t index, base, condition;
+    turbowasm_validation_func_type result_type = {0};
+    uint8_t result = op->result_type;
+    if (*stack_size < op->input_count || *next_reg >= register_limit ||
+        (op->result_type != 0 && register_limit - *next_reg < 2)) return false;
+    base = *stack_size - op->input_count;
+    for (index = 0; index < op->input_count; ++index) {
+        turbowasm_mir_stack_value value = stack[base + index];
+        if (value.type != turbowasm_jit_gc_input_type(op, index) ||
+            !turbowasm_mir_emit_value_store(text, "jit_call_args", index, value.type,
+                turbowasm_mir_reg_prefix(value.type), value.reg)) return false;
+    }
+    condition = (*next_reg)++;
+    if (!turbowasm_mir_text_appendf(text,
+            "mov jit_ref_arg, %lld\n"
+            "call tw_gc_p, tw_gc, r%u, jit_ctx, jit_ref_arg, %u, jit_call_args, %u, jit_call_results\n"
+            "call tw_call_status_p, tw_jit_call_status, jit_status, jit_ctx\n"
+            "bne jit_fail, jit_status, 0\n",
+            (long long)(intptr_t)op->code, condition, op->size, op->input_count)) return false;
+    *stack_size = base;
+    if (result != 0) {
+        result_type.results = &result; result_type.result_count = 1;
+        if (!turbowasm_mir_emit_call_results(text, &result_type, stack, stack_size,
+                next_reg, next_slot, slot_limit)) return false;
+    }
+    return !op->branches || turbowasm_mir_structured_branch_target(text, controls, control_size,
+        op->label, stack, *stack_size, true, condition, opcode_offset);
+}
+
 static bool turbowasm_mir_emit_global(turbowasm_mir_text *text,
     const turbowasm_validation_context *validation, turbowasm_reader *reader,
     uint8_t opcode, turbowasm_mir_stack_value *stack, uint32_t *stack_size,
@@ -3466,6 +3510,8 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 "i64:a, i64:b, i64:c, p:reference\n"
             "tw_reference_p: proto i64, p:ctx, i64:opcode, i64:immediate, p:out, p:a, p:b\n"
             "import tw_table, tw_reference\n"
+            "tw_gc_p: proto i64, p:ctx, p:code, i64:size, p:args, i64:count, p:result\n"
+            "import tw_gc\n"
             "tw_memory_p: proto i64, p:ctx, i64:op, i64:mem, i64:secondary, "
                 "i64:offset, i64:a, i64:b, i64:c\n"
             "tw_memory_load_f32_p: proto f, p:ctx, i64:mem, i64:offset, i64:address\n"
@@ -3744,6 +3790,14 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
         if (!turbowasm_mir_emit_checkpoint_text(&text))
             goto oom;
 
+        if (opcode == TURBOWASM_JIT_GC_PREFIX) {
+            turbowasm_jit_gc_instruction op;
+            if (!turbowasm_jit_gc_decode(validation, &reader, &op) ||
+                !turbowasm_mir_emit_gc(&text, &op, stack, &stack_size, &next_reg, register_count,
+                    &next_slot, slot_limit, controls, control_size, opcode_offset)) goto done;
+            if (calls.arguments < op.input_count) calls.arguments = op.input_count;
+            continue;
+        }
         {
             uint32_t numeric;
             turbowasm_numeric_signature signature;
@@ -5975,6 +6029,13 @@ static bool turbowasm_mir_register_call_externals(
         _Static_assert(sizeof(fn) == sizeof(address), "MIR external pointer size mismatch");
         memcpy(&address, &fn, sizeof(address));
         MIR_load_external(backend->mir, "tw_reference", address);
+    }
+    {
+        int64_t (*fn)(turbowasm_jit_invocation_context *, const uint8_t *, int64_t,
+            const turbowasm_value *, int64_t, turbowasm_value *) = turbowasm_jit_gc;
+        _Static_assert(sizeof(fn) == sizeof(address), "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(backend->mir, "tw_gc", address);
     }
     {
         float (*fn)(

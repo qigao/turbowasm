@@ -322,6 +322,29 @@ host/interpreted targets, long tail chains, GC, traps, fuel and allocation failu
 Rollback removes these four admission cases and their emitter together; Runtime
 interpreted behavior remains the compatibility baseline.
 
+### MIR GC instruction boundary
+
+GC lowering reuses `turbowasm_gc_execute` through a private adapter. The store
+remains the sole owner of object handles, type identities, quotas and collection;
+generated code neither caches object addresses nor implements a second heap.
+A decoded instruction view borrows validated module bytes and field metadata for
+the compiled function's lifetime. Its signature supplies complete value cells to
+the existing invocation scratch/root source; the returned cell is copied into a
+rooted native reference or vector location before another allocation or callback.
+Execution remains single-owner, with existing fuel/interruption checkpoints and
+Runtime errors. Cast branches reuse taken-only target assignments.
+
+Signatures describe fixed, repeated-array or heterogeneous-struct operands without
+allocating a descriptor array. Scratch demand is computed from reachable emission,
+so polymorphic dead array constructors cannot inflate the invocation budget.
+Allocation, array mutation, segment bounds and failed casts keep Runtime's error
+and commit semantics. The chosen adapter adds bounded value copies and preserves
+the installed API; inline object layouts were rejected because they would couple
+MIR to heap lifetime and duplicate checks. Rollback removes GC admission and its
+private adapter together. Validation includes all GC opcodes, packed/vector/ref
+fields, both cast edges, segment/drop behavior, null/bounds/cast traps, native-only
+roots under collection, quotas, allocation failures and fuel parity.
+
 ### MIR globals and nullable-reference control
 
 Global reads and writes use Runtime's existing global accessors. The provider's

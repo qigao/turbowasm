@@ -71,7 +71,7 @@ if(TURBOWASM_CORE3_TOOLS)
         --wasm-tools "${TURBOWASM_CORE3_TOOLS}"
         --runner $<TARGET_FILE:turbowasm_spec_runner>
         --compare-runner $<TARGET_FILE:turbowasm_spec_runner_mir>
-        --core-dir "${TURBOWASM_SPEC_ROOT}/test/core/memory64"
+        --core-dir "${TURBOWASM_SPEC_ROOT}/test/core"
         --all-core --maximum-unsupported 0)
     set_tests_properties(turbowasm_conformance_core3-mir PROPERTIES
       LABELS conformance TIMEOUT 600
