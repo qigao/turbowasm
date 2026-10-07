@@ -95,9 +95,11 @@ The instance, module, providers and backend must outlive the execution handle.
 
 The synchronous Component layer supports UTF-8, UTF-16LE and compact
 Latin-1/UTF-16 canonical strings, including nested host values and memory64.
-Core-instance `post-return` callbacks run after result lifting and share the
+`post-return` callbacks run after result lifting and share the
 resumable call's fuel/interruption control; failed cleanup discards unpublished
-results. Direct canonical-function bindings remain part of the binding work.
+results. Direct canonical cleanup targets are type checked and enforce the same
+leave restrictions as indirect calls from Core cleanup. Canonical lower and
+resource creation/deletion trap during cleanup or guest realloc.
 This does not complete the Component Model: local-function canonical lowering,
 the full async/future/stream surface and broader WASI 0.2 interfaces remain work
 in progress.

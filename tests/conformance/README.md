@@ -600,10 +600,22 @@ Implementation `6d108a7` passed all 48 selected Windows ASan
 Component/WASI 0.2/resumable/host-wait tests in 2.78 seconds and the complete
 150/150 tests in 218.86 seconds, using the VS developer environment required
 for the ASan runtime DLLs. The MIR variant additionally asserts that the producer and
-cleanup function are compiled while the cleanup frame is suspended; native
-qualification is pending in [this run](https://github.com/qigao/turbowasm/actions/runs/37650266391).
-Direct canonical builtins as cleanup targets remain
-part of the general canonical-function binding work.
+cleanup function are compiled while the cleanup frame is suspended. The
+[native run](https://github.com/qigao/turbowasm/actions/runs/37650266391) passed all
+five jobs: Linux MIR 173/173 in 2.00 seconds, macOS arm64 MIR 173/173 in 2.02
+seconds, Windows, ordinary Linux and the Android cross-build. Direct canonical
+cleanup targets were added after this qualification, as described below.
+
+Direct canon lower and resource.drop cleanup targets now pass signature admission
+and trap on the canonical leave gate before provider or handle side effects.
+Core cleanup also cannot call resource.new/drop, while resource.rep is permitted.
+Guest realloc shares this gate. The expanded post-return test exercises both
+synchronous and resumable direct targets, new/drop preservation of resource-table
+ownership, legal representation reads, invalid new/rep cleanup signatures, and
+provider exclusion during realloc. Both modified fixtures pass wasm-tools
+validation. The MIR test variant attaches backends to the resource fixture too.
+The expanded Windows ASan selection passed 48/48 in 2.05 seconds; native
+qualification of these additional bindings and guards is pending.
 
 ```powershell
 cmake --build --preset win-core3-asan-user

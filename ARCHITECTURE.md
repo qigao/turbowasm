@@ -640,10 +640,19 @@ of Component types and preserves the installed ABI. Removing the hook and
 rejecting the option again is the rollback path. Validation includes direct and
 indirect results, empty results, allocator/lift failures, cleanup traps/exceptions,
 cross-instance cleanup, canonical-leave rejection, fuel yields and cancellation.
-The executable binding boundary currently resolves Core-instance functions,
-including their imported functions. Direct canonical builtins as cleanup targets
-remain with the general canonical-function binding work; they are not silently
-treated as missing cleanup.
+Cleanup binding admits Core-instance functions and canonical functions with the
+required signature. Canonical lower and resource.drop targets always trap on
+invocation because post-return clears `may_leave`; resource.new and resource.rep
+cannot match a zero-result cleanup signature. The same leave check guards new
+and drop reached indirectly through Core imports, before handle mutation or a
+destructor/provider callback. Resource.rep remains permitted inside Core cleanup.
+This follows the pinned resource builtin definitions, without routing a direct
+canonical cleanup through an invented Core instance or additional coroutine.
+Guest realloc uses the same instance gate, restored on every return path; it
+cannot call canon lower, resource.new or resource.drop while canonical storage
+is being allocated. This changes previously admitted invalid canonical behavior
+into a trap before provider or handle side effects. The private context gains
+only a borrowed gate pointer; the exec already owns and outlives that context.
 
 ## Canonical string encodings
 

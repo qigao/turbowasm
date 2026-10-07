@@ -192,12 +192,19 @@ static turbowasm_status component_guest_realloc(
     if (status != TURBOWASM_OK)
         return status;
 
+    if (realloc_context->may_leave != NULL) {
+        if (!*realloc_context->may_leave)
+            return TURBOWASM_TRAPPED;
+        *realloc_context->may_leave = false;
+    }
     status = turbowasm_instance_invoke(
         realloc_context->instance,
         realloc_context->function_index,
         arguments, 4u,
         &result, 1u,
         &result_count, &trap);
+    if (realloc_context->may_leave != NULL)
+        *realloc_context->may_leave = true;
     if (status != TURBOWASM_OK)
         return status;
     if (trap != TURBOWASM_TRAP_NONE)
@@ -459,6 +466,12 @@ static turbowasm_status component_resource_builtin_host(
 
     *trap = TURBOWASM_TRAP_NONE;
     *result_count = 0u;
+
+    if (builtin_context->exec != NULL && !builtin_context->exec->may_leave &&
+        builtin_context->kind != TURBOWASM_COMPONENT_RESOURCE_BUILTIN_REP) {
+        *trap = TURBOWASM_TRAP_UNREACHABLE;
+        return TURBOWASM_TRAPPED;
+    }
 
     if (builtin_context->external) {
         const turbowasm_component_type *resource_type;
@@ -1486,6 +1499,7 @@ static turbowasm_status configure_canon_lower_memory(
             function_export->item_index;
         context->realloc_context.pointer_type =
             context->memory.pointer_type;
+        context->realloc_context.may_leave = &exec->may_leave;
         context->memory.guest_realloc =
             component_guest_realloc;
         context->memory.realloc_context =
@@ -2460,6 +2474,7 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
                 context->function_index =
                     realloc_function->function_index;
                 context->pointer_type = memory.pointer_type;
+                context->may_leave = &exec->may_leave;
 
                 if (!core_function_has_pointer_signature(
                         context->instance,
@@ -2500,14 +2515,29 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
                 goto fail;
             }
             post = &exec->core_functions[lift->post_return_function_index];
-            if (post->kind != TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INSTANCE ||
-                post->instance_index >= exec->core_instance_count) {
-                status = TURBOWASM_TYPE_MISMATCH;
-                goto fail;
+            if (post->kind == TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INSTANCE &&
+                post->instance_index < exec->core_instance_count) {
+                status = turbowasm_component_core_call_set_post_return(
+                    &exec->functions[i], &exec->core_instances[post->instance_index],
+                    post->function_index);
+            } else if (post->kind == TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_CANON_LOWER &&
+                       post->canon_lower_index < binary->canon_lower_count) {
+                status = turbowasm_component_core_call_set_canonical_post_return(
+                    &exec->functions[i],
+                    &exec->canon_lower_contexts[post->canon_lower_index].host_type);
+            } else if (post->kind == TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_RESOURCE_BUILTIN &&
+                       post->resource_builtin_index < binary->resource_builtin_count) {
+                turbowasm_host_function_type signature;
+                if (!resource_builtin_host_type(
+                        &exec->resource_builtin_contexts[post->resource_builtin_index], &signature)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto fail;
+                }
+                status = turbowasm_component_core_call_set_canonical_post_return(
+                    &exec->functions[i], &signature);
+            } else {
+                status = TURBOWASM_MALFORMED_MODULE;
             }
-            status = turbowasm_component_core_call_set_post_return(
-                &exec->functions[i], &exec->core_instances[post->instance_index],
-                post->function_index);
             if (status != TURBOWASM_OK)
                 goto fail;
         }

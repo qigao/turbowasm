@@ -873,7 +873,7 @@ turbowasm_status turbowasm_component_core_call_set_post_return(
     turbowasm_function_signature signature;
     uint32_t i;
     if (adapter == NULL || !adapter->initialized || instance == NULL ||
-        adapter->post_return_instance != NULL)
+        adapter->post_return_kind != TURBOWASM_COMPONENT_POST_RETURN_NONE)
         return TURBOWASM_INVALID_ARGUMENT;
     module = turbowasm_instance_module(instance);
     if (module == NULL || !turbowasm_module_function_signature_get(
@@ -887,6 +887,26 @@ turbowasm_status turbowasm_component_core_call_set_post_return(
     }
     adapter->post_return_instance = instance;
     adapter->post_return_function_index = function_index;
+    adapter->post_return_kind = TURBOWASM_COMPONENT_POST_RETURN_CORE;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_core_call_set_canonical_post_return(
+    turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_host_function_type *signature) {
+    uint32_t i;
+    if (adapter == NULL || !adapter->initialized || signature == NULL ||
+        adapter->post_return_kind != TURBOWASM_COMPONENT_POST_RETURN_NONE)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (signature->result_count != 0u ||
+        signature->param_count != adapter->flat_signature.result_count ||
+        (signature->param_count != 0u && signature->params == NULL))
+        return TURBOWASM_TYPE_MISMATCH;
+    for (i = 0u; i < signature->param_count; ++i) {
+        if (signature->params[i] != flat_value_kind(adapter->flat_signature.results[i]))
+            return TURBOWASM_TYPE_MISMATCH;
+    }
+    adapter->post_return_kind = TURBOWASM_COMPONENT_POST_RETURN_CANONICAL_LEAVE;
     return TURBOWASM_OK;
 }
 
@@ -928,8 +948,14 @@ static turbowasm_status component_post_return(
     turbowasm_jit_execution_control *control, turbowasm_trap *trap) {
     turbowasm_status status;
     size_t returned = 0u;
-    if (adapter->post_return_instance == NULL)
+    if (adapter->post_return_kind == TURBOWASM_COMPONENT_POST_RETURN_NONE)
         return TURBOWASM_OK;
+    /* A direct canonical target has the same may_leave failure as a Core
+     * cleanup that calls it. There is no provider or handle side effect. */
+    if (adapter->post_return_kind == TURBOWASM_COMPONENT_POST_RETURN_CANONICAL_LEAVE) {
+        *trap = TURBOWASM_TRAP_UNREACHABLE;
+        return TURBOWASM_TRAPPED;
+    }
     if (adapter->may_leave != NULL && !*adapter->may_leave) {
         *trap = TURBOWASM_TRAP_UNREACHABLE;
         return TURBOWASM_TRAPPED;
@@ -1327,7 +1353,7 @@ static turbowasm_status component_core_execution_finalize(
 
     if (runtime_status != TURBOWASM_OK) {
         resource_scope_abort_borrows(&impl->resource_scope);
-    } else if (impl->adapter->post_return_instance == NULL) {
+    } else if (impl->adapter->post_return_kind == TURBOWASM_COMPONENT_POST_RETURN_NONE) {
         status = component_core_execution_lift(impl);
     }
     if (status != TURBOWASM_OK) {
@@ -1412,7 +1438,7 @@ turbowasm_status turbowasm_component_core_execution_create(
         goto fail_before_start;
 
     impl->runtime_created = true;
-    if (adapter->post_return_instance != NULL) {
+    if (adapter->post_return_kind != TURBOWASM_COMPONENT_POST_RETURN_NONE) {
         status = turbowasm_execution_set_completion(&impl->runtime_execution,
             component_core_execution_complete, impl);
         if (status != TURBOWASM_OK) {

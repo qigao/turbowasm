@@ -62,14 +62,29 @@ static uint32_t drops(void) {
         NULL, 0u, &out, 1u, &count, &trap), TURBOWASM_OK);
     check_equal(count, 1u); return out.as.u32;
 }
-static void setup(void) {
+static void setup_fixture(const uint8_t *bytes, size_t size) {
     turbowasm_runtime_config config;
     turbowasm_runtime_config_init(&config);
     config.allocator.allocate = allocate;
     config.allocator.deallocate = deallocate;
     check_equal(turbowasm_component_binary_load_with_config(&binary,
-        component_post_return_bytes, sizeof(component_post_return_bytes), &config), TURBOWASM_OK);
+        bytes, size, &config), TURBOWASM_OK);
     check_equal(turbowasm_component_exec_init(&exec, &binary), TURBOWASM_OK);
+}
+static void setup(void) {
+    setup_fixture(component_post_return_bytes, sizeof(component_post_return_bytes));
+}
+static void attach_core_backends(void) {
+#ifdef TURBOWASM_TEST_MIR
+    uint32_t i;
+    for (i = 0u; i < exec.core_instance_count; ++i) {
+        turbowasm_jit_backend backend = {0};
+        if (exec.core_instances[i].impl == NULL) continue;
+        check_equal(turbowasm_mir_backend_create(&backend), TURBOWASM_OK);
+        check_equal(turbowasm_jit_instance_attach_backend(exec.core_instances[i].impl,
+            &backend, 1u), TURBOWASM_OK);
+    }
+#endif
 }
 static turbowasm_status invoke(const char *export_name, turbowasm_component_value *out) {
     turbowasm_trap trap;
@@ -197,6 +212,7 @@ spec("canonical post-return") {
     }
     it("blocks canonical leave before invoking its host provider") {
         turbowasm_component_exec_imports imports = {0};
+        turbowasm_component_value argument = {0}; turbowasm_trap trap;
         check_equal(turbowasm_component_binary_load(&binary, component_post_return_leave_bytes,
             sizeof(component_post_return_leave_bytes)), TURBOWASM_OK);
         imports.can_bind = can_bind; imports.invoke = notify_host;
@@ -206,6 +222,65 @@ spec("canonical post-return") {
         create_call("run");
         check_equal(turbowasm_component_exec_call_resume(&call, NULL), TURBOWASM_TRAPPED);
         check_equal(notifications, 2u); check_true(exec.may_leave);
+        turbowasm_component_exec_call_destroy(&call);
+        check_equal(invoke("direct", NULL), TURBOWASM_TRAPPED);
+        check_equal(notifications, 3u); check_true(exec.may_leave);
+        create_call("direct");
+        check_equal(turbowasm_component_exec_call_resume(&call, NULL), TURBOWASM_TRAPPED);
+        check_equal(notifications, 4u); check_true(exec.may_leave);
+        turbowasm_component_exec_call_destroy(&call);
+        argument.kind = TURBOWASM_COMPONENT_TYPE_STRING;
+        argument.as.string.data = (uint8_t *)"hello"; argument.as.string.size = TEXT_SIZE;
+        check_equal(turbowasm_component_exec_invoke_export(&exec, (const uint8_t *)"text",
+            4u, &argument, 1u, NULL, &trap), TURBOWASM_TRAPPED);
+        check_equal(notifications, 4u); check_true(exec.may_leave);
+        check_equal(turbowasm_component_exec_call_create(&call, &exec, (const uint8_t *)"text",
+            4u, &argument, 1u), TURBOWASM_TRAPPED);
+        check_equal(notifications, 4u); check_true(exec.may_leave);
+    }
+    it("traps direct and indirect resource mutations before cleanup side effects") {
+        const char *names[] = {"direct-drop", "indirect-drop", "indirect-new"};
+        size_t i; uint32_t destroyed = 0u;
+        setup_fixture(component_post_return_resources_bytes, sizeof(component_post_return_resources_bytes));
+        attach_core_backends();
+        for (i = 0u; i < sizeof(names) / sizeof(*names); ++i) {
+            check_equal(invoke(names[i], &result), TURBOWASM_TRAPPED);
+            check_equal(result.kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+            check_equal(exec.resource_table.live_count, 1u);
+            check_equal(number("drops"), destroyed);
+            check_true(exec.may_leave);
+            check_equal(invoke("cleanup", NULL), TURBOWASM_OK); ++destroyed;
+            check_equal(exec.resource_table.live_count, 0u);
+            create_call(names[i]);
+            check_equal(turbowasm_component_exec_call_resume(&call, NULL), TURBOWASM_TRAPPED);
+            check_equal(turbowasm_component_exec_call_result_count(&call), 0u);
+            check_equal(exec.resource_table.live_count, 1u);
+            check_equal(number("drops"), destroyed);
+            turbowasm_component_exec_call_destroy(&call);
+            check_equal(invoke("cleanup", NULL), TURBOWASM_OK); ++destroyed;
+            check_equal(number("drops"), destroyed);
+        }
+    }
+    it("permits resource.rep inside cleanup without changing ownership") {
+        setup_fixture(component_post_return_resources_bytes, sizeof(component_post_return_resources_bytes));
+        attach_core_backends();
+        check_equal(invoke("indirect-rep", &result), TURBOWASM_OK);
+        check_equal(result.kind, TURBOWASM_COMPONENT_TYPE_U32);
+        check_equal(exec.resource_table.live_count, 1u); check_equal(number("drops"), 0u);
+        check_equal(invoke("cleanup", NULL), TURBOWASM_OK); check_equal(number("drops"), 1u);
+    }
+    it("rejects direct new and rep cleanup targets because they return values") {
+        uint32_t i, checked = 0u;
+        check_equal(turbowasm_component_binary_load(&binary, component_post_return_resources_bytes,
+            sizeof(component_post_return_resources_bytes)), TURBOWASM_OK);
+        for (i = 0u; i < binary.resource_builtin_count; ++i) {
+            if (binary.resource_builtins[i].kind == TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP)
+                continue;
+            binary.canon_lifts[0].post_return_function_index = binary.resource_builtins[i].core_function_index;
+            check_equal(turbowasm_component_exec_init(&exec, &binary), TURBOWASM_TYPE_MISMATCH);
+            ++checked;
+        }
+        check_equal(checked, 2u);
     }
     it("validates the cleanup signature before instantiation succeeds") {
         check_equal(turbowasm_component_binary_load(&binary, component_post_return_bytes,

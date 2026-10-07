@@ -24,12 +24,20 @@ typedef turbowasm_status (*turbowasm_component_result_owner_fn)(
     turbowasm_component_type_ref type, turbowasm_component_value *value);
 typedef void (*turbowasm_component_admission_commit_fn)(void *context);
 
+typedef enum turbowasm_component_post_return_kind {
+    TURBOWASM_COMPONENT_POST_RETURN_NONE = 0,
+    TURBOWASM_COMPONENT_POST_RETURN_CORE,
+    /* Validly typed canon lower/resource.drop trap on the may_leave gate. */
+    TURBOWASM_COMPONENT_POST_RETURN_CANONICAL_LEAVE
+} turbowasm_component_post_return_kind;
+
 typedef struct turbowasm_component_core_call_adapter {
     const turbowasm_component_type_graph *graph;
     turbowasm_component_type_id function_type;
     turbowasm_instance *instance;
     uint32_t function_index;
 
+    turbowasm_component_post_return_kind post_return_kind;
     turbowasm_instance *post_return_instance;
     uint32_t post_return_function_index;
     /* Shared with the owning exec's canon-lower boundary. */
@@ -75,6 +83,10 @@ void turbowasm_component_core_call_adapter_destroy(
 turbowasm_status turbowasm_component_core_call_set_post_return(
     turbowasm_component_core_call_adapter *adapter,
     turbowasm_instance *instance, uint32_t function_index);
+
+turbowasm_status turbowasm_component_core_call_set_canonical_post_return(
+    turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_host_function_type *signature);
 
 turbowasm_status turbowasm_component_core_call_invoke(
     const turbowasm_component_core_call_adapter *adapter,
