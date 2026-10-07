@@ -71,6 +71,14 @@ turbowasm_status turbowasm_component_endpoint_take_value(
 turbowasm_status turbowasm_component_endpoint_cancel(turbowasm_component_endpoint *endpoint);
 turbowasm_status turbowasm_component_endpoint_close(turbowasm_component_endpoint *endpoint);
 
+/* Consume idle, unjoined source-readable and destination-writable ends of the
+ * same type, joining their peers and copying any available buffers. Admission
+ * failure preserves ownership. A conversion failure after linking consumes the
+ * intermediate ends, returns the trap, and requires error delivery on both
+ * surviving operations before releasing their borrowed storage. */
+turbowasm_status turbowasm_component_endpoint_forward(
+    turbowasm_component_endpoint *source, turbowasm_component_endpoint *destination);
+
 /* Zero-initialize then set table to the destination/source canonical table.
  * Source values, table and codec remain alive and exclusively borrowed until
  * commit/rollback. Handles reserved by lower are unusable until commit. Finish

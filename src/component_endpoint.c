@@ -104,6 +104,23 @@ static bool overlaps(const turbowasm_component_buffer *a,
     return first <= second ? second - first < first_size : first - second < second_size;
 }
 
+/* Both operations are admitted and COPYING before any conversion callback. */
+static turbowasm_status transfer_buffers(turbowasm_component_endpoint *reader,
+    turbowasm_component_endpoint *writer, uint32_t count) {
+    turbowasm_status status;
+    reader->waitable.delivering = writer->waitable.delivering = true;
+    status = turbowasm_component_buffer_copy(writer->operation, reader->operation, reader->has_payload, count);
+    reader->waitable.delivering = writer->waitable.delivering = false;
+    if (status != TURBOWASM_OK) {
+        reader->failure = writer->failure = status;
+        reader->available = writer->available = NULL;
+        if (!turbowasm_component_endpoint_request_cancel(&reader->waitable.state.endpoint, false) ||
+            !turbowasm_component_endpoint_request_cancel(&writer->waitable.state.endpoint, false))
+            return TURBOWASM_TRAPPED;
+    }
+    return status;
+}
+
 turbowasm_status turbowasm_component_endpoint_submit(
     turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer) {
     turbowasm_component_endpoint *peer;
@@ -162,20 +179,10 @@ turbowasm_status turbowasm_component_endpoint_submit(
     buffer->leased = true;
     endpoint->operation = buffer;
     if (count != 0u) {
-        turbowasm_component_buffer *source = endpoint->readable ? other : buffer;
-        turbowasm_component_buffer *destination = endpoint->readable ? buffer : other;
         endpoint->waitable.state.endpoint.phase = TURBOWASM_COMPONENT_ENDPOINT_COPYING;
-        endpoint->waitable.delivering = peer->waitable.delivering = true;
-        status = turbowasm_component_buffer_copy(source, destination, endpoint->has_payload, count);
-        endpoint->waitable.delivering = peer->waitable.delivering = false;
-        if (status != TURBOWASM_OK) {
-            endpoint->failure = peer->failure = status;
-            endpoint->available = peer->available = NULL;
-            if (!turbowasm_component_endpoint_request_cancel(&endpoint->waitable.state.endpoint, false) ||
-                !turbowasm_component_endpoint_request_cancel(&peer->waitable.state.endpoint, false))
-                return TURBOWASM_TRAPPED;
-            return TURBOWASM_OK;
-        }
+        status = transfer_buffers(endpoint->readable ? endpoint : peer,
+            endpoint->readable ? peer : endpoint, count);
+        if (status != TURBOWASM_OK) return TURBOWASM_OK;
     }
     endpoint->available = self_available ? buffer : NULL;
     endpoint->waitable.state.endpoint = next_self;
@@ -219,11 +226,15 @@ turbowasm_status turbowasm_component_endpoint_cancel(turbowasm_component_endpoin
     return TURBOWASM_OK;
 }
 
-static bool movable_readable(const turbowasm_component_endpoint *endpoint) {
-    return live(endpoint) && endpoint->failure == TURBOWASM_OK && endpoint->readable && endpoint->operation == NULL &&
+static bool movable_idle(const turbowasm_component_endpoint *endpoint) {
+    return live(endpoint) && endpoint->failure == TURBOWASM_OK && endpoint->operation == NULL &&
         endpoint->available == NULL && !endpoint->waitable.delivering &&
         !endpoint->waitable.sync_waiter && endpoint->waitable.set_handle == 0u &&
         endpoint->waitable.state.endpoint.phase == TURBOWASM_COMPONENT_ENDPOINT_IDLE;
+}
+
+static bool movable_readable(const turbowasm_component_endpoint *endpoint) {
+    return movable_idle(endpoint) && endpoint->readable;
 }
 
 turbowasm_status turbowasm_component_endpoint_detach_readable(
@@ -339,6 +350,89 @@ turbowasm_status turbowasm_component_endpoint_close(turbowasm_component_endpoint
         peer->peer = NULL;
         peer->available = NULL;
         peer->waitable.state.endpoint = peer_state;
+    }
+    return TURBOWASM_OK;
+}
+
+static bool forwardable(const turbowasm_component_endpoint *endpoint) {
+    const turbowasm_component_endpoint *peer;
+    if (!movable_idle(endpoint) || endpoint->lower_scope != NULL)
+        return false;
+    if (endpoint->waitable.table != NULL &&
+        turbowasm_component_handle_object(endpoint->waitable.table, endpoint->waitable.handle,
+            endpoint_kind(endpoint)) != &endpoint->waitable)
+        return false;
+    peer = endpoint->peer;
+    return peer == NULL || (peer->peer == endpoint && !peer->closed && !peer->waitable.delivering);
+}
+
+turbowasm_status turbowasm_component_endpoint_forward(
+    turbowasm_component_endpoint *source, turbowasm_component_endpoint *destination) {
+    turbowasm_component_endpoint *reader, *writer;
+    turbowasm_component_endpoint_state next_read, next_write;
+    turbowasm_status status;
+    uint32_t read_remaining = 0u, write_remaining = 0u, count = 0u;
+    bool rendezvous;
+    if (!forwardable(source) || !forwardable(destination) || !source->readable || destination->readable)
+        return TURBOWASM_TRAPPED;
+    if (!turbowasm_component_value_type_equal(source->graph,
+        turbowasm_component_type_ref_indexed(source->type), destination->graph,
+        turbowasm_component_type_ref_indexed(destination->type)))
+        return TURBOWASM_TYPE_MISMATCH;
+    writer = source->peer; reader = destination->peer;
+    if (writer == destination || writer == NULL || reader == NULL) {
+        status = turbowasm_component_endpoint_close(source);
+        return status == TURBOWASM_OK ? turbowasm_component_endpoint_close(destination) : status;
+    }
+    rendezvous = reader->available != NULL && writer->available != NULL;
+    next_read = reader->waitable.state.endpoint;
+    next_write = writer->waitable.state.endpoint;
+    if (rendezvous) {
+        const turbowasm_component_buffer *read = reader->available, *write = writer->available;
+        if (read != reader->operation || write != writer->operation || !read->leased || !write->leased ||
+            read->progress > read->length || write->progress > write->length ||
+            next_read.phase != TURBOWASM_COMPONENT_ENDPOINT_COPYING ||
+            next_write.phase != TURBOWASM_COMPONENT_ENDPOINT_COPYING)
+            return TURBOWASM_TRAPPED;
+        read_remaining = read->length - read->progress;
+        write_remaining = write->length - write->progress;
+        if (read_remaining != 0u && write_remaining != 0u) {
+            if ((reader->has_payload && overlaps(read, write)) ||
+                (reader->waitable.table != NULL && reader->waitable.table == writer->waitable.table &&
+                 !numeric_or_unit(reader)))
+                return TURBOWASM_TRAPPED;
+            count = read_remaining < write_remaining ? read_remaining : write_remaining;
+            if (!turbowasm_component_endpoint_notify(&next_read, read->progress + count) ||
+                !turbowasm_component_endpoint_notify(&next_write, write->progress + count))
+                return TURBOWASM_TRAPPED;
+        } else if (!turbowasm_component_endpoint_notify(
+            write_remaining == 0u ? &next_write : &next_read, 0u))
+            return TURBOWASM_TRAPPED;
+    }
+    /* Registration validity was checked before this callback-free commit. */
+    if (source->waitable.table != NULL) {
+        status = turbowasm_component_waitable_drop(source->waitable.table, source->waitable.handle);
+        if (status != TURBOWASM_OK) return status;
+    }
+    if (destination->waitable.table != NULL) {
+        status = turbowasm_component_waitable_drop(destination->waitable.table, destination->waitable.handle);
+        if (status != TURBOWASM_OK) return status;
+    }
+    source->peer = destination->peer = NULL;
+    source->closed = destination->closed = true;
+    reader->peer = writer; writer->peer = reader;
+    if (count != 0u) {
+        status = transfer_buffers(reader, writer, count);
+        if (status != TURBOWASM_OK) return status;
+    }
+    if (rendezvous) {
+        reader->waitable.state.endpoint = next_read;
+        writer->waitable.state.endpoint = next_write;
+        if (count != 0u) {
+            if (count == read_remaining) reader->available = NULL;
+            if (count == write_remaining) writer->available = NULL;
+        } else if (write_remaining == 0u) writer->available = NULL;
+        else reader->available = NULL;
     }
     return TURBOWASM_OK;
 }

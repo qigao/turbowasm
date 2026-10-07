@@ -850,6 +850,26 @@ endpoints guarded against reentrant take/cancel/close or another submit. Their
 enclosing execution owner must retain Component instances and callback contexts
 through suspension; no independent worker or raw guest-memory view is introduced.
 
+Private endpoint forwarding consumes an idle, unjoined readable end and writable
+end of the same structural type. Admission checks both registrations and their
+peer links before mutation. It removes the intermediate registrations and links
+the surviving endpoints directly, preserving their owners, operation borrows and
+undelivered progress. If both survivors have available buffers, it copies their
+minimum remaining count through the existing guarded buffer conversion and keeps
+only the larger remainder available. Zero-length readiness still notifies the
+writable side when both buffers are empty. Forwarding into the same pair closes
+both ends; forwarding with an already absent peer propagates closure to the
+remaining peer. No intermediate queue or payload allocation is added.
+
+The exclusive execution owner performs admission and link publication without
+callbacks. Conversion runs only after the intermediate ends have closed. A copy
+trap after publication returns its primary status from forwarding and marks both
+surviving operations failed; their buffers remain borrowed until error delivery.
+This irreversible consumption is distinct from admission failure, which preserves
+all endpoints and handles. The private caller must propagate the trap and drain
+both operation errors before destroying storage. Guest decoding and public host
+admission remain gated on the complete task/lifetime integration.
+
 ## Canonical post-return lifecycle
 
 Synchronous lifts with `post-return` copy/lift the Core results before invoking

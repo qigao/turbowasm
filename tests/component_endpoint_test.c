@@ -126,6 +126,214 @@ spec("Component endpoint host-value rendezvous") {
         check_equal(allocations, 0u);
     }
 
+    it("forwards pending buffers with numeric progress and asymmetric zero-length readiness") {
+        unsigned read_count, write_count, i;
+        for (read_count = 0u; read_count <= 3u; ++read_count)
+            for (write_count = 0u; write_count <= 3u; ++write_count) {
+                uint32_t count = read_count < write_count ? read_count : write_count;
+                uint32_t read_handle, write_handle;
+                primitive_type(false, false, TURBOWASM_COMPONENT_TYPE_U32);
+                check_true(turbowasm_component_resource_table_init(&tables[0], 8u));
+                check_equal(turbowasm_component_endpoint_pair_open(&graph, 0u, &tables[0], NULL,
+                    &reader, &writer), TURBOWASM_OK);
+                check_equal(turbowasm_component_endpoint_pair_open(&graph, 0u, NULL, &tables[0],
+                    &nested_reader, &nested_writer), TURBOWASM_OK);
+                read_handle = reader.waitable.handle; write_handle = nested_writer.waitable.handle;
+                numbers(0u, write_count, 42u); buffer(0u, 0u, write_count); buffer(1u, 1u, read_count);
+                check_equal(turbowasm_component_endpoint_submit(&writer, &buffers[0]), TURBOWASM_OK);
+                check_equal(turbowasm_component_endpoint_submit(&nested_reader, &buffers[1]), TURBOWASM_OK);
+                refuse_allocations = true;
+                check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_OK);
+                refuse_allocations = false;
+                check_true(reader.closed); check_true(nested_writer.closed);
+                check_null(reader.peer); check_null(nested_writer.peer);
+                check_true(writer.peer == &nested_reader); check_true(nested_reader.peer == &writer);
+                check_equal(turbowasm_component_handle_kind_get(&tables[0], read_handle), TURBOWASM_COMPONENT_HANDLE_INVALID);
+                check_equal(turbowasm_component_handle_kind_get(&tables[0], write_handle), TURBOWASM_COMPONENT_HANDLE_INVALID);
+                check_equal(tables[0].live_count, 0u);
+                for (i = 0u; i < count; ++i) {
+                    check_equal(cells[1][i].as.u32, 42u + i);
+                    check_equal(cells[0][i].kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+                }
+                if (count != 0u) {
+                    check_equal(writer.available != NULL, write_count > count);
+                    check_equal(nested_reader.available != NULL, read_count > count);
+                    check_equal(take(&writer), count << 4u); check_equal(take(&nested_reader), count << 4u);
+                } else if (write_count == 0u) {
+                    check_equal(take(&writer), 0u); check_true(buffers[1].leased);
+                    check_true(nested_reader.available == &buffers[1]);
+                    check_false(nested_reader.waitable.state.endpoint.pending_event);
+                } else {
+                    check_equal(take(&nested_reader), 0u); check_true(buffers[0].leased);
+                    check_true(writer.available == &buffers[0]);
+                    check_false(writer.waitable.state.endpoint.pending_event);
+                }
+                cleanup();
+            }
+    }
+
+    it("preserves previous undelivered progress across forwarding and later copies") {
+        primitive_type(false, false, TURBOWASM_COMPONENT_TYPE_U32); open_hosts();
+        check_equal(turbowasm_component_endpoint_pair_open(&graph, 0u, NULL, NULL,
+            &nested_reader, &nested_writer), TURBOWASM_OK);
+        numbers(0u, 4u, 40u); buffer(0u, 0u, 4u); buffer(1u, 1u, 1u); buffer(2u, 2u, 1u);
+        check_equal(turbowasm_component_endpoint_submit(&writer, &buffers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_submit(&reader, &buffers[1]), TURBOWASM_OK);
+        check_equal(take(&reader), 16u);
+        check_equal(turbowasm_component_endpoint_submit(&nested_reader, &buffers[2]), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_OK);
+        check_equal(take(&nested_reader), 16u); check_equal(cells[2][0].as.u32, 41u);
+        check_equal(buffers[0].progress, 2u); check_true(writer.available == &buffers[0]);
+        buffers[3].values = &cells[2][1]; buffers[3].length = 2u;
+        check_equal(turbowasm_component_endpoint_submit(&nested_reader, &buffers[3]), TURBOWASM_OK);
+        check_equal(take(&nested_reader), 32u); check_equal(take(&writer), 64u);
+        check_equal(cells[2][2].as.u32, 43u); check_false(buffers[0].leased);
+    }
+
+    it("forwards idle or pending futures and preserves unit completion") {
+        unsigned scenario;
+        for (scenario = 0u; scenario < 4u; ++scenario) {
+            bool unit = (scenario & 1u) != 0u, pending = (scenario & 2u) != 0u;
+            primitive_type(true, unit != 0u, TURBOWASM_COMPONENT_TYPE_U32); open_hosts();
+            check_equal(turbowasm_component_endpoint_pair_open(&graph, 0u, NULL, NULL,
+                &nested_reader, &nested_writer), TURBOWASM_OK);
+            if (!pending) check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_OK);
+            numbers(0u, 1u, 42u); buffer(0u, 0u, 1u); buffer(1u, 1u, 1u);
+            check_equal(turbowasm_component_endpoint_submit(&writer, &buffers[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_endpoint_submit(&nested_reader, &buffers[1]), TURBOWASM_OK);
+            if (pending) check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_OK);
+            check_equal(take(&writer), TURBOWASM_COMPONENT_COPY_COMPLETED);
+            check_equal(take(&nested_reader), TURBOWASM_COMPONENT_COPY_COMPLETED);
+            check_equal(writer.waitable.state.endpoint.phase, TURBOWASM_COMPONENT_ENDPOINT_DONE);
+            if (!unit) check_equal(cells[1][0].as.u32, 42u);
+            cleanup();
+        }
+    }
+
+    it("closes recursive forwarding and propagates an absent peer without losing a pending borrow") {
+        unsigned side;
+        primitive_type(false, false, TURBOWASM_COMPONENT_TYPE_U32); open_hosts();
+        check_equal(turbowasm_component_endpoint_forward(&reader, &writer), TURBOWASM_OK);
+        check_true(reader.closed); check_true(writer.closed); cleanup();
+        for (side = 0u; side < 2u; ++side) {
+            turbowasm_component_endpoint *survivor;
+            primitive_type(false, false, TURBOWASM_COMPONENT_TYPE_U32); open_hosts();
+            check_equal(turbowasm_component_endpoint_pair_open(&graph, 0u, NULL, NULL,
+                &nested_reader, &nested_writer), TURBOWASM_OK);
+            survivor = side ? &writer : &nested_reader;
+            if (side) numbers(0u, 1u, 42u);
+            buffer(0u, 0u, 1u);
+            check_equal(turbowasm_component_endpoint_submit(survivor, &buffers[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_endpoint_close(side ? &nested_reader : &writer), TURBOWASM_OK);
+            check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_OK);
+            check_true(reader.closed); check_true(nested_writer.closed); check_true(buffers[0].leased);
+            check_equal(take(survivor), TURBOWASM_COMPONENT_COPY_DROPPED); check_false(buffers[0].leased);
+            if (side) check_equal(cells[0][0].as.u32, 42u);
+            cleanup();
+        }
+    }
+
+    it("rejects forwarding admission before consuming either endpoint") {
+        turbowasm_component_event event;
+        primitive_type(false, false, TURBOWASM_COMPONENT_TYPE_U32);
+        check_true(turbowasm_component_resource_table_init(&tables[0], 8u));
+        check_equal(turbowasm_component_endpoint_pair_open(&graph, 0u, &tables[0], NULL,
+            &reader, &writer), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_pair_open(&graph, 0u, NULL, &tables[0],
+            &nested_reader, &nested_writer), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_forward(&writer, &nested_writer), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_waitable_set_register(&tables[0], &set), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_join(&tables[0], nested_writer.waitable.handle, set.handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_waitable_join(&tables[0], nested_writer.waitable.handle, 0u), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_wait_begin(&tables[0], reader.waitable.handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_waitable_wait_cancel(&tables[0], reader.waitable.handle), TURBOWASM_OK);
+        writer.waitable.delivering = true;
+        check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_TRAPPED);
+        writer.waitable.delivering = false;
+        buffer(0u, 0u, 1u);
+        check_equal(turbowasm_component_endpoint_submit(&reader, &buffers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_endpoint_cancel(&reader), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_take(&reader, &event), TURBOWASM_OK);
+        check_false(reader.closed); check_false(nested_writer.closed);
+        check_equal(tables[0].live_count, 3u);
+        check_true(reader.peer == &writer); check_true(nested_writer.peer == &nested_reader);
+        check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_OK);
+    }
+
+    it("matches independent type graphs and completes the surviving synchronous waits") {
+        turbowasm_component_event event;
+        primitive_type(false, false, TURBOWASM_COMPONENT_TYPE_U32);
+        check_true(turbowasm_component_type_graph_allocate(&value_graph, 2u));
+        check_true(turbowasm_component_type_graph_define_scalar(&value_graph, 0u, TURBOWASM_COMPONENT_TYPE_U8));
+        check_true(turbowasm_component_type_graph_define_async_value(&value_graph, 1u,
+            TURBOWASM_COMPONENT_TYPE_STREAM, true, turbowasm_component_type_ref_indexed(0u)));
+        check_true(turbowasm_component_resource_table_init(&tables[0], 8u));
+        check_true(turbowasm_component_resource_table_init(&tables[1], 8u));
+        check_equal(turbowasm_component_endpoint_pair_open(&graph, 0u, &tables[0], &tables[0],
+            &reader, &writer), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_pair_open(&value_graph, 1u, &tables[1], &tables[1],
+            &nested_reader, &nested_writer), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_TYPE_MISMATCH);
+        check_false(reader.closed); check_false(nested_writer.closed);
+        check_equal(tables[0].live_count, 2u); check_equal(tables[1].live_count, 2u);
+        value_graph.types[0].kind = TURBOWASM_COMPONENT_TYPE_U32;
+        numbers(0u, 1u, 42u); buffer(0u, 0u, 1u); buffer(1u, 1u, 1u);
+        check_equal(turbowasm_component_endpoint_submit(&writer, &buffers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_submit(&nested_reader, &buffers[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_wait_begin(&tables[0], writer.waitable.handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_wait_begin(&tables[1], nested_reader.waitable.handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_wait_end(&tables[0], writer.waitable.handle, &event), TURBOWASM_OK);
+        check_equal(event.payload, 16u);
+        check_equal(turbowasm_component_waitable_wait_end(&tables[1], nested_reader.waitable.handle, &event), TURBOWASM_OK);
+        check_equal(event.payload, 16u); check_equal(cells[1][0].as.u32, 42u);
+        check_false(buffers[0].leased); check_false(buffers[1].leased);
+    }
+
+    it("preserves the same-component composite restriction across forwarding") {
+        composite_type();
+        check_true(turbowasm_component_resource_table_init(&tables[0], 8u));
+        check_equal(turbowasm_component_endpoint_pair_open(&graph, 3u, NULL, &tables[0],
+            &reader, &writer), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_pair_open(&graph, 3u, &tables[0], NULL,
+            &nested_reader, &nested_writer), TURBOWASM_OK);
+        composite_value(0u); buffer(0u, 0u, 1u); buffer(1u, 1u, 1u);
+        check_equal(turbowasm_component_endpoint_submit(&writer, &buffers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_submit(&nested_reader, &buffers[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_TRAPPED);
+        check_false(reader.closed); check_false(nested_writer.closed);
+        check_true(buffers[0].leased); check_true(buffers[1].leased);
+        check_equal(destroyed, 0u); check_equal(cells[0][0].kind, TURBOWASM_COMPONENT_TYPE_RECORD);
+        check_equal(cells[1][0].kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+    }
+
+    it("forwards composite owners once after an intermediate readable value is explicitly taken") {
+        turbowasm_component_endpoint *taken = NULL;
+        composite_type();
+        check_equal(turbowasm_component_endpoint_pair_open(&graph, 3u, NULL, NULL,
+            &reader, &writer), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_pair_open(&graph, 3u, NULL, NULL,
+            &nested_reader, &nested_writer), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_into_value(&reader, &cells[2][0]), TURBOWASM_OK);
+        composite_value(0u); buffer(0u, 0u, 1u); buffer(1u, 1u, 1u);
+        check_equal(turbowasm_component_endpoint_submit(&writer, &buffers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_submit(&nested_reader, &buffers[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_forward(&reader, &nested_writer), TURBOWASM_TRAPPED);
+        check_not_null(reader.value_owner); check_false(reader.closed); check_false(nested_writer.closed);
+        check_equal(turbowasm_component_endpoint_take_value(&cells[2][0], &taken), TURBOWASM_OK);
+        check_true(taken == &reader);
+        check_equal(turbowasm_component_endpoint_forward(taken, &nested_writer), TURBOWASM_OK);
+        check_equal(take(&writer), 16u); check_equal(take(&nested_reader), 16u);
+        check_equal(destroyed, 0u); check_equal(cells[0][0].kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+        check_equal(cells[1][0].as.record.items[0].resource_identity, 42u);
+        check_equal(turbowasm_component_value_destroy(&cells[1][0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_value_destroy(&cells[1][0]), TURBOWASM_OK);
+        check_equal(destroyed, 1u);
+    }
+
     it("moves actual values in either arrival order and releases buffers at delivery") {
         unsigned read_first;
         for (read_first = 0u; read_first < 2u; ++read_first) {

@@ -874,3 +874,32 @@ The buffers and callbacks remain private borrowed objects. Canonical async guest
 bindings, task scheduling, and retained public host lifetime/transfer APIs still
 need implementation and end-to-end qualification; these tests do not qualify that
 complete surface.
+
+At `c09b471`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37672058269)
+passed Windows, Android cross-build, Linux MIR (187/187 in 1.19 seconds), and
+macOS arm64 MIR (187/187 in 2.93 seconds). Ordinary Linux was still running when
+these results were recorded.
+
+## Private endpoint forwarding
+
+Forwarding consumes matching idle, unjoined readable/writable intermediates and
+connects their surviving peers. Existing pending buffers immediately rendezvous,
+preserving previously accumulated progress and retaining any larger remainder.
+Zero-length readiness, recursive forwarding, and closure propagation follow the
+pinned Canonical ABI. Host-only forwarding adds no allocation. Guest conversion
+uses the same checked buffers and callback guards as ordinary copies. Admission
+failure preserves both intermediates; conversion failure after linking returns
+the trap and leaves both survivor borrows pending until error delivery.
+
+The endpoint suite covers the numeric buffer-size matrix, prior progress followed
+by further copies, idle/pending and unit/typed futures, recursive and absent-peer
+cases, handle removal, wrong direction, membership/waiter/reentry admission,
+independently indexed types, synchronous survivor waits, the same-component
+composite restriction, and explicitly moved composite resource ownership. The
+guest-buffer suite also covers successful forwarding and allocation failure after
+link publication under memory32/64. All tracked allocations are released.
+Windows ASan passed 58/58 related targets in 2.86 seconds. A final ownership case
+then passed with all three focused targets in 0.10 seconds: endpoint 28 cases /
+1155 assertions, codec 14 / 630, and buffer 13 / 948. Production code was unchanged
+after the broader regression. Canonical guest bindings, scheduling, and public
+host task/lifetime APIs remain unqualified and are not enabled by this primitive.

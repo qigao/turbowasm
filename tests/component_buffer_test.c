@@ -242,6 +242,34 @@ spec("Component host and guest buffer rendezvous") {
     }
     after_each() { cleanup(); turbowasm_runtime_scope_leave(scope); check_equal(allocations, 0u); }
 
+    it("forwards pending guest copies and delivers conversion failure after consuming intermediates") {
+        unsigned fail;
+        for (fail = 0u; fail < 2u; ++fail) {
+            turbowasm_component_event event;
+            initialize(TURBOWASM_COMPONENT_TYPE_U32, fail != 0u, false, false, 8u);
+            check_equal(turbowasm_component_endpoint_pair_open(&graph, 2u, NULL, NULL,
+                &children[0][0], &children[0][1]), TURBOWASM_OK);
+            put(0u, 16u, 42u); guest(0u, 0u, 16u, 1u); host(1u, 1u, 1u);
+            check_equal(turbowasm_component_endpoint_submit(&writer, &buffers[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_endpoint_submit(&children[0][0], &buffers[1]), TURBOWASM_OK);
+            if (fail) allowance = 0u;
+            check_equal(turbowasm_component_endpoint_forward(&reader, &children[0][1]),
+                fail ? TURBOWASM_OUT_OF_MEMORY : TURBOWASM_OK);
+            allowance = SIZE_MAX;
+            check_true(reader.closed); check_true(children[0][1].closed);
+            check_true(buffers[0].leased); check_true(buffers[1].leased);
+            if (fail) {
+                check_equal(turbowasm_component_endpoint_take(&writer, &event), TURBOWASM_OUT_OF_MEMORY);
+                check_equal(turbowasm_component_endpoint_take(&children[0][0], &event), TURBOWASM_OUT_OF_MEMORY);
+                check_equal(cells[1][0].kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+            } else {
+                check_equal(take(&writer), 16u); check_equal(take(&children[0][0]), 16u);
+                check_equal(cells[1][0].as.u32, 42u);
+            }
+            check_false(buffers[0].leased); check_false(buffers[1].leased); cleanup();
+        }
+    }
+
     it("copies numeric values between host and memory32 or memory64 in both arrival orders") {
         unsigned source_guest, dest_guest, scenario, i;
         for (source_guest = 0u; source_guest < 2u; ++source_guest)
