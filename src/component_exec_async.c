@@ -2,33 +2,50 @@
 #include "component_async_call.h"
 #include "runtime_alloc.h"
 
+typedef struct turbowasm_component_exec_async_transaction {
+    turbowasm_component_endpoint_codec endpoints;
+    turbowasm_component_exec_resource_codec resources;
+} turbowasm_component_exec_async_transaction;
+
 typedef struct turbowasm_component_exec_async_call {
     turbowasm_component_async_call call;
-    turbowasm_component_endpoint_codec parameters, result;
+    turbowasm_component_exec_async_transaction parameters, result;
     struct turbowasm_component_exec_async_call *next;
     turbowasm_status failure;
 } turbowasm_component_exec_async_call;
 
-static turbowasm_status commit_endpoints(void *context, turbowasm_component_task *task,
+static turbowasm_status commit_values(void *context, turbowasm_component_task *task,
     turbowasm_component_value *values, uint32_t count) {
+    turbowasm_component_exec_async_transaction *transaction = context;
+    turbowasm_status status;
     (void)task; (void)values; (void)count;
-    return turbowasm_component_endpoint_codec_commit(context);
+    status = turbowasm_component_exec_resource_codec_preflight(&transaction->resources);
+    if (status != TURBOWASM_OK) return status;
+    status = turbowasm_component_endpoint_codec_commit(&transaction->endpoints);
+    if (status != TURBOWASM_OK) return status;
+    /* No callback/allocation between preflight and publication. */
+    return turbowasm_component_exec_resource_codec_commit(&transaction->resources);
 }
 
-static turbowasm_status rollback_endpoints(void *context, turbowasm_component_task *task) {
+static turbowasm_status rollback_values(void *context, turbowasm_component_task *task) {
+    turbowasm_component_exec_async_transaction *transaction = context;
+    turbowasm_status status, cleanup;
     (void)task;
-    return turbowasm_component_endpoint_codec_rollback(context);
+    status = turbowasm_component_endpoint_codec_rollback(&transaction->endpoints);
+    cleanup = turbowasm_component_exec_resource_codec_rollback(&transaction->resources);
+    return status != TURBOWASM_OK ? status : cleanup;
 }
 
-static void bind_endpoints(turbowasm_component_canonical_memory *memory,
-    turbowasm_component_async_transaction *transaction, turbowasm_component_endpoint_codec *codec,
-    turbowasm_component_resource_table *table) {
-    codec->table = table;
+static void bind_values(turbowasm_component_canonical_memory *memory,
+    turbowasm_component_async_transaction *transaction, turbowasm_component_exec_async_transaction *codec,
+    turbowasm_component_exec *exec) {
+    codec->endpoints.table = &exec->resource_table;
     memory->endpoint_lift = turbowasm_component_endpoint_codec_lift;
     memory->endpoint_lower = turbowasm_component_endpoint_codec_lower;
-    memory->endpoint_context = codec;
-    transaction->commit = commit_endpoints;
-    transaction->rollback = rollback_endpoints;
+    memory->endpoint_context = &codec->endpoints;
+    turbowasm_component_exec_resource_codec_bind(&codec->resources, exec, memory);
+    transaction->commit = commit_values;
+    transaction->rollback = rollback_values;
     transaction->context = codec;
 }
 
@@ -88,7 +105,8 @@ turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_h
         result_count == NULL || trap == NULL || result_capacity < 1u || results == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     exec = lower->exec;
-    if (exec->task_domain.active == NULL || exec->task_domain.active->destroying || !exec->may_leave)
+    if (exec->task_domain.active == NULL || exec->task_domain.active->destroying || !exec->may_leave ||
+        exec->task_domain.synchronous_depth != 0u)
         return TURBOWASM_TRAPPED;
     if (exec->async_functions == NULL || lower->local_adapter_index >= exec->adapter_count ||
         exec->async_functions[lower->local_adapter_index].instance == NULL)
@@ -105,8 +123,8 @@ turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_h
     if (frame == NULL) return TURBOWASM_OUT_OF_MEMORY;
     /* These contexts survive guest realloc suspension and are never shared with
      * a recursive lower or a different call's pending result conversion. */
-    bind_endpoints(&binding.callee.memory, &binding.parameters, &frame->parameters, &exec->resource_table);
-    bind_endpoints(&binding.caller_memory, &binding.result, &frame->result, &exec->resource_table);
+    bind_values(&binding.callee.memory, &binding.parameters, &frame->parameters, exec);
+    bind_values(&binding.caller_memory, &binding.result, &frame->result, exec);
     status = turbowasm_component_async_call_create(&frame->call, &binding, arguments, argument_count);
     if (status != TURBOWASM_OK) { turbowasm_rt_free(frame); return status; }
     append(exec, frame); ++exec->async_call_count;

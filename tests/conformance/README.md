@@ -1226,9 +1226,9 @@ passed all five matrix jobs. Linux MIR passed 196/196 in 1.94 seconds and macOS
 arm64 MIR passed 196/196 in 2.86 seconds, including the compiled async exec target
 in 0.02 seconds on each platform.
 
-This is an internal integration stage. Per-call resource transactions, retained
-public async owners and nested Component instantiation remain incomplete.
-Endpoint call transactions are covered below. Public async admission stays closed.
+This is an internal integration stage. Retained public async owners and nested
+Component instantiation remain incomplete. Local resource/endpoint call
+transactions are covered below. Public async admission stays closed.
 
 ## Automatic local async lowering
 
@@ -1273,9 +1273,32 @@ failure, abort in parameter and result realloc, repeated fuel yields and allocat
 failure sweeps. The related regression passed 80/80 targets in 3.95 seconds.
 Reproduce with `cmake --build --preset win-core3-asan-user` and
 `ctest --preset win-core3-asan-user -R component_async_lower --output-on-failure`.
-Native MIR qualification of the endpoint integration is pending; both native
-targets exercise the same suite with compiled caller/callee/callback assertions.
+For `dbe1e8f`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37700265372)
+passed all five jobs. Linux MIR passed 198/198 targets in 1.30 seconds and macOS
+MIR passed 198/198 in 3.15 seconds, including the compiled async-lower suite
+(0.05 and 0.06 seconds respectively).
 
-Async capability imports, automatic resource transactions, ownership-bearing
-stream/future payload conversion, public task/endpoint owners, cross-instance
-progress ownership and the broader Component/WASI gaps remain open.
+Local own/borrow transactions are now connected as well. Own values reserve
+inaccessible handles before conversion commits; resources and endpoints in a
+mixed tuple share one transaction. Local borrow lowering passes the representation
+to the defining instance while the source lender remains held through terminal
+delivery. Lifted resource owner records are quota-bounded and retain the exec even
+after their canonical handles leave the table. Exec destruction also refuses live
+guest resource handles instead of discarding them.
+
+Destructors use fresh synchronous context slots and preserve live-task fuel and
+interruption control. They cannot task.return or block the enclosing async task;
+unwind restores the auxiliary state and does not retry the destructor. External
+resource-value destruction consumes its logical owner even when guest cleanup fails.
+
+Windows ASan passed the expanded async-lower suite: 36 cases, 2,758 assertions.
+The related regression passed 80/80 targets in 4.21 seconds. New cases cover own
+round trips, mixed resource/endpoint commit and rollback, borrow lender timing,
+premature guest drop, host-owner lifetime/quota/failing destructor, inaccessible
+reservations, parameter/result realloc unwind, destructor context/fuel/trap/wait
+and allocation failures. Native MIR qualification of resource integration is
+pending; the same suite also asserts compiled resource callees and destructors.
+
+Async capability imports, cross-instance resource borrowing/progress, ownership-
+bearing stream/future payload conversion, public task/endpoint owners, synchronous
+destructor-to-async lowering and the broader Component/WASI gaps remain open.

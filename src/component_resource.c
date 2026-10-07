@@ -220,6 +220,21 @@ turbowasm_component_handle_kind turbowasm_component_handle_kind_get(
     return entry == NULL ? TURBOWASM_COMPONENT_HANDLE_INVALID : entry->kind;
 }
 
+turbowasm_status turbowasm_component_resource_publish(
+    turbowasm_component_resource_table *table, turbowasm_component_resource_handle handle,
+    void *reservation, uint64_t resource_identity, turbowasm_value rep) {
+    turbowasm_component_resource_entry *entry = entry_get(table, handle);
+    if (reservation == NULL || resource_identity == 0u ||
+        (rep.kind != TURBOWASM_VALUE_I32 && rep.kind != TURBOWASM_VALUE_I64))
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (entry == NULL || entry->kind != TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION ||
+        entry->object != reservation) return TURBOWASM_TRAPPED;
+    entry->kind = TURBOWASM_COMPONENT_HANDLE_RESOURCE;
+    entry->object = NULL; entry->resource_identity = resource_identity;
+    entry->rep = rep; entry->owned = true;
+    return TURBOWASM_OK;
+}
+
 void *turbowasm_component_handle_object(
     const turbowasm_component_resource_table *table,
     turbowasm_component_resource_handle handle,

@@ -23,6 +23,7 @@ typedef enum turbowasm_component_handle_kind {
     TURBOWASM_COMPONENT_HANDLE_STREAM_WRITE,
     TURBOWASM_COMPONENT_HANDLE_FUTURE_READ,
     TURBOWASM_COMPONENT_HANDLE_FUTURE_WRITE,
+    TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION,
     TURBOWASM_COMPONENT_HANDLE_INVALID
 } turbowasm_component_handle_kind;
 
@@ -69,6 +70,13 @@ turbowasm_status turbowasm_component_handle_remove(
     turbowasm_component_resource_table *table,
     turbowasm_component_resource_handle handle,
     turbowasm_component_handle_kind kind, void **out_object);
+
+/* Publish a private reservation without allocating or changing its generation.
+ * Until publication all ordinary resource operations reject this handle. The
+ * reservation object is an identity token, borrowed through commit/rollback. */
+turbowasm_status turbowasm_component_resource_publish(
+    turbowasm_component_resource_table *table, turbowasm_component_resource_handle handle,
+    void *reservation, uint64_t resource_identity, turbowasm_value rep);
 
 typedef turbowasm_status (*turbowasm_component_resource_destructor_fn)(
     void *context,

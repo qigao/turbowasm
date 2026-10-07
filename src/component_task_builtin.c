@@ -72,7 +72,8 @@ turbowasm_status turbowasm_component_task_builtin_suspend(turbowasm_component_ta
     turbowasm_host_wait wait = {0};
     int completion;
     turbowasm_status status;
-    if (!turbowasm_host_call_can_wait(call) || task->builtin_wait != TURBOWASM_COMPONENT_TASK_WAIT_NONE)
+    if (!turbowasm_host_call_can_wait(call) || task->domain->synchronous_depth != 0u ||
+        task->builtin_wait != TURBOWASM_COMPONENT_TASK_WAIT_NONE)
         return TURBOWASM_TRAPPED;
     task->builtin_wait = kind;
     task->builtin_wait_set = set;

@@ -286,6 +286,11 @@ static turbowasm_status invoke_mapped_core_function(
         status = turbowasm_instance_invoke_from_host(call, instance,
             function->function_index, arguments, argument_count,
             results, result_capacity, result_count, trap);
+    else if (exec->task_domain.active != NULL && !exec->task_domain.active->destroying &&
+             exec->task_domain.active->core.impl != NULL)
+        status = turbowasm_instance_invoke_internal(instance->impl, function->function_index,
+            arguments, argument_count, results, result_capacity, result_count, trap,
+            turbowasm_execution_control_get(&exec->task_domain.active->core));
     else
         status = turbowasm_instance_invoke(instance,
             function->function_index, arguments, argument_count,
@@ -308,6 +313,9 @@ static turbowasm_status component_resource_destructor_bridge(
     size_t result_count = 0u;
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
     turbowasm_status status;
+    turbowasm_component_task_domain *domain;
+    turbowasm_component_task temporary = {0}, *saved_active = NULL, *saved_auxiliary = NULL;
+    uint64_t saved_context[2] = {0};
 
     if (resource_context == NULL ||
         resource_context->exec == NULL ||
@@ -323,6 +331,20 @@ static turbowasm_status component_resource_destructor_bridge(
         !resource_type->as.resource.has_destructor)
         return TURBOWASM_INVALID_ARGUMENT;
 
+    domain = &resource_context->exec->task_domain;
+    if (domain->table != NULL) {
+        if (domain->synchronous_depth == UINT32_MAX) return TURBOWASM_TRAPPED;
+        saved_active = domain->active; saved_auxiliary = domain->auxiliary;
+        if (saved_active == NULL || saved_active->destroying) {
+            temporary.domain = domain;
+            domain->active = &temporary;
+        } else {
+            memcpy(saved_context, saved_active->context_storage, sizeof(saved_context));
+            memset(saved_active->context_storage, 0, sizeof(saved_active->context_storage));
+        }
+        ++domain->synchronous_depth;
+        domain->auxiliary = domain->active;
+    }
     status = invoke_mapped_core_function(
         resource_context->exec,
         resource_context->call,
@@ -333,6 +355,12 @@ static turbowasm_status component_resource_destructor_bridge(
         0u,
         &result_count,
         &trap);
+    if (domain->table != NULL) {
+        if (saved_active != NULL && !saved_active->destroying)
+            memcpy(saved_active->context_storage, saved_context, sizeof(saved_context));
+        domain->active = saved_active; domain->auxiliary = saved_auxiliary;
+        --domain->synchronous_depth;
+    }
     if (resource_context->trap != NULL)
         *resource_context->trap = trap;
     if (status != TURBOWASM_OK)
@@ -1753,15 +1781,14 @@ static turbowasm_status configure_canon_lower_memory(
     return TURBOWASM_OK;
 }
 
-/* Endpoint call transactions are connected; resource loans and stream payload
- * ownership still require their own retained conversion owners. */
+/* Calls have retained ownership scopes; stream payloads still need independent
+ * per-operation scopes before they can carry resources or endpoints. */
 static turbowasm_status async_value_supported(const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_ref ref, bool endpoints) {
+    turbowasm_component_type_ref ref, bool ownership) {
     uint32_t features;
     if (!turbowasm_component_transfer_type_features(graph, ref, &features))
         return TURBOWASM_UNSUPPORTED;
-    return (features & (TURBOWASM_COMPONENT_VALUE_RESOURCES |
-        (endpoints ? 0u : TURBOWASM_COMPONENT_VALUE_ENDPOINTS)))
+    return (!ownership && (features & (TURBOWASM_COMPONENT_VALUE_RESOURCES | TURBOWASM_COMPONENT_VALUE_ENDPOINTS)))
         ? TURBOWASM_UNSUPPORTED : TURBOWASM_OK;
 }
 
@@ -1836,6 +1863,8 @@ static turbowasm_status bind_async_builtin(turbowasm_component_exec *exec, uint3
     if (status == TURBOWASM_OK && definition->kind == TURBOWASM_COMPONENT_TASK_RETURN) {
         context->binding.memory.endpoint_lift = turbowasm_component_endpoint_codec_lift;
         context->binding.memory.endpoint_context = &exec->async_endpoint_lift;
+        turbowasm_component_exec_resource_codec_bind(&exec->async_resource_lift, exec, &context->binding.memory);
+        context->binding.memory.resource_lower = NULL;
     }
     return status;
 }
@@ -2586,6 +2615,8 @@ static turbowasm_status initialize_lift_adapter(
         binding.function_index = core_function->function_index; binding.memory = memory;
         binding.memory.endpoint_lift = turbowasm_component_endpoint_codec_lift;
         binding.memory.endpoint_context = &exec->async_endpoint_lift;
+        turbowasm_component_exec_resource_codec_bind(&exec->async_resource_lift, exec, &binding.memory);
+        binding.memory.resource_lower = NULL;
         if (lift->has_callback) {
             const turbowasm_component_exec_core_function *callback;
             if (lift->callback_function_index >= exec->core_function_count) return TURBOWASM_MALFORMED_MODULE;
@@ -3044,14 +3075,15 @@ turbowasm_status turbowasm_component_exec_destroy(
     turbowasm_component_exec *exec) {
     if (exec == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (exec->async_call_count != 0u || exec->async_driving) return TURBOWASM_TRAPPED;
+    if (exec->async_call_count != 0u || exec->async_driving || exec->async_resource_owners != 0u)
+        return TURBOWASM_TRAPPED;
     if (exec->task_domain.table != NULL) {
         uint32_t i;
         turbowasm_status status;
         if (exec->task_domain.count != 0u) return TURBOWASM_TRAPPED;
         for (i = 0; i < exec->resource_table.capacity; ++i) {
             const turbowasm_component_resource_entry *entry = &exec->resource_table.entries[i];
-            if (entry->occupied && entry->kind != TURBOWASM_COMPONENT_HANDLE_RESOURCE)
+            if (entry->occupied)
                 return TURBOWASM_TRAPPED;
         }
         status = turbowasm_component_task_domain_destroy(&exec->task_domain);

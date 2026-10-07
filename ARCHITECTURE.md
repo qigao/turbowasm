@@ -865,9 +865,9 @@ Component during that invocation. An auxiliary owner excludes other tasks in
 the domain across suspension until context restoration. No transient host-call
 pointer is retained.
 This stage admits same-domain task/endpoint execution and local async lowering;
-async imports and automatic resource-valued argument/result transactions
-remain closed until their per-invocation ownership contexts are integrated. Endpoint
-call transactions are described below. The private entry
+async imports and cross-instance resource borrowing remain gated until their
+progress and loan owners are integrated. Local resource/endpoint call transactions
+are described below. The private entry
 does not change public loading or host API admission.
 
 Exec destruction rejects registered tasks and live async table entries before
@@ -894,7 +894,7 @@ collection. A private failure-abort entry propagates a non-success reason,
 rejects active/pinned conversion and releases remaining calls after exported
 caller tasks have been destroyed. It is not public cooperative cancellation. Exec destruction requires
 the call list drained. This stage binds local async lifts; async capability
-imports and automatic resource-value transactions remain gated.
+imports and cross-instance progress remain gated.
 
 Local async endpoint parameters and results use two independent endpoint codecs
 owned by each retained call frame. The caller-to-callee and callee-to-caller
@@ -904,8 +904,34 @@ guest realloc, rolls back reservations before releasing the owning values. Sourc
 handles already consumed by lifting stay invalid on failure. This is owner-thread
 state; no codec with pending lower reservations is shared between calls. A separate
 instance-owned lift-only codec lets task.return consume endpoints without retaining
-a transient host-call context. Resource loans and ownership-bearing stream/future
-payload conversion remain separate integration work; the public async gate stays closed.
+a transient host-call context. Ownership-bearing stream/future payload conversion
+remains separate integration work; the public async gate stays closed.
+
+Local async resource conversion retains one owner record per lifted own/borrow
+value, bounded by the exec handle quota even while values are outside the table.
+These records keep the exec alive. Own lifting consumes the source handle; borrow
+lifting acquires a lender that is released only at terminal subtask delivery or
+failure teardown. Lowering a borrow back into its defining instance passes the
+representation directly, as required by the canonical ABI, so no synthetic callee
+borrow handle is created. Imported/cross-instance borrowing requires separate
+task-bound handle accounting and is not admitted by this local codec.
+
+Each conversion direction owns an intrusive reservation list. Own destinations
+initially occupy private reservation slots, inaccessible to resource.rep/drop or
+waitable operations. Commit preflights all resource reservations, commits the
+endpoint scope, then publishes the already-validated resource slots without
+allocation or callbacks. Rollback removes every reservation before value cleanup;
+consumed source owners are destroyed, not silently restored. Cleanup propagates
+destructor failure, consumes the logical owner once, and never retries guest code.
+
+Resource destructors execute as synchronous auxiliary calls with fresh context
+slots. A live async task supplies fuel/interruption control and remains the
+progress owner across budget suspension; teardown/external release uses a
+non-resumable synchronous call. Auxiliary depth rejects task.return and blocking
+waits so a destructor cannot resolve or suspend its caller's async task. Nested
+destructors save/restore the enclosing context and auxiliary owner. Explicit async
+lowering from this synchronous destructor context remains gated until sync/async
+cross-call integration is complete.
 
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and

@@ -411,7 +411,7 @@ bool turbowasm_component_task_deliver_cancel(turbowasm_component_task_domain *do
 
 static turbowasm_component_task *returning_task(turbowasm_component_task_domain *domain) {
     turbowasm_component_task *task;
-    if (domain == NULL || domain->may_leave == NULL || !*domain->may_leave) return NULL;
+    if (domain == NULL || domain->may_leave == NULL || !*domain->may_leave || domain->synchronous_depth != 0u) return NULL;
     task = domain->active;
     return task != NULL && !task->destroying && !task->resolving && task->phase == TURBOWASM_COMPONENT_TASK_STARTED && task->borrowed_handles == 0u
         ? task : NULL;

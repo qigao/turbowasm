@@ -13,12 +13,13 @@ typedef struct turbowasm_component_task_domain {
     turbowasm_component_resource_table *table;
     bool *may_leave;
     turbowasm_component_task *active, *exclusive;
-    /* Auxiliary realloc retains may_leave/context isolation across suspension. */
+    /* Auxiliary calls retain context isolation across suspension. */
     turbowasm_component_task *auxiliary;
     struct turbowasm_component_task_owned_set *sets;
     struct turbowasm_component_task_owned_pair *pairs;
     uint32_t pair_count;
     uint32_t count, limit, backpressure;
+    uint32_t synchronous_depth;
 } turbowasm_component_task_domain;
 
 /* Called exactly once after backpressure clears, on the retained Core coroutine
