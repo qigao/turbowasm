@@ -555,6 +555,17 @@ one value-feature query for public admission, Core-call adapters and canonical
 import memory requirements, so nested variant strings/resources cannot drift
 between those layers.
 
+Validation on 2026-10-07 at code commit `154e570`: Windows full ASAN passed
+136/136 CTest entries (224.05 seconds), including both pinned Core 3.0 suites;
+Linux x64 and macOS arm64 MIR builds each passed 148/148 entries in
+[CI run 37606014785](https://github.com/qigao/turbowasm/actions/runs/37606014785).
+The Windows/Linux qualification jobs also build and run the installed C/C++
+Component consumers. These results validate this implementation slice, not full
+Component Model conformance. The executable public usage example is
+[`component_main.c`](../tests/installed_consumer/component_main.c); composite
+construction and ownership examples are in
+[`component_host_values_test.c`](../tests/component_host_values_test.c).
+
 The installed `TurboWasm::Component` library is a real façade target that
 depends publicly on `TurboWasm::Runtime`. Runtime never links back to the
 Component target, and the private retained type graph/canonical/resource structs
