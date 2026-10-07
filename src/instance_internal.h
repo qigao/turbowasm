@@ -236,6 +236,7 @@ typedef struct turbowasm_jit_invocation_context {
 
     /* Larger pending tuples belong to the enclosing Runtime dispatcher. */
     struct turbowasm_value_stack *tail_storage;
+    turbowasm_instance_impl *tail_instance;
 
     /* Borrowed views traced by the enclosing dispatcher's store source. */
     const turbowasm_value *arguments;
@@ -292,6 +293,18 @@ turbowasm_status turbowasm_jit_direct_call(
     size_t result_capacity,
     size_t *result_count,
     turbowasm_trap *trap);
+
+enum {
+    TURBOWASM_JIT_CALL_INDIRECT = 0x11,
+    TURBOWASM_JIT_RETURN_CALL_INDIRECT = 0x13,
+    TURBOWASM_JIT_CALL_REF = 0x14,
+    TURBOWASM_JIT_RETURN_CALL_REF = 0x15
+};
+
+/* Arguments contain the expected parameter tuple followed by one selector. */
+int64_t turbowasm_jit_indirect_call(turbowasm_jit_invocation_context *context,
+    int64_t opcode, int64_t type_index, int64_t table_index,
+    const turbowasm_value *arguments, turbowasm_value *results);
 
 turbowasm_status turbowasm_instance_invoke_interpreter_internal(
     turbowasm_instance_impl *instance,

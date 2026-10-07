@@ -250,7 +250,7 @@ There are no new buffers, retained references, locks or public APIs in this boun
 
 The first admitted operations were size, init, copy and element drop. The managed
 reference frame below adds get/set/grow/fill using the same Runtime backing.
-This does not admit general indirect calls or GC instructions. Tests compare table
+Indirect calls use the separate boundary below; GC instructions remain interpreted. Tests compare table
 contents and drop state as well as status/results, including table32/table64
 mixing, imported backing, overlap, full-width bounds, fuel and allocation failure.
 Rollback removes table decoder admission and emission with the helper registration;
@@ -289,6 +289,37 @@ Public resumable executions continue to use the interpreter; this increment does
 not admit native frames into the public yield/resume path.
 Rollback removes reference admission and emission together with frame allocation
 and root registration; it must not leave admitted code with untraced cells.
+
+### MIR indirect call ownership
+
+`call_indirect`, `call_ref` and their tail forms resolve targets through Runtime's
+existing table lookup and defined-type matching. The interpreter and native
+helper share the decoded-value resolver; MIR does not cache table entries or
+generated entry addresses. This preserves table32/table64 bounds, null traps,
+nominal subtyping, original function owners and imported backing. The semantic
+reference is the [Core execution contract](https://webassembly.github.io/spec/core/exec/instructions.html#exec-call-indirect).
+
+The current single execution owner borrows target instances under the existing
+funcref/linker lifetime contract. Native call scratch contains the validated
+parameter tuple followed by one selector cell, with checked counts and the same
+Runtime allocation limits as direct calls. Call results use the existing rooted
+result cells. Resolution and type errors happen before invoking a target; errors
+and pending exceptions return to the originating instance. Ordinary calls add one
+logical depth; tail requests copy parameters into dispatcher-owned bounded storage
+and publish the target instance/index only after validation and allocation succeed.
+After generated code unwinds, the dispatcher switches the active instance and
+store root registration at unchanged depth. Nested calls own separate frames;
+tail chains retain one pending tuple. No locks, retained public handles, new
+configuration or public ABI are introduced.
+
+Using a generated entry pointer directly would bypass Runtime type, ownership,
+fuel and exception boundaries; recursively implementing tail transfers would
+consume the native stack. The chosen helper/trampoline approach adds target
+resolution per call while preserving those invariants. Validation covers both
+address widths, typed references, mixed/reference tuples, cross-instance targets,
+host/interpreted targets, long tail chains, GC, traps, fuel and allocation failure.
+Rollback removes these four admission cases and their emitter together; Runtime
+interpreted behavior remains the compatibility baseline.
 
 ## Component host values and resource ownership (approved design)
 

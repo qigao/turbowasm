@@ -517,11 +517,8 @@ static bool turbowasm_mir_emit_argument_loads(
         (SIZE_MAX - offsetof(turbowasm_value, as)) / sizeof(turbowasm_value);
     for (index = 0u; index < type->param_count; ++index) {
         uint8_t value_type = type->params[index];
-        if (turbowasm_mir_reference_type(value_type)) {
-            if (!turbowasm_mir_emit_cell_copy(text, "jit_ref_locals", index, "jit_args", index))
-                return false;
+        if (turbowasm_mir_reference_type(value_type))
             continue;
-        }
         const char *move = turbowasm_mir_move_name(value_type);
         const char *memory_type = value_type == 0x7fu
             ? "i32" : turbowasm_mir_type_name(value_type);
@@ -642,6 +639,31 @@ static bool turbowasm_mir_value_signature(
         if (!turbowasm_mir_value_type(type->results[index]))
             return false;
     }
+    return true;
+}
+
+typedef struct turbowasm_mir_indirect_op {
+    const turbowasm_validation_func_type *type;
+    uint32_t type_index, table_index;
+    uint8_t selector_type;
+    bool tail;
+} turbowasm_mir_indirect_op;
+
+static bool turbowasm_mir_decode_indirect(const turbowasm_validation_context *validation,
+    turbowasm_reader *reader, uint8_t opcode, turbowasm_mir_indirect_op *op) {
+    bool by_reference = opcode == TURBOWASM_JIT_CALL_REF || opcode == TURBOWASM_JIT_RETURN_CALL_REF;
+    memset(op, 0, sizeof(*op));
+    if (!turbowasm_reader_uleb32(reader, &op->type_index))
+        return false;
+    op->type = turbowasm_validation_context_type(validation, op->type_index);
+    if (!turbowasm_mir_value_signature(op->type) || op->type->param_count == UINT32_MAX)
+        return false;
+    if (!by_reference && (!turbowasm_reader_uleb32(reader, &op->table_index) ||
+        op->table_index >= validation->table_count))
+        return false;
+    op->selector_type = by_reference ? 0x70u :
+        turbowasm_mir_table_address_type(validation, op->table_index);
+    op->tail = opcode == TURBOWASM_JIT_RETURN_CALL_REF || opcode == TURBOWASM_JIT_RETURN_CALL_INDIRECT;
     return true;
 }
 
@@ -2011,6 +2033,28 @@ static bool turbowasm_mir_scan_structured_scalar(
                 break;
             }
 
+            case TURBOWASM_JIT_CALL_INDIRECT:
+            case TURBOWASM_JIT_RETURN_CALL_INDIRECT:
+            case TURBOWASM_JIT_CALL_REF:
+            case TURBOWASM_JIT_RETURN_CALL_REF: {
+                turbowasm_mir_indirect_op op;
+                uint32_t result;
+                if (!turbowasm_mir_decode_indirect(validation, &reader, opcode, &op) ||
+                    op.type->result_count > UINT32_MAX - calls.registers)
+                    goto done;
+                if (op.type->param_count + 1u > calls.arguments)
+                    calls.arguments = op.type->param_count + 1u;
+                if (!op.tail) {
+                    if (op.type->result_count > calls.results)
+                        calls.results = op.type->result_count;
+                    calls.registers += op.type->result_count;
+                }
+                calls.references |= turbowasm_mir_reference_type(op.selector_type);
+                for (result = 0u; result < op.type->result_count; ++result)
+                    calls.references |= turbowasm_mir_reference_type(op.type->results[result]);
+                break;
+            }
+
             case 0x12u: { /* return_call */
                 uint32_t callee_index;
 
@@ -2503,32 +2547,10 @@ static bool turbowasm_mir_control_location_budget(
     return true;
 }
 
-static bool turbowasm_mir_structured_emit_call(
-    turbowasm_mir_text *text,
-    const turbowasm_validation_context *validation,
-    uint32_t callee_index, turbowasm_mir_stack_value *stack,
-    uint32_t *stack_size, uint32_t *next_reg, uint32_t register_limit) {
-    const turbowasm_validation_func_type *type =
-        turbowasm_validation_context_function_type(validation, callee_index);
-    uint32_t index, base;
-    if (!turbowasm_mir_value_signature(type) ||
-        *stack_size < type->param_count || *next_reg > register_limit ||
-        type->result_count > register_limit - *next_reg)
-        return false;
-    base = *stack_size - type->param_count;
-    for (index = 0u; index < type->param_count; ++index) {
-        turbowasm_mir_stack_value value = stack[base + index];
-        if (value.type != type->params[index] ||
-            !turbowasm_mir_emit_value_store(text, "jit_call_args", index,
-                value.type, turbowasm_mir_reg_prefix(value.type), value.reg))
-            return false;
-    }
-    if (!turbowasm_mir_text_appendf(text,
-            "call tw_call_values_p, tw_jit_call_values, jit_status, jit_ctx, "
-            "%u, jit_call_args, jit_call_results\n"
-            "bne jit_fail, jit_status, 0\n", callee_index))
-        return false;
-    *stack_size = base;
+static bool turbowasm_mir_emit_call_results(turbowasm_mir_text *text,
+    const turbowasm_validation_func_type *type, turbowasm_mir_stack_value *stack,
+    uint32_t *stack_size, uint32_t *next_reg) {
+    uint32_t index;
     for (index = 0u; index < type->result_count; ++index) {
         uint8_t value_type = type->results[index];
         if (turbowasm_mir_reference_type(value_type)) {
@@ -2557,6 +2579,62 @@ static bool turbowasm_mir_structured_emit_call(
         ++*stack_size;
     }
     return true;
+}
+
+static bool turbowasm_mir_structured_emit_call(
+    turbowasm_mir_text *text,
+    const turbowasm_validation_context *validation,
+    uint32_t callee_index, turbowasm_mir_stack_value *stack,
+    uint32_t *stack_size, uint32_t *next_reg, uint32_t register_limit) {
+    const turbowasm_validation_func_type *type =
+        turbowasm_validation_context_function_type(validation, callee_index);
+    uint32_t index, base;
+    if (!turbowasm_mir_value_signature(type) ||
+        *stack_size < type->param_count || *next_reg > register_limit ||
+        type->result_count > register_limit - *next_reg)
+        return false;
+    base = *stack_size - type->param_count;
+    for (index = 0u; index < type->param_count; ++index) {
+        turbowasm_mir_stack_value value = stack[base + index];
+        if (value.type != type->params[index] ||
+            !turbowasm_mir_emit_value_store(text, "jit_call_args", index,
+                value.type, turbowasm_mir_reg_prefix(value.type), value.reg))
+            return false;
+    }
+    if (!turbowasm_mir_text_appendf(text,
+            "call tw_call_values_p, tw_jit_call_values, jit_status, jit_ctx, "
+            "%u, jit_call_args, jit_call_results\n"
+            "bne jit_fail, jit_status, 0\n", callee_index))
+        return false;
+    *stack_size = base;
+    return turbowasm_mir_emit_call_results(text, type, stack, stack_size, next_reg);
+}
+
+static bool turbowasm_mir_emit_indirect(turbowasm_mir_text *text,
+    const turbowasm_mir_indirect_op *op, uint8_t opcode,
+    turbowasm_mir_stack_value *stack, uint32_t *stack_size,
+    uint32_t *next_reg, uint32_t register_limit) {
+    uint32_t index, base, count = op->type->param_count + 1u;
+    if (*stack_size < count || *next_reg > register_limit ||
+        (!op->tail && op->type->result_count > register_limit - *next_reg))
+        return false;
+    base = *stack_size - count;
+    for (index = 0u; index < count; ++index) {
+        turbowasm_mir_stack_value value = stack[base + index];
+        uint8_t expected = index == op->type->param_count ? op->selector_type : op->type->params[index];
+        if (value.type != expected || !turbowasm_mir_emit_value_store(text,
+                "jit_call_args", index, value.type, turbowasm_mir_reg_prefix(value.type), value.reg))
+            return false;
+    }
+    if (!turbowasm_mir_text_appendf(text,
+            "call tw_indirect_p, tw_indirect, jit_status, jit_ctx, %u, %u, %u, jit_call_args, jit_call_results\n",
+            opcode, op->type_index, op->table_index))
+        return false;
+    *stack_size = base;
+    if (op->tail)
+        return turbowasm_mir_text_appendf(text, "ret\n");
+    return turbowasm_mir_text_appendf(text, "bne jit_fail, jit_status, 0\n") &&
+        turbowasm_mir_emit_call_results(text, op->type, stack, stack_size, next_reg);
 }
 
 static bool turbowasm_mir_materialize_branch_target(
@@ -3178,6 +3256,8 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             "tw_jit_m_%u: module\n"
             "tw_call_values_p: proto i64, p:ctx, i64:index, p:args, p:results\n"
             "tw_tail_values_p: proto i64, p:ctx, i64:index, p:args\n"
+            "tw_indirect_p: proto i64, p:ctx, i64:op, i64:type, i64:table, p:args, p:results\n"
+            "import tw_indirect\n"
             "tw_table_p: proto i64, p:ctx, i64:op, i64:table, i64:secondary, "
                 "i64:a, i64:b, i64:c, p:reference\n"
             "tw_reference_p: proto i64, p:ctx, i64:opcode, i64:immediate, p:out, p:a, p:b\n"
@@ -3734,6 +3814,22 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                         &text, validation, callee_index,
                         stack, &stack_size, &next_reg, register_count))
                     goto done;
+                break;
+            }
+
+            case TURBOWASM_JIT_CALL_INDIRECT:
+            case TURBOWASM_JIT_RETURN_CALL_INDIRECT:
+            case TURBOWASM_JIT_CALL_REF:
+            case TURBOWASM_JIT_RETURN_CALL_REF: {
+                turbowasm_mir_indirect_op op;
+                if (!turbowasm_mir_decode_indirect(validation, &reader, opcode, &op) ||
+                    !turbowasm_mir_emit_indirect(&text, &op, opcode,
+                        stack, &stack_size, &next_reg, register_count))
+                    goto done;
+                if (op.tail) {
+                    stack_size = controls[0].height;
+                    reachable = false;
+                }
                 break;
             }
 
@@ -5408,6 +5504,21 @@ static turbowasm_status turbowasm_mir_invoke_compiled_inner(
         reference_locals = call_results + function->calls.results;
         reference_registers = reference_locals + function->reference_local_count;
     }
+    for (index = 0u; index < function->param_count; ++index) {
+        if (turbowasm_mir_reference_type(function->type->params[index])) {
+            reference_locals[index] = arguments[index];
+            if (reference_locals[index].kind == TURBOWASM_VALUE_FUNCREF &&
+                !reference_locals[index].as.funcref.is_null &&
+                reference_locals[index].as.funcref.owner == NULL) {
+                const turbowasm_module_impl *module = turbowasm_module_impl_get(context->instance->module);
+                if (reference_locals[index].as.funcref.function_index >= module->validation.function_count) {
+                    turbowasm_rt_free(scratch);
+                    return TURBOWASM_INVALID_ARGUMENT;
+                }
+                reference_locals[index].as.funcref.owner = context->instance;
+            }
+        }
+    }
     context->native_values = scratch;
     context->native_value_count = (size_t)scratch_count;
     {
@@ -5503,6 +5614,13 @@ static bool turbowasm_mir_register_call_externals(
     if (backend == NULL || backend->mir == NULL)
         return false;
 
+    {
+        int64_t (*fn)(turbowasm_jit_invocation_context *, int64_t, int64_t, int64_t,
+            const turbowasm_value *, turbowasm_value *) = turbowasm_jit_indirect_call;
+        _Static_assert(sizeof(fn) == sizeof(address), "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(backend->mir, "tw_indirect", address);
+    }
     {
         int64_t (*fn)(turbowasm_jit_invocation_context *, int64_t,
             const turbowasm_value *) = turbowasm_mir_tail_values;

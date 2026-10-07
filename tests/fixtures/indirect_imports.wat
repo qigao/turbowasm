@@ -1,0 +1,13 @@
+(module
+  (type $tuple (func (param i32 i64 f32 f64 anyref externref funcref) (result i64 f64 anyref funcref i32 f32 externref)))
+  (import "p" "table32" (table $t32 8 funcref))
+  (import "p" "table64" (table $t64 i64 8 funcref))
+  (func (export "call32") (param i32 i64 f32 f64 anyref externref funcref i32) (result i64 f64 anyref funcref i32 f32 externref)
+    local.get 0 local.get 1 local.get 2 local.get 3 local.get 4 local.get 5 local.get 6 local.get 7 call_indirect $t32 (type $tuple))
+  (func (export "tail32") (param i32 i64 f32 f64 anyref externref funcref i32) (result i64 f64 anyref funcref i32 f32 externref)
+    local.get 0 local.get 1 local.get 2 local.get 3 local.get 4 local.get 5 local.get 6 local.get 7 return_call_indirect $t32 (type $tuple))
+  (func (export "call64") (param i32 i64 f32 f64 anyref externref funcref i64) (result i64 f64 anyref funcref i32 f32 externref)
+    local.get 0 local.get 1 local.get 2 local.get 3 local.get 4 local.get 5 local.get 6 local.get 7 call_indirect $t64 (type $tuple))
+  (func (export "tail64") (param i32 i64 f32 f64 anyref externref funcref i64) (result i64 f64 anyref funcref i32 f32 externref)
+    local.get 0 local.get 1 local.get 2 local.get 3 local.get 4 local.get 5 local.get 6 local.get 7 return_call_indirect $t64 (type $tuple))
+)

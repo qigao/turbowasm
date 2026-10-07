@@ -55,11 +55,13 @@ existing SIMD memory subset through Runtime helpers. Shared memory32/memory64
 also use these helpers, including atomic load/store, RMW, compare-exchange,
 fence and interruptible wait/notify. The private entry
 accepts mixed scalar/reference parameters and zero or multiple results.
-Direct calls and direct tail calls support these tuples
+Direct, table-indirect and typed-reference calls and their tail forms support these tuples
 through Runtime, including interpreted callees and host imports. Tail dispatch
 reuses the logical call depth. Reference locals, control merges and call scratch
 use complete value cells rooted in the owning store. Instruction admission still
-excludes vector call signatures and indirect tail calls. Each instance/backend retains one execution owner,
+excludes vector call signatures. Indirect targets retain Runtime's table bounds,
+null and subtype checks; cross-instance tails switch owners after the native
+frame unwinds. Each instance/backend retains one execution owner,
 while distinct instances can import the same shared backing. Native MIR
 memory64 verification passed the Linux and macOS MIR test profiles; see the
 [qualification record](tests/conformance/README.md). The Windows MIR dependency
@@ -70,7 +72,7 @@ tracked by Runtime v2 (#301). GC and all table64 operations execute in the
 interpreter. MIR also lowers table.size, table.init, table.copy, elem.drop and
 table.get/set/grow/fill
 through Runtime for table32/table64, including mixed-width and imported tables.
-Native GC instruction lowering and general indirect calls remain incomplete.
+Native GC instruction lowering remains incomplete.
 
 ## Core 3.0 and managed references
 
