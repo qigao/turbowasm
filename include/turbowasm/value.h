@@ -46,7 +46,7 @@ typedef enum turbowasm_v128_shape {
 } turbowasm_v128_shape;
 
 typedef struct turbowasm_v128 {
-    salts_v128 bits;
+    cmeta_v128 bits;
     turbowasm_v128_shape shape;
 } turbowasm_v128;
 
