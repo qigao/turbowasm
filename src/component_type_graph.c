@@ -1084,3 +1084,105 @@ const turbowasm_component_type *turbowasm_component_resource_definition(
     }
     return resource;
 }
+
+static bool equal_name(const uint8_t *left, uint32_t left_size,
+    const uint8_t *right, uint32_t right_size) {
+    return left_size == right_size && (left_size == 0u ||
+        (left != NULL && right != NULL && memcmp(left, right, left_size) == 0));
+}
+
+static bool equal_value_type(const turbowasm_component_type_graph *lg,
+    turbowasm_component_type_ref lr, const turbowasm_component_type_graph *rg,
+    turbowasm_component_type_ref rr, uint32_t depth) {
+    turbowasm_component_type li = {0}, ri = {0};
+    const turbowasm_component_type *left, *right;
+    uint32_t i;
+    if (depth >= TURBOWASM_COMPONENT_VALUE_MAX_DEPTH ||
+        !turbowasm_component_type_ref_validate(lg, lr) ||
+        !turbowasm_component_type_ref_validate(rg, rr))
+        return false;
+    if (lr.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE) {
+        li.kind = lr.as.inline_type; left = &li;
+    } else left = turbowasm_component_type_graph_get(lg, lr.as.indexed);
+    if (rr.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE) {
+        ri.kind = rr.as.inline_type; right = &ri;
+    } else right = turbowasm_component_type_graph_get(rg, rr.as.indexed);
+    if (left->kind != right->kind) return false;
+    if (inline_kind(left->kind)) return true;
+    switch (left->kind) {
+        case TURBOWASM_COMPONENT_TYPE_LIST:
+            return equal_value_type(lg, left->as.list.element_type,
+                rg, right->as.list.element_type, depth + 1u);
+        case TURBOWASM_COMPONENT_TYPE_OPTION:
+            return equal_value_type(lg, left->as.option.payload,
+                rg, right->as.option.payload, depth + 1u);
+        case TURBOWASM_COMPONENT_TYPE_FUTURE:
+        case TURBOWASM_COMPONENT_TYPE_STREAM:
+            return left->as.async_value.has_payload == right->as.async_value.has_payload &&
+                (!left->as.async_value.has_payload || equal_value_type(lg, left->as.async_value.payload,
+                    rg, right->as.async_value.payload, depth + 1u));
+        case TURBOWASM_COMPONENT_TYPE_RESULT:
+            return left->as.result.has_ok == right->as.result.has_ok &&
+                left->as.result.has_error == right->as.result.has_error &&
+                (!left->as.result.has_ok || equal_value_type(lg, left->as.result.ok,
+                    rg, right->as.result.ok, depth + 1u)) &&
+                (!left->as.result.has_error || equal_value_type(lg, left->as.result.error,
+                    rg, right->as.result.error, depth + 1u));
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+            if (left->as.record.count != right->as.record.count ||
+                left->as.record.fields == NULL || right->as.record.fields == NULL)
+                return false;
+            for (i = 0u; i < left->as.record.count; ++i) {
+                const turbowasm_component_record_field *a = &left->as.record.fields[i];
+                const turbowasm_component_record_field *b = &right->as.record.fields[i];
+                if (!equal_name(a->name, a->name_size, b->name, b->name_size) ||
+                    !equal_value_type(lg, a->type, rg, b->type, depth + 1u)) return false;
+            }
+            return true;
+        case TURBOWASM_COMPONENT_TYPE_TUPLE:
+            if (left->as.tuple.count != right->as.tuple.count ||
+                left->as.tuple.elements == NULL || right->as.tuple.elements == NULL)
+                return false;
+            for (i = 0u; i < left->as.tuple.count; ++i)
+                if (!equal_value_type(lg, left->as.tuple.elements[i],
+                    rg, right->as.tuple.elements[i], depth + 1u)) return false;
+            return true;
+        case TURBOWASM_COMPONENT_TYPE_VARIANT:
+            if (left->as.variant.count != right->as.variant.count ||
+                left->as.variant.cases == NULL || right->as.variant.cases == NULL)
+                return false;
+            for (i = 0u; i < left->as.variant.count; ++i) {
+                const turbowasm_component_variant_case *a = &left->as.variant.cases[i];
+                const turbowasm_component_variant_case *b = &right->as.variant.cases[i];
+                if (!equal_name(a->name, a->name_size, b->name, b->name_size) ||
+                    a->has_payload != b->has_payload || (a->has_payload &&
+                        !equal_value_type(lg, a->payload, rg, b->payload, depth + 1u))) return false;
+            }
+            return true;
+        case TURBOWASM_COMPONENT_TYPE_ENUM:
+        case TURBOWASM_COMPONENT_TYPE_FLAGS: {
+            bool enumeration = left->kind == TURBOWASM_COMPONENT_TYPE_ENUM;
+            uint32_t count = enumeration ? left->as.enumeration.count : left->as.flags.count;
+            const turbowasm_component_label *a = enumeration ? left->as.enumeration.labels : left->as.flags.labels;
+            const turbowasm_component_label *b = enumeration ? right->as.enumeration.labels : right->as.flags.labels;
+            if (count != (enumeration ? right->as.enumeration.count : right->as.flags.count) ||
+                a == NULL || b == NULL) return false;
+            for (i = 0u; i < count; ++i)
+                if (!equal_name(a[i].name, a[i].name_size, b[i].name, b[i].name_size)) return false;
+            return true;
+        }
+        case TURBOWASM_COMPONENT_TYPE_OWN:
+        case TURBOWASM_COMPONENT_TYPE_BORROW: {
+            const turbowasm_component_type *a = turbowasm_component_resource_definition(lg, left->as.handle.resource_type);
+            const turbowasm_component_type *b = turbowasm_component_resource_definition(rg, right->as.handle.resource_type);
+            return a != NULL && b != NULL && a->as.resource.identity == b->as.resource.identity;
+        }
+        default: return false;
+    }
+}
+
+bool turbowasm_component_value_type_equal(
+    const turbowasm_component_type_graph *left_graph, turbowasm_component_type_ref left,
+    const turbowasm_component_type_graph *right_graph, turbowasm_component_type_ref right) {
+    return equal_value_type(left_graph, left, right_graph, right, 0u);
+}

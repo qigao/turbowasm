@@ -1150,6 +1150,8 @@ turbowasm_status turbowasm_component_value_destroy(
             payload = owned.as.result.payload; break;
         case TURBOWASM_COMPONENT_TYPE_OWN:
         case TURBOWASM_COMPONENT_TYPE_BORROW:
+        case TURBOWASM_COMPONENT_TYPE_FUTURE:
+        case TURBOWASM_COMPONENT_TYPE_STREAM:
             if (owned.release != NULL)
                 return owned.release(owned.release_context);
             break;
@@ -3266,6 +3268,12 @@ static turbowasm_status validate_host_value(
     switch (kind) {
         case TURBOWASM_COMPONENT_TYPE_STRING:
             return turbowasm_component_string_validate(&value->as.string);
+        case TURBOWASM_COMPONENT_TYPE_FUTURE:
+        case TURBOWASM_COMPONENT_TYPE_STREAM:
+            return value->as.endpoint.owner != NULL && value->release != NULL &&
+                turbowasm_component_value_type_equal(graph, ref,
+                    value->as.endpoint.graph, value->as.endpoint.type)
+                ? TURBOWASM_OK : TURBOWASM_TYPE_MISMATCH;
         case TURBOWASM_COMPONENT_TYPE_LIST:
             sequence = &value->as.list;
             count = sequence->count;

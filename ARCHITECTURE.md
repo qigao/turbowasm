@@ -783,6 +783,19 @@ the end host-owned and retryable. These are internal owner operations; canonical
 lift/lower admission must additionally validate the guest handle kind and payload
 type before calling them. They do not admit guest binaries or expose a public API.
 
+Nested private endpoint values use the canonical value's existing move and
+release protocol. An idle, host-owned readable end can enter a value, freezing
+direct endpoint operations until that value is taken back or destroyed. The
+value carries a borrowed graph/type reference and opaque stable owner; the
+canonical module compares value types structurally (resource leaves by nominal
+identity), without depending on endpoint execution. The endpoint module supplies
+the release hook. Moving a record/list moves this obligation unchanged; destroying
+it closes the contained readable end and notifies its writer once. Extracting it
+clears the value before restoring direct endpoint access. Graphs and stable
+endpoint storage must outlive the containing value. No allocation or guest code
+runs at these owner transitions. Canonical memory conversion and public host
+admission remain separate, closed boundaries until their integration is complete.
+
 ## Canonical post-return lifecycle
 
 Synchronous lifts with `post-return` copy/lift the Core results before invoking

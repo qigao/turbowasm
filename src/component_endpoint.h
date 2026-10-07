@@ -20,6 +20,7 @@ typedef struct turbowasm_component_endpoint {
     turbowasm_component_waitable waitable;
     struct turbowasm_component_endpoint *peer;
     const turbowasm_component_type_graph *graph;
+    turbowasm_component_type_id type;
     turbowasm_component_type_ref payload;
     turbowasm_component_host_buffer *available;
     turbowasm_component_host_buffer *operation;
@@ -27,6 +28,7 @@ typedef struct turbowasm_component_endpoint {
     bool readable;
     bool initialized;
     bool closed;
+    bool value_owned;
 } turbowasm_component_endpoint;
 
 /* Private pair owners are zero-initialized, caller-owned and stable until both
@@ -58,6 +60,15 @@ turbowasm_status turbowasm_component_endpoint_detach_readable(
 turbowasm_status turbowasm_component_endpoint_attach_readable(
     turbowasm_component_endpoint *endpoint,
     turbowasm_component_resource_table *table);
+/* Move a host-owned readable end into an empty canonical value, freezing direct
+ * endpoint operations. Its peer remains usable. Taking the value clears it and
+ * restores direct ownership; destroying it closes the end. Neither transition
+ * allocates or frees caller-owned stable endpoint storage. Graph/storage must
+ * outlive the value. Failures preserve the value and endpoint ownership. */
+turbowasm_status turbowasm_component_endpoint_into_value(
+    turbowasm_component_endpoint *endpoint, turbowasm_component_value *out);
+turbowasm_status turbowasm_component_endpoint_take_value(
+    turbowasm_component_value *value, turbowasm_component_endpoint **out);
 /* Host value-array copies acknowledge cancellation immediately, retaining the
  * borrow until event delivery. This does not cancel an external I/O request. */
 turbowasm_status turbowasm_component_endpoint_cancel(turbowasm_component_endpoint *endpoint);

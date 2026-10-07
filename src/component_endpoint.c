@@ -48,6 +48,7 @@ turbowasm_status turbowasm_component_endpoint_pair_open(
         return TURBOWASM_TYPE_MISMATCH;
     initialize_endpoint(reader, graph, type, true, writer);
     initialize_endpoint(writer, graph, type, false, reader);
+    reader->type = writer->type = type_id;
     if (reader_table != NULL)
         status = turbowasm_component_waitable_register(reader_table, endpoint_kind(reader), &reader->waitable);
     if (status == TURBOWASM_OK && writer_table != NULL)
@@ -64,7 +65,7 @@ turbowasm_status turbowasm_component_endpoint_pair_open(
 }
 
 static bool live(const turbowasm_component_endpoint *endpoint) {
-    return endpoint != NULL && endpoint->initialized && !endpoint->closed;
+    return endpoint != NULL && endpoint->initialized && !endpoint->closed && !endpoint->value_owned;
 }
 
 static bool numeric_or_unit(const turbowasm_component_endpoint *endpoint) {
@@ -243,6 +244,48 @@ turbowasm_status turbowasm_component_endpoint_attach_readable(
     if (!movable_readable(endpoint) || endpoint->waitable.table != NULL || table == NULL)
         return TURBOWASM_TRAPPED;
     return turbowasm_component_waitable_register(table, endpoint_kind(endpoint), &endpoint->waitable);
+}
+
+static turbowasm_status release_endpoint_value(void *context) {
+    turbowasm_component_endpoint *endpoint = context;
+    if (endpoint == NULL || !endpoint->value_owned) return TURBOWASM_TRAPPED;
+    endpoint->value_owned = false;
+    return turbowasm_component_endpoint_close(endpoint);
+}
+
+turbowasm_status turbowasm_component_endpoint_into_value(
+    turbowasm_component_endpoint *endpoint, turbowasm_component_value *out) {
+    turbowasm_component_value value = {0};
+    if (out == NULL || out->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED || out->release != NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!movable_readable(endpoint) || endpoint->waitable.table != NULL)
+        return TURBOWASM_TRAPPED;
+    value.kind = endpoint->waitable.state.endpoint.future
+        ? TURBOWASM_COMPONENT_TYPE_FUTURE : TURBOWASM_COMPONENT_TYPE_STREAM;
+    value.as.endpoint.owner = endpoint;
+    value.as.endpoint.graph = endpoint->graph;
+    value.as.endpoint.type = turbowasm_component_type_ref_indexed(endpoint->type);
+    value.release = release_endpoint_value;
+    value.release_context = endpoint;
+    endpoint->value_owned = true;
+    *out = value;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_endpoint_take_value(
+    turbowasm_component_value *value, turbowasm_component_endpoint **out) {
+    turbowasm_component_endpoint *endpoint;
+    if (value == NULL || out == NULL ||
+        (value->kind != TURBOWASM_COMPONENT_TYPE_FUTURE && value->kind != TURBOWASM_COMPONENT_TYPE_STREAM) ||
+        value->release != release_endpoint_value || value->release_context != value->as.endpoint.owner)
+        return TURBOWASM_INVALID_ARGUMENT;
+    endpoint = value->as.endpoint.owner;
+    if (endpoint == NULL || !endpoint->value_owned)
+        return TURBOWASM_TRAPPED;
+    memset(value, 0, sizeof(*value));
+    endpoint->value_owned = false;
+    *out = endpoint;
+    return TURBOWASM_OK;
 }
 
 turbowasm_status turbowasm_component_endpoint_close(turbowasm_component_endpoint *endpoint) {

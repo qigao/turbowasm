@@ -124,6 +124,14 @@ struct turbowasm_component_value {
          * created/consumed only at a resource-table boundary.
          */
         turbowasm_value resource_rep;
+        /* Private endpoint owner: direct operations are frozen while this
+         * unique value owns it. Graph/type references remain borrowed. The
+         * endpoint adapter supplies release; canonical codecs stay separate. */
+        struct {
+            void *owner;
+            const turbowasm_component_type_graph *graph;
+            turbowasm_component_type_ref type;
+        } endpoint;
     } as;
     /* Optional lifted owner or import loan. Moving a value moves this cleanup
      * obligation; borrowed public argument copies have no release hook. */

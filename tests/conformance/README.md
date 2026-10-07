@@ -784,3 +784,29 @@ Two additional buffer/await cases then passed with the full endpoint target:
 These results qualify host-array rendezvous and private owner transitions only.
 Guest memory codecs, nested endpoint values, canonical async bindings, task
 scheduling and public async host integration remain under implementation.
+At `59925b8`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37666577052)
+passed all five jobs: Linux MIR 185/185 in 2.16 seconds, macOS arm64 MIR 185/185
+in 2.93 seconds, Windows, ordinary Linux and the Android cross-build.
+
+## Nested private endpoint values
+
+Canonical host values now retain a unique readable future/stream owner through
+their existing move/release protocol. Entering a value freezes direct endpoint
+operations; extraction clears the carrier and restores direct access. Value
+destruction closes the endpoint once, including endpoints nested in composites.
+Cross-graph value-type comparison uses structural fields and ordered labels;
+resource leaves use nominal identity. This comparison allocates nothing and
+shares the existing value-depth limit. It does not make endpoints admissible
+through the synchronous public host boundary or canonical guest memory codecs.
+
+The type tests cover inline/indexed representations, independently indexed
+graphs, all composite wrappers, labels, endpoint kind/unit distinctions, nominal
+resources and depth/cycle rejection. The endpoint tests transfer actual
+`list<record<future<u32>>>` and `list<record<stream<u32>>>` values across distinct
+type graphs. They verify payload mismatch before ownership transfer, frozen
+direct access, pending peer-close preservation, extraction followed by actual
+data transfer, and nested destruction notifying a pending writer without losing
+its untransferred value. Windows ASan passed five focused targets in 0.18 seconds
+and the related 56/56 tests in 2.43 seconds; a final focused run also covers the
+nested stream variant. Guest codecs, task scheduling, canonical async bindings
+and public host lifetime/transfer APIs still need implementation and qualification.

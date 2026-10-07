@@ -5,9 +5,11 @@
 #include <string.h>
 
 static turbowasm_component_type_graph graph;
+static turbowasm_component_type_graph value_graph;
 static turbowasm_component_resource_table tables[2];
 static turbowasm_component_waitable_set set;
 static turbowasm_component_endpoint reader, writer;
+static turbowasm_component_endpoint nested_reader, nested_writer;
 static turbowasm_component_host_buffer buffers[6];
 static turbowasm_component_value cells[3][8];
 static turbowasm_runtime_config config;
@@ -31,9 +33,9 @@ static turbowasm_status release_resource(void *context) {
     (void)context; ++destroyed; return TURBOWASM_OK;
 }
 static void cleanup(void) {
-    turbowasm_component_endpoint *ends[2] = {&reader, &writer};
+    turbowasm_component_endpoint *ends[4] = {&reader, &writer, &nested_reader, &nested_writer};
     unsigned i, j;
-    for (i = 0u; i < 2u; ++i) {
+    for (i = 0u; i < 4u; ++i) {
         turbowasm_component_event event;
         if (!ends[i]->initialized || ends[i]->closed) continue;
         if (ends[i]->operation != NULL) {
@@ -51,7 +53,9 @@ static void cleanup(void) {
     turbowasm_component_resource_table_destroy(&tables[0]);
     turbowasm_component_resource_table_destroy(&tables[1]);
     turbowasm_component_type_graph_destroy(&graph);
+    turbowasm_component_type_graph_destroy(&value_graph);
     memset(&reader, 0, sizeof(reader)); memset(&writer, 0, sizeof(writer));
+    memset(&nested_reader, 0, sizeof(nested_reader)); memset(&nested_writer, 0, sizeof(nested_writer));
     memset(&set, 0, sizeof(set)); memset(buffers, 0, sizeof(buffers));
 }
 static void primitive_type(bool future, bool unit, turbowasm_component_type_kind kind) {
@@ -456,5 +460,102 @@ spec("Component endpoint host-value rendezvous") {
         check_equal(tables[0].live_count, 1u);
         check_equal(turbowasm_component_endpoint_detach_readable(&reader), TURBOWASM_OK);
         check_equal(tables[0].live_count, 0u);
+    }
+
+    it("freezes direct access while a value owns a readable endpoint") {
+        turbowasm_component_endpoint *taken = &writer;
+        turbowasm_component_event event;
+        primitive_type(true, true, TURBOWASM_COMPONENT_TYPE_U32); open_hosts();
+        check_equal(turbowasm_component_endpoint_into_value(&writer, &cells[0][0]), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_endpoint_into_value(&reader, &cells[0][0]), TURBOWASM_OK);
+        check_true(reader.value_owned);
+        check_equal(turbowasm_component_endpoint_into_value(&reader, &cells[0][1]), TURBOWASM_TRAPPED);
+        check_equal(cells[0][1].kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+        buffers[0].length = 1u;
+        check_equal(turbowasm_component_endpoint_submit(&reader, &buffers[0]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_endpoint_take(&reader, &event), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_endpoint_close(&reader), TURBOWASM_INVALID_ARGUMENT);
+        check_true(turbowasm_component_resource_table_init(&tables[0], 1u));
+        check_equal(turbowasm_component_endpoint_attach_readable(&reader, &tables[0]), TURBOWASM_TRAPPED);
+        check_equal(tables[0].live_count, 0u);
+        check_equal(turbowasm_component_endpoint_take_value(&cells[0][1], &taken), TURBOWASM_INVALID_ARGUMENT);
+        check_true(taken == &writer);
+        check_equal(turbowasm_component_endpoint_close(&writer), TURBOWASM_OK);
+        check_equal(turbowasm_component_canonical_validate_value(&graph,
+            turbowasm_component_type_ref_indexed(0u), &cells[0][0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_take_value(&cells[0][0], &taken), TURBOWASM_OK);
+        check_true(taken == &reader); check_false(reader.value_owned);
+        check_equal(cells[0][0].kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+        check_equal(take(taken), TURBOWASM_COMPONENT_COPY_DROPPED);
+        check_equal(turbowasm_component_endpoint_into_value(taken, &cells[0][0]), TURBOWASM_TRAPPED);
+    }
+
+    it("moves nested endpoints through lists of records across independently indexed types") {
+        unsigned scenario;
+        for (scenario = 0u; scenario < 4u; ++scenario) {
+            bool extract = (scenario & 1u) != 0u;
+            bool future = scenario < 2u;
+            turbowasm_component_type_kind endpoint_type = future
+                ? TURBOWASM_COMPONENT_TYPE_FUTURE : TURBOWASM_COMPONENT_TYPE_STREAM;
+            turbowasm_component_record_field field = {
+                (const uint8_t *)"endpoint", 8u, {0}
+            };
+            turbowasm_component_value *record, *leaf;
+            turbowasm_component_endpoint *taken = NULL;
+            check_true(turbowasm_component_type_graph_allocate(&graph, 4u));
+            check_true(turbowasm_component_type_graph_define_async_value(&graph, 0u,
+                endpoint_type, true,
+                turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_U32)));
+            field.type = turbowasm_component_type_ref_indexed(0u);
+            check_true(turbowasm_component_type_graph_define_record(&graph, 1u, &field, 1u));
+            check_true(turbowasm_component_type_graph_define_list(&graph, 2u, 1u));
+            check_true(turbowasm_component_type_graph_define_async_value(&graph, 3u,
+                TURBOWASM_COMPONENT_TYPE_STREAM, true, turbowasm_component_type_ref_indexed(2u)));
+            check_true(turbowasm_component_type_graph_allocate(&value_graph, 2u));
+            check_true(turbowasm_component_type_graph_define_scalar(&value_graph, 0u, TURBOWASM_COMPONENT_TYPE_U32));
+            check_true(turbowasm_component_type_graph_define_async_value(&value_graph, 1u,
+                endpoint_type, true, turbowasm_component_type_ref_indexed(0u)));
+            check_equal(turbowasm_component_endpoint_pair_open(&graph, 3u, NULL, NULL,
+                &reader, &writer), TURBOWASM_OK);
+            check_equal(turbowasm_component_endpoint_pair_open(&value_graph, 1u, NULL, NULL,
+                &nested_reader, &nested_writer), TURBOWASM_OK);
+            cells[0][0].kind = TURBOWASM_COMPONENT_TYPE_LIST;
+            record = turbowasm_rt_calloc(1u, sizeof(*record)); check_not_null(record);
+            cells[0][0].as.list.items = record; cells[0][0].as.list.count = 1u;
+            record->kind = TURBOWASM_COMPONENT_TYPE_RECORD;
+            leaf = turbowasm_rt_calloc(1u, sizeof(*leaf)); check_not_null(leaf);
+            record->as.record.items = leaf; record->as.record.count = 1u;
+            check_equal(turbowasm_component_endpoint_into_value(&nested_reader, leaf), TURBOWASM_OK);
+            buffer(0u, 0u, 1u); buffer(1u, 1u, 1u);
+            graph.types[0].as.async_value.payload = turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_U64);
+            check_equal(turbowasm_component_endpoint_submit(&writer, &buffers[0]), TURBOWASM_TYPE_MISMATCH);
+            check_false(buffers[0].leased); check_true(nested_reader.value_owned);
+            graph.types[0].as.async_value.payload = turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_U32);
+            check_equal(turbowasm_component_endpoint_submit(&writer, &buffers[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_endpoint_submit(&reader, &buffers[1]), TURBOWASM_OK);
+            check_equal(take(&writer), 16u); check_equal(take(&reader), 16u);
+            check_equal(cells[0][0].kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+            check_true(cells[1][0].as.list.items == record); check_true(nested_reader.value_owned);
+            numbers(2u, 1u, 42u); buffer(2u, 2u, 1u);
+            check_equal(turbowasm_component_endpoint_submit(&nested_writer, &buffers[2]), TURBOWASM_OK);
+            if (extract) {
+                check_equal(turbowasm_component_endpoint_take_value(leaf, &taken), TURBOWASM_OK);
+                check_true(taken == &nested_reader); check_false(nested_reader.value_owned);
+                buffers[3].values = &cells[2][1]; buffers[3].length = 1u;
+                check_equal(turbowasm_component_endpoint_submit(taken, &buffers[3]), TURBOWASM_OK);
+                check_equal(take(taken), future ? TURBOWASM_COMPONENT_COPY_COMPLETED : 16u);
+                check_equal(take(&nested_writer), future ? TURBOWASM_COMPONENT_COPY_COMPLETED : 16u);
+                check_equal(cells[2][1].as.u32, 42u);
+                check_equal(turbowasm_component_value_destroy(&cells[1][0]), TURBOWASM_OK);
+                check_false(nested_reader.closed);
+            } else {
+                check_equal(turbowasm_component_value_destroy(&cells[1][0]), TURBOWASM_OK);
+                check_true(nested_reader.closed); check_false(nested_reader.value_owned);
+                check_equal(take(&nested_writer), TURBOWASM_COMPONENT_COPY_DROPPED);
+                check_equal(cells[2][0].as.u32, 42u);
+                check_equal(turbowasm_component_value_destroy(&cells[1][0]), TURBOWASM_OK);
+            }
+            cleanup();
+        }
     }
 }

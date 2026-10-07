@@ -181,6 +181,16 @@ bool turbowasm_component_value_type_features(
     turbowasm_component_type_ref ref,
     uint32_t *out_features);
 
+/* Structural equality of value types in validated immutable graphs, including
+ * nested future/stream types. Resource leaves compare nominal identity, not
+ * graph addresses or local indices. Non-value nodes and excessive depth fail.
+ * Time O(expanded type tree), stack O(depth); does not allocate. */
+bool turbowasm_component_value_type_equal(
+    const turbowasm_component_type_graph *left_graph,
+    turbowasm_component_type_ref left,
+    const turbowasm_component_type_graph *right_graph,
+    turbowasm_component_type_ref right);
+
 /*
  * Allocate an exact number of stable type-id slots. The graph owns all nodes
  * but never owns Core Wasm validation metadata. Allocation uses the current
