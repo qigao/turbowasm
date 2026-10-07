@@ -235,6 +235,15 @@ set_target_properties(turbowasm_component_async_type_test PROPERTIES
 add_test(NAME turbowasm_component_async_type_test
          COMMAND turbowasm_component_async_type_test)
 
+if(TURBOWASM_ENABLE_COMPONENT)
+  add_executable(turbowasm_component_async_binary_test component_async_binary_test.c)
+  target_link_libraries(turbowasm_component_async_binary_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  target_include_directories(turbowasm_component_async_binary_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_component_async_binary_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_async_binary_test COMMAND turbowasm_component_async_binary_test)
+endif()
+
 add_executable(turbowasm_component_async_state_test component_async_state_test.c)
 target_link_libraries(turbowasm_component_async_state_test
   PRIVATE TurboWasm::Runtime Salts::TinyTest)

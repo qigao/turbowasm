@@ -705,6 +705,19 @@ Signature outputs are published only on success. This calculation does not admit
 async function types or canonical options; decoding, option validation, tasks and
 execution remain separate integration gates.
 
+Staged async decoding uses a private metadata-only entry point into the existing
+binary parser, allocator and type graph. It retains async function flags,
+future/stream payload references and async/callback canonical options, including
+instance-local type aliases. Source bytes remain borrowed and graph/option arrays
+remain decoder-owned; failure releases all metadata and resets the output.
+Ordinary loading keeps its explicit async rejection. The execution constructor
+also rejects every metadata-only object before allocating or running Core start
+functions, so internal parsing cannot accidentally expose partial execution.
+Option syntax, duplicate/conflict rules and index bounds belong to decoding;
+actual Core callback/realloc signatures and runtime capabilities belong to
+instantiation. This temporary private gate is removed only with complete async
+task, canonical builtin and lifetime integration, followed by end-to-end tests.
+
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and
 terminal-event delivery separately. Subtask start and resolve notifications

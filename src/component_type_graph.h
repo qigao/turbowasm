@@ -121,6 +121,7 @@ typedef struct turbowasm_component_type {
         struct {
             turbowasm_component_type_ref *params;
             uint32_t param_count;
+            bool is_async;
             bool has_result;
             turbowasm_component_type_ref result;
         } function;

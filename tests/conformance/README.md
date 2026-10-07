@@ -927,3 +927,31 @@ focused targets in 0.25 seconds and the related 58/58 targets in 2.72 seconds.
 These tests qualify private signature calculation and synchronous regression;
 they do not qualify async function decoding, canonical option validation, task
 scheduling, or public async execution.
+At `abc3c69`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37673794023)
+passed Windows, ordinary Linux, Linux MIR (187/187 in 2.57 seconds), and macOS
+arm64 MIR (187/187 in 2.71 seconds). Android cross-build was still running when
+these results were recorded.
+
+## Private async type and option decoding
+
+An internal metadata-only entry point now decodes async function types,
+future/stream payloads, and async/callback lift/lower options through the existing
+binary parser and allocator. Instance-local aliases preserve function async flags
+and endpoint references. Async lowering resolves callee types through direct
+imports, lifts, local inline instances, export aliases, and imported interfaces.
+The decoder checks duplicate/conflicting options, index bounds, async function
+typing, and required memory for async lowers. Graph validation rejects invalid
+endpoint payloads, including transitive borrows and immediate stream<char>.
+
+Ordinary/public loading still rejects async forms. Exec rejects metadata-only
+objects before allocation or Core start execution. These objects borrow their
+input bytes and own their decoded arrays; every failed decode frees its arrays
+and resets the output. The private path does not validate actual Core callback
+signatures or admit async canonical builtins/execution yet.
+
+`component_async_binary_test.c` covers the admission gates, nested type aliases,
+memory32/64 options, callee resolution paths, malformed/truncated input, and
+allocation failure at every allocation until successful decoding. Windows ASan
+passed five focused targets in 0.16 seconds and the related 59/59 targets in
+2.61 seconds. A final transitive-borrow rejection case also passed with the whole
+async binary target; production code was unchanged after the broader regression.

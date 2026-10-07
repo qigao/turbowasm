@@ -498,6 +498,7 @@ bool turbowasm_component_type_graph_define_function(
     type->kind = TURBOWASM_COMPONENT_TYPE_FUNCTION;
     type->as.function.params = copy;
     type->as.function.param_count = param_count;
+    type->as.function.is_async = false;
     type->as.function.has_result = has_result;
     type->as.function.result = result;
     return true;

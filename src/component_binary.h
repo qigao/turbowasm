@@ -81,6 +81,7 @@ typedef struct turbowasm_component_canon_lower {
     uint32_t realloc_function_index;
 
     turbowasm_component_string_encoding string_encoding;
+    bool is_async;
 } turbowasm_component_canon_lower;
 
 typedef struct turbowasm_component_canon_lift {
@@ -98,6 +99,9 @@ typedef struct turbowasm_component_canon_lift {
     uint32_t post_return_function_index;
 
     turbowasm_component_string_encoding string_encoding;
+    bool is_async;
+    bool has_callback;
+    uint32_t callback_function_index;
 } turbowasm_component_canon_lift;
 
 typedef enum turbowasm_component_resource_builtin_kind {
@@ -160,6 +164,8 @@ typedef struct turbowasm_component_function_alias {
 typedef struct turbowasm_component_binary {
     const uint8_t *bytes;
     size_t size;
+    /* Metadata-only decoding cannot be passed to the execution constructor. */
+    bool async_metadata;
 
     turbowasm_component_section *sections;
     uint32_t section_count;
@@ -232,6 +238,16 @@ turbowasm_status turbowasm_component_binary_load_with_config(
 
 void turbowasm_component_binary_destroy(
     turbowasm_component_binary *component);
+
+/* Internal metadata decoder for staged async integration. Borrows source bytes
+ * and owns decoded metadata exactly like load_with_config. It additionally
+ * retains async function/endpoint types and lift/lower options; Core signatures
+ * and capability admission are still checked by the eventual instantiator.
+ * Exec rejects these objects until async execution integration is complete.
+ * No public loader calls this entry point. */
+turbowasm_status turbowasm_component_binary_decode_async_metadata(
+    turbowasm_component_binary *component, const uint8_t *bytes, size_t size,
+    const turbowasm_runtime_config *config);
 
 const turbowasm_component_section *
 turbowasm_component_binary_section_at(

@@ -2504,6 +2504,9 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
         binary->bytes == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
+    if (binary->async_metadata)
+        return TURBOWASM_UNSUPPORTED;
+
     if ((import_set_count != 0u && import_sets == NULL) ||
         import_set_count > UINT32_MAX ||
         import_set_count >
