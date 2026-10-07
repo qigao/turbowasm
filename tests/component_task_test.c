@@ -1,5 +1,6 @@
 #include "component_task.h"
 #include "component_task_builtin.h"
+#include "component_subtask.h"
 #include "runtime_alloc.h"
 #include <tinytest.h>
 #include <stdlib.h>
@@ -16,13 +17,15 @@ static turbowasm_module module;
 static turbowasm_instance instance;
 static turbowasm_linker linker;
 static turbowasm_component_binary builtin_binary;
-static turbowasm_component_task_builtin builtins[16];
+enum { BUILTIN_COUNT = 19 };
+static turbowasm_component_task_builtin builtins[BUILTIN_COUNT];
 static turbowasm_module alias_module;
 static turbowasm_instance aliases[2], other_instance;
 static turbowasm_linker alias_linker;
 static turbowasm_component_type_graph graph;
 static turbowasm_component_resource_table table;
 static turbowasm_component_task_domain domain;
+static turbowasm_component_task_domain caller_domain;
 static turbowasm_component_task tasks[3];
 static turbowasm_component_waitable_set set;
 static turbowasm_component_waitable item;
@@ -38,6 +41,17 @@ static unsigned return_memory_override;
 static uint32_t entry_word, callback_word, prepared_argument;
 static unsigned entered, callbacks, prepared, wait_started, wait_resumed, wait_interrupted;
 static turbowasm_component_event last_event;
+static turbowasm_component_subtask subtask;
+static turbowasm_component_canonical_memory lower_memory;
+static turbowasm_component_resource_handle lender;
+static uint64_t lower_address;
+static unsigned loans, lowered, released;
+static bool lower_failure, release_failure, check_release_reentry, check_cancel_pin, prepare_failure;
+
+static turbowasm_status subtask_prepare(void *context, turbowasm_component_task *task,
+    turbowasm_value *arguments, size_t capacity, size_t *out_count);
+static turbowasm_status lower_result(void *context, turbowasm_component_value *value);
+static turbowasm_status release_lender(void *context);
 
 static void *allocate(void *context, size_t size) {
     void *p; (void)context;
@@ -72,7 +86,7 @@ static turbowasm_status prepare(void *context, turbowasm_component_task *task,
     turbowasm_value *arguments, size_t capacity, size_t *out_count) {
     (void)context;
     ++prepared;
-    check_true(domain.active == task); check_greater_equal(capacity, 1u);
+    check_true(task->domain->active == task); check_greater_equal(capacity, 1u);
     arguments[0].kind = TURBOWASM_VALUE_I32; arguments[0].as.i32 = (int32_t)prepared_argument;
     *out_count = task->binding.function_type == 1u ? 1u : 0u;
     return TURBOWASM_OK;
@@ -129,6 +143,13 @@ static turbowasm_status host(void *context, turbowasm_host_call *call,
         ++callbacks; check_equal(count, 3u);
         last_event.code = (turbowasm_component_event_code)args[0].as.i32;
         last_event.handle = (uint32_t)args[1].as.i32; last_event.payload = (uint32_t)args[2].as.i32;
+        if (check_cancel_pin) {
+            turbowasm_component_event event;
+            check_true(subtask.waitable.sync_waiter);
+            check_equal(turbowasm_component_waitable_take(&table, subtask.waitable.handle, &event), TURBOWASM_TRAPPED);
+            check_equal(turbowasm_component_waitable_join(&table, subtask.waitable.handle, 0), TURBOWASM_TRAPPED);
+            check_equal(turbowasm_component_subtask_drop(&table, subtask.waitable.handle), TURBOWASM_TRAPPED);
+        }
         if (!callback_exit_only) {
             if (last_event.code == TURBOWASM_COMPONENT_EVENT_TASK_CANCELLED && !ignore_cancel)
                 status = turbowasm_component_task_cancel(&domain);
@@ -172,12 +193,84 @@ static void complete_wait(unsigned index) {
     check_equal(turbowasm_execution_complete_host_wait(&tasks[index].core, wait, 7), TURBOWASM_OK);
 }
 
+static turbowasm_status subtask_prepare(void *context, turbowasm_component_task *task,
+    turbowasm_value *arguments, size_t capacity, size_t *out_count) {
+    turbowasm_status status;
+    (void)context;
+    check_equal(subtask.waitable.state.subtask.phase, TURBOWASM_COMPONENT_SUBTASK_STARTED);
+    status = turbowasm_component_resource_lend_acquire(&table, lender, 123);
+    if (status != TURBOWASM_OK) return status;
+    ++loans;
+    if (prepare_failure) return TURBOWASM_OUT_OF_MEMORY;
+    return prepare(NULL, task, arguments, capacity, out_count);
+}
+
+static turbowasm_status lower_result(void *context, turbowasm_component_value *value) {
+    turbowasm_status status;
+    (void)context;
+    ++lowered;
+    check_equal(subtask.waitable.state.subtask.phase, TURBOWASM_COMPONENT_SUBTASK_STARTED);
+    check_equal(released, 0u);
+    check_equal(turbowasm_component_task_return(&domain, value), TURBOWASM_TRAPPED);
+    if (subtask.waitable.handle != 0)
+        check_equal(turbowasm_component_subtask_cancel_begin(&table, subtask.waitable.handle, NULL), TURBOWASM_TRAPPED);
+    if (lower_failure) return TURBOWASM_OUT_OF_MEMORY;
+    status = turbowasm_component_canonical_lower_value(&graph, u32_type(), &lower_memory, lower_address, value);
+    if (status != TURBOWASM_OK) return status;
+    return turbowasm_component_value_destroy(value);
+}
+
+static turbowasm_status release_lender(void *context) {
+    turbowasm_status status = TURBOWASM_OK;
+    (void)context;
+    ++released;
+    check_true(subtask.waitable.delivering);
+    if (check_release_reentry) {
+        turbowasm_component_event event;
+        check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_subtask_drop(&table, subtask.waitable.handle), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_waitable_take(&table, subtask.waitable.handle, &event), TURBOWASM_TRAPPED);
+    }
+    if (loans != 0) {
+        status = turbowasm_component_resource_lend_release(&table, lender, 123);
+        --loans;
+    }
+    return release_failure ? TURBOWASM_TRAPPED : status;
+}
+
+static void create_subtask(const char *entry, const char *callback, bool has_arg) {
+    turbowasm_component_task_binding b = binding(entry, callback, has_arg);
+    turbowasm_value rep = {.kind = TURBOWASM_VALUE_I32}; rep.as.i32 = 9;
+    check_equal(turbowasm_component_resource_new_owned(&table, 123, rep, &lender), TURBOWASM_OK);
+    b.prepare = subtask_prepare;
+    check_equal(turbowasm_component_subtask_create(&subtask, &table, &tasks[0], &domain, &b,
+        lower_result, release_lender, NULL), TURBOWASM_OK);
+}
+
+static uint32_t publish_subtask(void) {
+    uint32_t word;
+    check_equal(turbowasm_component_subtask_publish(&subtask, &word), TURBOWASM_OK);
+    return word;
+}
+
+static void check_lowered_result(void) {
+    turbowasm_component_value value = {0};
+    check_equal(turbowasm_component_canonical_lift_value(&graph, u32_type(), &lower_memory, lower_address, &value), TURBOWASM_OK);
+    check_equal(value.as.u32, 42u);
+    check_equal(turbowasm_component_value_destroy(&value), TURBOWASM_OK);
+}
+
+static bool interrupt_child(void *context) {
+    (void)context;
+    return domain.active == &tasks[0];
+}
+
 spec("private async Component Core task execution") {
     before_each() {
         static const turbowasm_value_kind i32s[] = {TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I32};
         static const char *names[] = {"control","callback","return","cancel","wait"};
         static const char *builtin_names[] = {"return","cancel","get0","set0","get1","set1","inc","dec",
-            "new","drop","join","yield","wait32","poll32","wait64","poll64"};
+            "new","drop","join","yield","wait32","poll32","wait64","poll64","subcancel","subcancel-async","subdrop"};
         const turbowasm_host_function_type types[] = {
             {NULL,0,i32s,1},{i32s,3,i32s,1},{i32s,1,NULL,0},{NULL,0,NULL,0},{NULL,0,NULL,0}
         };
@@ -190,6 +283,10 @@ spec("private async Component Core task execution") {
         deliver_on_wait = false;
         composite_return = 0;
         return_memory_override = 0;
+        memset(&subtask, 0, sizeof(subtask)); memset(&lower_memory, 0, sizeof(lower_memory));
+        lower_memory.instance = &instance; lower_address = 128;
+        loans = lowered = released = 0; lender = 0;
+        lower_failure = release_failure = check_release_reentry = check_cancel_pin = prepare_failure = false;
         memset(builtins, 0, sizeof(builtins));
         entry_word = 1; callback_word = 0; prepared_argument = 42;
         entered = callbacks = prepared = wait_started = wait_resumed = wait_interrupted = 0;
@@ -215,8 +312,8 @@ spec("private async Component Core task execution") {
             check_equal(turbowasm_linker_define_host_function(&linker, name("t"), name(names[i]), &types[i], host, (void *)(uintptr_t)i), TURBOWASM_OK);
         check_equal(turbowasm_component_binary_decode_async_metadata(&builtin_binary,
             component_task_builtins_bytes, sizeof(component_task_builtins_bytes), &config), TURBOWASM_OK);
-        check_equal(builtin_binary.async_builtin_count, 16u);
-        for (i = 0; i < 16; ++i) {
+        check_equal(builtin_binary.async_builtin_count, (uint32_t)BUILTIN_COUNT);
+        for (i = 0; i < BUILTIN_COUNT; ++i) {
             static const turbowasm_value_kind kinds[] = {TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I64,TURBOWASM_VALUE_F32,TURBOWASM_VALUE_F64};
             turbowasm_component_flat_signature sig;
             turbowasm_value_kind params[17], results[1];
@@ -231,7 +328,7 @@ spec("private async Component Core task execution") {
                 turbowasm_component_task_builtin_invoke, &builtins[i]), TURBOWASM_OK);
         }
         check_equal(turbowasm_instance_create_linked(&instance, &module, &linker), TURBOWASM_OK);
-        for (i = 0; i < 16; ++i) {
+        for (i = 0; i < BUILTIN_COUNT; ++i) {
             turbowasm_component_canonical_memory memory = {0};
             const turbowasm_component_async_builtin *definition = &builtin_binary.async_builtins[i];
             memory.instance = &instance; memory.memory_index = definition->memory_index;
@@ -248,8 +345,12 @@ spec("private async Component Core task execution") {
     after_each() {
         unsigned i; allowance = SIZE_MAX;
         for (i = 0; i < 3; ++i) check_equal(turbowasm_component_task_destroy(&tasks[i]), TURBOWASM_OK);
+        release_failure = false;
+        check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_OK);
+        check_equal(loans, 0u);
         check_equal(turbowasm_component_value_destroy(&result), TURBOWASM_OK);
         check_equal(turbowasm_component_task_domain_destroy(&domain), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_domain_destroy(&caller_domain), TURBOWASM_OK);
         turbowasm_component_resource_table_destroy(&table);
         turbowasm_component_type_graph_destroy(&graph);
         turbowasm_instance_destroy(&aliases[1]); turbowasm_instance_destroy(&aliases[0]);
@@ -643,6 +744,348 @@ spec("private async Component Core task execution") {
         check_equal(turbowasm_component_task_set_drop(&domain, handle), TURBOWASM_OK);
         check_equal(turbowasm_component_task_set_drop(&domain, handle), TURBOWASM_TRAPPED);
         check_null(domain.sets);
+    }
+
+    it("writes eager subtask results before releasing loans and detaches while Core is still waiting") {
+        unsigned wide;
+        for (wide = 0; wide < 2; ++wide) {
+            lower_memory.memory_index = wide;
+            lower_memory.pointer_type = wide ? TURBOWASM_COMPONENT_POINTER_I64 : TURBOWASM_COMPONENT_POINTER_I32;
+            create_subtask("return-wait", NULL, false);
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+            check_null(subtask.callee); check_equal(lowered, 1u); check_equal(loans, 1u);
+            check_lowered_result();
+            check_equal(turbowasm_component_resource_drop(&table, lender, 123, NULL, NULL), TURBOWASM_TRAPPED);
+            check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_TRAPPED);
+            check_equal(publish_subtask(), 2u); check_equal(subtask.waitable.handle, 0u);
+            check_equal(released, 1u); check_equal(loans, 0u);
+            check_equal(turbowasm_component_task_take_result(&tasks[0], &result), TURBOWASM_TRAPPED);
+            check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_OK);
+            complete_wait(0);
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_resource_drop(&table, lender, 123, NULL, NULL), TURBOWASM_OK);
+            lowered = released = 0;
+        }
+        compiled("return-wait");
+    }
+
+    it("publishes STARTING under backpressure and keeps loans until the terminal event is delivered") {
+        turbowasm_component_event event = {0};
+        uint32_t word;
+        check_equal(turbowasm_component_task_backpressure(&domain, true), TURBOWASM_OK);
+        create_subtask("wait-return", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        word = publish_subtask();
+        check_equal(word & 15u, 0u); check_equal(word >> 4u, subtask.waitable.handle);
+        check_equal(prepared, 0u); check_equal(loans, 0u);
+        check_equal(turbowasm_component_subtask_drop(&table, subtask.waitable.handle), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_task_backpressure(&domain, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_waitable_take(&table, subtask.waitable.handle, &event), TURBOWASM_OK);
+        check_equal(event.payload, 1u); check_equal(released, 0u); check_equal(loans, 1u);
+        complete_wait(0);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_lowered_result();
+        check_equal(turbowasm_component_resource_drop(&table, lender, 123, NULL, NULL), TURBOWASM_TRAPPED);
+        check_release_reentry = true;
+        check_equal(turbowasm_component_waitable_take(&table, subtask.waitable.handle, &event), TURBOWASM_OK);
+        check_equal(event.payload, 2u); check_equal(released, 1u); check_equal(loans, 0u);
+        check_equal(turbowasm_component_subtask_drop(&table, subtask.waitable.handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_resource_drop(&table, lender, 123, NULL, NULL), TURBOWASM_OK);
+    }
+
+    it("coalesces progress and does not replay STARTED already returned by publication") {
+        turbowasm_component_event event = {0};
+        uint32_t word;
+        create_subtask("entry", "callback", false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        word = publish_subtask(); check_equal(word & 15u, 1u);
+        check_equal(turbowasm_component_waitable_take(&table, word >> 4, &event), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_waitable_set_register(&table, &set), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_join(&table, word >> 4, set.handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_subtask_cancel_begin(&table, word >> 4, NULL), TURBOWASM_TRAPPED);
+        check_false(tasks[0].cancellation_requested);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_set_poll(&table, set.handle, &event), TURBOWASM_OK);
+        check_equal(event.payload, 2u); check_equal(event.code, TURBOWASM_COMPONENT_EVENT_SUBTASK);
+        check_equal(turbowasm_component_subtask_drop(&table, word >> 4), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_set_drop(&table, set.handle), TURBOWASM_OK);
+    }
+
+    it("cancels before start without preparing arguments and rejects stale drop handles through Wasm") {
+        uint32_t handle;
+        create_subtask("stackful", NULL, false); handle = publish_subtask() >> 4;
+        prepared_argument = handle; create(1, "builtin-subcancel", NULL, true);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_OK);
+        check_equal(tasks[1].result.as.u32, 3u); check_equal(tasks[0].phase, TURBOWASM_COMPONENT_TASK_CANCELLED);
+        check_equal(prepared, 1u); /* only the caller, never the cancelled callee */
+        check_equal(loans, 0u); check_equal(lowered, 0u); check_equal(released, 1u);
+        compiled("builtin-subcancel");
+        check_equal(turbowasm_component_task_destroy(&tasks[1]), TURBOWASM_OK);
+        create(1, "builtin-subdrop", NULL, true);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_OK);
+        compiled("builtin-subdrop");
+        check_equal(turbowasm_component_task_destroy(&tasks[1]), TURBOWASM_OK);
+        create(1, "builtin-subdrop", NULL, true);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_TRAPPED);
+    }
+
+    it("holds the synchronous cancellation pin across a Core suspension until the callee acknowledges") {
+        uint32_t handle;
+        turbowasm_component_event event = {0};
+        create_subtask("entry", "callback", false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        handle = publish_subtask() >> 4;
+        prepared_argument = handle; create(1, "builtin-subcancel", NULL, true);
+        check_cancel_pin = true;
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_YIELDED);
+        check_true(subtask.waitable.sync_waiter); check_true(tasks[0].cancellation_requested);
+        check_equal(turbowasm_component_waitable_take(&table, handle, &event), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_waitable_join(&table, handle, 0), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_subtask_drop(&table, handle), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_YIELDED);
+        check_equal(released, 0u); check_equal(loans, 1u);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_OK);
+        check_equal(tasks[1].result.as.u32, 4u); check_false(subtask.waitable.sync_waiter);
+        check_equal(released, 1u); check_equal(loans, 0u);
+        check_equal(turbowasm_component_subtask_cancel_begin(&table, handle, NULL), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_subtask_drop(&table, handle), TURBOWASM_OK);
+        compiled("builtin-subcancel");
+    }
+
+    it("returns async BLOCKED once and lets a pending real I/O completion win cancellation") {
+        uint32_t handle;
+        turbowasm_component_event event = {0};
+        create_subtask("wait-return", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        handle = publish_subtask() >> 4;
+        prepared_argument = handle; create(1, "builtin-subcancel-async", NULL, true);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_OK);
+        check_equal(tasks[1].result.as.u32, UINT32_MAX); check_false(subtask.waitable.sync_waiter);
+        check_equal(wait_resumed, 0u); check_equal(loans, 1u); check_equal(released, 0u);
+        compiled("builtin-subcancel-async");
+        check_equal(turbowasm_component_task_destroy(&tasks[1]), TURBOWASM_OK);
+        create(1, "builtin-subcancel-async", NULL, true);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_TRAPPED);
+        complete_wait(0); check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_take(&table, handle, &event), TURBOWASM_OK);
+        check_equal(event.payload, 2u); check_equal(released, 1u); check_lowered_result();
+    }
+
+    it("runs an available cancellation callback eagerly under the exclusive subtask pin") {
+        uint32_t handle, phase = 99;
+        create_subtask("entry", "callback", false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        handle = publish_subtask() >> 4; check_cancel_pin = true;
+        check_equal(turbowasm_component_subtask_cancel_begin(&table, handle, NULL), TURBOWASM_OK);
+        check_equal(callbacks, 1u); check_equal(tasks[0].phase, TURBOWASM_COMPONENT_TASK_CANCELLED);
+        check_equal(released, 0u); check_true(subtask.waitable.sync_waiter);
+        check_equal(turbowasm_component_subtask_cancel_poll(&table, handle, &phase), TURBOWASM_OK);
+        check_equal(phase, 4u); check_equal(released, 1u); check_false(subtask.waitable.sync_waiter);
+    }
+
+    it("wakes a synchronous canceller on callee failure and releases its pin before owner teardown") {
+        uint32_t handle;
+        create_subtask("wait-return", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        handle = publish_subtask() >> 4;
+        prepared_argument = handle; create(1, "builtin-subcancel", NULL, true);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_YIELDED);
+        lower_failure = true; complete_wait(0);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_OUT_OF_MEMORY);
+        check_false(subtask.waitable.sync_waiter); check_equal(released, 0u);
+        check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_OK);
+        check_equal(released, 1u); check_equal(loans, 0u);
+    }
+
+    it("coalesces an unobserved STARTED into one terminal subtask notification") {
+        uint32_t handle;
+        turbowasm_component_event event = {0};
+        create_subtask("stackful", NULL, false); handle = publish_subtask() >> 4;
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_take(&table, handle, &event), TURBOWASM_OK);
+        check_equal(event.payload, 2u); check_equal(released, 1u);
+        check_equal(turbowasm_component_waitable_take(&table, handle, &event), TURBOWASM_YIELDED);
+    }
+
+    it("unwinds a synchronous canceller without releasing the callee loans or stealing its event") {
+        uint32_t handle;
+        turbowasm_component_event event = {0};
+        create_subtask("wait-return", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        handle = publish_subtask() >> 4;
+        prepared_argument = handle; create(1, "builtin-subcancel", NULL, true);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_task_destroy(&tasks[1]), TURBOWASM_OK);
+        check_false(subtask.waitable.sync_waiter); check_equal(loans, 1u); check_equal(released, 0u);
+        complete_wait(0); check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_take(&table, handle, &event), TURBOWASM_OK);
+        check_equal(event.payload, 2u); check_equal(released, 1u);
+    }
+
+    it("delivers an already returned result during cancellation without issuing a new request") {
+        uint32_t handle, phase = 99;
+        create_subtask("stackful", NULL, false); handle = publish_subtask() >> 4;
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_subtask_cancel_begin(&table, handle, NULL), TURBOWASM_OK);
+        check_false(tasks[0].cancellation_requested); check_false(subtask.waitable.state.subtask.cancellation_requested);
+        check_equal(turbowasm_component_subtask_cancel_poll(&table, handle, &phase), TURBOWASM_OK);
+        check_equal(phase, 2u); check_equal(released, 1u);
+    }
+
+    it("propagates callee traps and result conversion failures without publishing a successful terminal event") {
+        static const char *entries[] = {"throw-entry", "no-return", "stackful", "stackful", "stackful"};
+        unsigned i;
+        for (i = 0; i < 5; ++i) {
+            turbowasm_component_event event = {.payload = 99};
+            turbowasm_status expected = i == 2 || i == 4 ? TURBOWASM_OUT_OF_MEMORY : TURBOWASM_TRAPPED;
+            bool ready = false;
+            lower_failure = i == 2; lower_address = i == 3 ? 65536 : 128;
+            prepare_failure = i == 4;
+            create_subtask(entries[i], NULL, false); (void)publish_subtask();
+            check_equal(turbowasm_component_waitable_set_register(&table, &set), TURBOWASM_OK);
+            check_equal(turbowasm_component_waitable_join(&table, subtask.waitable.handle, set.handle), TURBOWASM_OK);
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), expected);
+            check_null(subtask.callee); check_equal(released, 0u); check_equal(loans, 1u);
+            check_false(subtask.waitable.state.subtask.resolve_delivered);
+            check_equal(turbowasm_component_waitable_set_ready(&table, set.handle, &ready), TURBOWASM_OK); check_true(ready);
+            check_equal(turbowasm_component_waitable_set_poll(&table, set.handle, &event), expected);
+            check_equal(event.payload, 99u);
+            check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_OK);
+            check_equal(released, 1u); check_equal(loans, 0u);
+            check_equal(turbowasm_component_waitable_set_drop(&table, set.handle), TURBOWASM_OK);
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_resource_drop(&table, lender, 123, NULL, NULL), TURBOWASM_OK);
+            released = lowered = 0;
+        }
+    }
+
+    it("releases failed-owner loans only after unwinding the retained callee host frame") {
+        create_subtask("wait-return", NULL, false); (void)publish_subtask();
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_TRAPPED);
+        check_equal(released, 0u); check_equal(wait_interrupted, 0u);
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        check_equal(wait_interrupted, 1u); check_null(subtask.callee); check_equal(released, 0u);
+        check_equal(subtask.waitable.failure, TURBOWASM_INTERRUPTED);
+        check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_OK);
+        check_equal(released, 1u); check_equal(loans, 0u);
+    }
+
+    it("consumes a failing terminal loan cleanup once and preserves the event output") {
+        turbowasm_component_event event = {.payload = 99};
+        uint32_t handle;
+        create_subtask("stackful", NULL, false); handle = publish_subtask() >> 4;
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        release_failure = true; check_release_reentry = true;
+        check_equal(turbowasm_component_waitable_take(&table, handle, &event), TURBOWASM_TRAPPED);
+        check_equal(event.payload, 99u); check_equal(released, 1u); check_equal(loans, 0u);
+        check_equal(turbowasm_component_waitable_take(&table, handle, &event), TURBOWASM_TRAPPED);
+        check_equal(released, 1u);
+        check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_OK);
+        check_equal(released, 1u);
+    }
+
+    it("preserves task ownership and packed output when bounded handle publication cannot grow") {
+        uint32_t word = 99;
+        turbowasm_value rep = {.kind = TURBOWASM_VALUE_I32};
+        turbowasm_status status;
+        create_subtask("stackful", NULL, false);
+        while (table.live_count < table.capacity) {
+            turbowasm_component_resource_handle handle;
+            check_equal(turbowasm_component_resource_new_owned(&table, 456, rep, &handle), TURBOWASM_OK);
+        }
+        allowance = 0;
+        status = turbowasm_component_subtask_publish(&subtask, &word);
+        allowance = SIZE_MAX;
+        check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_equal(word, 99u);
+        check_false(subtask.published); check_true(subtask.callee == &tasks[0]); check_equal(subtask.waitable.handle, 0u);
+        check_equal(turbowasm_component_subtask_publish(&subtask, &word), TURBOWASM_OK);
+        check_not_equal(word, 99u);
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_OK);
+        check_equal(released, 1u); check_equal(prepared, 0u);
+    }
+
+    it("rejects missing preparation or result adapters and resolves unit calls without either") {
+        turbowasm_component_task_binding b = binding("argument", NULL, true);
+        b.prepare = NULL;
+        check_equal(turbowasm_component_subtask_create(&subtask, &table, &tasks[0], &domain, &b,
+            lower_result, release_lender, NULL), TURBOWASM_INVALID_ARGUMENT);
+        check_null(subtask.table); check_null(tasks[0].domain); check_equal(domain.count, 0u);
+        b.prepare = prepare;
+        check_equal(turbowasm_component_subtask_create(&subtask, &table, &tasks[0], &domain, &b,
+            NULL, release_lender, NULL), TURBOWASM_INVALID_ARGUMENT);
+        b = binding("entry", "callback", false); b.function_type = 5; b.prepare = NULL;
+        composite_return = 3; entry_word = 0;
+        check_equal(turbowasm_component_subtask_create(&subtask, &table, &tasks[0], &domain, &b,
+            NULL, release_lender, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(publish_subtask(), 2u); check_equal(released, 1u); check_equal(lowered, 0u);
+    }
+
+    it("preserves packed output on eager cleanup failure without replaying loan release") {
+        uint32_t word = 99;
+        create_subtask("stackful", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        release_failure = true;
+        check_equal(turbowasm_component_subtask_publish(&subtask, &word), TURBOWASM_TRAPPED);
+        check_equal(word, 99u); check_equal(released, 1u); check_equal(loans, 0u);
+        check_equal(turbowasm_component_subtask_publish(&subtask, &word), TURBOWASM_TRAPPED);
+        check_equal(released, 1u); check_equal(subtask.waitable.handle, 0u);
+        check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_OK);
+    }
+
+    it("charges eager cancellation callbacks to the caller fuel and honors its interruption check") {
+        unsigned mode, i;
+        check_true(turbowasm_component_task_domain_init(&caller_domain, &table, &may_leave, 1));
+        /* Separate scheduling domains share this fixture's table and Core
+         * instance; the child uses t imports, the caller uses decoded a imports. */
+        for (i = 0; i < BUILTIN_COUNT; ++i) builtins[i].domain = &caller_domain;
+        for (mode = 0; mode < 3; ++mode) {
+            turbowasm_component_task_binding b = binding("builtin-subcancel-async", NULL, true);
+            turbowasm_execution_options options = {0};
+            turbowasm_component_event event = {0};
+            turbowasm_status status;
+            uint32_t handle;
+            create_subtask("entry", "cancel-fuel", false);
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+            handle = publish_subtask() >> 4; prepared_argument = handle;
+            check_equal(turbowasm_component_task_create(&tasks[1], &caller_domain, &b), TURBOWASM_OK);
+            if (mode == 0) { options.has_fuel_limit = true; options.fuel = 20; }
+            else if (mode == 1) options.should_interrupt = interrupt_child;
+            status = turbowasm_component_task_resume(&tasks[1], &options);
+            if (mode < 2) {
+                check_equal(tasks[0].phase, TURBOWASM_COMPONENT_TASK_STARTED);
+                check_equal(tasks[0].state, TURBOWASM_EXECUTION_YIELDED);
+                check_equal(turbowasm_execution_yield_reason_get(&tasks[0].core),
+                    mode == 0 ? TURBOWASM_YIELD_FUEL : TURBOWASM_YIELD_INTERRUPTION);
+                if (mode == 0) {
+                    check_equal(status, TURBOWASM_YIELDED);
+                    check_equal(turbowasm_execution_yield_reason_get(&tasks[1].core), TURBOWASM_YIELD_FUEL);
+                    status = turbowasm_component_task_resume(&tasks[1], NULL);
+                }
+                check_equal(status, TURBOWASM_OK); check_equal(tasks[1].result.as.u32, UINT32_MAX);
+                check_equal(released, 0u); check_false(subtask.waitable.sync_waiter);
+                check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+                check_equal(turbowasm_component_waitable_take(&table, handle, &event), TURBOWASM_OK);
+                check_equal(event.payload, 4u);
+            } else {
+                check_equal(status, TURBOWASM_OK); check_equal(tasks[1].result.as.u32, 4u);
+                check_equal(tasks[0].state, TURBOWASM_EXECUTION_COMPLETED);
+            }
+            check_equal(released, 1u); check_equal(loans, 0u);
+            check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_OK);
+            check_equal(turbowasm_component_task_destroy(&tasks[1]), TURBOWASM_OK);
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_resource_drop(&table, lender, 123, NULL, NULL), TURBOWASM_OK);
+            released = lowered = 0;
+        }
+        compiled("cancel-fuel"); compiled("builtin-subcancel-async");
     }
 
     it("rejects unsupported families and invalid resolved bindings before publishing a host signature") {

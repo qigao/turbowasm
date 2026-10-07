@@ -132,6 +132,7 @@ static turbowasm_status take_event(turbowasm_component_waitable *waitable,
     turbowasm_component_event event = {0};
     turbowasm_status status = TURBOWASM_OK;
     bool terminal = false;
+    if (waitable->failure != TURBOWASM_OK) return waitable->failure;
     event.handle = waitable->handle;
     if (kind == TURBOWASM_COMPONENT_HANDLE_SUBTASK) {
         turbowasm_component_subtask_phase phase;
@@ -179,8 +180,9 @@ turbowasm_status turbowasm_component_waitable_take(
 static bool ready_member(const turbowasm_component_waitable *waitable,
     turbowasm_component_handle_kind kind, turbowasm_component_resource_handle set_handle) {
     return waitable->set_handle == set_handle && !waitable->delivering && !waitable->sync_waiter &&
-        (kind == TURBOWASM_COMPONENT_HANDLE_SUBTASK ? waitable->state.subtask.pending_event
-                                                  : waitable->state.endpoint.pending_event);
+        (waitable->failure != TURBOWASM_OK ||
+         (kind == TURBOWASM_COMPONENT_HANDLE_SUBTASK ? waitable->state.subtask.pending_event
+                                                   : waitable->state.endpoint.pending_event));
 }
 
 turbowasm_status turbowasm_component_waitable_set_ready(

@@ -21,4 +21,7 @@
   (core func (canon waitable-set.poll (memory $m32)))
   (core func (canon waitable-set.wait (memory $m64)))
   (core func (canon waitable-set.poll (memory $m64)))
+  (core func (canon subtask.cancel))
+  (core func (canon subtask.cancel async))
+  (core func (canon subtask.drop))
 )

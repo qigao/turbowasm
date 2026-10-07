@@ -1,4 +1,6 @@
 #include "component_task.h"
+#include "component_subtask.h"
+#include "execution_internal.h"
 #include "module_internal.h"
 #include "instance_internal.h"
 #include "runtime_alloc.h"
@@ -121,6 +123,8 @@ turbowasm_status turbowasm_component_task_create(turbowasm_component_task *task,
     }
     if (signature.param_count != 0u && binding->prepare == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+    if ((binding->resolve == NULL) != (binding->abandon == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
     if (domain->count == domain->limit) return TURBOWASM_OUT_OF_MEMORY;
     memset(task, 0, sizeof(*task));
     task->domain = domain; task->binding = *binding; task->signature = signature;
@@ -130,6 +134,27 @@ turbowasm_status turbowasm_component_task_create(turbowasm_component_task *task,
 
 static bool resolved(const turbowasm_component_task *task) {
     return task->phase == TURBOWASM_COMPONENT_TASK_RETURNED || task->phase == TURBOWASM_COMPONENT_TASK_CANCELLED;
+}
+
+static void abandon_caller(turbowasm_component_task *task, turbowasm_status status) {
+    turbowasm_component_task_abandon_fn abandon = task->binding.abandon;
+    void *context = task->binding.caller_context;
+    task->binding.resolve = NULL; task->binding.abandon = NULL; task->binding.caller_context = NULL;
+    if (abandon != NULL) abandon(context, status);
+}
+
+static turbowasm_status resolve_caller(turbowasm_component_task *task,
+    turbowasm_component_value *result, bool cancelled) {
+    turbowasm_status status;
+    if (task->binding.resolve == NULL) return TURBOWASM_OK;
+    task->resolving = true;
+    status = task->binding.resolve(task->binding.caller_context, result, cancelled);
+    task->resolving = false;
+    if (status == TURBOWASM_OK) {
+        task->binding.resolve = NULL; task->binding.abandon = NULL; task->binding.caller_context = NULL;
+        task->result_taken = !cancelled;
+    }
+    return status;
 }
 
 static turbowasm_status release_wait(turbowasm_component_task *task) {
@@ -147,6 +172,14 @@ static turbowasm_status finish(turbowasm_component_task *task, turbowasm_status 
     if (task->domain->exclusive == task) task->domain->exclusive = NULL;
     task->between_callbacks = false;
     task->status = status;
+    if (status != TURBOWASM_OK) {
+        /* An unresolved caller may release loans after abandonment. Unwind every
+         * retained Core callback before allowing that boundary to detach. */
+        task->destroying = true;
+        turbowasm_execution_destroy(&task->core);
+        abandon_caller(task, status);
+        task->destroying = false;
+    }
     task->state = status == TURBOWASM_OK ? TURBOWASM_EXECUTION_COMPLETED
         : status == TURBOWASM_TRAPPED ? TURBOWASM_EXECUTION_TRAPPED
         : status == TURBOWASM_EXCEPTION ? TURBOWASM_EXECUTION_EXCEPTION : TURBOWASM_EXECUTION_FAILED;
@@ -207,8 +240,9 @@ static turbowasm_status start_callback(turbowasm_component_task *task) {
 }
 
 static turbowasm_status resume_active(turbowasm_component_task *task,
-    const turbowasm_execution_options *options) {
+    const turbowasm_execution_options *options, turbowasm_jit_execution_control *parent) {
     turbowasm_status status;
+    turbowasm_execution_options inherited = {0};
     uint32_t packed = 0u, code;
     if (task->phase == TURBOWASM_COMPONENT_TASK_INITIAL) {
         if (!can_start(task)) return TURBOWASM_YIELDED;
@@ -225,7 +259,9 @@ static turbowasm_status resume_active(turbowasm_component_task *task,
         turbowasm_host_wait wait;
         bool ready = task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_YIELD;
         if (!ready) {
-            status = turbowasm_component_waitable_set_ready(task->domain->table, task->builtin_wait_set, &ready);
+            status = task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_SUBTASK
+                ? turbowasm_component_subtask_cancel_ready(task->domain->table, task->builtin_wait_set, &ready)
+                : turbowasm_component_waitable_set_ready(task->domain->table, task->builtin_wait_set, &ready);
             if (status != TURBOWASM_OK) return finish(task, status);
         }
         if (!ready) return TURBOWASM_YIELDED;
@@ -234,7 +270,14 @@ static turbowasm_status resume_active(turbowasm_component_task *task,
         status = turbowasm_execution_complete_host_wait(&task->core, wait, 0);
         if (status != TURBOWASM_OK) return finish(task, status);
     }
+    if (parent != NULL) {
+        inherited.has_fuel_limit = parent->fuel_limited; inherited.fuel = parent->fuel_remaining;
+        inherited.should_interrupt = parent->should_interrupt; inherited.interrupt_context = parent->interrupt_context;
+        options = &inherited;
+    }
     status = turbowasm_execution_resume(&task->core, options);
+    if (parent != NULL && parent->fuel_limited)
+        parent->fuel_remaining = turbowasm_execution_control_get(&task->core)->fuel_remaining;
     if (status == TURBOWASM_YIELDED) return status;
     if (status != TURBOWASM_OK) {
         task->trap = turbowasm_execution_trap(&task->core);
@@ -268,8 +311,8 @@ static turbowasm_status resume_active(turbowasm_component_task *task,
     return TURBOWASM_YIELDED;
 }
 
-turbowasm_status turbowasm_component_task_resume(turbowasm_component_task *task,
-    const turbowasm_execution_options *options) {
+static turbowasm_status resume_task(turbowasm_component_task *task,
+    const turbowasm_execution_options *options, turbowasm_jit_execution_control *parent) {
     const turbowasm_module_impl *module;
     turbowasm_runtime_scope scope;
     turbowasm_status status;
@@ -280,19 +323,33 @@ turbowasm_status turbowasm_component_task_resume(turbowasm_component_task *task,
     if (module == NULL) return TURBOWASM_INVALID_ARGUMENT;
     scope = turbowasm_runtime_scope_enter(&module->config);
     task->domain->active = task; task->state = TURBOWASM_EXECUTION_RUNNING;
-    status = resume_active(task, options);
+    status = resume_active(task, options, parent);
     if (status == TURBOWASM_YIELDED) task->state = TURBOWASM_EXECUTION_YIELDED;
     task->domain->active = NULL;
     turbowasm_runtime_scope_leave(scope);
     return status;
 }
 
+turbowasm_status turbowasm_component_task_resume(turbowasm_component_task *task,
+    const turbowasm_execution_options *options) {
+    return resume_task(task, options, NULL);
+}
+
+turbowasm_status turbowasm_component_task_resume_from_host(turbowasm_component_task *task,
+    const turbowasm_host_call *caller) {
+    turbowasm_jit_execution_control *parent = turbowasm_host_call_control(caller);
+    if (parent == NULL || task == NULL || !task->between_callbacks) return TURBOWASM_INVALID_ARGUMENT;
+    return resume_task(task, NULL, parent);
+}
+
 turbowasm_status turbowasm_component_task_request_cancel(turbowasm_component_task *task) {
     if (task == NULL || task->domain == NULL) return TURBOWASM_INVALID_ARGUMENT;
-    if (task->destroying || resolved(task) || task->cancellation_requested || task->state >= TURBOWASM_EXECUTION_COMPLETED)
+    if (task->destroying || task->resolving || resolved(task) || task->cancellation_requested || task->state >= TURBOWASM_EXECUTION_COMPLETED)
         return TURBOWASM_TRAPPED;
     task->cancellation_requested = true;
     if (task->phase == TURBOWASM_COMPONENT_TASK_INITIAL) {
+        turbowasm_status status = resolve_caller(task, NULL, true);
+        if (status != TURBOWASM_OK) return finish(task, status);
         task->phase = TURBOWASM_COMPONENT_TASK_CANCELLED;
         return finish(task, TURBOWASM_OK);
     }
@@ -313,13 +370,16 @@ static turbowasm_component_task *returning_task(turbowasm_component_task_domain 
     turbowasm_component_task *task;
     if (domain == NULL || domain->may_leave == NULL || !*domain->may_leave) return NULL;
     task = domain->active;
-    return task != NULL && !task->destroying && task->phase == TURBOWASM_COMPONENT_TASK_STARTED && task->borrowed_handles == 0u
+    return task != NULL && !task->destroying && !task->resolving && task->phase == TURBOWASM_COMPONENT_TASK_STARTED && task->borrowed_handles == 0u
         ? task : NULL;
 }
 
 turbowasm_status turbowasm_component_task_cancel(turbowasm_component_task_domain *domain) {
     turbowasm_component_task *task = returning_task(domain);
+    turbowasm_status status;
     if (task == NULL || !task->cancellation_delivered) return TURBOWASM_TRAPPED;
+    status = resolve_caller(task, NULL, true);
+    if (status != TURBOWASM_OK) return status;
     task->phase = TURBOWASM_COMPONENT_TASK_CANCELLED;
     return TURBOWASM_OK;
 }
@@ -335,8 +395,12 @@ turbowasm_status turbowasm_component_task_return(turbowasm_component_task_domain
         if (result == NULL) return TURBOWASM_TYPE_MISMATCH;
         status = turbowasm_component_canonical_validate_value(task->binding.graph, type->as.function.result, result);
         if (status != TURBOWASM_OK) return status;
-        task->result = *result; memset(result, 0, sizeof(*result));
     } else if (result != NULL) return TURBOWASM_TYPE_MISMATCH;
+    status = resolve_caller(task, result, false);
+    if (status != TURBOWASM_OK) return status;
+    if (!task->result_taken && result != NULL) {
+        task->result = *result; memset(result, 0, sizeof(*result));
+    }
     task->phase = TURBOWASM_COMPONENT_TASK_RETURNED;
     return TURBOWASM_OK;
 }
@@ -406,9 +470,10 @@ turbowasm_status turbowasm_component_task_destroy(turbowasm_component_task *task
     if (task == NULL) return TURBOWASM_INVALID_ARGUMENT;
     domain = task->domain;
     if (domain == NULL) return TURBOWASM_OK;
-    if (domain->active != NULL || task->destroying) return TURBOWASM_TRAPPED;
+    if (domain->active != NULL || task->destroying || task->resolving) return TURBOWASM_TRAPPED;
     domain->active = task; task->destroying = true;
     turbowasm_execution_destroy(&task->core);
+    abandon_caller(task, task->status != TURBOWASM_OK ? task->status : TURBOWASM_INTERRUPTED);
     status = release_wait(task);
     result_status = turbowasm_component_value_destroy(&task->result);
     if (status == TURBOWASM_OK) status = result_status;

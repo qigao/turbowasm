@@ -4,7 +4,7 @@
 #include "component_binary.h"
 #include "component_task.h"
 
-/* Private Core host binding for task/context/backpressure/yield/waitable-set
+/* Private Core host binding for task/subtask/context/backpressure/yield/waitable-set
  * builtins. Bind rejects other async families until their ownership adapters
  * are connected. Stable binding, domain, graph and resolved memory/codec context
  * outlive every linked instance and suspended callback. No guest code runs here. */
@@ -25,7 +25,7 @@ turbowasm_status turbowasm_component_task_builtin_bind(turbowasm_component_task_
 
 /* Ordinary Runtime host ABI; result outputs are published only on success. WAIT and
  * YIELD suspend through Core host-wait. Task resume supplies readiness, while
- * destruction unwinds the same frame and releases its set pin exactly once. */
+ * destruction unwinds the same frame and releases its set/subtask pin once. */
 turbowasm_status turbowasm_component_task_builtin_invoke(void *context, turbowasm_host_call *call,
     const turbowasm_value *arguments, size_t argument_count,
     turbowasm_value *results, size_t result_capacity, size_t *result_count, turbowasm_trap *trap);

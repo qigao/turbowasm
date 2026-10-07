@@ -4770,6 +4770,11 @@ typedef struct turbowasm_host_call_impl {
     uint32_t depth;
 } turbowasm_host_call_impl;
 
+turbowasm_jit_execution_control *turbowasm_host_call_control(const turbowasm_host_call *call) {
+    const turbowasm_host_call_impl *impl = call != NULL ? call->impl : NULL;
+    return impl != NULL ? impl->execution : NULL;
+}
+
 turbowasm_status turbowasm_instance_invoke_from_host(
     const turbowasm_host_call *call,
     turbowasm_instance *instance,

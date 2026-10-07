@@ -232,6 +232,11 @@ turbowasm_status turbowasm_execution_set_completion(
     return TURBOWASM_OK;
 }
 
+turbowasm_jit_execution_control *turbowasm_execution_control_get(turbowasm_execution *execution) {
+    turbowasm_execution_impl *impl = turbowasm_execution_impl_mut(execution);
+    return impl == NULL ? NULL : &impl->control;
+}
+
 turbowasm_status turbowasm_execution_create(
     turbowasm_execution *execution,
     turbowasm_instance *instance,

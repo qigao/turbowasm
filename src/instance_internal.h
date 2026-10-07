@@ -317,6 +317,10 @@ turbowasm_status turbowasm_instance_invoke_internal(
     turbowasm_trap *trap,
     turbowasm_jit_execution_control *execution);
 
+/* For a separately resumable child task, borrow only the current quantum's
+ * fuel/interrupt policy. Its retained continuation never retains this pointer. */
+turbowasm_jit_execution_control *turbowasm_host_call_control(const turbowasm_host_call *call);
+
 /* Borrows the live host callback's control and depth until this nested call
  * returns, including coroutine suspension. Must not outlive that callback. */
 turbowasm_status turbowasm_instance_invoke_from_host(

@@ -25,6 +25,16 @@ typedef turbowasm_status (*turbowasm_component_task_prepare_fn)(
     void *context, turbowasm_component_task *task, turbowasm_value *arguments,
     size_t capacity, size_t *out_count);
 
+/* Private caller boundary. Resolve moves result on success (NULL for unit or
+ * cancellation), before the task commits its phase. Failure leaves any remaining
+ * value with the caller. Abandon is nonblocking, runs no guest code, and detaches
+ * an unresolved caller on failure/unwind. Supply both hooks or neither. Context
+ * stays stable until exactly one successful resolve or abandon; no recursive
+ * task return/cancel/destruction is permitted within these hooks. */
+typedef turbowasm_status (*turbowasm_component_task_resolve_fn)(
+    void *context, turbowasm_component_value *result, bool cancelled);
+typedef void (*turbowasm_component_task_abandon_fn)(void *context, turbowasm_status status);
+
 typedef struct turbowasm_component_task_binding {
     const turbowasm_component_type_graph *graph;
     turbowasm_component_type_id function_type;
@@ -35,6 +45,9 @@ typedef struct turbowasm_component_task_binding {
     turbowasm_component_canonical_memory memory;
     turbowasm_component_task_prepare_fn prepare;
     void *prepare_context;
+    turbowasm_component_task_resolve_fn resolve;
+    turbowasm_component_task_abandon_fn abandon;
+    void *caller_context;
 } turbowasm_component_task_binding;
 
 typedef enum turbowasm_component_task_phase {
@@ -59,11 +72,11 @@ struct turbowasm_component_task {
     turbowasm_component_resource_handle waiting_set;
     /* Builtin host-wait continuation, separate from callback WAIT. */
     enum { TURBOWASM_COMPONENT_TASK_WAIT_NONE, TURBOWASM_COMPONENT_TASK_WAIT_YIELD,
-           TURBOWASM_COMPONENT_TASK_WAIT_SET } builtin_wait;
+           TURBOWASM_COMPONENT_TASK_WAIT_SET, TURBOWASM_COMPONENT_TASK_WAIT_SUBTASK } builtin_wait;
     turbowasm_component_resource_handle builtin_wait_set;
     uint64_t context_storage[2];
     bool between_callbacks, cancellation_requested, cancellation_delivered;
-    bool result_taken, destroying;
+    bool result_taken, destroying, resolving;
 };
 
 bool turbowasm_component_task_domain_init(turbowasm_component_task_domain *domain,
@@ -89,6 +102,11 @@ turbowasm_status turbowasm_component_task_create(turbowasm_component_task *task,
  * has priority over pending events. Core fuel/host waits are never replayed. */
 turbowasm_status turbowasm_component_task_resume(turbowasm_component_task *task,
     const turbowasm_execution_options *options);
+/* Nonblocking callback quantum between guest calls, sharing the active host
+ * caller's remaining fuel and interrupt policy. A previously suspended Core
+ * call must be resumed by its driver; this entry rejects such continuations. */
+turbowasm_status turbowasm_component_task_resume_from_host(turbowasm_component_task *task,
+    const turbowasm_host_call *caller);
 turbowasm_status turbowasm_component_task_request_cancel(turbowasm_component_task *task);
 /* Called at a canonical cancellable wait point in the active task. */
 bool turbowasm_component_task_deliver_cancel(turbowasm_component_task_domain *domain);

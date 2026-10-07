@@ -35,6 +35,9 @@ typedef struct turbowasm_component_waitable {
     bool sync_waiter;
     /* Exclusive callback guard during event cleanup and endpoint conversion. */
     bool delivering;
+    /* Failed owners wake waiters with the original error, never a fake terminal
+     * event. Their enclosing owner releases outstanding loans during teardown. */
+    turbowasm_status failure;
     union {
         turbowasm_component_subtask_state subtask;
         turbowasm_component_endpoint_state endpoint;

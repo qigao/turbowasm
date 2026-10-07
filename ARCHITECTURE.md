@@ -753,7 +753,7 @@ handles prevent either resolution. Destroy unwinds the Core callback first,
 releases a pinned wait, destroys any untaken result, and removes the task from
 its domain. Domains, graphs, instances, canonical codec contexts and prepared
 argument owners outlive all such tasks. This private runner is not yet selected
-by public Component calls; automatic builtin binding, subtask propagation and
+by public Component calls; automatic builtin/lift/lower binding and
 public retained-instance task wrappers remain integration work.
 
 Decoded task/context/backpressure/yield/waitable-set builtins now have a private
@@ -773,8 +773,33 @@ slots live in the current task across Core and callback suspension. Event output
 uses the canonical ordering: consume the event, then store its two u32 payloads,
 so a second-store trap may leave the first store visible. task.return compares
 resolved memory object identity through imports, not Core instance/index pairs.
-Subtask and endpoint builtin bindings remain outside this private binding slice;
+Endpoint builtin bindings remain outside this private binding slice;
 public Component loading/execution retains its existing async admission gate.
+
+The private subtask adapter connects a caller-owned subtask to a callee task on
+the same execution owner thread. The subtask borrows the caller's handle table,
+argument preparation context and result destination; task admission and handle
+publication retain their existing finite quotas. Preparation publishes STARTED
+only when the callee actually starts. A resolution hook converts/moves the result
+before committing RETURNED; cancellation commits only after the callee's explicit
+acknowledgement. Resolution detaches the callee's hooks, allowing the subtask to
+be dropped while the callee continues executing after task.return. Failed or
+destroyed unresolved callees detach with a sticky error rather than fabricate a
+successful/cancelled event. Loan cleanup runs once at terminal event delivery,
+or during failed-owner teardown after the callee has detached. An exclusive
+waitable pin spans cancellation callbacks and synchronous cancellation waits.
+These internal hooks do not change existing synchronous or public task APIs.
+The initial packed word suppresses a redundant STARTED notification; start and
+return before polling coalesce into one terminal event. Eager results use no
+handle. Deferred publication shares table allocation/quota failure semantics.
+Subtask cancel/drop descriptors bind through the same host adapter. Synchronous
+cancel waits retain their exclusive pin in the actual Core host frame; async
+cancel returns BLOCKED when acknowledgement is pending. A ready callee callback
+runs one eager quantum with the initiating Core caller's remaining fuel and
+interrupt check, charging fuel back before returning. Subsequent scheduling uses
+the callee's own resumable execution and never retains the caller's control
+pointer. These tests exercise the internal ownership adapter; automatic canonical
+argument/result wiring and retained public Component owners remain gated work.
 
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and

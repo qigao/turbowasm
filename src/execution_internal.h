@@ -15,4 +15,8 @@ turbowasm_status turbowasm_execution_set_completion(
     turbowasm_execution *execution,
     turbowasm_execution_completion_fn completion, void *context);
 
+/* Borrowed on the execution owner thread until execution destruction. Used by
+ * task scheduling to account a nested quantum before its Core handle is freed. */
+turbowasm_jit_execution_control *turbowasm_execution_control_get(turbowasm_execution *execution);
+
 #endif

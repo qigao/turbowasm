@@ -1021,17 +1021,17 @@ including its assertions that key entry/callback/wait/fuel paths were compiled.
 
 This qualifies an internal execution owner, not public async Component support.
 Automatic binding of decoded builtins/lifts, canonical argument ownership,
-subtask propagation, instance-retaining public task/endpoint/transfer APIs, and
+instance-retaining public task/endpoint/transfer APIs, and
 the remaining Component/WASI integration are still incomplete.
 
 ## Private task and waitable builtin bindings
 
-Twelve builtin families now bind decoded descriptors to exact Core host
+The initial twelve builtin families bind decoded descriptors to exact Core host
 signatures: task return/cancel, context get/set, backpressure inc/dec, thread
 yield, waitable-set new/drop/wait/poll, and waitable join. A committed Component
 fixture provides the decoded descriptors; a real Core Wasm fixture imports and
-executes the resulting bindings. Subtask and endpoint families are still rejected
-by this binding entry point, and public async admission remains disabled.
+executes the resulting bindings. Subtask cancel/drop support is recorded below;
+endpoint families remain rejected, and public async admission remains disabled.
 
 The task driver resumes builtin YIELD on its next quantum and SET waits only
 when a non-consuming readiness check finds a pending event. The retained host
@@ -1051,7 +1051,47 @@ Component/WASI/resume/host-wait/memory/link regression, 76/76 in 3.48 seconds. T
 task suite passed 25 cases and 2490 assertions, including real builtin suspension,
 context isolation, memory32/64 event output, may_leave checks, cancellation,
 owned-set allocation failure and cleanup, and invalid/unsupported binding
-admission. The same test source extends the MIR task target; verification of
-this increment on Linux/macOS is pending. Component instantiation still needs
+admission. At `11652f1`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37683175897)
+passed all five jobs, including Linux MIR 190/190 in 2.28 seconds and macOS arm64 MIR 190/190 in
+2.17 seconds. Both executed the MIR task suite in 0.02 seconds, including
+compiled builtin suspension/event-output paths. Component instantiation still needs
 to construct these bindings automatically alongside async lift/lower adapters,
 subtasks, endpoint ownership and the public retained-instance API.
+
+## Private subtask propagation and cancellation
+
+The caller-side subtask now connects real callee task preparation, task.return
+and cancellation acknowledgement to the shared waitable table. The result adapter
+must finish lowering/moving the result before RETURNED is committed. Actual
+resource lend counts stay held until terminal delivery; STARTED alone releases
+no loan. Eager results return the canonical raw RETURNED word without allocating
+a handle. Deferred calls publish the current phase and a generation-checked
+handle, suppressing a duplicate STARTED and coalescing later progress.
+
+Decoded synchronous/async subtask.cancel and subtask.drop run as Core imports.
+Cancellation owns an exclusive waitable pin before entering the callee callback;
+the synchronous form keeps it across a real host-wait suspension, while the
+async form returns BLOCKED if unresolved. A result may win cancellation. Callback
+resolution detaches the caller context, allowing the subtask to be destroyed
+while callee Core cleanup remains suspended. Failure first unwinds retained Core
+frames, then detaches with a sticky error. Waiters observe the failure and loan
+cleanup occurs once during owner teardown, without a fabricated terminal event.
+
+Eager cancellation into an available callback in another scheduling domain shares
+the initiating caller's remaining fuel and interruption check. The child retains
+its own continuation if it suspends; the caller is charged consumed fuel before
+its Core frame resumes. The suite checks both exhaustion and interruption, as
+well as an immediate acknowledgement with unlimited execution.
+
+The committed task fixtures cover both memory widths for caller result stores,
+real lend/drop exclusion, pre-start cancellation, deferred acknowledgement,
+reentrant event theft prevention, cancellation unwind, stale handles, eager and
+deferred cleanup failures, argument/result failures, and handle allocation OOM.
+The same tests are compiled into the existing interpreter and MIR task targets.
+Windows ASan passed 43 task cases with 4989 assertions. The related
+Component/WASI/resumable/host-wait/memory/link/fuel/interrupt selection passed
+76/76 targets in 3.02 seconds. Linux/macOS MIR verification of this subtask
+increment is pending; the preceding builtin increment's results are above.
+This remains private integration: automatic canonical argument/result adapters,
+endpoint builtin bindings, retained public async owners and end-to-end Component
+instantiation are still required before opening public async admission.
