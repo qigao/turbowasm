@@ -53,7 +53,7 @@ legacy WASI threads, the qualified Preview1 capability layer, and interpreter
 memory64 are part of the completed Runtime surface. Shared memory64 supports
 atomic operations, wait/notify, imports and guarded growth. MIR admits unshared
 memory64 modules and lowers scalar load/store, size/grow, bulk memory and its
-existing SIMD memory subset through Runtime helpers. Shared memory32/memory64
+SIMD memory instructions through Runtime helpers. Shared memory32/memory64
 also use these helpers, including atomic load/store, RMW, compare-exchange,
 fence and interruptible wait/notify. The private entry
 accepts mixed scalar/reference/vector parameters and zero or multiple results.
@@ -76,6 +76,11 @@ interpreter. MIR also lowers table.size, table.init, table.copy, elem.drop and
 table.get/set/grow/fill
 through Runtime for table32/table64, including mixed-width and imported tables.
 Native GC instruction lowering remains incomplete.
+
+MIR admits the complete helper-backed SIMD instruction set, including shuffle,
+lane extraction/replacement, extending/splat/zero loads and lane loads/stores.
+Immediate SIMD operations reuse Runtime's validated instruction semantics; this
+does not introduce a platform vector calling convention or MIR vector registers.
 
 ## Core 3.0 and managed references
 

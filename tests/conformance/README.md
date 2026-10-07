@@ -309,8 +309,8 @@ ctest --preset win-core3-asan-user -R "vector_calls|jit_simd_helper|reference_na
 ```
 
 This qualifies the helper-backed vector call boundary. It does not add a MIR
-vector register ABI, the remaining SIMD instructions, native GC/EH instructions,
-or resumable native execution.
+vector register ABI, native GC/EH instructions or resumable native execution.
+Remaining SIMD instructions are covered by the later increment below.
 
 ## MIR scalar numeric instructions
 
@@ -352,4 +352,44 @@ ctest --preset win-core3-asan-user -R "numeric_native|scalar_results|scalar_tail
 ```
 
 Scalar numeric coverage does not qualify native GC/EH, remaining reference
-control/globals, the remaining SIMD subset, or resumable native execution.
+control/globals or resumable native execution.
+
+## Complete helper-backed SIMD admission
+
+Implementation `f27e804` adds shuffle, lane extract/replace and extending, splat,
+zero and lane memory operations to MIR's existing SIMD path. The private bridge
+executes one validated instruction with a fixed local stack, sharing Runtime's
+vector semantics and shared/unshared memory32/64 access checks. The module owns
+the immutable instruction view until compiled code is destroyed. No installed
+API or MIR vector register ABI is introduced.
+
+`simd_native_test.c` visits every shared SIMD descriptor, every lane and both
+shuffle patterns. The generated modules are independently validated, and their
+MIR variants require compiled functions. Tests compare bits and shape, memory
+contents, fuel boundaries and traps against the interpreter. Memory descriptors
+run with two memories in all four address/shared modes, exercising the explicit
+nonzero memory index, unaligned addresses, offsets, boundary and overflow traps.
+The existing v128 constant/load/store and structured SIMD suites remain active;
+the shuffle test now requires native compilation instead of interpreter fallback.
+
+The first Windows ASan check passed all four relevant tests in 0.58 seconds.
+The complete Windows ASan suite passed 145/145 tests in 223.15 seconds, including
+both Core 3.0 gates.
+
+[Native CI at `f27e804`](https://github.com/qigao/turbowasm/actions/runs/37632774787)
+passed all five jobs:
+
+- Linux MIR: 164/164 tests, 1.53 seconds.
+- macOS arm64 MIR: 164/164 tests, 2.58 seconds.
+- Windows qualification: 143/143 tests; installed package: 16/16.
+- Linux qualification: 144/144 tests; installed package: 17/17.
+- Android arm64: cross-build and installed consumer build; no device execution.
+
+```powershell
+cmake --build --preset win-core3-asan-user
+ctest --preset win-core3-asan-user -R "simd_native|jit_simd_helper|vector_calls|memory64_execution" --output-on-failure
+```
+
+This qualifies instruction admission through Runtime helpers, not platform SIMD
+register generation or full native Core 3.0. Native GC/EH, remaining reference
+control/globals and resumable native execution remain separate work.
