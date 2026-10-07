@@ -4,9 +4,33 @@
 
 typedef struct turbowasm_component_exec_async_call {
     turbowasm_component_async_call call;
+    turbowasm_component_endpoint_codec parameters, result;
     struct turbowasm_component_exec_async_call *next;
     turbowasm_status failure;
 } turbowasm_component_exec_async_call;
+
+static turbowasm_status commit_endpoints(void *context, turbowasm_component_task *task,
+    turbowasm_component_value *values, uint32_t count) {
+    (void)task; (void)values; (void)count;
+    return turbowasm_component_endpoint_codec_commit(context);
+}
+
+static turbowasm_status rollback_endpoints(void *context, turbowasm_component_task *task) {
+    (void)task;
+    return turbowasm_component_endpoint_codec_rollback(context);
+}
+
+static void bind_endpoints(turbowasm_component_canonical_memory *memory,
+    turbowasm_component_async_transaction *transaction, turbowasm_component_endpoint_codec *codec,
+    turbowasm_component_resource_table *table) {
+    codec->table = table;
+    memory->endpoint_lift = turbowasm_component_endpoint_codec_lift;
+    memory->endpoint_lower = turbowasm_component_endpoint_codec_lower;
+    memory->endpoint_context = codec;
+    transaction->commit = commit_endpoints;
+    transaction->rollback = rollback_endpoints;
+    transaction->context = codec;
+}
 
 static void append(turbowasm_component_exec *exec, turbowasm_component_exec_async_call *frame) {
     frame->next = NULL;
@@ -79,6 +103,10 @@ turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_h
     binding.callee = exec->async_functions[lower->local_adapter_index];
     frame = turbowasm_rt_calloc(1u, sizeof(*frame));
     if (frame == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    /* These contexts survive guest realloc suspension and are never shared with
+     * a recursive lower or a different call's pending result conversion. */
+    bind_endpoints(&binding.callee.memory, &binding.parameters, &frame->parameters, &exec->resource_table);
+    bind_endpoints(&binding.caller_memory, &binding.result, &frame->result, &exec->resource_table);
     status = turbowasm_component_async_call_create(&frame->call, &binding, arguments, argument_count);
     if (status != TURBOWASM_OK) { turbowasm_rt_free(frame); return status; }
     append(exec, frame); ++exec->async_call_count;

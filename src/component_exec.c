@@ -1628,7 +1628,7 @@ static bool type_ref_contains_dynamic_memory(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref) {
     uint32_t features;
-    return !turbowasm_component_value_type_features(graph, ref, &features) ||
+    return !turbowasm_component_transfer_type_features(graph, ref, &features) ||
         (features & TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY) != 0u;
 }
 
@@ -1753,13 +1753,15 @@ static turbowasm_status configure_canon_lower_memory(
     return TURBOWASM_OK;
 }
 
-/* Automatic ownership transactions are integrated separately. */
-static turbowasm_status async_plain_value(const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_ref ref) {
+/* Endpoint call transactions are connected; resource loans and stream payload
+ * ownership still require their own retained conversion owners. */
+static turbowasm_status async_value_supported(const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref, bool endpoints) {
     uint32_t features;
     if (!turbowasm_component_transfer_type_features(graph, ref, &features))
         return TURBOWASM_UNSUPPORTED;
-    return (features & (TURBOWASM_COMPONENT_VALUE_RESOURCES | TURBOWASM_COMPONENT_VALUE_ENDPOINTS))
+    return (features & (TURBOWASM_COMPONENT_VALUE_RESOURCES |
+        (endpoints ? 0u : TURBOWASM_COMPONENT_VALUE_ENDPOINTS)))
         ? TURBOWASM_UNSUPPORTED : TURBOWASM_OK;
 }
 
@@ -1770,6 +1772,7 @@ static turbowasm_status initialize_async_state(turbowasm_component_exec *exec,
     if (!turbowasm_component_task_domain_init(&exec->task_domain,
             &exec->resource_table, &exec->may_leave, limits->tasks))
         return TURBOWASM_INVALID_ARGUMENT;
+    exec->async_endpoint_lift.table = &exec->resource_table;
     if ((size_t)binary->async_builtin_count > SIZE_MAX / sizeof(*exec->async_builtins) ||
         (size_t)exec->adapter_count > SIZE_MAX / sizeof(*exec->async_functions))
         return TURBOWASM_OUT_OF_MEMORY;
@@ -1789,11 +1792,11 @@ static turbowasm_status initialize_async_state(turbowasm_component_exec *exec,
         const turbowasm_component_type *type = turbowasm_component_type_graph_get(
             &binary->type_graph, definition->type_index);
         if (definition->kind == TURBOWASM_COMPONENT_TASK_RETURN && definition->has_result)
-            status = async_plain_value(&binary->type_graph, definition->result);
+            status = async_value_supported(&binary->type_graph, definition->result, true);
         else if (turbowasm_component_endpoint_builtin_kind(definition->kind, &future) && type != NULL &&
                  (type->kind == TURBOWASM_COMPONENT_TYPE_STREAM || type->kind == TURBOWASM_COMPONENT_TYPE_FUTURE) &&
                  type->as.async_value.has_payload)
-            status = async_plain_value(&binary->type_graph, type->as.async_value.payload);
+            status = async_value_supported(&binary->type_graph, type->as.async_value.payload, false);
         if (status != TURBOWASM_OK) return status;
         if (definition->core_function_index >= exec->core_function_count)
             return TURBOWASM_MALFORMED_MODULE;
@@ -1828,8 +1831,13 @@ static turbowasm_status bind_async_builtin(turbowasm_component_exec *exec, uint3
         context->realloc_context.domain = &exec->task_domain;
         options.memory.realloc_context = &context->realloc_context;
     }
-    return turbowasm_component_task_builtin_bind(&context->binding, &exec->task_domain,
+    status = turbowasm_component_task_builtin_bind(&context->binding, &exec->task_domain,
         &exec->binary->type_graph, definition, definition->has_memory ? &options.memory : NULL);
+    if (status == TURBOWASM_OK && definition->kind == TURBOWASM_COMPONENT_TASK_RETURN) {
+        context->binding.memory.endpoint_lift = turbowasm_component_endpoint_codec_lift;
+        context->binding.memory.endpoint_context = &exec->async_endpoint_lift;
+    }
+    return status;
 }
 
 static bool flat_kind_to_value_kind(
@@ -2566,16 +2574,18 @@ static turbowasm_status initialize_lift_adapter(
         if (exec->async_functions == NULL || type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
             return TURBOWASM_UNSUPPORTED;
         for (parameter = 0; parameter < type->as.function.param_count; ++parameter) {
-            status = async_plain_value(&binary->type_graph, type->as.function.params[parameter]);
+            status = async_value_supported(&binary->type_graph, type->as.function.params[parameter], true);
             if (status != TURBOWASM_OK) return status;
         }
         if (type->as.function.has_result) {
-            status = async_plain_value(&binary->type_graph, type->as.function.result);
+            status = async_value_supported(&binary->type_graph, type->as.function.result, true);
             if (status != TURBOWASM_OK) return status;
         }
         binding.graph = &binary->type_graph; binding.function_type = lift->type_index;
         binding.instance = &exec->core_instances[core_function->instance_index];
         binding.function_index = core_function->function_index; binding.memory = memory;
+        binding.memory.endpoint_lift = turbowasm_component_endpoint_codec_lift;
+        binding.memory.endpoint_context = &exec->async_endpoint_lift;
         if (lift->has_callback) {
             const turbowasm_component_exec_core_function *callback;
             if (lift->callback_function_index >= exec->core_function_count) return TURBOWASM_MALFORMED_MODULE;

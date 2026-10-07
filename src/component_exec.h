@@ -5,6 +5,7 @@
 #include "component_core_call.h"
 #include "component_resource_binding.h"
 #include "component_task_builtin.h"
+#include "component_endpoint.h"
 
 #include <turbowasm/instance.h>
 #include <turbowasm/link.h>
@@ -182,6 +183,8 @@ typedef struct turbowasm_component_exec {
     uint32_t function_count;
 
     turbowasm_component_task_domain task_domain;
+    /* Lift-only codec: no shared lower reservations across retained calls. */
+    turbowasm_component_endpoint_codec async_endpoint_lift;
     turbowasm_component_task_binding *async_functions;
     turbowasm_component_exec_async_builtin *async_builtins;
     struct turbowasm_component_exec_async_call *async_calls, *async_calls_tail;
@@ -224,8 +227,8 @@ turbowasm_status turbowasm_component_exec_resource_release(
     turbowasm_component_exec *exec, uint64_t identity, turbowasm_value rep);
 
 /* Private staged async integration. Explicit nonzero bounded quotas; borrows
- * binary/source bytes. Async imports and ownership-bearing boundary values remain
- * unsupported until their automatic invocation transactions are connected.
+ * binary/source bytes. Local endpoint values use invocation-owned transactions;
+ * async imports, resource values and ownership-bearing stream payloads remain gated.
  * No public Component loader calls this entry. */
 turbowasm_status turbowasm_component_exec_init_async(
     turbowasm_component_exec *exec, const turbowasm_component_binary *binary,

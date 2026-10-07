@@ -865,8 +865,9 @@ Component during that invocation. An auxiliary owner excludes other tasks in
 the domain across suspension until context restoration. No transient host-call
 pointer is retained.
 This stage admits same-domain task/endpoint execution and local async lowering;
-async imports and automatic resource/endpoint-valued argument/result transactions
-remain closed until their per-invocation ownership contexts are integrated. The private entry
+async imports and automatic resource-valued argument/result transactions
+remain closed until their per-invocation ownership contexts are integrated. Endpoint
+call transactions are described below. The private entry
 does not change public loading or host API admission.
 
 Exec destruction rejects registered tasks and live async table entries before
@@ -893,7 +894,18 @@ collection. A private failure-abort entry propagates a non-success reason,
 rejects active/pinned conversion and releases remaining calls after exported
 caller tasks have been destroyed. It is not public cooperative cancellation. Exec destruction requires
 the call list drained. This stage binds local async lifts; async capability
-imports and automatic ownership-bearing value transactions remain gated.
+imports and automatic resource-value transactions remain gated.
+
+Local async endpoint parameters and results use two independent endpoint codecs
+owned by each retained call frame. The caller-to-callee and callee-to-caller
+directions reserve generation-checked handles under the instance handle quota;
+only successful conversion commits them. Failure, including unwinding a suspended
+guest realloc, rolls back reservations before releasing the owning values. Source
+handles already consumed by lifting stay invalid on failure. This is owner-thread
+state; no codec with pending lower reservations is shared between calls. A separate
+instance-owned lift-only codec lets task.return consume endpoints without retaining
+a transient host-call context. Resource loans and ownership-bearing stream/future
+payload conversion remain separate integration work; the public async gate stays closed.
 
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and

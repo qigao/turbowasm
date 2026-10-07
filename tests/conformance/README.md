@@ -1226,9 +1226,9 @@ passed all five matrix jobs. Linux MIR passed 196/196 in 1.94 seconds and macOS
 arm64 MIR passed 196/196 in 2.86 seconds, including the compiled async exec target
 in 0.02 seconds on each platform.
 
-This is an internal integration stage. Per-call resource/endpoint-value
-transactions, retained public async owners and nested Component instantiation
-remain incomplete. Public async admission stays closed.
+This is an internal integration stage. Per-call resource transactions, retained
+public async owners and nested Component instantiation remain incomplete.
+Endpoint call transactions are covered below. Public async admission stays closed.
 
 ## Automatic local async lowering
 
@@ -1253,11 +1253,29 @@ early task.return, nested calls during polling, guest cancellation, capacity
 failures, published/unpublished traps, suspended realloc teardown and allocation
 failure sweeps. Windows ASan passed 14 cases with 713 assertions; related
 Component/WASI/resumable/host-wait/memory/link/fuel/interrupt regression passed
-80/80 targets in 3.79 seconds. Native MIR
-qualification of this increment is pending; both native MIR targets run the same
-suite with compiled-function assertions.
+80/80 targets in 3.79 seconds. For `bf22bae`, the
+[native run](https://github.com/qigao/turbowasm/actions/runs/37698899854)
+passed all five jobs. Linux MIR passed 198/198 targets in 2.41 seconds and macOS
+MIR passed 198/198 in 2.82 seconds, including the compiled async-lower suite
+(0.04 and 0.03 seconds respectively).
 
-The path currently admits local async lifts with scalar, string and plain
-composite payloads. Async capability
-imports, automatic resource/endpoint transactions, public task/endpoint owners,
-cross-instance progress ownership and the broader Component/WASI gaps remain open.
+Local async calls now also move stream/future readable endpoints, including
+endpoints nested in composite values. Each invocation owns separate parameter
+and result reservation scopes; task.return uses an instance-owned lift-only codec.
+Partial conversion failure rolls back unpublished destination handles, and consumed
+source owners close exactly once. Suspending in a later string realloc retains
+the earlier endpoint reservation until commit or execution unwind.
+
+The expanded Windows ASan suite passed 23 cases with 1,703 assertions, including
+memory-free endpoint lifts/returns, memory32-to-memory64 mixed tuples, deferred
+callbacks, future peer retention, exported endpoint lifetime, partial input/result
+failure, abort in parameter and result realloc, repeated fuel yields and allocation
+failure sweeps. The related regression passed 80/80 targets in 3.95 seconds.
+Reproduce with `cmake --build --preset win-core3-asan-user` and
+`ctest --preset win-core3-asan-user -R component_async_lower --output-on-failure`.
+Native MIR qualification of the endpoint integration is pending; both native
+targets exercise the same suite with compiled caller/callee/callback assertions.
+
+Async capability imports, automatic resource transactions, ownership-bearing
+stream/future payload conversion, public task/endpoint owners, cross-instance
+progress ownership and the broader Component/WASI gaps remain open.

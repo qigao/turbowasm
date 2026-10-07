@@ -1,4 +1,5 @@
 #include "component_exec.h"
+#include "component_endpoint_builtin.h"
 #include "instance_internal.h"
 #include "runtime_alloc.h"
 #include <tinytest.h>
@@ -33,6 +34,12 @@ static void compiled(turbowasm_instance *instance, uint32_t index) {
     (void)instance; (void)index;
 #endif
 }
+static void compiled_child(const char *name) {
+    const turbowasm_component_task_binding *binding = NULL;
+    check_equal(turbowasm_component_exec_async_export(&exec, (const uint8_t *)name, (uint32_t)strlen(name), &binding), TURBOWASM_OK);
+    compiled(binding->instance, binding->function_index);
+    if (binding->callback_instance != NULL) compiled(binding->callback_instance, binding->callback_index);
+}
 static void create(const char *name) {
     const turbowasm_component_task_binding *binding = NULL;
     check_equal(turbowasm_component_exec_async_export(&exec, (const uint8_t *)name, (uint32_t)strlen(name), &binding), TURBOWASM_OK);
@@ -65,6 +72,32 @@ static void cleanup_calls(void) {
     }
 }
 
+static uint32_t reservations(void) {
+    uint32_t i, count = 0;
+    for (i = 0; i < exec.resource_table.capacity; ++i) {
+        uint32_t handle; turbowasm_component_handle_kind kind; void *object;
+        if (turbowasm_component_handle_at(&exec.resource_table, i, &handle, &kind, &object) &&
+            kind == TURBOWASM_COMPONENT_HANDLE_STREAM_READ &&
+            ((turbowasm_component_waitable *)object)->table == NULL) ++count;
+    }
+    return count;
+}
+
+static void cleanup_endpoints(void) {
+    uint32_t i;
+    for (i = 0; i < exec.resource_table.capacity; ++i) {
+        uint32_t handle; turbowasm_component_handle_kind kind; void *object;
+        if (turbowasm_component_handle_at(&exec.resource_table, i, &handle, &kind, &object) &&
+            (kind == TURBOWASM_COMPONENT_HANDLE_STREAM_READ || kind == TURBOWASM_COMPONENT_HANDLE_STREAM_WRITE ||
+             kind == TURBOWASM_COMPONENT_HANDLE_FUTURE_READ || kind == TURBOWASM_COMPONENT_HANDLE_FUTURE_WRITE)) {
+            turbowasm_component_endpoint *endpoint = turbowasm_component_endpoint_get(&exec.resource_table, handle, kind);
+            check_not_null(endpoint);
+            check_equal(turbowasm_component_endpoint_close(endpoint), TURBOWASM_OK);
+        }
+    }
+    turbowasm_component_endpoint_domain_collect(&exec.task_domain);
+}
+
 spec("instantiated async canonical lower") {
     before_each() {
         turbowasm_component_exec_async_limits limits = {5, 16};
@@ -88,6 +121,7 @@ spec("instantiated async canonical lower") {
     after_each() {
         allowance = SIZE_MAX;
         cleanup_calls(); check_equal(turbowasm_component_value_destroy(&value), TURBOWASM_OK);
+        cleanup_endpoints();
         check_equal(turbowasm_component_exec_destroy(&exec), TURBOWASM_OK);
         turbowasm_component_binary_destroy(&binary); turbowasm_runtime_scope_leave(scope);
         check_equal(live, 0u);
@@ -118,13 +152,13 @@ spec("instantiated async canonical lower") {
         check_equal(poll(NULL), 0u); check_equal(exec.task_domain.count, 0u);
     }
     it("allows a polled callback to create and retire nested calls without invalidating the queue") {
-        uint32_t adapter; const turbowasm_component_task_binding *child;
+        const turbowasm_component_task_binding *child = NULL;
         create("nested"); check_equal(turbowasm_component_task_resume(&task, NULL), TURBOWASM_YIELDED);
         check_equal(exec.async_call_count, 1u); check_equal(poll(NULL), 1u);
         check_equal(exec.task_domain.count, 2u);
         check_equal(turbowasm_component_task_resume(&task, NULL), TURBOWASM_OK); result(42);
-        adapter = exec.canon_lower_contexts[binary.canon_lower_count - 1u].local_adapter_index;
-        child = &exec.async_functions[adapter]; compiled(child->callback_instance, child->callback_index);
+        check_equal(turbowasm_component_exec_async_export(&exec, (const uint8_t *)"nested-child", 12, &child), TURBOWASM_OK);
+        compiled(child->callback_instance, child->callback_index);
         check_equal(poll(NULL), 0u); check_equal(exec.resource_table.live_count, 0u);
     }
     it("rejects call-table exhaustion and aborts the retained child after its caller unwinds") {
@@ -225,5 +259,100 @@ spec("instantiated async canonical lower") {
             check_equal(live, baseline); if (succeeded) break;
         }
         check_true(succeeded); check_greater(budget, 5u);
+    }
+    it("moves readable endpoints through memory-free callees and mixed memory32-memory64 tuples") {
+        const char *names[] = {"endpoint", "endpoint-text"}; unsigned i;
+        const char *children[] = {"endpoint-child", "endpoint-text-child"};
+        for (i = 0; i < 2; ++i) {
+            create(names[i]); check_equal(turbowasm_component_task_resume(&task, NULL), TURBOWASM_OK); result(51);
+            check_equal(exec.resource_table.live_count, 0u); check_equal(exec.async_call_count, 0u);
+            compiled_child(children[i]);
+            check_equal(reservations(), 0u); cleanup_calls();
+        }
+    }
+    it("retains endpoint ownership across a deferred callback and terminal event delivery") {
+        create("endpoint-deferred"); check_equal(turbowasm_component_task_resume(&task, NULL), TURBOWASM_YIELDED);
+        check_equal(exec.async_call_count, 1u); check_equal(exec.resource_table.live_count, 4u);
+        check_equal(poll(NULL), 1u); check_equal(reservations(), 0u);
+        check_equal(turbowasm_component_task_resume(&task, NULL), TURBOWASM_OK); result(51);
+        compiled_child("endpoint-deferred-child");
+        check_equal(poll(NULL), 0u); check_equal(exec.resource_table.live_count, 0u);
+    }
+    it("keeps an exported endpoint owner alive after its task exits") {
+        create("endpoint-result"); check_equal(turbowasm_component_task_resume(&task, NULL), TURBOWASM_OK);
+        compiled(task.binding.instance, task.binding.function_index);
+        check_equal(turbowasm_component_task_take_result(&task, &value), TURBOWASM_OK);
+        check_equal(value.kind, TURBOWASM_COMPONENT_TYPE_STREAM);
+        cleanup_calls(); check_equal(exec.resource_table.live_count, 0u);
+        check_equal(turbowasm_component_exec_destroy(&exec), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_value_destroy(&value), TURBOWASM_OK);
+    }
+    it("moves future read handles without closing their writable peers") {
+        create("future"); check_equal(turbowasm_component_task_resume(&task, NULL), TURBOWASM_OK); result(51);
+        compiled_child("future-child"); check_equal(exec.resource_table.live_count, 2u);
+        check_equal(exec.async_call_count, 0u); cleanup_calls(); cleanup_endpoints();
+        check_equal(exec.task_domain.pair_count, 0u);
+    }
+    it("closes consumed endpoints on partial parameter lifting and result-store failures") {
+        const char *names[] = {"endpoint-bad-input", "endpoint-bad-result"}; unsigned i;
+        for (i = 0; i < 2; ++i) {
+            create(names[i]); check_equal(turbowasm_component_task_resume(&task, NULL), TURBOWASM_TRAPPED);
+            cleanup_calls(); check_equal(reservations(), 0u);
+            check_equal(exec.resource_table.live_count, 1u); cleanup_endpoints();
+            check_equal(exec.resource_table.live_count, 0u); check_equal(exec.task_domain.pair_count, 0u);
+        }
+    }
+    it("unwinds reserved endpoint handles when aborted inside guest realloc") {
+        turbowasm_execution_options options = {0}; unsigned turns;
+        options.has_fuel_limit = true; options.fuel = 4; create("endpoint-text");
+        for (turns = 0; turns < 1000 && reservations() == 0; ++turns) {
+            check_equal(turbowasm_component_task_resume(&task, &options), TURBOWASM_YIELDED);
+            if (reservations() == 0) (void)poll(&options);
+        }
+        check_less(turns, 1000u); check_equal(reservations(), 1u); check_false(exec.may_leave);
+        cleanup_calls(); check_equal(reservations(), 0u); check_true(exec.may_leave);
+        check_equal(exec.resource_table.live_count, 1u);
+    }
+    it("rolls back result reservations before unwinding the retained task.return value") {
+        turbowasm_execution_options options = {0}; unsigned turns; bool suspended = false;
+        options.has_fuel_limit = true; options.fuel = 4; create("endpoint-text");
+        for (turns = 0; turns < 1000; ++turns) {
+            check_equal(turbowasm_component_task_resume(&task, &options), TURBOWASM_YIELDED);
+            if (exec.task_domain.auxiliary != NULL && exec.task_domain.auxiliary->resolving && reservations() == 1u) {
+                suspended = true; break;
+            }
+            (void)poll(&options);
+            if (exec.task_domain.auxiliary != NULL && exec.task_domain.auxiliary->resolving && reservations() == 1u) {
+                suspended = true; break;
+            }
+        }
+        check_true(suspended); check_false(exec.may_leave); cleanup_calls();
+        check_equal(reservations(), 0u); check_true(exec.may_leave); check_equal(exec.resource_table.live_count, 1u);
+    }
+    it("resumes both endpoint transactions through repeated fuel yields") {
+        turbowasm_execution_options options = {0}; turbowasm_status status; unsigned turns;
+        options.has_fuel_limit = true; options.fuel = 4; create("endpoint-text");
+        status = turbowasm_component_task_resume(&task, &options);
+        for (turns = 0; turns < 1000 && status == TURBOWASM_YIELDED; ++turns) {
+            (void)poll(&options); status = turbowasm_component_task_resume(&task, &options);
+        }
+        check_less(turns, 1000u); check_greater(turns, 2u); check_equal(status, TURBOWASM_OK); result(51);
+        compiled_child("endpoint-text-child"); check_equal(poll(NULL), 0u); check_equal(reservations(), 0u);
+        check_equal(exec.resource_table.live_count, 0u);
+    }
+    it("recovers endpoint owner and transaction allocation failures without leaks") {
+        size_t baseline, budget; bool succeeded = false;
+        create("endpoint-text"); check_equal(turbowasm_component_task_resume(&task, NULL), TURBOWASM_OK); result(51);
+        cleanup_calls(); cleanup_endpoints(); baseline = live;
+        for (budget = 0; budget < 150; ++budget) {
+            turbowasm_status status;
+            create("endpoint-text"); allowance = budget; status = turbowasm_component_task_resume(&task, NULL);
+            allowance = SIZE_MAX;
+            if (status == TURBOWASM_OK) { result(51); succeeded = true; }
+            else check_equal(status, TURBOWASM_OUT_OF_MEMORY);
+            cleanup_calls(); check_equal(reservations(), 0u); cleanup_endpoints();
+            check_equal(live, baseline); if (succeeded) break;
+        }
+        check_true(succeeded); check_greater(budget, 8u);
     }
 }
