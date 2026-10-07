@@ -1899,6 +1899,8 @@ static turbowasm_status wasi02_fs_resource_drop(
     uint32_t handle) {
     turbowasm_wasi02_filesystem *filesystem =
         (turbowasm_wasi02_filesystem *)context;
+    turbowasm_value rep = {0};
+    turbowasm_status status;
 
     if (filesystem == NULL ||
         !filesystem->initialized ||
@@ -1906,8 +1908,21 @@ static turbowasm_status wasi02_fs_resource_drop(
         resource_identity != filesystem->descriptor_identity)
         return TURBOWASM_TYPE_MISMATCH;
 
-    return turbowasm_wasi02_filesystem_descriptor_drop(
-        filesystem, handle);
+    status = turbowasm_component_resource_drop(&filesystem->resources, handle,
+        TURBOWASM_WASI02_FS_PREOPEN_DESCRIPTOR_ID, NULL, NULL);
+    if (status == TURBOWASM_OK)
+        return status;
+    status = turbowasm_component_resource_take_owned(&filesystem->resources, handle,
+        TURBOWASM_WASI02_FS_CHILD_DESCRIPTOR_ID, &rep);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (rep.kind != TURBOWASM_VALUE_I64)
+        return TURBOWASM_TRAPPED;
+    /* The underlying filesystem retains a failed close for host recovery, but
+     * canonical destruction cannot leave a retryable Component own behind. */
+    return turbowasm_wasi_fs_close_descriptor(filesystem->filesystem,
+        unpack_descriptor((uint64_t)rep.as.i64)) == TURBOWASM_WASI_ERRNO_SUCCESS
+        ? TURBOWASM_OK : TURBOWASM_TRAPPED;
 }
 
 turbowasm_status turbowasm_wasi02_filesystem_imports(

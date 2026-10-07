@@ -18,9 +18,9 @@ extern "C" {
 /*
  * Public synchronous Component Model façade.
  *
- * Both handles are zero-initialized opaque owners. A loaded component borrows
- * immutable source bytes. Those bytes must remain alive until the component
- * handle and every instance derived from it have been destroyed.
+ * Handles are zero-initialized opaque owners. A loaded component borrows
+ * immutable source bytes. Those bytes and allocator contexts must remain alive
+ * until all derived instances, calls and returned own values have been released.
  */
 typedef struct turbowasm_component {
     void *impl;
@@ -55,7 +55,9 @@ typedef enum turbowasm_component_host_value_kind {
     TURBOWASM_COMPONENT_HOST_OPTION,
     TURBOWASM_COMPONENT_HOST_RESULT,
     TURBOWASM_COMPONENT_HOST_ENUM,
-    TURBOWASM_COMPONENT_HOST_FLAGS
+    TURBOWASM_COMPONENT_HOST_FLAGS,
+    TURBOWASM_COMPONENT_HOST_OWN = 24,
+    TURBOWASM_COMPONENT_HOST_BORROW = 25
 } turbowasm_component_host_value_kind;
 
 typedef struct turbowasm_component_host_value
@@ -88,6 +90,10 @@ typedef struct turbowasm_component_host_flags {
     size_t word_count;
 } turbowasm_component_host_flags;
 
+/* Opaque unique resource owner. Copying own values is not an ownership transfer.
+ * Borrow views are non-owning and require their source to be live at admission. */
+typedef struct turbowasm_component_host_resource turbowasm_component_host_resource;
+
 struct turbowasm_component_host_value {
     turbowasm_component_host_value_kind kind;
     union {
@@ -112,6 +118,8 @@ struct turbowasm_component_host_value {
         turbowasm_component_host_variant result;
         uint32_t enum_index;
         turbowasm_component_host_flags flags;
+        turbowasm_component_host_resource *own;
+        turbowasm_component_host_resource *borrow;
     } as;
 };
 
@@ -144,14 +152,16 @@ void turbowasm_component_instance_destroy(
 /*
  * Invoke one synchronous Component function export.
  *
- * Supports scalars, strings and synchronous non-resource composites. Resource
- * own/borrow values are not yet exposed by this facade.
+ * Supports synchronous value types, including own results and borrow arguments.
+ * Const invocation rejects own arguments, including nested own leaves, before
+ * canonical lowering. Use invoke_move to transfer ownership.
  *
  * A synchronous Component MVP function has at most one result. result_capacity
  * may therefore be 0 or 1. out_result_count is always written on successful
  * invocation.
  *
- * Input values are borrowed and never consumed. Returned composite/string
+ * Input values are borrowed and never consumed. Result storage must be empty
+ * or contain only an unowned scalar before invocation. Returned composite/string
  * storage is owned by TurboWasm and must be released with
  * turbowasm_component_host_value_destroy().
  */
@@ -165,14 +175,31 @@ turbowasm_status turbowasm_component_instance_invoke(
     size_t *out_result_count,
     turbowasm_trap *trap);
 
+/* Same invocation contract, with explicit own transfer. Full type/identity
+ * validation and canonical preparation precede commit. Pre-commit failure keeps
+ * own leaves unchanged; after commit they are zeroed even if execution traps.
+ * Non-resource argument storage stays caller-owned. Result storage may alias a
+ * top-level own argument: failure before commit preserves it, success replaces
+ * the consumed value. A guest realloc failure may leave guest memory changed. */
+turbowasm_status turbowasm_component_instance_invoke_move(
+    turbowasm_component_instance *instance,
+    turbowasm_name export_name,
+    turbowasm_component_host_value *arguments,
+    size_t argument_count,
+    turbowasm_component_host_value *result,
+    size_t result_capacity,
+    size_t *out_result_count,
+    turbowasm_trap *trap);
+
 /*
  * Create a restartable invocation of one Component function export.
  *
  * The call retains the Component instance and its capability owner. Releasing
  * the public instance/component handles does not invalidate an admitted call.
  * The borrowed component source bytes must still outlive the call.
- * Arguments are canonically lowered during create and need not outlive this
- * function. The retained Runtime execution may then yield for fuel,
+ * Arguments are canonically lowered during create and their carrier storage need
+ * not outlive this function. A borrow's source own remains pinned until terminal
+ * completion or call destruction. The retained Runtime execution may yield for fuel,
  * interruption, or host-wait without replaying canonical lowering or the
  * imported callback frame.
  */
@@ -181,6 +208,16 @@ turbowasm_status turbowasm_component_call_create(
     turbowasm_component_instance *instance,
     turbowasm_name export_name,
     const turbowasm_component_host_value *arguments,
+    size_t argument_count);
+
+/* Successful creation consumes own leaves exactly once. Destroying an unstarted
+ * call releases its transferred resources. Borrow loans last until terminal
+ * completion or cancellation, and block moving/destroying the source own. */
+turbowasm_status turbowasm_component_call_create_move(
+    turbowasm_component_call *call,
+    turbowasm_component_instance *instance,
+    turbowasm_name export_name,
+    turbowasm_component_host_value *arguments,
     size_t argument_count);
 
 void turbowasm_component_call_destroy(
@@ -222,11 +259,23 @@ turbowasm_status turbowasm_component_call_take_result(
     turbowasm_component_call *call,
     turbowasm_component_host_value *out_result);
 
+/* Create a borrow view without transferring or duplicating the source own.
+ * out_borrow must be empty and distinct from source. Returns INVALID_ARGUMENT
+ * for a non-own, moved, busy or invalid source. The source own must remain live
+ * until the view is admitted to a call; never admit a stale view after moving or
+ * destroying its source. The view itself has no cleanup cost. */
+turbowasm_status turbowasm_component_host_value_borrow(
+    const turbowasm_component_host_value *source,
+    turbowasm_component_host_value *out_borrow);
+
 /*
  * Destroy a value returned by turbowasm_component_instance_invoke().
  * Do not call this on caller-owned input values. Recursively releases storage
  * and clears the value. NULL and already-cleared values succeed.
- * Returns TURBOWASM_OK for the currently supported non-resource values.
+ * An active loan or busy owner returns INVALID_ARGUMENT without mutation.
+ * Otherwise cleanup continues after destructor failures and returns the first
+ * error; the cleared value cannot be retried. Instances are single-threaded;
+ * retained owners/calls do not permit concurrent execution on an instance.
  */
 turbowasm_status turbowasm_component_host_value_destroy(
     turbowasm_component_host_value *value);

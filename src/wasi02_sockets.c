@@ -2262,13 +2262,30 @@ static turbowasm_status wasi02_sockets_resource_drop(
     socket_component_resource_kind kind =
         socket_component_identity_kind(
             sockets, resource_identity);
+    turbowasm_value rep = {0};
+    turbowasm_status status;
 
-    if (kind == SOCKET_COMPONENT_RESOURCE_NETWORK)
-        return turbowasm_wasi02_network_drop(
-            sockets, handle);
-    if (kind == SOCKET_COMPONENT_RESOURCE_TCP)
-        return turbowasm_wasi02_tcp_drop(
-            sockets, handle);
+    if (kind == SOCKET_COMPONENT_RESOURCE_NETWORK) {
+        status = turbowasm_component_resource_take_owned(
+            &sockets->networks, handle, TW_WASI02_NETWORK_ID, &rep);
+        if (status != TURBOWASM_OK)
+            return status;
+        return sockets->provider.network_drop(sockets->provider.context, rep);
+    }
+    if (kind == SOCKET_COMPONENT_RESOURCE_TCP) {
+        turbowasm_wasi02_tcp_slot *slot;
+        turbowasm_value provider_rep;
+        status = tcp_slot_get(sockets, handle, &slot);
+        if (status != TURBOWASM_OK)
+            return status;
+        provider_rep = slot->provider_rep;
+        status = turbowasm_component_resource_take_owned(
+            &sockets->tcp_resources, handle, TW_WASI02_TCP_SOCKET_ID, &rep);
+        if (status != TURBOWASM_OK)
+            return status;
+        release_tcp_slot(sockets, slot);
+        return sockets->provider.tcp_drop(sockets->provider.context, provider_rep);
+    }
     return TURBOWASM_TYPE_MISMATCH;
 }
 

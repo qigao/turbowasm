@@ -36,6 +36,12 @@ int main(void) {
     };
     size_t result_count = 0u;
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_component_host_value borrowed = {0};
+
+    assert(turbowasm_component_host_value_borrow(&result, &borrowed) == TURBOWASM_INVALID_ARGUMENT);
+    assert(turbowasm_component_call_create_move(&call, &instance, name, NULL, 0u) == TURBOWASM_INVALID_ARGUMENT);
+    assert(turbowasm_component_instance_invoke_move(&instance, name, NULL, 0u,
+        &result, 1u, &result_count, &trap) == TURBOWASM_INVALID_ARGUMENT);
 
     assert(turbowasm_component_load_borrowed(
                &component,

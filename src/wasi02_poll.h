@@ -36,6 +36,11 @@ turbowasm_status turbowasm_wasi02_pollable_drop(
     turbowasm_wasi02_poll *poll,
     uint32_t resource);
 
+/* Canonical destruction consumes the logical handle even if its provider fails.
+ * The direct drop operation above keeps its existing retryable contract. */
+turbowasm_status turbowasm_wasi02_pollable_release(
+    turbowasm_wasi02_poll *poll, uint32_t resource);
+
 turbowasm_status turbowasm_wasi02_pollable_ready(
     turbowasm_wasi02_poll *poll,
     uint32_t resource,

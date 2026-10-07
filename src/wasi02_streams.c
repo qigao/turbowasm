@@ -170,6 +170,8 @@ static turbowasm_status resource_destructor(
         (turbowasm_wasi02_streams *)context;
     turbowasm_wasi02_stream_slot *slot;
     uint32_t index;
+    turbowasm_wasi02_stream_slot owned;
+    turbowasm_status status = TURBOWASM_OK;
 
     if (streams == NULL || !streams->initialized ||
         rep.kind != TURBOWASM_VALUE_I32 ||
@@ -184,38 +186,39 @@ static turbowasm_status resource_destructor(
         identity_for_kind(slot->kind) != resource_identity)
         return TURBOWASM_TRAPPED;
 
-    {
-        turbowasm_status status =
-            clear_transient_pollable(streams, slot);
-        if (status != TURBOWASM_OK)
-            return status;
-    }
+    owned = *slot;
+    /* The canonical handle was removed before this callback. Retire the slot
+     * before provider reentry; continue cleanup if a transient pollable fails. */
+    release_slot(streams, slot);
+    if (owned.transient_pollable_valid)
+        status = streams->poll != NULL
+            ? turbowasm_wasi02_pollable_release(streams->poll, owned.transient_pollable)
+            : TURBOWASM_TRAPPED;
 
-    switch (slot->kind) {
+    switch (owned.kind) {
         case TURBOWASM_WASI02_STREAM_SLOT_INPUT:
             if (streams->provider.input_drop != NULL)
                 streams->provider.input_drop(
                     streams->provider.context,
-                    slot->provider_rep);
+                    owned.provider_rep);
             break;
         case TURBOWASM_WASI02_STREAM_SLOT_OUTPUT:
             if (streams->provider.output_drop != NULL)
                 streams->provider.output_drop(
                     streams->provider.context,
-                    slot->provider_rep);
+                    owned.provider_rep);
             break;
         case TURBOWASM_WASI02_STREAM_SLOT_ERROR:
             if (streams->provider.error_drop != NULL)
                 streams->provider.error_drop(
                     streams->provider.context,
-                    slot->provider_rep);
+                    owned.provider_rep);
             break;
         default:
             return TURBOWASM_TRAPPED;
     }
 
-    release_slot(streams, slot);
-    return TURBOWASM_OK;
+    return status;
 }
 
 turbowasm_status turbowasm_wasi02_streams_init(

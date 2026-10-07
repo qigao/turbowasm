@@ -293,7 +293,8 @@ The synchronous Core-call adapter can optionally bind a C4 resource table:
   to the callee table;
 - lifting an `own<R>` result consumes an owned handle without running the
   destructor and returns the abstract representation;
-- lowering `borrow<R>` creates a transient non-owned handle;
+- lowering a foreign `borrow<R>` creates a transient non-owned handle;
+  an exec defining `R` receives the representation directly;
 - the Core call must explicitly drop every transient borrow before returning;
   otherwise the adapter cleans the leaked transient handle and returns a
   canonical trap status;
@@ -489,7 +490,7 @@ No C4 dependency is introduced into the generic C3 canonical codec.
 
 ## C6a installed façade boundary
 
-The synchronous non-resource host types are exposed through a separate
+The synchronous host value types, including resource own/borrow, are exposed through a separate
 installed target:
 
 ```cmake
@@ -521,21 +522,43 @@ The public host-value ABI supports:
 - recursive list values;
 - records and tuples, in declaration order;
 - variant, option and result, with case index and optional payload;
-- enum indices and counted flag words (one word for the MVP limit of 32 flags).
+- enum indices and counted flag words (one word for the MVP limit of 32 flags);
+- opaque own results and explicit move arguments, plus scoped borrow arguments.
 
-The resource ownership contract in [ARCHITECTURE.md](../ARCHITECTURE.md#component-host-values-and-resource-ownership-approved-design)
-is approved; its own/borrow implementation is still pending. Exports containing
-resource values are rejected before Core execution begins. Non-resource type
-exports introduce retained type aliases; function exports introduce function
-aliases, including re-exports referenced by subsequent definitions. Type exports
-with explicit ascriptions and resource/instance type exports remain unsupported.
+The [approved resource ownership contract](../ARCHITECTURE.md#component-host-values-and-resource-ownership-approved-design)
+is implemented. Resource and non-resource type exports introduce nominally
+preserving aliases; function exports introduce function aliases, including
+re-exports referenced by subsequent definitions. Type exports with explicit
+ascriptions and instance type exports remain unsupported.
 
-Input values are borrowed and never consumed. Returned strings, sequence arrays,
-variant payloads and flag words belong to TurboWasm and are released recursively
-with `turbowasm_component_host_value_destroy()`, which now returns
-`turbowasm_status`. NULL and already-cleared values succeed. Existing callers
-may ignore the return value; Component consumers must rebuild for the expanded
-value union and changed function type.
+Const `instance_invoke` and `call_create` accept borrow arguments and reject own
+arguments anywhere in the tree. `instance_invoke_move` and `call_create_move`
+validate the complete tree, prepare canonical handles and then clear only the
+transferred own leaves. Admission failure preserves the caller's owns; failure
+after commit does not return them. Other argument storage remains caller-owned.
+Destroying an admitted call before its first resume releases its transferred
+resources. After execution starts, guest-owned resources follow the existing
+explicit-drop contract, including when Core execution fails before result
+lifting; instance teardown does not run implicit guest destructors.
+
+An own value holds a unique opaque handle with nominal identity and originating
+instance. It must not be copied. `host_value_borrow` creates a view whose source
+must remain live until admission. Admitted loans block moving or destroying the
+source own through fuel/host-wait suspension; terminal completion and cancellation
+release them. Local resource borrows lower to their representation; imported
+borrows use temporary canonical handles that the guest must drop before return.
+The instance canonical table mediates provider resources as well, so ending a
+borrow never destroys the underlying owned capability.
+
+Returned strings, sequence arrays, variant payloads, flag words and owns belong
+to TurboWasm and are released recursively with `host_value_destroy`, which returns
+`turbowasm_status`. It preflights all loans before mutating the tree, invalidates
+owns before callbacks and continues through remaining children after a destructor
+failure. The value stays empty after such a failure and must not be retried.
+Provider cleanup failures are returned to the host; the provider remains
+responsible for recovery of any backing object its callback failed to release.
+NULL and already-cleared values succeed. Component consumers must rebuild for
+the expanded value union and changed destroy function type.
 
 Restartable calls retain the instance and its capability owner until call
 destruction. The public component and instance handles can be released after
@@ -563,8 +586,18 @@ The Windows/Linux qualification jobs also build and run the installed C/C++
 Component consumers. These results validate this implementation slice, not full
 Component Model conformance. The executable public usage example is
 [`component_main.c`](../tests/installed_consumer/component_main.c); composite
-construction and ownership examples are in
+construction examples are in
 [`component_host_values_test.c`](../tests/component_host_values_test.c).
+
+Resource ownership examples and regressions are in
+[`component_host_resources_test.c`](../tests/component_host_resources_test.c) and
+[`component_wasi_resources_test.c`](../tests/component_wasi_resources_test.c).
+They cover nominal/provenance rejection, duplicate owns, atomic move admission,
+nested own lists and results, allocation failure, partial lift cleanup, destructor
+traps/reentry, host-wait completion/cancellation and capability lifetime after
+public instance release. Their `.wat` fixtures in `tests/fixtures` are validated
+with wasm-tools 1.261.0 before embedding the generated bytes. The tests also check
+that the configured allocator returns to zero live allocations after teardown.
 
 The installed `TurboWasm::Component` library is a real façade target that
 depends publicly on `TurboWasm::Runtime`. Runtime never links back to the

@@ -287,6 +287,155 @@ static turbowasm_status component_resource_destructor_bridge(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_component_exec_resource_release(
+    turbowasm_component_exec *exec, uint64_t identity, turbowasm_value rep) {
+    uint32_t i;
+    if (exec == NULL || exec->binary == NULL || identity == 0u)
+        return TURBOWASM_INVALID_ARGUMENT;
+    for (i = 0u; i < exec->binary->type_graph.count; ++i) {
+        const turbowasm_component_type *type = &exec->binary->type_graph.types[i];
+        if (type->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE &&
+            type->as.resource.identity == identity && !type->as.resource.identity_alias) {
+            turbowasm_component_exec_resource_context context = {exec, i};
+            if (!type->as.resource.has_destructor)
+                return TURBOWASM_OK;
+            return component_resource_destructor_bridge(&context, identity, rep);
+        }
+    }
+    if (exec->imports.resource_drop == NULL || rep.kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_TYPE_MISMATCH;
+    return exec->imports.resource_drop(exec->imports.context, identity, (uint32_t)rep.as.i32);
+}
+
+static turbowasm_status component_external_destructor(
+    void *context, uint64_t identity, turbowasm_value rep) {
+    return turbowasm_component_exec_resource_release(context, identity, rep);
+}
+
+typedef struct component_import_resource_loan {
+    turbowasm_component_exec *exec;
+    uint64_t identity;
+    uint32_t handle;
+    turbowasm_value rep;
+    bool borrowed;
+    bool committed;
+} component_import_resource_loan;
+
+static turbowasm_status component_import_resource_release(void *context) {
+    component_import_resource_loan *loan = context;
+    turbowasm_status status = TURBOWASM_OK;
+    if (loan->borrowed)
+        status = turbowasm_component_resource_lend_release(
+            &loan->exec->resource_table, loan->handle, loan->identity);
+    else if (!loan->committed)
+        status = turbowasm_component_exec_resource_release(loan->exec, loan->identity, loan->rep);
+    turbowasm_rt_free(loan);
+    return status;
+}
+
+/* Guest handles belong to this instance. Provider handles remain opaque reps;
+ * the canonical table owns movement, generation checks and active borrow loans. */
+static turbowasm_status component_import_resource_lift(
+    void *context, const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref, uint32_t handle, turbowasm_component_value *out) {
+    turbowasm_component_exec *exec = context;
+    const turbowasm_component_type *type = ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INDEXED
+        ? turbowasm_component_type_graph_get(graph, ref.as.indexed) : NULL;
+    const turbowasm_component_type *resource;
+    component_import_resource_loan *loan;
+    turbowasm_value rep = {0};
+    turbowasm_status status;
+    if (type == NULL || (type->kind != TURBOWASM_COMPONENT_TYPE_OWN &&
+            type->kind != TURBOWASM_COMPONENT_TYPE_BORROW) || exec->imports.resource_lift == NULL)
+        return TURBOWASM_TYPE_MISMATCH;
+    resource = turbowasm_component_resource_definition(graph, type->as.handle.resource_type);
+    if (resource == NULL)
+        return TURBOWASM_TYPE_MISMATCH;
+    status = turbowasm_component_resource_rep(&exec->resource_table, handle,
+        resource->as.resource.identity, &rep);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (rep.kind != TURBOWASM_VALUE_I32)
+        return TURBOWASM_TYPE_MISMATCH;
+    status = exec->imports.resource_lift(exec->imports.context, graph, ref, (uint32_t)rep.as.i32, out);
+    if (status != TURBOWASM_OK)
+        return status;
+    loan = turbowasm_rt_calloc(1u, sizeof(*loan));
+    if (loan == NULL) {
+        memset(out, 0, sizeof(*out));
+        return TURBOWASM_OUT_OF_MEMORY;
+    }
+    loan->exec = exec;
+    loan->identity = resource->as.resource.identity;
+    loan->handle = handle;
+    loan->rep = rep;
+    loan->borrowed = type->kind == TURBOWASM_COMPONENT_TYPE_BORROW;
+    status = loan->borrowed
+        ? turbowasm_component_resource_lend_acquire(&exec->resource_table, handle, loan->identity)
+        : turbowasm_component_resource_take_owned(&exec->resource_table, handle, loan->identity, &rep);
+    if (status != TURBOWASM_OK) {
+        turbowasm_rt_free(loan);
+        memset(out, 0, sizeof(*out));
+        return status;
+    }
+    out->release = component_import_resource_release;
+    out->release_context = loan;
+    out->resource_identity = loan->identity;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status component_import_resource_lower(
+    void *context, const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref, const turbowasm_component_value *value, uint32_t *out) {
+    turbowasm_component_exec *exec = context;
+    const turbowasm_component_type *type = ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INDEXED
+        ? turbowasm_component_type_graph_get(graph, ref.as.indexed) : NULL;
+    const turbowasm_component_type *resource;
+    turbowasm_value rep = {.kind = TURBOWASM_VALUE_I32};
+    uint32_t provider_handle;
+    turbowasm_status status;
+    if (type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_OWN ||
+            exec->imports.resource_lower == NULL)
+        return TURBOWASM_TYPE_MISMATCH;
+    resource = turbowasm_component_resource_definition(graph, type->as.handle.resource_type);
+    if (resource == NULL)
+        return TURBOWASM_TYPE_MISMATCH;
+    status = exec->imports.resource_lower(exec->imports.context, graph, ref, value, &provider_handle);
+    if (status != TURBOWASM_OK)
+        return status;
+    rep.as.i32 = (int32_t)provider_handle;
+    status = turbowasm_component_resource_new_owned(&exec->resource_table,
+        resource->as.resource.identity, rep, out);
+    if (status != TURBOWASM_OK)
+        (void)turbowasm_component_exec_resource_release(exec, resource->as.resource.identity, rep);
+    return status;
+}
+
+/* Canonical lifting has already checked shape and bounded nesting. */
+static void component_import_commit_resources(turbowasm_component_value *value) {
+    turbowasm_component_value_list *sequence = NULL;
+    turbowasm_component_value *payload = NULL;
+    size_t i;
+    switch (value->kind) {
+        case TURBOWASM_COMPONENT_TYPE_OWN:
+            if (value->release == component_import_resource_release)
+                ((component_import_resource_loan *)value->release_context)->committed = true;
+            break;
+        case TURBOWASM_COMPONENT_TYPE_LIST: sequence = &value->as.list; break;
+        case TURBOWASM_COMPONENT_TYPE_RECORD: sequence = &value->as.record; break;
+        case TURBOWASM_COMPONENT_TYPE_TUPLE: sequence = &value->as.tuple; break;
+        case TURBOWASM_COMPONENT_TYPE_VARIANT: payload = value->as.variant.payload; break;
+        case TURBOWASM_COMPONENT_TYPE_OPTION: payload = value->as.option.payload; break;
+        case TURBOWASM_COMPONENT_TYPE_RESULT: payload = value->as.result.payload; break;
+        default: break;
+    }
+    if (sequence != NULL)
+        for (i = 0u; i < sequence->count; ++i)
+            component_import_commit_resources(&sequence->items[i]);
+    if (payload != NULL)
+        component_import_commit_resources(payload);
+}
+
 static turbowasm_status component_resource_builtin_host(
     void *context,
     turbowasm_host_call *call,
@@ -333,10 +482,11 @@ static turbowasm_status component_resource_builtin_host(
             resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE)
             return TURBOWASM_MALFORMED_MODULE;
 
-        return builtin_context->exec->imports.resource_drop(
-            builtin_context->exec->imports.context,
+        return turbowasm_component_resource_drop(
+            &builtin_context->exec->resource_table,
+            (uint32_t)arguments[0].as.i32,
             resource_type->as.resource.identity,
-            (uint32_t)arguments[0].as.i32);
+            component_external_destructor, builtin_context->exec);
     }
 
     if (builtin_context->binding == NULL ||
@@ -579,6 +729,8 @@ static turbowasm_status component_canon_lower_host(
         goto done;
     }
 
+    for (i = 0u; i < component_param_count; ++i)
+        component_import_commit_resources(&component_arguments[i]);
     status = lower_context->exec->imports.invoke(
         lower_context->exec->imports.context,
         call,
@@ -991,7 +1143,7 @@ static turbowasm_status initialize_resource_state(
                 exec->core_function_count)
             return TURBOWASM_MALFORMED_MODULE;
 
-        resource_type = turbowasm_component_type_graph_get(
+        resource_type = turbowasm_component_resource_definition(
             &binary->type_graph, builtin->resource_type);
         if (resource_type == NULL ||
             resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE)
@@ -1035,8 +1187,8 @@ static turbowasm_status initialize_resource_state(
 
         if (!binding->initialized) {
             resource_context->exec = exec;
-            resource_context->resource_type =
-                builtin->resource_type;
+            resource_context->resource_type = (uint32_t)(
+                resource_type - binary->type_graph.types);
 
             status = turbowasm_component_resource_binding_init(
                 binding,
@@ -1246,11 +1398,11 @@ static turbowasm_status configure_canon_lower_memory(
     if (exec->imports.resource_lower != NULL ||
         exec->imports.resource_lift != NULL) {
         context->memory.resource_lower =
-            exec->imports.resource_lower;
+            component_import_resource_lower;
         context->memory.resource_lift =
-            exec->imports.resource_lift;
+            component_import_resource_lift;
         context->memory.resource_context =
-            exec->imports.context;
+            exec;
     }
 
     if (!lower->has_memory)
@@ -2331,17 +2483,9 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
         if (status != TURBOWASM_OK)
             goto fail;
 
-        if (exec->imports.resource_lower != NULL ||
-            exec->imports.resource_lift != NULL) {
-            turbowasm_component_core_call_adapter_set_external_resources(
-                &exec->functions[i],
-                exec->imports.resource_lower,
-                exec->imports.resource_lift,
-                exec->imports.context);
-        }
-
         exec->function_adapter_indices[
             lift->component_function_index] = i;
+        exec->functions[i].defines_local_resources = true;
     }
 
     status = resolve_component_function_aliases(exec, binary);

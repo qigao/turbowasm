@@ -33,6 +33,11 @@ add_test(NAME turbowasm_artifact_restore_test
          COMMAND turbowasm_artifact_restore_test)
 
 if(TURBOWASM_ENABLE_COMPONENT)
+  add_executable(turbowasm_component_host_resources_test component_host_resources_test.c)
+  target_link_libraries(turbowasm_component_host_resources_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  set_target_properties(turbowasm_component_host_resources_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_host_resources_test COMMAND turbowasm_component_host_resources_test)
   add_executable(turbowasm_component_host_values_test component_host_values_test.c)
   target_link_libraries(turbowasm_component_host_values_test PRIVATE TurboWasm::Component Salts::TinyTest)
   set_target_properties(turbowasm_component_host_values_test PROPERTIES
@@ -379,6 +384,11 @@ endif()
 set(_turbowasm_wasi02_fixture_dir
   "${PROJECT_SOURCE_DIR}/tests/wasi02/fixtures/generated")
 if(TARGET turbowasm_wasi02)
+  add_executable(turbowasm_component_wasi_resources_test component_wasi_resources_test.c)
+  target_link_libraries(turbowasm_component_wasi_resources_test PRIVATE TurboWasm::WASI02 Salts::TinyTest)
+  set_target_properties(turbowasm_component_wasi_resources_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_wasi_resources_test COMMAND turbowasm_component_wasi_resources_test)
   add_executable(turbowasm_wasi02_toolchain_fixture_test
     wasi02_toolchain_fixture_test.c)
   target_link_libraries(turbowasm_wasi02_toolchain_fixture_test

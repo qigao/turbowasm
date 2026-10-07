@@ -90,7 +90,9 @@ typedef struct turbowasm_component_exec_imports {
     turbowasm_component_import_can_bind_fn can_bind;
     turbowasm_component_import_invoke_fn invoke;
 
-    /* Optional imported-resource canonical boundary. */
+    /* Optional imported-resource canonical boundary. Values contain provider
+     * handles; Core sees only this exec's canonical table handles. resource_drop
+     * consumes the provider's logical handle even when its destructor fails. */
     turbowasm_component_resource_lower_fn resource_lower;
     turbowasm_component_resource_lift_fn resource_lift;
     turbowasm_component_import_resource_drop_fn resource_drop;
@@ -189,6 +191,10 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
     const turbowasm_component_binary *binary,
     const turbowasm_component_exec_imports *import_sets,
     size_t import_set_count);
+
+/* Drop an abstract resource already removed from its canonical table. */
+turbowasm_status turbowasm_component_exec_resource_release(
+    turbowasm_component_exec *exec, uint64_t identity, turbowasm_value rep);
 
 void turbowasm_component_exec_destroy(
     turbowasm_component_exec *exec);

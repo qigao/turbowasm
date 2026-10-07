@@ -201,9 +201,9 @@ Rollback removes general-call admission, emission and scratch allocation togethe
 
 ## Component host values and resource ownership (approved design)
 
-Approved by the user on 2026-10-07. Non-resource composite host values, status-returning
-value destruction and instance retention by restartable calls are implemented.
-Resource handles, move admission and borrow loans remain pending. This design
+Approved by the user on 2026-10-07. Composite host values, status-returning
+value destruction, retained instances, opaque own/borrow handles and explicit move
+admission are implemented. This design
 extends the former scalar/string/list-only boundary in `component_api.c`; it does
 not change Core Runtime value layouts. The existing canonical codec, type graph,
 resource table and call-scope rollback remain the semantic implementation.
@@ -254,6 +254,19 @@ Terminal completion, trap, cancellation and call destruction each end the borrow
 scope exactly once. Borrow values cannot escape as results where the declared
 Component function type forbids them.
 
+Canonical handles have one instance-owned table, including imported resources.
+Provider handles are opaque representations in that table, never guest handles.
+Resource aliases resolve to the original local definition before choosing a
+codec or destructor. A borrow returned to its defining instance lowers directly
+to its representation; a foreign borrow creates a transient table entry that
+must be dropped before the call returns. Imported callbacks acquire table loans
+and release them after completion or host-wait unwinding. This replaces the old
+provider-handle passthrough that could not express canonical borrow ownership.
+Direct capability APIs keep their documented retryable drop operations;
+canonical destruction instead consumes the logical provider handle before its
+callback and reports failure without reviving that handle. A failed underlying
+filesystem close remains owned by the filesystem layer for host recovery.
+
 Destroy preflights the complete value tree for active loans before changing it.
 Once destruction begins, each own handle is invalidated before invoking its
 destructor, preventing reentrant double destruction. Cleanup continues through
@@ -286,6 +299,8 @@ borrowed-owner release, destructor traps/reentry, cancellation and allocation
 failure must be tested. Old source examples remain valid; ownership examples must
 check destroy status. Rollback removes the added host kinds and move APIs together
 with retained-owner bookkeeping; no persisted data format requires migration.
+The imported-resource table routing and consuming canonical destructors must roll
+back together; mixing raw provider handles with canonical handles is invalid.
 
 ## Reusable compiled-artifact policy
 

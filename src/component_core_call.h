@@ -17,6 +17,13 @@
  * The adapter borrows the Component type graph, Core instance and canonical
  * memory options. It never owns or bypasses the Core Runtime instance.
  */
+/* A result hook takes responsibility for releasing a lifted own on both success
+ * and failure. The admission hook runs only after all lowering has succeeded. */
+typedef turbowasm_status (*turbowasm_component_result_owner_fn)(
+    void *context, const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type, turbowasm_component_value *value);
+typedef void (*turbowasm_component_admission_commit_fn)(void *context);
+
 typedef struct turbowasm_component_core_call_adapter {
     const turbowasm_component_type_graph *graph;
     turbowasm_component_type_id function_type;
@@ -27,12 +34,16 @@ typedef struct turbowasm_component_core_call_adapter {
     turbowasm_component_flat_signature flat_signature;
     turbowasm_component_resource_table *resources;
 
-    turbowasm_component_resource_lower_fn external_resource_lower;
-    turbowasm_component_resource_lift_fn external_resource_lift;
-    void *external_resource_context;
+    turbowasm_component_result_owner_fn result_owner;
+    void *result_owner_context;
+    turbowasm_component_admission_commit_fn admission_commit;
+    void *admission_context;
 
     bool uses_memory;
     bool uses_resources;
+    /* The exec owning this graph implements its non-alias resource definitions.
+     * Standalone adapters treat supplied resources as foreign to their callee. */
+    bool defines_local_resources;
     bool initialized;
 } turbowasm_component_core_call_adapter;
 
@@ -52,12 +63,6 @@ turbowasm_status turbowasm_component_core_call_adapter_init_with_resources(
     uint32_t function_index,
     const turbowasm_component_canonical_memory *memory,
     turbowasm_component_resource_table *resources);
-
-void turbowasm_component_core_call_adapter_set_external_resources(
-    turbowasm_component_core_call_adapter *adapter,
-    turbowasm_component_resource_lower_fn lower,
-    turbowasm_component_resource_lift_fn lift,
-    void *context);
 
 void turbowasm_component_core_call_adapter_destroy(
     turbowasm_component_core_call_adapter *adapter);

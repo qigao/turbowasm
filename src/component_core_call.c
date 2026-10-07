@@ -42,29 +42,6 @@ static bool type_ref_is_resource_handle(
             type->kind == TURBOWASM_COMPONENT_TYPE_BORROW);
 }
 
-
-static bool resource_handle_is_external(
-    const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_ref ref) {
-    const turbowasm_component_type *handle_type;
-    const turbowasm_component_type *resource_type;
-
-    if (graph == NULL ||
-        ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
-        return false;
-    handle_type = turbowasm_component_type_graph_get(
-        graph, ref.as.indexed);
-    if (handle_type == NULL ||
-        (handle_type->kind != TURBOWASM_COMPONENT_TYPE_OWN &&
-         handle_type->kind != TURBOWASM_COMPONENT_TYPE_BORROW))
-        return false;
-    resource_type = turbowasm_component_type_graph_get(
-        graph, handle_type->as.handle.resource_type);
-    return resource_type != NULL &&
-           resource_type->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE &&
-           resource_type->as.resource.identity_alias;
-}
-
 static turbowasm_status resource_handle_info(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
@@ -86,14 +63,14 @@ static turbowasm_status resource_handle_info(
          handle_type->kind != TURBOWASM_COMPONENT_TYPE_BORROW))
         return TURBOWASM_TYPE_MISMATCH;
 
-    resource_type = turbowasm_component_type_graph_get(
+    resource_type = turbowasm_component_resource_definition(
         graph, handle_type->as.handle.resource_type);
     if (resource_type == NULL ||
         resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE ||
         resource_type->as.resource.identity == 0u)
         return TURBOWASM_MALFORMED_MODULE;
 
-    if (resource_type->as.resource.rep_type == 0x7fu) {
+    if (resource_type->as.resource.identity_alias || resource_type->as.resource.rep_type == 0x7fu) {
         *out_rep_kind = TURBOWASM_VALUE_I32;
     } else if (resource_type->as.resource.rep_type == 0x7eu) {
         *out_rep_kind = TURBOWASM_VALUE_I64;
@@ -235,6 +212,8 @@ static turbowasm_status resource_scope_reserve(
 
     if (scope == NULL || scope->adapter == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+    if (required > TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS)
+        return TURBOWASM_OUT_OF_MEMORY;
     if (required <= scope->capacity)
         return TURBOWASM_OK;
 
@@ -246,6 +225,8 @@ static turbowasm_status resource_scope_reserve(
         }
         next *= 2u;
     }
+    if (next > TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS)
+        next = TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS;
     if ((size_t)next > SIZE_MAX / sizeof(*grown))
         return TURBOWASM_OUT_OF_MEMORY;
 
@@ -423,6 +404,21 @@ static turbowasm_status canonical_resource_lower(
         out_handle == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
+    if (codec->adapter->defines_local_resources && value != NULL &&
+            value->kind == TURBOWASM_COMPONENT_TYPE_BORROW &&
+            ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INDEXED) {
+        const turbowasm_component_type *type = turbowasm_component_type_graph_get(graph, ref.as.indexed);
+        const turbowasm_component_type *resource = type != NULL && type->kind == value->kind
+            ? turbowasm_component_resource_definition(graph, type->as.handle.resource_type) : NULL;
+        if (resource == NULL)
+            return TURBOWASM_TYPE_MISMATCH;
+        if (!resource->as.resource.identity_alias) {
+            if (value->as.resource_rep.kind != TURBOWASM_VALUE_I32)
+                return TURBOWASM_TYPE_MISMATCH;
+            *out_handle = (uint32_t)value->as.resource_rep.as.i32;
+            return TURBOWASM_OK;
+        }
+    }
     status = lower_resource_argument(
         codec->adapter, ref, value,
         &handle, &identity, &borrowed, &flat);
@@ -447,18 +443,19 @@ static turbowasm_status canonical_resource_lift(
     turbowasm_component_type_ref ref,
     uint32_t handle,
     turbowasm_component_value *out) {
-    turbowasm_component_resource_codec_context *codec =
-        (turbowasm_component_resource_codec_context *)context;
+    turbowasm_component_resource_codec_context *codec = context;
     turbowasm_value flat = {0};
-
+    turbowasm_status status;
     if (codec == NULL || codec->adapter == NULL ||
         graph != codec->adapter->graph || out == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-
     flat.kind = TURBOWASM_VALUE_I32;
     flat.as.i32 = (int32_t)handle;
-    return lift_owned_result(
-        codec->adapter, ref, &flat, out);
+    status = lift_owned_result(codec->adapter, ref, &flat, out);
+    if (status == TURBOWASM_OK && codec->adapter->result_owner != NULL)
+        status = codec->adapter->result_owner(
+            codec->adapter->result_owner_context, graph, ref, out);
+    return status;
 }
 
 static turbowasm_value_kind flat_value_kind(
@@ -860,18 +857,6 @@ fail:
     return status;
 }
 
-void turbowasm_component_core_call_adapter_set_external_resources(
-    turbowasm_component_core_call_adapter *adapter,
-    turbowasm_component_resource_lower_fn lower,
-    turbowasm_component_resource_lift_fn lift,
-    void *context) {
-    if (adapter == NULL || !adapter->initialized)
-        return;
-    adapter->external_resource_lower = lower;
-    adapter->external_resource_lift = lift;
-    adapter->external_resource_context = context;
-}
-
 void turbowasm_component_core_call_adapter_destroy(
     turbowasm_component_core_call_adapter *adapter) {
     if (adapter == NULL)
@@ -922,7 +907,7 @@ turbowasm_status turbowasm_component_core_call_invoke(
     codec.scope = &resource_scope;
     call_memory = adapter->memory;
 
-    if (adapter->uses_resources && adapter->uses_memory) {
+    if (adapter->uses_resources) {
         call_memory.resource_lower = canonical_resource_lower;
         call_memory.resource_lift = canonical_resource_lift;
         call_memory.resource_context = &codec;
@@ -952,26 +937,8 @@ turbowasm_status turbowasm_component_core_call_invoke(
             if (type_ref_is_resource_handle(adapter->graph, ref)) {
                 uint32_t handle;
 
-                if (resource_handle_is_external(
-                        adapter->graph, ref)) {
-                    if (adapter->external_resource_lower == NULL) {
-                        status = TURBOWASM_UNSUPPORTED;
-                        goto lowering_failed;
-                    }
-                    status = adapter->external_resource_lower(
-                        adapter->external_resource_context,
-                        adapter->graph,
-                        ref,
-                        &arguments[i],
-                        &handle);
-                } else {
-                    status = canonical_resource_lower(
-                        &codec,
-                        adapter->graph,
-                        ref,
-                        &arguments[i],
-                        &handle);
-                }
+                status = canonical_resource_lower(
+                    &codec, adapter->graph, ref, &arguments[i], &handle);
                 if (status != TURBOWASM_OK)
                     goto lowering_failed;
 
@@ -998,7 +965,7 @@ turbowasm_status turbowasm_component_core_call_invoke(
                     turbowasm_component_canonical_lower_flat_value(
                         adapter->graph,
                         ref,
-                        adapter->uses_memory
+                        (adapter->uses_memory || adapter->uses_resources)
                             ? &call_memory
                             : NULL,
                         &arguments[i],
@@ -1026,6 +993,8 @@ turbowasm_status turbowasm_component_core_call_invoke(
         goto lowering_failed;
     }
 
+    if (adapter->admission_commit != NULL)
+        adapter->admission_commit(adapter->admission_context);
     status = turbowasm_instance_invoke(
         adapter->instance,
         adapter->function_index,
@@ -1070,27 +1039,8 @@ turbowasm_status turbowasm_component_core_call_invoke(
             return TURBOWASM_MALFORMED_MODULE;
         }
 
-        if (resource_handle_is_external(
-                adapter->graph,
-                function->as.function.result)) {
-            if (adapter->external_resource_lift == NULL) {
-                resource_scope_destroy(&resource_scope);
-                return TURBOWASM_UNSUPPORTED;
-            }
-            status = adapter->external_resource_lift(
-                adapter->external_resource_context,
-                adapter->graph,
-                function->as.function.result,
-                (uint32_t)core_results[0].as.i32,
-                out_result);
-        } else {
-            status = canonical_resource_lift(
-                &codec,
-                adapter->graph,
-                function->as.function.result,
-                (uint32_t)core_results[0].as.i32,
-                out_result);
-        }
+        status = canonical_resource_lift(&codec, adapter->graph,
+            function->as.function.result, (uint32_t)core_results[0].as.i32, out_result);
         resource_scope_destroy(&resource_scope);
         return status;
     }
@@ -1116,7 +1066,7 @@ turbowasm_status turbowasm_component_core_call_invoke(
     status = turbowasm_component_canonical_lift_flat_value(
         adapter->graph,
         function->as.function.result,
-        adapter->uses_memory ? &call_memory : NULL,
+        (adapter->uses_memory || adapter->uses_resources) ? &call_memory : NULL,
         core_results,
         (uint32_t)core_result_count,
         out_result);
@@ -1128,7 +1078,6 @@ lowering_failed:
     resource_scope_destroy(&resource_scope);
     return status;
 }
-
 
 
 typedef struct turbowasm_component_core_execution_impl {
@@ -1209,23 +1158,8 @@ static turbowasm_status component_core_execution_lower(
             if (type_ref_is_resource_handle(adapter->graph, ref)) {
                 uint32_t handle;
 
-                if (resource_handle_is_external(adapter->graph, ref)) {
-                    if (adapter->external_resource_lower == NULL)
-                        return TURBOWASM_UNSUPPORTED;
-                    status = adapter->external_resource_lower(
-                        adapter->external_resource_context,
-                        adapter->graph,
-                        ref,
-                        &arguments[i],
-                        &handle);
-                } else {
-                    status = canonical_resource_lower(
-                        &impl->codec,
-                        adapter->graph,
-                        ref,
-                        &arguments[i],
-                        &handle);
-                }
+                status = canonical_resource_lower(
+                    &impl->codec, adapter->graph, ref, &arguments[i], &handle);
                 if (status != TURBOWASM_OK)
                     return status;
 
@@ -1250,7 +1184,7 @@ static turbowasm_status component_core_execution_lower(
                     turbowasm_component_canonical_lower_flat_value(
                         adapter->graph,
                         ref,
-                        adapter->uses_memory
+                        (adapter->uses_memory || adapter->uses_resources)
                             ? &impl->call_memory
                             : NULL,
                         &arguments[i],
@@ -1321,18 +1255,6 @@ static turbowasm_status component_core_execution_lift(
             core_results[0].kind != TURBOWASM_VALUE_I32)
             return TURBOWASM_MALFORMED_MODULE;
 
-        if (resource_handle_is_external(
-                adapter->graph,
-                impl->function->as.function.result)) {
-            if (adapter->external_resource_lift == NULL)
-                return TURBOWASM_UNSUPPORTED;
-            return adapter->external_resource_lift(
-                adapter->external_resource_context,
-                adapter->graph,
-                impl->function->as.function.result,
-                (uint32_t)core_results[0].as.i32,
-                &impl->lifted_result);
-        }
 
         return canonical_resource_lift(
             &impl->codec,
@@ -1362,7 +1284,7 @@ static turbowasm_status component_core_execution_lift(
     return turbowasm_component_canonical_lift_flat_value(
         adapter->graph,
         impl->function->as.function.result,
-        adapter->uses_memory ? &impl->call_memory : NULL,
+        (adapter->uses_memory || adapter->uses_resources) ? &impl->call_memory : NULL,
         core_results,
         (uint32_t)core_result_count,
         &impl->lifted_result);
@@ -1438,7 +1360,7 @@ turbowasm_status turbowasm_component_core_execution_create(
     impl->codec.scope = &impl->resource_scope;
     impl->call_memory = adapter->memory;
 
-    if (adapter->uses_resources && adapter->uses_memory) {
+    if (adapter->uses_resources) {
         impl->call_memory.resource_lower =
             canonical_resource_lower;
         impl->call_memory.resource_lift =
@@ -1486,6 +1408,11 @@ void turbowasm_component_core_execution_destroy(
 
     config = adapter_runtime_config(impl->adapter);
 
+    /* Unwind host-wait callbacks while their canonical borrows remain live. */
+    if (impl->runtime_created)
+        turbowasm_execution_destroy(
+            &impl->runtime_execution);
+
     if (!impl->finalized) {
         if (impl->started)
             resource_scope_abort_borrows(&impl->resource_scope);
@@ -1499,10 +1426,6 @@ void turbowasm_component_core_execution_destroy(
             TURBOWASM_COMPONENT_TYPE_UNDEFINED)
         turbowasm_component_value_destroy(
             &impl->lifted_result);
-
-    if (impl->runtime_created)
-        turbowasm_execution_destroy(
-            &impl->runtime_execution);
 
     if (config != NULL) {
         alloc_scope = turbowasm_runtime_scope_enter(config);

@@ -33,6 +33,9 @@ auto *tw_component_instance_destroy =
     &turbowasm_component_instance_destroy;
 auto *tw_component_invoke =
     &turbowasm_component_instance_invoke;
+auto *tw_component_invoke_move = &turbowasm_component_instance_invoke_move;
+auto *tw_component_create_move = &turbowasm_component_call_create_move;
+auto *tw_component_borrow = &turbowasm_component_host_value_borrow;
 auto *tw_component_call_create =
     &turbowasm_component_call_create;
 auto *tw_component_call_destroy =
@@ -65,6 +68,9 @@ int main() {
            tw_component_instance_create == nullptr ||
            tw_component_instance_destroy == nullptr ||
            tw_component_invoke == nullptr ||
+           tw_component_invoke_move == nullptr ||
+           tw_component_create_move == nullptr ||
+           tw_component_borrow == nullptr ||
            tw_component_call_create == nullptr ||
            tw_component_call_destroy == nullptr ||
            tw_component_call_resume == nullptr ||

@@ -1000,3 +1000,23 @@ bool turbowasm_component_value_type_features(
     *out_features = features;
     return true;
 }
+
+const turbowasm_component_type *turbowasm_component_resource_definition(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id resource_type) {
+    const turbowasm_component_type *resource =
+        turbowasm_component_type_graph_get(graph, resource_type);
+    uint32_t i;
+    if (resource == NULL || resource->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE)
+        return NULL;
+    if (!resource->as.resource.identity_alias)
+        return resource;
+    for (i = 0u; i < graph->count; ++i) {
+        const turbowasm_component_type *candidate = &graph->types[i];
+        if (candidate->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE &&
+            !candidate->as.resource.identity_alias &&
+            candidate->as.resource.identity == resource->as.resource.identity)
+            return candidate;
+    }
+    return resource;
+}

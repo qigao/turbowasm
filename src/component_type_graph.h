@@ -154,6 +154,12 @@ struct turbowasm_component_instance_type {
     uint32_t export_count;
 };
 
+/* Resolve nominal aliases within one graph. An imported identity has no local
+ * definition and resolves to its alias node; it retains identity_alias=true. */
+const turbowasm_component_type *turbowasm_component_resource_definition(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id resource_type);
+
 enum {
     TURBOWASM_COMPONENT_VALUE_MAX_DEPTH = 64,
     TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY = 1u,

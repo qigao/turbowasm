@@ -2329,8 +2329,7 @@ static turbowasm_status decode_component_export_section(
                 &component->type_graph, export_desc.item_index);
             if (type == NULL || *current_type_count >= component->type_graph.count)
                 return TURBOWASM_MALFORMED_MODULE;
-            if (type->kind == TURBOWASM_COMPONENT_TYPE_INSTANCE ||
-                type->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE)
+            if (type->kind == TURBOWASM_COMPONENT_TYPE_INSTANCE)
                 return TURBOWASM_UNSUPPORTED;
             if (!clone_local_type(&component->type_graph,
                     *current_type_count, export_desc.item_index))
@@ -2659,6 +2658,7 @@ void turbowasm_component_binary_destroy(
     turbowasm_rt_free(component->core_function_aliases);
     turbowasm_rt_free(component->core_memory_aliases);
     turbowasm_rt_free(component->canon_lifts);
+    turbowasm_rt_free(component->canon_lowers);
     turbowasm_rt_free(component->resource_builtins);
     turbowasm_rt_free(component->component_instances);
     turbowasm_rt_free(component->component_function_aliases);

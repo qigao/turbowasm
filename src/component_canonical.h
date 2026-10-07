@@ -82,6 +82,8 @@ typedef struct turbowasm_component_value_variant {
     turbowasm_component_value *payload;
 } turbowasm_component_value_variant;
 
+typedef turbowasm_status (*turbowasm_component_value_release_fn)(void *context);
+
 struct turbowasm_component_value {
     turbowasm_component_type_kind kind;
     union {
@@ -112,6 +114,11 @@ struct turbowasm_component_value {
          */
         turbowasm_value resource_rep;
     } as;
+    /* Optional lifted owner or import loan. Moving a value moves this cleanup
+     * obligation; borrowed public argument copies have no release hook. */
+    turbowasm_component_value_release_fn release;
+    void *release_context;
+    uint64_t resource_identity;
 };
 
 typedef turbowasm_status (*turbowasm_component_realloc_fn)(
@@ -215,7 +222,14 @@ turbowasm_status turbowasm_component_canonical_lower_value(
     uint64_t address,
     const turbowasm_component_value *value);
 
-void turbowasm_component_value_destroy(
+/* Pure admission validation: no guest calls, writes, allocations or transfers.
+ * A nonzero resource_identity additionally checks a host-provided nominal ID. */
+turbowasm_status turbowasm_component_canonical_validate_value(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    const turbowasm_component_value *value);
+
+turbowasm_status turbowasm_component_value_destroy(
     turbowasm_component_value *value);
 
 #endif /* TURBOWASM_COMPONENT_CANONICAL_H */

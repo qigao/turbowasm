@@ -21,6 +21,8 @@ typedef struct turbowasm_component_instance_public_impl {
     turbowasm_component_public_impl *component;
     turbowasm_component_exec exec;
     uint32_t ref_count;
+    turbowasm_component_host_resource *resources;
+    uint32_t resource_count;
 
     /*
      * Optional capability owner retained by a specialized public instance

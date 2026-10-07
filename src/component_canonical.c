@@ -1145,63 +1145,56 @@ static turbowasm_status lower_value_inner(
     uint32_t depth,
     const turbowasm_component_value *value);
 
-static void destroy_value_sequence(
+static turbowasm_status destroy_value_sequence(
     turbowasm_component_value_list *sequence) {
     uint64_t i;
-
-    if (sequence == NULL)
-        return;
-    for (i = 0u; i < sequence->count; ++i)
-        turbowasm_component_value_destroy(&sequence->items[i]);
+    turbowasm_status first = TURBOWASM_OK;
+    for (i = 0u; i < sequence->count; ++i) {
+        turbowasm_status status = turbowasm_component_value_destroy(&sequence->items[i]);
+        if (first == TURBOWASM_OK)
+            first = status;
+    }
     turbowasm_rt_free(sequence->items);
-    sequence->items = NULL;
-    sequence->count = 0u;
+    return first;
 }
 
-void turbowasm_component_value_destroy(
+turbowasm_status turbowasm_component_value_destroy(
     turbowasm_component_value *value) {
+    turbowasm_component_value owned;
+    turbowasm_component_value *payload = NULL;
+    turbowasm_status status = TURBOWASM_OK;
     if (value == NULL)
-        return;
-
-    switch (value->kind) {
-        case TURBOWASM_COMPONENT_TYPE_STRING:
-            turbowasm_rt_free(value->as.string.data);
-            break;
-        case TURBOWASM_COMPONENT_TYPE_LIST:
-            destroy_value_sequence(&value->as.list);
-            break;
-        case TURBOWASM_COMPONENT_TYPE_RECORD:
-            destroy_value_sequence(&value->as.record);
-            break;
-        case TURBOWASM_COMPONENT_TYPE_TUPLE:
-            destroy_value_sequence(&value->as.tuple);
-            break;
-        case TURBOWASM_COMPONENT_TYPE_VARIANT:
-            if (value->as.variant.payload != NULL) {
-                turbowasm_component_value_destroy(
-                    value->as.variant.payload);
-                turbowasm_rt_free(value->as.variant.payload);
-            }
-            break;
-        case TURBOWASM_COMPONENT_TYPE_OPTION:
-            if (value->as.option.payload != NULL) {
-                turbowasm_component_value_destroy(
-                    value->as.option.payload);
-                turbowasm_rt_free(value->as.option.payload);
-            }
-            break;
-        case TURBOWASM_COMPONENT_TYPE_RESULT:
-            if (value->as.result.payload != NULL) {
-                turbowasm_component_value_destroy(
-                    value->as.result.payload);
-                turbowasm_rt_free(value->as.result.payload);
-            }
-            break;
-        default:
-            break;
-    }
-
+        return TURBOWASM_OK;
+    owned = *value;
+    /* Invalidate before a resource destructor can re-enter the host boundary. */
     memset(value, 0, sizeof(*value));
+    switch (owned.kind) {
+        case TURBOWASM_COMPONENT_TYPE_STRING:
+            turbowasm_rt_free(owned.as.string.data); break;
+        case TURBOWASM_COMPONENT_TYPE_LIST:
+            return destroy_value_sequence(&owned.as.list);
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+            return destroy_value_sequence(&owned.as.record);
+        case TURBOWASM_COMPONENT_TYPE_TUPLE:
+            return destroy_value_sequence(&owned.as.tuple);
+        case TURBOWASM_COMPONENT_TYPE_VARIANT:
+            payload = owned.as.variant.payload; break;
+        case TURBOWASM_COMPONENT_TYPE_OPTION:
+            payload = owned.as.option.payload; break;
+        case TURBOWASM_COMPONENT_TYPE_RESULT:
+            payload = owned.as.result.payload; break;
+        case TURBOWASM_COMPONENT_TYPE_OWN:
+        case TURBOWASM_COMPONENT_TYPE_BORROW:
+            if (owned.release != NULL)
+                return owned.release(owned.release_context);
+            break;
+        default: break;
+    }
+    if (payload != NULL) {
+        status = turbowasm_component_value_destroy(payload);
+        turbowasm_rt_free(payload);
+    }
+    return status;
 }
 
 static turbowasm_status lift_scalar(
@@ -3270,4 +3263,91 @@ turbowasm_status turbowasm_component_canonical_lower_value(
     return lower_value_inner(
         graph, type, memory, instance,
         address, 0u, value);
+}
+
+static turbowasm_status validate_host_value(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_component_value *value, uint32_t depth) {
+    const turbowasm_component_type *type;
+    turbowasm_component_type_kind kind;
+    const turbowasm_component_value_list *sequence = NULL;
+    const turbowasm_component_value_variant *variant = NULL;
+    turbowasm_status status;
+    uint64_t i, count = 0u;
+    if (value == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (depth >= TURBOWASM_COMPONENT_CANONICAL_MAX_DEPTH)
+        return TURBOWASM_TRAPPED;
+    status = resolved_kind(graph, ref, &kind, &type);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (kind != value->kind)
+        return TURBOWASM_TYPE_MISMATCH;
+    if (kind >= TURBOWASM_COMPONENT_TYPE_BOOL && kind <= TURBOWASM_COMPONENT_TYPE_CHAR) {
+        turbowasm_value ignored;
+        return lower_flat_scalar(kind, value, &ignored);
+    }
+    switch (kind) {
+        case TURBOWASM_COMPONENT_TYPE_STRING:
+            return value->as.string.size <= TURBOWASM_COMPONENT_MAX_STRING_BYTE_LENGTH &&
+                utf8_bytes_valid(value->as.string.data, value->as.string.size)
+                ? TURBOWASM_OK : TURBOWASM_INVALID_ARGUMENT;
+        case TURBOWASM_COMPONENT_TYPE_LIST:
+            sequence = &value->as.list;
+            count = sequence->count;
+            break;
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+            sequence = &value->as.record; count = type->as.record.count; break;
+        case TURBOWASM_COMPONENT_TYPE_TUPLE:
+            sequence = &value->as.tuple; count = type->as.tuple.count; break;
+        case TURBOWASM_COMPONENT_TYPE_VARIANT: variant = &value->as.variant; break;
+        case TURBOWASM_COMPONENT_TYPE_OPTION: variant = &value->as.option; break;
+        case TURBOWASM_COMPONENT_TYPE_RESULT: variant = &value->as.result; break;
+        case TURBOWASM_COMPONENT_TYPE_ENUM:
+            return value->as.enum_index < type->as.enumeration.count
+                ? TURBOWASM_OK : TURBOWASM_INVALID_ARGUMENT;
+        case TURBOWASM_COMPONENT_TYPE_FLAGS:
+            return (value->as.flags & ~flags_valid_mask(type->as.flags.count)) == 0u
+                ? TURBOWASM_OK : TURBOWASM_INVALID_ARGUMENT;
+        case TURBOWASM_COMPONENT_TYPE_OWN:
+        case TURBOWASM_COMPONENT_TYPE_BORROW: {
+            const turbowasm_component_type *resource = turbowasm_component_resource_definition(
+                graph, type->as.handle.resource_type);
+            if (resource == NULL || (value->resource_identity != 0u &&
+                resource->as.resource.identity != value->resource_identity))
+                return TURBOWASM_TYPE_MISMATCH;
+            return TURBOWASM_OK;
+        }
+        default: return TURBOWASM_UNSUPPORTED;
+    }
+    if (sequence != NULL) {
+        if (count != sequence->count || (count != 0u && sequence->items == NULL))
+            return TURBOWASM_TYPE_MISMATCH;
+        for (i = 0u; i < count; ++i) {
+            turbowasm_component_type_ref child = kind == TURBOWASM_COMPONENT_TYPE_LIST
+                ? type->as.list.element_type : composite_sequence_ref(type, kind, (uint32_t)i);
+            status = validate_host_value(graph, child, &sequence->items[i], depth + 1u);
+            if (status != TURBOWASM_OK)
+                return status;
+        }
+    } else if (variant != NULL) {
+        bool has_payload;
+        turbowasm_component_type_ref payload = {0};
+        status = variant_case_ref(type, kind, variant->case_index, &has_payload, &payload);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (has_payload != (variant->payload != NULL))
+            return TURBOWASM_TYPE_MISMATCH;
+        if (has_payload)
+            return validate_host_value(graph, payload, variant->payload, depth + 1u);
+    }
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_canonical_validate_value(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    const turbowasm_component_value *value) {
+    return validate_host_value(graph, type, value, 0u);
 }
