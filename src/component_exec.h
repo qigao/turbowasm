@@ -39,6 +39,8 @@ typedef struct turbowasm_component_exec_realloc_context {
     uint32_t function_index;
     turbowasm_component_pointer_type pointer_type;
     bool *may_leave;
+    turbowasm_host_call *call;
+    turbowasm_trap *trap;
 } turbowasm_component_exec_realloc_context;
 
 typedef struct turbowasm_component_exec_resource_context {

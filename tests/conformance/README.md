@@ -640,3 +640,16 @@ with all seven re-entry cases (3,398 assertions) in the same preset; production
 code was unchanged after the full run. Native MIR qualification is pending.
 This closes destructor budget/depth reset, not local-function canonical lowering
 or the remaining Component async and WASI 0.2 surface.
+
+## Guest realloc execution control
+
+`component_realloc_execution_test.c` covers memory32 and memory64 realloc under
+canonical lowering in five cases: fuel suspension without provider replay,
+cancellation and private-result cleanup, trap/exception propagation, cumulative
+caller/realloc depth, and interruption. The native variant checks the suspended
+realloc function's compiled state. Both WAT fixtures pass wasm-tools 1.261.0
+validation. Windows ASan passed the focused test and the related 50/50 tests in
+2.48 seconds. Runtime code is unchanged from the preceding full qualification;
+the changes are private Component call contexts and error propagation. Native
+MIR qualification remains pending while GitHub rejects branch pushes with an
+Internal Server Error. Local-function canonical lowering remains separate work.

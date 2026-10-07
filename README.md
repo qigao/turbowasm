@@ -103,6 +103,9 @@ resource creation/deletion trap during cleanup or guest realloc.
 Guest resource destructors inherit the invoking call's fuel, interruption,
 host-wait ownership and call-depth limit. Consumed handles stay consumed if
 destruction traps or the suspended call is cancelled.
+Guest realloc reached during canonical lowering shares that control too; failed
+or cancelled result conversion restores the leave gate without publishing a
+partial host result.
 This does not complete the Component Model: local-function canonical lowering,
 the full async/future/stream surface and broader WASI 0.2 interfaces remain work
 in progress.

@@ -680,6 +680,17 @@ and interpreted execution. Reverting this boundary would require rejecting guest
 destructor re-entry under controlled execution rather than silently resetting
 the control state.
 
+Canonical lowering also borrows the active host call for guest realloc. Each
+lower invocation copies its memory/realloc options onto its own coroutine frame;
+the exec's immutable binding never stores a current execution pointer. Realloc
+therefore shares fuel, interruption and depth with the caller while `may_leave`
+is cleared. Cancellation unwinds and restores that gate, destroys the private
+host result, and publishes no partially written result tuple. Guest allocator
+side effects already executed remain committed; the canonical ABI has no
+rollback operation for them. Realloc called directly while preparing an ordinary
+host entry retains that entry's existing synchronous semantics. Tests cover
+memory32/memory64, suspension, cancellation, trap/exception conversion and depth.
+
 ## Canonical string encodings
 
 The [pinned Canonical ABI](https://github.com/WebAssembly/component-model/blob/a25fc0b372dd21f07f0242c46e98bd0f1ea0c0e1/design/mvp/CanonicalABI.md#storing)

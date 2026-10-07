@@ -194,18 +194,31 @@ static turbowasm_status component_guest_realloc(
         return status;
 
     if (realloc_context->may_leave != NULL) {
-        if (!*realloc_context->may_leave)
+        if (!*realloc_context->may_leave) {
+            if (realloc_context->trap != NULL)
+                *realloc_context->trap = TURBOWASM_TRAP_UNREACHABLE;
             return TURBOWASM_TRAPPED;
+        }
         *realloc_context->may_leave = false;
     }
-    status = turbowasm_instance_invoke(
-        realloc_context->instance,
-        realloc_context->function_index,
-        arguments, 4u,
-        &result, 1u,
-        &result_count, &trap);
+    if (realloc_context->call != NULL)
+        status = turbowasm_instance_invoke_from_host(
+            realloc_context->call, realloc_context->instance,
+            realloc_context->function_index, arguments, 4u,
+            &result, 1u, &result_count, &trap);
+    else
+        status = turbowasm_instance_invoke(
+            realloc_context->instance, realloc_context->function_index,
+            arguments, 4u, &result, 1u, &result_count, &trap);
     if (realloc_context->may_leave != NULL)
         *realloc_context->may_leave = true;
+    if (status == TURBOWASM_EXCEPTION) {
+        ((turbowasm_instance_impl *)realloc_context->instance->impl)->pending_exception = NULL;
+        trap = TURBOWASM_TRAP_UNREACHABLE;
+        status = TURBOWASM_TRAPPED;
+    }
+    if (realloc_context->trap != NULL)
+        *realloc_context->trap = trap;
     if (status != TURBOWASM_OK)
         return status;
     if (trap != TURBOWASM_TRAP_NONE)
@@ -672,6 +685,8 @@ static turbowasm_status component_canon_lower_host(
         (turbowasm_component_exec_canon_lower_context *)context;
     const turbowasm_component_type *function_type;
     const turbowasm_component_canonical_memory *memory = NULL;
+    turbowasm_component_canonical_memory call_memory;
+    turbowasm_component_exec_realloc_context call_realloc;
     turbowasm_component_value
         component_arguments[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {{0}};
     turbowasm_component_value component_result = {0};
@@ -704,8 +719,16 @@ static turbowasm_status component_canon_lower_host(
         function_type->as.function.param_count;
     if (lower_context->uses_memory ||
         lower_context->memory.resource_lower != NULL ||
-        lower_context->memory.resource_lift != NULL)
-        memory = &lower_context->memory;
+        lower_context->memory.resource_lift != NULL) {
+        call_memory = lower_context->memory;
+        if (call_memory.guest_realloc != NULL) {
+            call_realloc = lower_context->realloc_context;
+            call_realloc.call = call;
+            call_realloc.trap = trap;
+            call_memory.realloc_context = &call_realloc;
+        }
+        memory = &call_memory;
+    }
 
     *trap = TURBOWASM_TRAP_NONE;
     *result_count = 0u;
