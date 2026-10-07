@@ -3801,8 +3801,8 @@ static turbowasm_status turbowasm_exec_simd_generic(
         case TURBOWASM_SIMD_EXEC_RELAXED: {
             uint8_t arity =
                 turbowasm_relaxed_simd_arity(descriptor->opcode);
-            const salts_v128 *b = NULL;
-            const salts_v128 *third_value = NULL;
+            const cmeta_v128 *b = NULL;
+            const cmeta_v128 *third_value = NULL;
 
             if (arity == 3u) {
                 status = turbowasm_stack_pop_kind(
