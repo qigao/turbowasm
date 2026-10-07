@@ -6,6 +6,7 @@
 #include "../jit_table_helper.h"
 #include "../jit_reference_helper.h"
 #include "../jit_gc_helper.h"
+#include "../jit_exception_helper.h"
 #include "../relaxed_simd.h"
 #include "../simd_exec_table.h"
 
@@ -1914,6 +1915,14 @@ static bool turbowasm_mir_scalar_function_shape(
     return true;
 }
 
+static const turbowasm_validation_func_type *turbowasm_mir_tag_type(
+    const turbowasm_validation_context *validation, uint32_t index) {
+    const turbowasm_validation_tag *tag = turbowasm_validation_context_tag(validation, index);
+    const turbowasm_validation_func_type *type = tag == NULL ? NULL :
+        turbowasm_validation_context_type(validation, tag->type_index);
+    return turbowasm_mir_value_signature(type) && type->result_count == 0 ? type : NULL;
+}
+
 static bool turbowasm_mir_scan_structured_scalar(
     const turbowasm_validation_context *validation,
     uint32_t function_index,
@@ -2010,6 +2019,7 @@ static bool turbowasm_mir_scan_structured_scalar(
 
             case 0x02u: /* block */
             case 0x03u: /* loop */
+            case TURBOWASM_JIT_TRY_TABLE:
             case 0x04u: { /* if */
                 const turbowasm_validation_control *annotation;
                 uint32_t current_offset;
@@ -2038,8 +2048,27 @@ static bool turbowasm_mir_scan_structured_scalar(
                          TURBOWASM_VALIDATION_CONTROL_LOOP) ||
                     (opcode == 0x04u &&
                      annotation->kind !=
-                         TURBOWASM_VALIDATION_CONTROL_IF))
+                         TURBOWASM_VALIDATION_CONTROL_IF) ||
+                    (opcode == TURBOWASM_JIT_TRY_TABLE && annotation->kind != TURBOWASM_VALIDATION_CONTROL_TRY_TABLE))
                     goto done;
+
+                if (opcode == TURBOWASM_JIT_TRY_TABLE) {
+                    uint32_t clause;
+                    calls.references = true;
+                    for (clause = 0; clause < annotation->catch_count; ++clause) {
+                        const turbowasm_validation_catch *handler = &annotation->catches[clause];
+                        uint64_t count = handler->kind == TURBOWASM_VALIDATION_CATCH_REF ||
+                            handler->kind == TURBOWASM_VALIDATION_CATCH_ALL_REF ? 1 : 0;
+                        if (handler->kind == TURBOWASM_VALIDATION_CATCH || handler->kind == TURBOWASM_VALIDATION_CATCH_REF) {
+                            const turbowasm_validation_func_type *payload = turbowasm_mir_tag_type(validation, handler->tag_index);
+                            if (payload == NULL) goto done;
+                            count += payload->param_count;
+                        }
+                        if (count > UINT32_MAX - calls.registers) goto done;
+                        calls.registers += (uint32_t)count;
+                        if (count > calls.results) calls.results = (uint32_t)count;
+                    }
+                }
 
                 /*
                  * The validator already parsed and proved the blocktype.
@@ -2117,6 +2146,20 @@ static bool turbowasm_mir_scan_structured_scalar(
             }
 
             case 0x0fu: /* return */
+                break;
+
+            case TURBOWASM_JIT_THROW: {
+                uint32_t tag;
+                const turbowasm_validation_func_type *payload;
+                if (!turbowasm_reader_uleb32(&reader, &tag) ||
+                    (payload = turbowasm_mir_tag_type(validation, tag)) == NULL) goto done;
+                if (payload->param_count > calls.arguments) calls.arguments = payload->param_count;
+                calls.references = true;
+                break;
+            }
+            case TURBOWASM_JIT_THROW_REF:
+                calls.references = true;
+                if (calls.arguments == 0) calls.arguments = 1;
                 break;
 
             case 0x10u: { /* call */
@@ -2382,7 +2425,8 @@ typedef enum turbowasm_mir_control_kind {
     TURBOWASM_MIR_CONTROL_FUNCTION = 0,
     TURBOWASM_MIR_CONTROL_BLOCK,
     TURBOWASM_MIR_CONTROL_LOOP,
-    TURBOWASM_MIR_CONTROL_IF
+    TURBOWASM_MIR_CONTROL_IF,
+    TURBOWASM_MIR_CONTROL_TRY_TABLE
 } turbowasm_mir_control_kind;
 
 typedef struct turbowasm_mir_control_frame {
@@ -2403,6 +2447,20 @@ typedef struct turbowasm_mir_control_frame {
     uint32_t end_reg_base;
     uint32_t end_slot_base;
 } turbowasm_mir_control_frame;
+
+static uint32_t turbowasm_mir_exception_target(const turbowasm_mir_control_frame *controls, uint32_t count) {
+    while (count != 0) {
+        const turbowasm_mir_control_frame *frame = &controls[--count];
+        if (frame->kind == TURBOWASM_MIR_CONTROL_TRY_TABLE) return frame->annotation->opcode_offset;
+    }
+    return UINT32_MAX;
+}
+
+static bool turbowasm_mir_emit_exception_guard(turbowasm_mir_text *text, uint32_t target) {
+    if (target != UINT32_MAX && !turbowasm_mir_text_appendf(text,
+            "beq c_%u_exception, jit_status, %u\n", target, TURBOWASM_EXCEPTION)) return false;
+    return turbowasm_mir_text_appendf(text, "bne jit_fail, jit_status, 0\n");
+}
 
 static bool turbowasm_mir_emit_checkpoint_text(
     turbowasm_mir_text *text) {
@@ -2464,6 +2522,8 @@ static turbowasm_mir_control_kind turbowasm_mir_control_kind_from_annotation(
             return TURBOWASM_MIR_CONTROL_LOOP;
         case TURBOWASM_VALIDATION_CONTROL_IF:
             return TURBOWASM_MIR_CONTROL_IF;
+        case TURBOWASM_VALIDATION_CONTROL_TRY_TABLE:
+            return TURBOWASM_MIR_CONTROL_TRY_TABLE;
         default:
             return TURBOWASM_MIR_CONTROL_FUNCTION;
     }
@@ -2765,7 +2825,7 @@ static bool turbowasm_mir_structured_emit_call(
     const turbowasm_validation_context *validation,
     uint32_t callee_index, turbowasm_mir_stack_value *stack,
     uint32_t *stack_size, uint32_t *next_reg, uint32_t register_limit,
-    uint32_t *next_slot, uint32_t slot_limit) {
+    uint32_t *next_slot, uint32_t slot_limit, uint32_t exception_target) {
     const turbowasm_validation_func_type *type =
         turbowasm_validation_context_function_type(validation, callee_index);
     uint32_t index, base;
@@ -2783,8 +2843,8 @@ static bool turbowasm_mir_structured_emit_call(
     }
     if (!turbowasm_mir_text_appendf(text,
             "call tw_call_values_p, tw_jit_call_values, jit_status, jit_ctx, "
-            "%u, jit_call_args, jit_call_results\n"
-            "bne jit_fail, jit_status, 0\n", callee_index))
+            "%u, jit_call_args, jit_call_results\n", callee_index) ||
+        !turbowasm_mir_emit_exception_guard(text, exception_target))
         return false;
     *stack_size = base;
     return turbowasm_mir_emit_call_results(text, type, stack, stack_size, next_reg, next_slot, slot_limit);
@@ -2793,7 +2853,8 @@ static bool turbowasm_mir_structured_emit_call(
 static bool turbowasm_mir_emit_indirect(turbowasm_mir_text *text,
     const turbowasm_mir_indirect_op *op, uint8_t opcode,
     turbowasm_mir_stack_value *stack, uint32_t *stack_size,
-    uint32_t *next_reg, uint32_t register_limit, uint32_t *next_slot, uint32_t slot_limit) {
+    uint32_t *next_reg, uint32_t register_limit, uint32_t *next_slot, uint32_t slot_limit,
+    uint32_t exception_target) {
     uint32_t index, base, count = op->type->param_count + 1u;
     if (*stack_size < count || *next_reg > register_limit ||
         (!op->tail && op->type->result_count > register_limit - *next_reg))
@@ -2813,7 +2874,7 @@ static bool turbowasm_mir_emit_indirect(turbowasm_mir_text *text,
     *stack_size = base;
     if (op->tail)
         return turbowasm_mir_text_appendf(text, "ret\n");
-    return turbowasm_mir_text_appendf(text, "bne jit_fail, jit_status, 0\n") &&
+    return turbowasm_mir_emit_exception_guard(text, exception_target) &&
         turbowasm_mir_emit_call_results(text, op->type, stack, stack_size, next_reg, next_slot, slot_limit);
 }
 
@@ -3300,6 +3361,41 @@ static turbowasm_status turbowasm_mir_structured_emit_simd(
     }
 }
 
+static bool turbowasm_mir_emit_handlers(turbowasm_mir_text *text,
+    turbowasm_mir_control_frame *controls, uint32_t control_size,
+    turbowasm_mir_stack_value *stack, uint32_t stack_size, uint32_t *next_reg,
+    uint32_t *next_slot, uint32_t slot_limit) {
+    const turbowasm_validation_control *annotation = controls[control_size - 1].annotation;
+    uint32_t clause, outer = turbowasm_mir_exception_target(controls, control_size - 1);
+    if (!turbowasm_mir_text_appendf(text, "jmp c_%u_body\nc_%u_exception:\n",
+            annotation->opcode_offset, annotation->opcode_offset)) return false;
+    for (clause = 0; clause < annotation->catch_count; ++clause) {
+        const turbowasm_validation_catch *handler = &annotation->catches[clause];
+        turbowasm_mir_control_frame *target;
+        turbowasm_validation_func_type payload = {0};
+        uint32_t handler_stack_size = stack_size;
+        if (handler->label_depth >= control_size - 1) return false;
+        target = &controls[control_size - 2 - handler->label_depth];
+        payload.results = (uint8_t *)(target->kind == TURBOWASM_MIR_CONTROL_LOOP ? target->start_types : target->end_types);
+        payload.result_count = target->kind == TURBOWASM_MIR_CONTROL_LOOP ? target->start_count : target->end_count;
+        if (!turbowasm_mir_text_appendf(text,
+                "mov jit_ref_arg, %lld\n"
+                "call tw_catch_p, tw_catch, jit_status, jit_ctx, jit_ref_arg, jit_call_results, %u\n"
+                "blt jit_fail, jit_status, 0\n"
+                "bf c_%u_catch_%u_next, jit_status\n",
+                (long long)(intptr_t)handler, payload.result_count, annotation->opcode_offset, clause) ||
+            !turbowasm_mir_emit_call_results(text, &payload, stack, &handler_stack_size,
+                next_reg, next_slot, slot_limit) ||
+            !turbowasm_mir_structured_branch_target(text, controls, control_size,
+                handler->label_depth + 1, stack, handler_stack_size, false, 0, annotation->opcode_offset) ||
+            !turbowasm_mir_text_appendf(text, "c_%u_catch_%u_next:\n", annotation->opcode_offset, clause)) return false;
+    }
+    if (outer == UINT32_MAX) {
+        if (!turbowasm_mir_text_appendf(text, "jmp jit_fail\n")) return false;
+    } else if (!turbowasm_mir_text_appendf(text, "jmp c_%u_exception\n", outer)) return false;
+    return turbowasm_mir_text_appendf(text, "c_%u_body:\n", annotation->opcode_offset);
+}
+
 static bool turbowasm_mir_emit_gc(turbowasm_mir_text *text,
     const turbowasm_jit_gc_instruction *op, turbowasm_mir_stack_value *stack,
     uint32_t *stack_size, uint32_t *next_reg, uint32_t register_limit,
@@ -3512,6 +3608,9 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             "import tw_table, tw_reference\n"
             "tw_gc_p: proto i64, p:ctx, p:code, i64:size, p:args, i64:count, p:result\n"
             "import tw_gc\n"
+            "tw_throw_p: proto i64, p:ctx, i64:opcode, i64:tag, p:args, i64:count\n"
+            "tw_catch_p: proto i64, p:ctx, p:clause, p:results, i64:capacity\n"
+            "import tw_throw, tw_catch\n"
             "tw_memory_p: proto i64, p:ctx, i64:op, i64:mem, i64:secondary, "
                 "i64:offset, i64:a, i64:b, i64:c\n"
             "tw_memory_load_f32_p: proto f, p:ctx, i64:mem, i64:offset, i64:address\n"
@@ -3842,6 +3941,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
 
             case 0x02u: /* block */
             case 0x03u: /* loop */
+            case TURBOWASM_JIT_TRY_TABLE:
             case 0x04u: { /* if */
                 const turbowasm_validation_control *annotation;
                 turbowasm_mir_control_frame *frame;
@@ -3940,6 +4040,9 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 reader.cursor =
                     function->code + annotation->body_offset;
 
+                if (opcode == TURBOWASM_JIT_TRY_TABLE &&
+                    !turbowasm_mir_emit_handlers(&text, controls, control_size,
+                        stack, stack_size, &next_reg, &next_slot, slot_limit)) goto done;
                 if (opcode == 0x03u) {
                     if (!turbowasm_mir_emit_control_label(
                             &text, annotation->opcode_offset,
@@ -4129,13 +4232,39 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 break;
             }
 
+            case TURBOWASM_JIT_THROW:
+            case TURBOWASM_JIT_THROW_REF: {
+                uint32_t tag = 0, count = 1, base, argument;
+                const turbowasm_validation_func_type *payload = NULL;
+                if (opcode == TURBOWASM_JIT_THROW) {
+                    if (!turbowasm_reader_uleb32(&reader, &tag) ||
+                        (payload = turbowasm_mir_tag_type(validation, tag)) == NULL) goto done;
+                    count = payload->param_count;
+                }
+                if (stack_size < count) goto done;
+                base = stack_size - count;
+                for (argument = 0; argument < count; ++argument) {
+                    turbowasm_mir_stack_value value = stack[base + argument];
+                    uint8_t expected = payload == NULL ? TURBOWASM_VALUE_EXNREF : payload->params[argument];
+                    if (value.type != expected || !turbowasm_mir_emit_value_store(&text, "jit_call_args",
+                            argument, value.type, turbowasm_mir_reg_prefix(value.type), value.reg)) goto done;
+                }
+                if (!turbowasm_mir_text_appendf(&text,
+                        "call tw_throw_p, tw_throw, jit_status, jit_ctx, %u, %u, jit_call_args, %u\n",
+                        opcode, tag, count) ||
+                    !turbowasm_mir_emit_exception_guard(&text, turbowasm_mir_exception_target(controls, control_size))) goto oom;
+                stack_size = controls[control_size - 1].height;
+                reachable = false;
+                break;
+            }
             case 0x10u: { /* call */
                 uint32_t callee_index;
                 if (!turbowasm_reader_uleb32(
                         &reader, &callee_index) ||
                     !turbowasm_mir_structured_emit_call(
                         &text, validation, callee_index,
-                        stack, &stack_size, &next_reg, register_count, &next_slot, slot_limit))
+                        stack, &stack_size, &next_reg, register_count, &next_slot, slot_limit,
+                        turbowasm_mir_exception_target(controls, control_size)))
                     goto done;
                 break;
             }
@@ -4147,7 +4276,8 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 turbowasm_mir_indirect_op op;
                 if (!turbowasm_mir_decode_indirect(validation, &reader, opcode, &op) ||
                     !turbowasm_mir_emit_indirect(&text, &op, opcode,
-                        stack, &stack_size, &next_reg, register_count, &next_slot, slot_limit))
+                        stack, &stack_size, &next_reg, register_count, &next_slot, slot_limit,
+                        turbowasm_mir_exception_target(controls, control_size)))
                     goto done;
                 if (op.tail) {
                     stack_size = controls[0].height;
@@ -6036,6 +6166,20 @@ static bool turbowasm_mir_register_call_externals(
         _Static_assert(sizeof(fn) == sizeof(address), "MIR external pointer size mismatch");
         memcpy(&address, &fn, sizeof(address));
         MIR_load_external(backend->mir, "tw_gc", address);
+    }
+    {
+        int64_t (*fn)(turbowasm_jit_invocation_context *, int64_t, int64_t,
+            turbowasm_value *, int64_t) = turbowasm_jit_throw;
+        _Static_assert(sizeof(fn) == sizeof(address), "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(backend->mir, "tw_throw", address);
+    }
+    {
+        int64_t (*fn)(turbowasm_jit_invocation_context *, const turbowasm_validation_catch *,
+            turbowasm_value *, int64_t) = turbowasm_jit_catch;
+        _Static_assert(sizeof(fn) == sizeof(address), "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(backend->mir, "tw_catch", address);
     }
     {
         float (*fn)(

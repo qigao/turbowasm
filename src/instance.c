@@ -10,6 +10,7 @@
 #include "validate_type.h"
 #include "runtime_alloc.h"
 #include "gc_exec.h"
+#include "jit_exception_helper.h"
 
 #include <limits.h>
 #include <math.h>
@@ -872,6 +873,80 @@ static turbowasm_status turbowasm_exception_create(
     instance->exceptions = exception;
     *out_exception = exception;
     return TURBOWASM_OK;
+}
+
+int64_t turbowasm_jit_throw(turbowasm_jit_invocation_context *context,
+    int64_t opcode, int64_t tag, turbowasm_value *arguments, int64_t count) {
+    turbowasm_status status = TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_exception *exception = NULL;
+    const turbowasm_module_impl *module;
+    if (context == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    if (context->instance == NULL || count < 0 || count > UINT32_MAX ||
+        (count != 0 && arguments == NULL)) goto done;
+    module = turbowasm_module_impl_get(context->instance->module);
+    if (module == NULL || context->instance->pending_exception != NULL) goto done;
+    if (opcode == TURBOWASM_JIT_THROW) {
+        const turbowasm_validation_tag *desc;
+        const turbowasm_validation_func_type *type;
+        turbowasm_value_stack stack = {arguments, (uint32_t)count, (uint32_t)count};
+        if (tag < 0 || tag > UINT32_MAX) goto done;
+        desc = turbowasm_validation_context_tag(&module->validation, (uint32_t)tag);
+        if (desc == NULL) goto done;
+        type = turbowasm_validation_context_type(&module->validation, desc->type_index);
+        if (type == NULL || type->param_count != (uint32_t)count) goto done;
+        status = turbowasm_exception_create(context->instance, &module->validation,
+            (uint32_t)tag, &stack, &exception);
+        if (status != TURBOWASM_OK) goto done;
+    } else if (opcode == TURBOWASM_JIT_THROW_REF) {
+        if (count != 1 || arguments[0].kind != TURBOWASM_VALUE_EXNREF) goto done;
+        if (arguments[0].as.exnref.is_null || arguments[0].as.exnref.exception == NULL) {
+            status = TURBOWASM_TRAPPED; trap = TURBOWASM_TRAP_NULL_REFERENCE; goto done;
+        }
+        exception = (turbowasm_exception *)arguments[0].as.exnref.exception;
+    } else goto done;
+    context->instance->pending_exception = exception;
+    status = TURBOWASM_EXCEPTION;
+done:
+    context->call_status = status; context->call_trap = trap;
+    return status;
+}
+
+int64_t turbowasm_jit_catch(turbowasm_jit_invocation_context *context,
+    const turbowasm_validation_catch *clause, turbowasm_value *results, int64_t capacity) {
+    turbowasm_exception *exception;
+    turbowasm_status status = TURBOWASM_INVALID_ARGUMENT;
+    bool include_ref, all;
+    uint32_t count;
+    if (context == NULL) return -1;
+    if (context->instance == NULL || clause == NULL || capacity < 0 || capacity > UINT32_MAX ||
+        clause->kind > TURBOWASM_VALIDATION_CATCH_ALL_REF) goto fail;
+    exception = context->instance->pending_exception;
+    if (context->call_status != TURBOWASM_EXCEPTION || exception == NULL) goto fail;
+    all = clause->kind == TURBOWASM_VALIDATION_CATCH_ALL || clause->kind == TURBOWASM_VALIDATION_CATCH_ALL_REF;
+    include_ref = clause->kind == TURBOWASM_VALIDATION_CATCH_REF || clause->kind == TURBOWASM_VALIDATION_CATCH_ALL_REF;
+    if (!all) {
+        turbowasm_tag_identity identity;
+        status = turbowasm_instance_tag_identity(context->instance, clause->tag_index, &identity);
+        if (status != TURBOWASM_OK) goto fail;
+        if (!turbowasm_tag_identity_equal(identity, exception->tag)) return 0;
+    }
+    count = all ? 0 : exception->payload_count;
+    status = TURBOWASM_INVALID_ARGUMENT;
+    if ((uint64_t)count + (include_ref ? 1u : 0u) > (uint64_t)capacity ||
+        ((count != 0 || include_ref) && results == NULL)) goto fail;
+    if (count != 0) memcpy(results, exception->payload, (size_t)count * sizeof(*results));
+    if (include_ref) {
+        results[count] = (turbowasm_value){0};
+        results[count].kind = TURBOWASM_VALUE_EXNREF;
+        results[count].as.exnref.exception = exception;
+    }
+    context->instance->pending_exception = NULL;
+    context->call_status = TURBOWASM_OK; context->call_trap = TURBOWASM_TRAP_NONE;
+    return 1;
+fail:
+    context->call_status = status; context->call_trap = TURBOWASM_TRAP_NONE;
+    return -1;
 }
 
 static turbowasm_status turbowasm_exception_push_handler_values(

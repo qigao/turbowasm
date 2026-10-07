@@ -322,6 +322,32 @@ host/interpreted targets, long tail chains, GC, traps, fuel and allocation failu
 Rollback removes these four admission cases and their emitter together; Runtime
 interpreted behavior remains the compatibility baseline.
 
+### MIR exception boundary
+
+Native `throw`, `throw_ref` and `try_table` share Runtime exception objects,
+resolved tag identities and the instance's pending-exception state. A private
+throw adapter creates the same payload representation as the interpreter. A
+catch adapter tests clauses in binary order and commits a matched payload into
+the invocation's rooted scratch before clearing the pending exception. No public
+ABI, exception ownership or cross-instance propagation contract changes.
+
+MIR emits one static handler chain per lexical try scope. Ordinary direct,
+indirect and reference calls route only `EXCEPTION` to the nearest enclosing
+chain; other errors keep their existing return path. Unmatched exceptions pass
+to the outer chain or caller. Handler payloads use validated target signatures
+and existing branch merge cells, including vectors/references. Tail calls leave
+the current frame and its handlers before dispatch, matching Runtime tail
+semantics. No dynamic handler stack or native unwinder is introduced.
+
+The alternative native unwinder would add platform-specific lifecycle rules;
+interpreting protected regions would leave the native-coverage gap unresolved.
+Static handlers add bounded code and payload scratch derived from retained
+validation metadata. Runtime remains the sole mutable exception owner and no
+helper holds a lock or suspends. Tests cover all catch kinds, nesting/order,
+rethrow/null throw, scalar/vector/reference payloads, imported tag identity,
+mixed-tier direct/indirect/tail calls, collection, allocation failures and fuel.
+Rollback removes EH admission/emission and its private adapters together.
+
 ### MIR GC instruction boundary
 
 GC lowering reuses `turbowasm_gc_execute` through a private adapter. The store

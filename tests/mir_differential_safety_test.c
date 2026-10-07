@@ -622,7 +622,7 @@ static void test_execution_control_parity_and_cache(void) {
 }
 
 
-static void test_eh_fallback_isolation(void) {
+static void test_native_eh_isolation(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
 
@@ -673,7 +673,7 @@ static void test_eh_fallback_isolation(void) {
         0x41, 0x07,
         0x0b,
 
-        /* f3: MIR-eligible caller -> interpreted EH catcher + 1 => 43. */
+        /* f3: compiled caller -> native EH catcher + 1 => 43. */
         0x07,
         0x00,
         0x10, 0x01,
@@ -681,7 +681,7 @@ static void test_eh_fallback_isolation(void) {
         0x6a,
         0x0b,
 
-        /* f4: MIR-eligible caller -> interpreted uncaught thrower. */
+        /* f4: compiled caller -> native uncaught thrower. */
         0x04,
         0x00,
         0x10, 0x00,
@@ -695,14 +695,11 @@ static void test_eh_fallback_isolation(void) {
     pair_init(&pair, bytes, sizeof(bytes));
     impl = tiered_impl(&pair);
 
-    /*
-     * EH-bearing f1 is rejected by MIR eligibility at threshold=1, but its
-     * interpreter result remains identical to the non-tiered instance.
-     */
+    /* EH-bearing f1 compiles at threshold=1 and preserves interpreter results. */
     compare_unbounded(&pair, 1u, NULL, 0u);
     assert(impl->jit_functions[1].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
-    assert(impl->jit_functions[1].compiled.impl == NULL);
+           TURBOWASM_JIT_COMPILED);
+    assert(impl->jit_functions[1].compiled.impl != NULL);
 
     /* An unrelated sibling in the same instance still compiles normally. */
     compare_unbounded(&pair, 2u, NULL, 0u);
@@ -710,19 +707,16 @@ static void test_eh_fallback_isolation(void) {
            TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[2].compiled.impl != NULL);
 
-    /*
-     * A compiled caller can enter the interpreter-only EH catcher and return
-     * to native code without changing the observable result.
-     */
+    /* A compiled caller receives the native catcher's result. */
     compare_unbounded(&pair, 3u, NULL, 0u);
     assert(impl->jit_functions[3].state ==
            TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[3].compiled.impl != NULL);
     assert(impl->jit_functions[1].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
+           TURBOWASM_JIT_COMPILED);
 
     /*
-     * The same compiled->interpreter boundary preserves an uncaught Wasm
+     * The native call boundary preserves an uncaught Wasm
      * exception as TURBOWASM_EXCEPTION, not a trap or JIT/policy status.
      */
     interpreted = invoke_capture(
@@ -738,13 +732,13 @@ static void test_eh_fallback_isolation(void) {
            TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[4].compiled.impl != NULL);
     assert(impl->jit_functions[0].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
-    assert(impl->jit_functions[0].compiled.impl == NULL);
+           TURBOWASM_JIT_COMPILED);
+    assert(impl->jit_functions[0].compiled.impl != NULL);
 
-    /* Compiling other functions must not perturb the EH fallback cache. */
+    /* Compiling siblings must not perturb the EH function's cached code. */
     compare_unbounded(&pair, 1u, NULL, 0u);
     assert(impl->jit_functions[1].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
+           TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[2].state ==
            TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[3].state ==
@@ -762,6 +756,6 @@ int main(void) {
     test_compiled_caller_preserves_state_mutation();
     test_compiled_caller_preserves_memory_trap();
     test_execution_control_parity_and_cache();
-    test_eh_fallback_isolation();
+    test_native_eh_isolation();
     return 0;
 }
