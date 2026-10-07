@@ -12,7 +12,16 @@ int64_t turbowasm_jit_reference(turbowasm_jit_invocation_context *context,
         return 0;
     if (context->instance == NULL)
         goto done;
-    if (opcode == TURBOWASM_JIT_REF_FUNC) {
+    if (opcode == TURBOWASM_JIT_UNREACHABLE) {
+        status = TURBOWASM_TRAPPED;
+        trap = TURBOWASM_TRAP_UNREACHABLE;
+    } else if (opcode == TURBOWASM_JIT_GLOBAL_GET || opcode == TURBOWASM_JIT_GLOBAL_SET) {
+        if (immediate < 0 || immediate > UINT32_MAX ||
+            (opcode == TURBOWASM_JIT_GLOBAL_GET ? out == NULL : a == NULL)) goto done;
+        status = opcode == TURBOWASM_JIT_GLOBAL_GET
+            ? turbowasm_instance_global_get(context->instance, (uint32_t)immediate, out)
+            : turbowasm_instance_global_set(context->instance, (uint32_t)immediate, *a);
+    } else if (opcode == TURBOWASM_JIT_REF_FUNC) {
         const turbowasm_module_impl *module = turbowasm_module_impl_get(context->instance->module);
         if (out == NULL || immediate < 0 || immediate > UINT32_MAX || module == NULL ||
             (uint64_t)immediate >= module->validation.function_count)

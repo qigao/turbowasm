@@ -3,6 +3,7 @@
 #include "jit_reference_helper.h"
 #include "jit_table_helper.h"
 #include "fixtures/reference_native.h"
+#include "fixtures/global_imports.h"
 #ifdef TURBOWASM_TEST_MIR
 #include "jit/mir_backend.h"
 #endif
@@ -114,6 +115,35 @@ static void same_reference(turbowasm_value actual, turbowasm_value expected) {
             break;
         default: check(false, "unexpected reference kind");
     }
+}
+static void same_value(turbowasm_value actual, turbowasm_value expected) {
+    check_equal(actual.kind, expected.kind);
+    if (actual.kind == TURBOWASM_VALUE_V128) {
+        check_equal(actual.as.v128.shape, expected.as.v128.shape);
+        check_equal(memcmp(&actual.as.v128.bits, &expected.as.v128.bits, sizeof(actual.as.v128.bits)), 0);
+    } else if (actual.kind == TURBOWASM_VALUE_I32 || actual.kind == TURBOWASM_VALUE_F32)
+        check_equal(memcmp(&actual.as, &expected.as, sizeof(uint32_t)), 0);
+    else if (actual.kind == TURBOWASM_VALUE_I64 || actual.kind == TURBOWASM_VALUE_F64)
+        check_equal(memcmp(&actual.as, &expected.as, sizeof(uint64_t)), 0);
+    else same_reference(actual, expected);
+}
+static call_result compare_control(const char *name, const turbowasm_value *args, size_t count,
+    const turbowasm_execution_options *options) {
+    call_result expected = invoke(&reference, name, args, count, options);
+    call_result actual = invoke(&instance, name, args, count, options);
+    size_t i;
+    check_equal(actual.status, expected.status); check_equal(actual.trap, expected.trap);
+    check_equal(actual.count, expected.count);
+    for (i = 0; i < actual.count; ++i) same_value(actual.values[i], expected.values[i]);
+    compiled(name);
+    return actual;
+}
+static turbowasm_value vector_value(void) {
+    const uint64_t bits[] = {UINT64_C(0x7ff8000000001234), UINT64_C(0x8000000000000000)};
+    turbowasm_value value = {0};
+    value.kind = TURBOWASM_VALUE_V128; value.as.v128.shape = TURBOWASM_V128_F64X2;
+    cmeta_simd_v128_load(&value.as.v128.bits, bits);
+    return value;
 }
 static turbowasm_status host_collect(void *context, turbowasm_host_call *call,
     const turbowasm_value *args, size_t argc, turbowasm_value *results,
@@ -462,5 +492,164 @@ spec("native reference frame") {
             check_equal(after.bytes, before.bytes);
         }
         result = run("call", nodes, 1u); same_reference(result.values[0], nodes[0]);
+    }
+    it("preserves nullable branch edges at block, function and loop targets") {
+        const char *names[] = {"br-null", "br-non-null", "return-null", "return-non-null", "loop-null", "loop-non-null"};
+        unsigned choice, name, fuel;
+        for (choice = 0; choice < 2; ++choice) {
+            turbowasm_value selected = choice ? nodes[0] : (turbowasm_value){.kind = TURBOWASM_VALUE_GCREF};
+            for (name = 0; name < sizeof(names) / sizeof(*names); ++name) {
+                turbowasm_value args[] = {selected, nodes[1]};
+                size_t count = name >= 4 ? 2 : 1;
+                turbowasm_execution_options options = {0};
+                call_result result;
+                if (name == 5) { args[0] = integer(0, false); args[1] = selected; }
+                result = compare_control(names[name], args, count, NULL);
+                check_equal(result.status, TURBOWASM_OK);
+                if (name == 0 || name == 2) check_equal(result.values[0].as.i32, choice ? 22 : 11);
+                else if (name == 4) check_equal(result.values[0].as.i32, choice ? 1 : 2);
+                else same_reference(result.values[0], selected);
+                options.has_fuel_limit = true;
+                for (fuel = 0; fuel < FUEL_BOUNDARIES; ++fuel) {
+                    options.fuel = fuel; compare_control(names[name], args, count, &options);
+                }
+            }
+        }
+    }
+    it("branches on external, function and exception reference carriers") {
+        turbowasm_value args[3] = {0};
+        args[0].kind = TURBOWASM_VALUE_EXTERNREF;
+        args[0].as.externref.token = (uintptr_t)&module;
+        args[1].kind = TURBOWASM_VALUE_FUNCREF;
+        args[1].as.funcref.function_index = function_index("one"); args[1].as.funcref.owner = instance.impl;
+        args[2].kind = TURBOWASM_VALUE_EXNREF; args[2].as.exnref.is_null = true;
+        check_equal(compare_control("br-extern", &args[0], 1, NULL).status, TURBOWASM_OK);
+        check_equal(compare_control("br-function", &args[1], 1, NULL).status, TURBOWASM_OK);
+        check_equal(compare_control("br-exception", &args[2], 1, NULL).status, TURBOWASM_OK);
+        args[0].as.externref.is_null = true; args[1].as.funcref.is_null = true;
+        check_equal(compare_control("br-extern", &args[0], 1, NULL).status, TURBOWASM_OK);
+        check_equal(compare_control("br-function", &args[1], 1, NULL).status, TURBOWASM_OK);
+    }
+    it("reads and writes scalar, vector and reference globals without losing metadata") {
+        turbowasm_value args[] = {integer(-19, false), integer(INT64_MIN, true), {0}, {0}};
+        uint32_t nan = UINT32_C(0x7fc01234);
+        turbowasm_value vector = vector_value();
+        args[2].kind = TURBOWASM_VALUE_F32; memcpy(&args[2].as.f32, &nan, sizeof(nan));
+        args[3].kind = TURBOWASM_VALUE_F64; args[3].as.f64 = -0.0;
+        check_equal(compare_control("global-scalars", args, 4, NULL).status, TURBOWASM_OK);
+        run("set-vector", &vector, 1); same_value(run("get-vector", NULL, 0).values[0], vector);
+        args[0] = nodes[0]; args[0].kind = TURBOWASM_VALUE_MANAGED_EXTERNREF;
+        args[1] = run("function", NULL, 0).values[0];
+        args[2] = (turbowasm_value){0}; args[2].kind = TURBOWASM_VALUE_EXNREF; args[2].as.exnref.is_null = true;
+        check_equal(compare_control("global-refs", args, 3, NULL).status, TURBOWASM_OK);
+        check_equal(run("global-const", NULL, 0).values[0].as.i32, 91);
+    }
+    it("retains managed values in globals and leaves rejected writes unchanged") {
+        turbowasm_value arg = integer(73, false), out = {0};
+        turbowasm_jit_invocation_context context = {0};
+        call_result result = run("global-live", &arg, 1);
+        check_equal(turbowasm_store_collect(&store), TURBOWASM_OK);
+        check_equal(read_node(run("get-any", NULL, 0).values[0]), 73);
+        context.instance = instance.impl;
+        turbowasm_jit_reference(&context, TURBOWASM_JIT_GLOBAL_SET, 0, NULL, &arg, NULL);
+        check_equal(context.call_status, TURBOWASM_TYPE_MISMATCH);
+        same_reference(run("get-any", NULL, 0).values[0], result.values[0]);
+        turbowasm_jit_reference(&context, TURBOWASM_JIT_GLOBAL_SET, 9, NULL, &arg, NULL);
+        check_equal(context.call_status, TURBOWASM_TYPE_MISMATCH);
+        check_equal(run("global-const", NULL, 0).values[0].as.i32, 91);
+        turbowasm_jit_reference(&context, TURBOWASM_JIT_GLOBAL_GET, UINT32_MAX, &out, NULL, NULL);
+        check_equal(context.call_status, TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_store_create(&foreign_store, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_instance_create_in_store(&foreign_instance, &module, &linker, &foreign_store), TURBOWASM_OK);
+        arg = make_node(&foreign_instance, 4);
+        turbowasm_jit_reference(&context, TURBOWASM_JIT_GLOBAL_SET, 0, NULL, &arg, NULL);
+        check_equal(context.call_status, TURBOWASM_TYPE_MISMATCH);
+        same_reference(run("get-any", NULL, 0).values[0], result.values[0]);
+    }
+    it("preserves global mutation ordering at every fuel boundary") {
+        const char *setters[] = {"set-any", "set-vector", "global-scalars", "global-refs"};
+        turbowasm_value scalar[] = {integer(19, false), integer(INT64_MIN, true), {0}, {0}};
+        turbowasm_value vector = vector_value(), refs[] = {nodes[0], {0}, {0}};
+        const turbowasm_value *args[] = {&nodes[1], &vector, scalar, refs};
+        const size_t counts[] = {1, 1, 4, 3};
+        turbowasm_value initial[9];
+        turbowasm_execution_options options = {0};
+        unsigned operation, fuel, global;
+        scalar[2].kind = TURBOWASM_VALUE_F32; scalar[2].as.f32 = -0.0f;
+        scalar[3].kind = TURBOWASM_VALUE_F64; scalar[3].as.f64 = 0.25;
+        refs[0].kind = TURBOWASM_VALUE_MANAGED_EXTERNREF;
+        refs[1] = run("function", NULL, 0).values[0];
+        refs[2].kind = TURBOWASM_VALUE_EXNREF; refs[2].as.exnref.is_null = true;
+        for (global = 0; global < sizeof(initial) / sizeof(*initial); ++global)
+            check_equal(turbowasm_instance_global_get(instance.impl, global, &initial[global]), TURBOWASM_OK);
+        options.has_fuel_limit = true;
+        for (operation = 0; operation < sizeof(setters) / sizeof(*setters); ++operation) {
+            for (fuel = 0; fuel < FUEL_BOUNDARIES; ++fuel) {
+                for (global = 0; global < sizeof(initial) / sizeof(*initial); ++global) {
+                    check_equal(turbowasm_instance_global_set(instance.impl, global, initial[global]), TURBOWASM_OK);
+                    check_equal(turbowasm_instance_global_set(reference.impl, global, initial[global]), TURBOWASM_OK);
+                }
+                options.fuel = fuel;
+                compare_control(setters[operation], args[operation], counts[operation], &options);
+                for (global = 0; global < sizeof(initial) / sizeof(*initial); ++global) {
+                    turbowasm_value actual, expected;
+                    check_equal(turbowasm_instance_global_get(instance.impl, global, &actual), TURBOWASM_OK);
+                    check_equal(turbowasm_instance_global_get(reference.impl, global, &expected), TURBOWASM_OK);
+                    same_value(actual, expected);
+                }
+            }
+        }
+    }
+    it("updates imported globals in the provider and preserves function ownership") {
+        turbowasm_module imported = {0};
+        turbowasm_instance consumer = {0};
+        turbowasm_linker imports = {0};
+        const uint32_t provider_globals[] = {0, 1, 7};
+        turbowasm_value values[] = {nodes[0], vector_value(), run("function", NULL, 0).values[0]};
+        unsigned i;
+        check_equal(turbowasm_module_load_borrowed(&imported, global_imports_bytes, sizeof(global_imports_bytes)), TURBOWASM_OK);
+        check_equal(turbowasm_linker_init(&imports), TURBOWASM_OK);
+        check_equal(turbowasm_linker_define_instance(&imports,
+            (turbowasm_name){(const uint8_t *)"p", 1}, &instance), TURBOWASM_OK);
+        check_equal(turbowasm_instance_create_in_store(&consumer, &imported, &imports, &store), TURBOWASM_OK);
+#ifdef TURBOWASM_TEST_MIR
+        {
+            turbowasm_jit_backend backend = {0};
+            check_equal(turbowasm_mir_backend_create(&backend), TURBOWASM_OK);
+            check_equal(turbowasm_jit_instance_attach_backend(consumer.impl, &backend, 1u), TURBOWASM_OK);
+        }
+#endif
+        for (i = 0; i < 3; ++i) {
+            turbowasm_value result = {0};
+            size_t count;
+            turbowasm_trap trap;
+            check_equal(turbowasm_instance_invoke(&consumer, i * 2 + 1, &values[i], 1, NULL, 0, &count, &trap), TURBOWASM_OK);
+            check_equal(turbowasm_instance_global_get(instance.impl, provider_globals[i], &result), TURBOWASM_OK);
+            same_value(result, values[i]);
+            if (i == 0) values[i] = nodes[1];
+            if (i == 1) values[i].as.v128.shape = TURBOWASM_V128_U64X2;
+            check_equal(turbowasm_instance_global_set(instance.impl, provider_globals[i], values[i]), TURBOWASM_OK);
+            check_equal(turbowasm_instance_invoke(&consumer, i * 2, NULL, 0, &result, 1, &count, &trap), TURBOWASM_OK);
+            check_equal(count, 1u); same_value(result, values[i]);
+#ifdef TURBOWASM_TEST_MIR
+            check_equal(((turbowasm_instance_impl *)consumer.impl)->jit_functions[i * 2].state, TURBOWASM_JIT_COMPILED);
+            check_equal(((turbowasm_instance_impl *)consumer.impl)->jit_functions[i * 2 + 1].state, TURBOWASM_JIT_COMPILED);
+#endif
+        }
+        turbowasm_instance_destroy(&consumer); turbowasm_linker_destroy(&imports); turbowasm_module_destroy(&imported);
+    }
+    it("traps only on reachable unreachable instructions and matches fuel priority") {
+        turbowasm_value arg = integer(0, false);
+        turbowasm_execution_options options = {0};
+        unsigned fuel;
+        check_equal(compare_control("trap-arm", &arg, 1, NULL).values[0].as.i32, 17);
+        arg.as.i32 = 1;
+        check_equal(compare_control("trap-arm", &arg, 1, NULL).trap, TURBOWASM_TRAP_UNREACHABLE);
+        options.has_fuel_limit = true;
+        for (fuel = 0; fuel < FUEL_BOUNDARIES; ++fuel) {
+            options.fuel = fuel;
+            compare_control("trap-arm", &arg, 1, &options);
+            compare_control("trap", NULL, 0, &options);
+        }
     }
 }

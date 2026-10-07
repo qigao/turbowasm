@@ -383,7 +383,7 @@ static void test_direct_calls_and_trap_parity(void) {
         0x94,
         0x0b,
 
-        /* interpreted-only trapping callee */
+        /* native-eligible trapping callee */
         0x03,
         0x00,
         0x00,
@@ -424,7 +424,7 @@ static void test_direct_calls_and_trap_parity(void) {
     assert(impl->jit_functions[2].state ==
            TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[4].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
+           TURBOWASM_JIT_COMPILED);
 
     pair_destroy(&pair);
 }
@@ -447,7 +447,7 @@ static void test_compiled_caller_preserves_state_mutation(void) {
         0x0a, 0x17,
         0x03,
 
-        /* f0: ++global; return global (MIR-ineligible) */
+        /* f0: ++global; return global */
         0x0b,
         0x00,
         0x23, 0x00,
@@ -463,7 +463,7 @@ static void test_compiled_caller_preserves_state_mutation(void) {
         0x10, 0x00,
         0x0b,
 
-        /* f2: getter (MIR-ineligible) */
+        /* f2: global getter */
         0x04,
         0x00,
         0x23, 0x00,
@@ -483,9 +483,9 @@ static void test_compiled_caller_preserves_state_mutation(void) {
     assert(impl->jit_functions[1].state ==
            TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[0].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
+           TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[2].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
+           TURBOWASM_JIT_COMPILED);
 
     pair_destroy(&pair);
 }

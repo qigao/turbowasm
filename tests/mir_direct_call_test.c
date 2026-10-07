@@ -161,7 +161,7 @@ int main(void) {
         0x94,
         0x0b,
 
-        /* f4: interpreted-only trapping callee */
+        /* f4: native-eligible trapping callee */
         0x03,
         0x00,
         0x00,
@@ -197,7 +197,7 @@ int main(void) {
     impl = turbowasm_module_impl_get(&module);
     assert(impl != NULL);
 
-    /* Division is native-eligible; unreachable still uses the interpreter. */
+    /* Division and unreachable are native-eligible. */
     callee = turbowasm_validation_context_function(
         &impl->validation, 0u);
     assert(callee != NULL);
@@ -213,7 +213,7 @@ int main(void) {
     callee = turbowasm_validation_context_function(
         &impl->validation, 4u);
     assert(callee != NULL);
-    assert(!backend.is_function_eligible(
+    assert(backend.is_function_eligible(
         backend.context, &impl->validation, 4u, callee));
 
     compile_and_compare(

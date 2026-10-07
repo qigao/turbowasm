@@ -322,6 +322,30 @@ host/interpreted targets, long tail chains, GC, traps, fuel and allocation failu
 Rollback removes these four admission cases and their emitter together; Runtime
 interpreted behavior remains the compatibility baseline.
 
+### MIR globals and nullable-reference control
+
+Global reads and writes use Runtime's existing global accessors. The provider's
+global cell remains the sole state owner, including imported aliases; generated
+code copies complete values through invocation scratch and never caches a global
+address. Mutability and semantic type checks precede writes. Managed values in
+globals are traced by their instance/store and temporary reference cells remain
+in the native frame's existing root source. Scalar/vector globals use the same
+value boundary. No installed API or ownership contract changes.
+
+`br_on_null` removes its reference from the taken edge and retains it on the
+non-null fallthrough; `br_on_non_null` forwards it on the taken edge and removes
+it on null fallthrough. Only a taken edge writes target merge cells, preserving
+loop inputs and values still live on fallthrough. Both reuse Runtime null testing
+and the existing structured target metadata. `unreachable` records its defined
+trap after its instruction checkpoint and terminates the native path.
+
+Direct field access or a second reference representation would duplicate
+ownership/type rules. The chosen helper boundary adds bounded copies and calls,
+but retains existing allocation limits, single-owner execution, error reporting
+and cleanup. Tests cover imported/provider mutation, scalar/vector/reference
+values, GC retention, both branch outcomes at block/function/loop targets, fuel,
+traps and rejected writes. Rollback removes admission and emission together.
+
 ### MIR immediate SIMD boundary
 
 Shuffle, lane extract/replace and extended SIMD memory instructions reuse the

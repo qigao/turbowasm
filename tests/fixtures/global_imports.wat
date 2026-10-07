@@ -1,0 +1,11 @@
+(module
+  (import "p" "g_any" (global $a (mut anyref)))
+  (import "p" "g_vec" (global $v (mut v128)))
+  (import "p" "g_fun" (global $f (mut funcref)))
+  (func (export "get-any") (result anyref) global.get $a)
+  (func (export "set-any") (param anyref) local.get 0 global.set $a)
+  (func (export "get-vector") (result v128) global.get $v)
+  (func (export "set-vector") (param v128) local.get 0 global.set $v)
+  (func (export "get-function") (result funcref) global.get $f)
+  (func (export "set-function") (param funcref) local.get 0 global.set $f)
+)

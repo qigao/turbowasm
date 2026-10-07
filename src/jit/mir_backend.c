@@ -1994,6 +1994,7 @@ static bool turbowasm_mir_scan_structured_scalar(
         }
 
         switch (opcode) {
+            case TURBOWASM_JIT_UNREACHABLE:
             case 0x01u: /* nop */
                 break;
 
@@ -2071,6 +2072,11 @@ static bool turbowasm_mir_scan_structured_scalar(
                 }
                 break;
 
+            case TURBOWASM_JIT_BR_ON_NULL:
+            case TURBOWASM_JIT_BR_ON_NON_NULL:
+                calls.references = true;
+                /* The validator proves the branch's edge-specific signature. */
+                /* fall through */
             case 0x0cu: /* br */
             case 0x0du: { /* br_if */
                 uint32_t depth;
@@ -2208,6 +2214,18 @@ static bool turbowasm_mir_scan_structured_scalar(
             case 0x1au: /* drop */
                 break;
 
+            case TURBOWASM_JIT_GLOBAL_GET:
+            case TURBOWASM_JIT_GLOBAL_SET: {
+                uint32_t global;
+                uint8_t value_type;
+                if (!turbowasm_reader_uleb32(&reader, &global) || global >= validation->global_count) goto done;
+                value_type = validation->globals[global].value_type;
+                if (!turbowasm_mir_value_type(value_type) && value_type != 0x7bu) goto done;
+                calls.references |= turbowasm_mir_reference_type(value_type);
+                if (calls.arguments == 0u) calls.arguments = 1u;
+                if (calls.results == 0u) calls.results = 1u;
+                break;
+            }
             case 0x20u: /* local.get */
             case 0x21u: /* local.set */
             case 0x22u: { /* local.tee */
@@ -3272,6 +3290,31 @@ static turbowasm_status turbowasm_mir_structured_emit_simd(
     }
 }
 
+static bool turbowasm_mir_emit_global(turbowasm_mir_text *text,
+    const turbowasm_validation_context *validation, turbowasm_reader *reader,
+    uint8_t opcode, turbowasm_mir_stack_value *stack, uint32_t *stack_size,
+    uint32_t *next_reg, uint32_t *next_slot, uint32_t slot_limit) {
+    uint32_t index;
+    uint8_t value_type;
+    turbowasm_validation_func_type result_type = {0};
+    if (!turbowasm_reader_uleb32(reader, &index) || index >= validation->global_count) return false;
+    value_type = validation->globals[index].value_type;
+    if (opcode == TURBOWASM_JIT_GLOBAL_SET) {
+        turbowasm_mir_stack_value value;
+        if (*stack_size == 0u) return false;
+        value = stack[--*stack_size];
+        if (value.type != value_type || !turbowasm_mir_emit_value_store(text,
+                "jit_call_args", 0u, value.type, turbowasm_mir_reg_prefix(value.type), value.reg)) return false;
+    }
+    if (!turbowasm_mir_text_appendf(text,
+            "call tw_reference_p, tw_reference, jit_status, jit_ctx, %u, %u, jit_call_results, jit_call_args, 0\n"
+            "call tw_call_status_p, tw_jit_call_status, jit_status, jit_ctx\n"
+            "bne jit_fail, jit_status, 0\n", opcode, index)) return false;
+    if (opcode == TURBOWASM_JIT_GLOBAL_SET) return true;
+    result_type.result_count = 1u; result_type.results = &value_type;
+    return turbowasm_mir_emit_call_results(text, &result_type, stack, stack_size, next_reg, next_slot, slot_limit);
+}
+
 static bool turbowasm_mir_emit_reference(turbowasm_mir_text *text,
     const turbowasm_validation_context *validation, turbowasm_reader *reader,
     uint8_t opcode, turbowasm_mir_stack_value *stack, uint32_t *stack_size,
@@ -3729,6 +3772,17 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
         }
 
         switch (opcode) {
+            case TURBOWASM_JIT_UNREACHABLE:
+                if (!turbowasm_mir_text_appendf(&text,
+                        "call tw_reference_p, tw_reference, jit_status, jit_ctx, 0, 0, 0, 0, 0\nret\n")) goto oom;
+                stack_size = controls[control_size - 1u].height;
+                reachable = false;
+                break;
+            case TURBOWASM_JIT_GLOBAL_GET:
+            case TURBOWASM_JIT_GLOBAL_SET:
+                if (next_reg >= register_count || !turbowasm_mir_emit_global(&text, validation,
+                        &reader, opcode, stack, &stack_size, &next_reg, &next_slot, slot_limit)) goto done;
+                break;
             case 0x01u: /* nop */
                 break;
 
@@ -3869,6 +3923,26 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 break;
             }
 
+            case TURBOWASM_JIT_BR_ON_NULL:
+            case TURBOWASM_JIT_BR_ON_NON_NULL: {
+                uint32_t depth, condition_reg;
+                turbowasm_mir_stack_value reference;
+                if (!turbowasm_reader_uleb32(&reader, &depth) || depth >= control_size ||
+                    stack_size == 0u || next_reg >= register_count) goto done;
+                reference = stack[stack_size - 1u];
+                if (!turbowasm_mir_emit_reference(&text, validation, &reader,
+                        TURBOWASM_JIT_REF_IS_NULL, stack, &stack_size, &next_reg)) goto done;
+                condition_reg = stack[--stack_size].reg;
+                if (opcode == TURBOWASM_JIT_BR_ON_NON_NULL) {
+                    stack[stack_size++] = reference;
+                    if (!turbowasm_mir_text_appendf(&text, "eq r%u, r%u, 0\n", condition_reg, condition_reg)) goto oom;
+                }
+                if (!turbowasm_mir_structured_branch_target(&text, controls, control_size,
+                        depth, stack, stack_size, true, condition_reg, opcode_offset)) goto done;
+                if (opcode == TURBOWASM_JIT_BR_ON_NULL) stack[stack_size++] = reference;
+                else --stack_size;
+                break;
+            }
             case 0x0cu: /* br */
             case 0x0du: { /* br_if */
                 uint32_t depth;
