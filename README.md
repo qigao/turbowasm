@@ -65,8 +65,11 @@ memory64 verification passed the Linux and macOS MIR test profiles; see the
 is not supported. The synchronous Component Model subset is exposed separately
 through the optional `TurboWasm::Component` façade; it does not enter the
 `TurboWasm::Runtime` public ABI. WASI 0.2 remains a separate capability layer
-tracked by Runtime v2 (#301). GC and table64 execute in the interpreter; native
-MIR lowering of these operations is not claimed.
+tracked by Runtime v2 (#301). GC and all table64 operations execute in the
+interpreter. MIR also lowers table.size, table.init, table.copy and elem.drop
+through Runtime for table32/table64, including mixed-width and imported tables.
+Native reference operands (table.get/set/grow/fill) and GC instruction lowering
+remain incomplete.
 
 ## Core 3.0 and managed references
 

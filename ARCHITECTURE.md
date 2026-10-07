@@ -228,6 +228,35 @@ or serialized formats. Tests cover long mixed-arity chains, interpreted and host
 targets, empty/mixed results, allocation cleanup and checkpoint parity. Rollback
 must remove general-tail admission, emission and dispatcher storage together.
 
+### MIR table storage boundary
+
+Native table operations delegate to the same Runtime table objects and element
+segments as the interpreter. The MIR decoder derives operand widths from validated
+table limits: destinations and sources use their respective address types;
+`table.copy` uses i64 length only when both tables are table64; `table.init`
+keeps i32 source and length. These are the [Core table typing rules](https://webassembly.github.io/spec/core/valid/instructions.html#valid-table-copy).
+Admission and emission share one decoded signature, so a rejected operation cannot
+reach a mismatched helper ABI. Memory and table helpers remain separate adapters
+while sharing native integer argument emission.
+
+Helpers borrow the instance for one synchronous operation and never cache table
+entry pointers. Imported tables resolve through Runtime to their original owner;
+native code has no separate table size, drop state or GC reference store. Runtime
+checks both ranges before copying, preserves overlap semantics, and allocates
+table.init staging through its configured allocator. Resource limits, allocation
+failure, and TABLE_OUT_OF_BOUNDS traps retain the interpreter contract. Each
+instruction's existing checkpoint runs before the helper can mutate storage.
+There are no new buffers, retained references, locks or public APIs in this boundary.
+
+The first admitted operations are size, init, copy and element drop. get/set/grow/
+fill still require the planned native reference-value frame and remain rejected
+by MIR admission until that frame is implemented and rooted. This is an explicit
+native subset, not a claim of complete table64 lowering. Tests compare table
+contents and drop state as well as status/results, including table32/table64
+mixing, imported backing, overlap, full-width bounds, fuel and allocation failure.
+Rollback removes table decoder admission and emission with the helper registration;
+Runtime table ownership and the public API are unchanged.
+
 ## Component host values and resource ownership (approved design)
 
 Approved by the user on 2026-10-07. Composite host values, status-returning

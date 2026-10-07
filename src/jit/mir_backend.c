@@ -3,6 +3,7 @@
 #include "../instance_internal.h"
 #include "../jit_simd_helper.h"
 #include "../jit_memory_helper.h"
+#include "../jit_table_helper.h"
 #include "../relaxed_simd.h"
 #include "../simd_exec_table.h"
 
@@ -166,17 +167,18 @@ static bool turbowasm_mir_read_indexed_memarg(
     return true;
 }
 
-typedef struct turbowasm_mir_memory_op {
+typedef struct turbowasm_mir_storage_op {
     uint32_t opcode;
-    uint32_t memory;
+    uint32_t primary;
     uint32_t secondary;
+    bool table;
     uint64_t offset;
     uint8_t inputs[3];
     uint8_t input_count;
     uint8_t result;
-} turbowasm_mir_memory_op;
+} turbowasm_mir_storage_op;
 
-static bool turbowasm_mir_memory_opcode(uint8_t opcode) {
+static bool turbowasm_mir_storage_opcode(uint8_t opcode) {
     return (opcode >= 0x28u && opcode <= 0x40u) || opcode == 0xfcu || opcode == 0xfeu;
 }
 
@@ -185,10 +187,51 @@ static uint8_t turbowasm_mir_memory_type(
     return validation->memories[memory].memory64 ? 0x7eu : 0x7fu;
 }
 
-/* Both admission and emission consume this decoded memory signature. */
-static bool turbowasm_mir_decode_memory(
+static uint8_t turbowasm_mir_table_address_type(
+    const turbowasm_validation_context *validation, uint32_t table) {
+    return validation->tables[table].limits.table64 ? 0x7eu : 0x7fu;
+}
+
+static bool turbowasm_mir_decode_table_bulk(
+    const turbowasm_validation_context *validation, turbowasm_reader *reader,
+    uint32_t opcode, turbowasm_mir_storage_op *op) {
+    if (opcode != TURBOWASM_JIT_TABLE_INIT && opcode != TURBOWASM_JIT_ELEMENT_DROP &&
+        opcode != TURBOWASM_JIT_TABLE_COPY && opcode != TURBOWASM_JIT_TABLE_SIZE)
+        return false;
+    op->table = true;
+    op->opcode = opcode;
+    if (opcode == TURBOWASM_JIT_TABLE_INIT || opcode == TURBOWASM_JIT_ELEMENT_DROP) {
+        if (!turbowasm_reader_uleb32(reader, &op->secondary) ||
+            op->secondary >= validation->element_segment_count)
+            return false;
+        if (opcode == TURBOWASM_JIT_ELEMENT_DROP)
+            return true;
+    }
+    if (!turbowasm_reader_uleb32(reader, &op->primary) ||
+        op->primary >= validation->table_count)
+        return false;
+    if (opcode == TURBOWASM_JIT_TABLE_SIZE) {
+        op->result = turbowasm_mir_table_address_type(validation, op->primary);
+        return true;
+    }
+    op->input_count = 3u;
+    op->inputs[0] = turbowasm_mir_table_address_type(validation, op->primary);
+    op->inputs[1] = op->inputs[2] = 0x7fu;
+    if (opcode == TURBOWASM_JIT_TABLE_COPY) {
+        if (!turbowasm_reader_uleb32(reader, &op->secondary) ||
+            op->secondary >= validation->table_count)
+            return false;
+        op->inputs[1] = turbowasm_mir_table_address_type(validation, op->secondary);
+        op->inputs[2] = op->inputs[0] == 0x7eu && op->inputs[1] == 0x7eu
+            ? 0x7eu : 0x7fu;
+    }
+    return true;
+}
+
+/* Admission and emission consume the same decoded storage signature. */
+static bool turbowasm_mir_decode_storage(
     const turbowasm_validation_context *validation,
-    turbowasm_reader *reader, uint8_t opcode, turbowasm_mir_memory_op *op) {
+    turbowasm_reader *reader, uint8_t opcode, turbowasm_mir_storage_op *op) {
     uint8_t address_type;
     memset(op, 0, sizeof(*op));
     op->opcode = opcode;
@@ -207,10 +250,10 @@ static bool turbowasm_mir_decode_memory(
         if (subopcode > 2u && descriptor == NULL)
             return false;
         if (!turbowasm_mir_read_indexed_memarg(
-                validation, reader, &op->memory, &op->offset))
+                validation, reader, &op->primary, &op->offset))
             return false;
         op->opcode = TURBOWASM_JIT_MEMORY_ATOMIC + subopcode;
-        op->inputs[0] = turbowasm_mir_memory_type(validation, op->memory);
+        op->inputs[0] = turbowasm_mir_memory_type(validation, op->primary);
         if (subopcode <= 2u) {
             op->inputs[1] = subopcode == 2u ? 0x7eu : 0x7fu;
             op->inputs[2] = 0x7eu;
@@ -228,9 +271,9 @@ static bool turbowasm_mir_decode_memory(
     if (opcode >= 0x28u && opcode <= 0x3eu) {
         uint8_t value_type;
         if (!turbowasm_mir_read_indexed_memarg(
-                validation, reader, &op->memory, &op->offset))
+                validation, reader, &op->primary, &op->offset))
             return false;
-        address_type = turbowasm_mir_memory_type(validation, op->memory);
+        address_type = turbowasm_mir_memory_type(validation, op->primary);
         if (opcode == 0x2au || opcode == 0x38u)
             value_type = 0x7du;
         else if (opcode == 0x2bu || opcode == 0x39u)
@@ -251,10 +294,10 @@ static bool turbowasm_mir_decode_memory(
         return true;
     }
     if (opcode == 0x3fu || opcode == 0x40u) {
-        if (!turbowasm_reader_uleb32(reader, &op->memory) ||
-            op->memory >= validation->memory_count)
+        if (!turbowasm_reader_uleb32(reader, &op->primary) ||
+            op->primary >= validation->memory_count)
             return false;
-        op->result = turbowasm_mir_memory_type(validation, op->memory);
+        op->result = turbowasm_mir_memory_type(validation, op->primary);
         if (opcode == 0x40u) {
             op->input_count = 1u;
             op->inputs[0] = op->result;
@@ -263,8 +306,11 @@ static bool turbowasm_mir_decode_memory(
     }
     if (opcode == 0xfcu) {
         uint32_t subopcode;
-        if (!turbowasm_reader_uleb32(reader, &subopcode) ||
-            subopcode < 8u || subopcode > 11u)
+        if (!turbowasm_reader_uleb32(reader, &subopcode))
+            return false;
+        if (subopcode >= TURBOWASM_JIT_TABLE_INIT)
+            return turbowasm_mir_decode_table_bulk(validation, reader, subopcode, op);
+        if (subopcode < 8u || subopcode > 11u)
             return false;
         op->opcode = TURBOWASM_JIT_MEMORY_BULK + subopcode;
         if (subopcode == 8u || subopcode == 9u) {
@@ -274,10 +320,10 @@ static bool turbowasm_mir_decode_memory(
             if (subopcode == 9u)
                 return true;
         }
-        if (!turbowasm_reader_uleb32(reader, &op->memory) ||
-            op->memory >= validation->memory_count)
+        if (!turbowasm_reader_uleb32(reader, &op->primary) ||
+            op->primary >= validation->memory_count)
             return false;
-        address_type = turbowasm_mir_memory_type(validation, op->memory);
+        address_type = turbowasm_mir_memory_type(validation, op->primary);
         op->input_count = 3u;
         op->inputs[0] = address_type;
         op->inputs[1] = 0x7fu;
@@ -1729,9 +1775,9 @@ static bool turbowasm_mir_scan_structured_scalar(
         opcode_offset =
             (uint32_t)(reader.cursor - function->code - 1u);
 
-        if (turbowasm_mir_memory_opcode(opcode)) {
-            turbowasm_mir_memory_op op;
-            if (!turbowasm_mir_decode_memory(validation, &reader, opcode, &op))
+        if (turbowasm_mir_storage_opcode(opcode)) {
+            turbowasm_mir_storage_op op;
+            if (!turbowasm_mir_decode_storage(validation, &reader, opcode, &op))
                 goto done;
             continue;
         }
@@ -2486,14 +2532,14 @@ static bool turbowasm_mir_structured_branch_target(
     return true;
 }
 
-static turbowasm_status turbowasm_mir_emit_memory(
+static turbowasm_status turbowasm_mir_emit_storage(
     turbowasm_mir_text *text, const turbowasm_validation_context *validation,
     turbowasm_reader *reader, uint8_t opcode,
     turbowasm_mir_stack_value *stack, uint32_t *stack_size, uint32_t *next_reg) {
-    turbowasm_mir_memory_op op;
+    turbowasm_mir_storage_op op;
     uint32_t base, index;
     long long offset;
-    if (!turbowasm_mir_decode_memory(validation, reader, opcode, &op) ||
+    if (!turbowasm_mir_decode_storage(validation, reader, opcode, &op) ||
         *stack_size < op.input_count)
         return TURBOWASM_UNSUPPORTED;
     base = *stack_size - op.input_count;
@@ -2508,20 +2554,22 @@ static turbowasm_status turbowasm_mir_emit_memory(
                 "call tw_memory_load_%s_p, tw_memory_load_%s, %s%u, "
                 "jit_ctx, %u, %lld, r%u\n",
                 suffix, suffix, turbowasm_mir_reg_prefix(op.result),
-                *next_reg, op.memory, offset, stack[base].reg))
+                *next_reg, op.primary, offset, stack[base].reg))
             return TURBOWASM_OUT_OF_MEMORY;
     } else if (op.opcode == 0x38u || op.opcode == 0x39u) {
         const char *suffix = op.opcode == 0x38u ? "f32" : "f64";
         if (!turbowasm_mir_text_appendf(text,
                 "call tw_memory_store_%s_p, tw_memory_store_%s, jit_status, "
                 "jit_ctx, %u, %lld, r%u, %s%u\n",
-                suffix, suffix, op.memory, offset, stack[base].reg,
+                suffix, suffix, op.primary, offset, stack[base].reg,
                 turbowasm_mir_reg_prefix(op.inputs[1]), stack[base + 1u].reg))
             return TURBOWASM_OUT_OF_MEMORY;
     } else {
+        const char *helper = op.table ? "tw_table" : "tw_memory";
         if (!turbowasm_mir_text_appendf(text,
-                "call tw_memory_p, tw_memory, r%u, jit_ctx, %u, %u, %u, %lld",
-                *next_reg, op.opcode, op.memory, op.secondary, offset))
+                "call %s_p, %s, r%u, jit_ctx, %u, %u, %u",
+                helper, helper, *next_reg, op.opcode, op.primary, op.secondary) ||
+            (!op.table && !turbowasm_mir_text_appendf(text, ", %lld", offset)))
             return TURBOWASM_OUT_OF_MEMORY;
         for (index = 0u; index < 3u; ++index) {
             if (index < op.input_count) {
@@ -2929,6 +2977,9 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             "tw_jit_m_%u: module\n"
             "tw_call_values_p: proto i64, p:ctx, i64:index, p:args, p:results\n"
             "tw_tail_values_p: proto i64, p:ctx, i64:index, p:args\n"
+            "tw_table_p: proto i64, p:ctx, i64:op, i64:table, i64:secondary, "
+                "i64:a, i64:b, i64:c\n"
+            "import tw_table\n"
             "tw_memory_p: proto i64, p:ctx, i64:op, i64:mem, i64:secondary, "
                 "i64:offset, i64:a, i64:b, i64:c\n"
             "tw_memory_load_f32_p: proto f, p:ctx, i64:mem, i64:offset, i64:address\n"
@@ -3185,8 +3236,8 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
         if (!turbowasm_mir_emit_checkpoint_text(&text))
             goto oom;
 
-        if (turbowasm_mir_memory_opcode(opcode)) {
-            turbowasm_status memory_status = turbowasm_mir_emit_memory(
+        if (turbowasm_mir_storage_opcode(opcode)) {
+            turbowasm_status memory_status = turbowasm_mir_emit_storage(
                 &text, validation, &reader, opcode, stack, &stack_size, &next_reg);
             if (memory_status == TURBOWASM_OUT_OF_MEMORY)
                 goto oom;
@@ -5445,6 +5496,14 @@ static bool turbowasm_mir_register_call_externals(
         _Static_assert(sizeof(fn) == sizeof(address), "MIR external pointer size mismatch");
         memcpy(&address, &fn, sizeof(address));
         MIR_load_external(backend->mir, "tw_memory", address);
+    }
+
+    {
+        int64_t (*fn)(turbowasm_jit_invocation_context *,
+            int64_t, int64_t, int64_t, int64_t, int64_t, int64_t) = turbowasm_jit_table;
+        _Static_assert(sizeof(fn) == sizeof(address), "MIR external pointer size mismatch");
+        memcpy(&address, &fn, sizeof(address));
+        MIR_load_external(backend->mir, "tw_table", address);
     }
 
     {
