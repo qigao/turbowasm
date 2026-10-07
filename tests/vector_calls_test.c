@@ -1,6 +1,7 @@
 #include <turbowasm/turbowasm.h>
 #include "instance_internal.h"
 #include "fixtures/vector_calls.h"
+#include "fixtures/vector_imports.h"
 #ifdef TURBOWASM_TEST_MIR
 #include "jit/mir_backend.h"
 #endif
@@ -8,17 +9,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { TUPLE_SIZE = 6, TAIL_DEPTH = 1024, FUEL_LIMIT = 40 };
+enum { TUPLE_SIZE = 6, WIDE_COUNT = 16, TAIL_DEPTH = 1024, FUEL_LIMIT = 40 };
 static turbowasm_module module;
 static turbowasm_instance instance, reference;
 static turbowasm_linker linker;
+static turbowasm_store store;
 static struct { size_t attempts, fail_at, live; } allocations;
 
 typedef struct outcome {
     turbowasm_status status;
     turbowasm_trap trap;
     size_t count;
-    turbowasm_value values[TUPLE_SIZE];
+    turbowasm_value values[WIDE_COUNT];
 } outcome;
 
 static void *allocate(void *context, size_t size) {
@@ -79,6 +81,9 @@ static void same(const turbowasm_value *actual, const turbowasm_value *expected)
         case TURBOWASM_VALUE_EXTERNREF:
             check_equal(actual->as.externref.is_null, expected->as.externref.is_null);
             check_equal(actual->as.externref.token, expected->as.externref.token); break;
+        case TURBOWASM_VALUE_GCREF:
+            check_true(actual->as.gcref.store == expected->as.gcref.store);
+            check_equal(actual->as.gcref.handle, expected->as.gcref.handle); break;
         default: check(false, "unexpected result kind");
     }
     if (size != 0) check_equal(memcmp(&actual->as, &expected->as, size), 0);
@@ -87,7 +92,7 @@ static outcome invoke(turbowasm_instance *target, const char *name,
     const turbowasm_value *args, size_t count, const turbowasm_execution_options *options) {
     outcome result = {0};
     result.status = turbowasm_instance_invoke_with_options(target, index_of(name),
-        args, count, result.values, TUPLE_SIZE, &result.count, &result.trap, options);
+        args, count, result.values, WIDE_COUNT, &result.count, &result.trap, options);
     return result;
 }
 static outcome compare(const char *name, const turbowasm_value *args, size_t count,
@@ -105,6 +110,13 @@ static turbowasm_status host(void *context, turbowasm_host_call *call,
     const turbowasm_value *args, size_t count, turbowasm_value *results,
     size_t capacity, size_t *out_count, turbowasm_trap *trap) {
     (void)context;
+    {
+        turbowasm_status status = turbowasm_store_collect(&store);
+        if (status != TURBOWASM_OK) {
+            *out_count = 0; *trap = TURBOWASM_TRAP_NONE;
+            return status;
+        }
+    }
     return turbowasm_instance_invoke(turbowasm_host_call_instance(call), index_of("identity"),
         args, count, results, capacity, out_count, trap);
 }
@@ -114,17 +126,20 @@ spec("vector call values") {
         const turbowasm_value_kind kind = TURBOWASM_VALUE_V128;
         turbowasm_host_function_type type = {&kind, 1, &kind, 1};
         turbowasm_runtime_config runtime;
+        turbowasm_store_config config;
         memset(&allocations, 0, sizeof(allocations));
         turbowasm_runtime_config_init(&runtime);
         runtime.allocator.allocate = allocate; runtime.allocator.deallocate = deallocate;
+        turbowasm_store_config_init(&config); config.runtime = runtime;
+        check_equal(turbowasm_store_create(&store, &config), TURBOWASM_OK);
         check_equal(turbowasm_module_load_borrowed_with_config(&module,
             vector_calls_bytes, sizeof(vector_calls_bytes), &runtime), TURBOWASM_OK);
         check_equal(turbowasm_linker_init(&linker), TURBOWASM_OK);
         check_equal(turbowasm_linker_define_host_function(&linker,
             (turbowasm_name){(const uint8_t *)"h", 1},
             (turbowasm_name){(const uint8_t *)"vector", 6}, &type, host, NULL), TURBOWASM_OK);
-        check_equal(turbowasm_instance_create_linked(&instance, &module, &linker), TURBOWASM_OK);
-        check_equal(turbowasm_instance_create_linked(&reference, &module, &linker), TURBOWASM_OK);
+        check_equal(turbowasm_instance_create_in_store(&instance, &module, &linker, &store), TURBOWASM_OK);
+        check_equal(turbowasm_instance_create_in_store(&reference, &module, &linker, &store), TURBOWASM_OK);
 #ifdef TURBOWASM_TEST_MIR
         {
             turbowasm_jit_backend backend = {0};
@@ -137,11 +152,12 @@ spec("vector call values") {
         allocations.fail_at = 0;
         turbowasm_instance_destroy(&instance); turbowasm_instance_destroy(&reference);
         turbowasm_linker_destroy(&linker); turbowasm_module_destroy(&module);
+        check_equal(turbowasm_store_destroy(&store), TURBOWASM_OK);
         check_equal(allocations.live, 0u);
     }
     it("preserves vector bits and shape through direct, host and indirect calls") {
         const char *direct[] = {"identity", "direct", "tail", "host"};
-        const char *indirect[] = {"table", "tail-table"};
+        const char *indirect[] = {"table-call", "tail-table"};
         turbowasm_value args[] = {vector(), integer(0)};
         size_t i, target;
         for (i = 0; i < sizeof(direct) / sizeof(*direct); ++i) {
@@ -170,6 +186,8 @@ spec("vector call values") {
         result = compare("locals", &args[1], 1, NULL);
         check_equal(result.status, TURBOWASM_OK);
         same(&result.values[0], &args[1]); same(&result.values[1], &args[1]);
+        result = compare("wide", &args[1], 1, NULL);
+        check_equal(result.status, TURBOWASM_OK); check_equal(result.count, WIDE_COUNT);
     }
     it("merges vector control results and resets locals on self tail calls") {
         turbowasm_value args[] = {vector(), integer(0)};
@@ -184,7 +202,7 @@ spec("vector call values") {
     it("propagates traps and bounded execution without publishing results") {
         turbowasm_execution_options options = {0};
         turbowasm_value args[] = {vector(), integer(3)};
-        check_true(compare("table", args, 2, NULL).status != TURBOWASM_OK);
+        check_true(compare("table-call", args, 2, NULL).status != TURBOWASM_OK);
         check_true(compare("trap", args, 1, NULL).status != TURBOWASM_OK);
         options.has_fuel_limit = true; options.fuel = FUEL_LIMIT;
         args[1] = integer(TAIL_DEPTH);
@@ -206,5 +224,54 @@ spec("vector call values") {
             check_equal(allocations.live, live);
         }
         check_equal(compare("host", &args, 1, NULL).status, TURBOWASM_OK);
+    }
+    it("keeps mixed managed values rooted while a host collects and reenters") {
+        outcome node = invoke(&reference, "make", NULL, 0, NULL), result;
+        turbowasm_root root = {0};
+        turbowasm_value args[] = {vector(), node.values[0]};
+        check_equal(node.status, TURBOWASM_OK);
+        check_equal(turbowasm_root_retain(&store, &args[1], &root), TURBOWASM_OK);
+        result = compare("live", args, 2, NULL);
+        check_equal(result.status, TURBOWASM_OK);
+        check_equal(invoke(&reference, "read", &result.values[1], 1, NULL).values[0].as.i32, 73);
+        check_equal(turbowasm_root_release(&root), TURBOWASM_OK);
+        result = compare("live-native", args, 1, NULL);
+        check_equal(result.status, TURBOWASM_OK);
+        check_equal(result.values[0].as.i32, 73); same(&result.values[1], args);
+    }
+    it("transports vectors through imported native functions and tables") {
+        turbowasm_module imported = {0};
+        turbowasm_instance consumer = {0};
+        turbowasm_linker imports = {0};
+        turbowasm_value argument = vector();
+        size_t i;
+        check_equal(turbowasm_module_load_borrowed(&imported,
+            vector_imports_bytes, sizeof(vector_imports_bytes)), TURBOWASM_OK);
+        check_equal(turbowasm_linker_init(&imports), TURBOWASM_OK);
+        check_equal(turbowasm_linker_define_instance(&imports,
+            (turbowasm_name){(const uint8_t *)"p", 1}, &instance), TURBOWASM_OK);
+        check_equal(turbowasm_instance_create_in_store(&consumer, &imported, &imports, &store), TURBOWASM_OK);
+#ifdef TURBOWASM_TEST_MIR
+        {
+            turbowasm_jit_backend backend = {0};
+            check_equal(turbowasm_mir_backend_create(&backend), TURBOWASM_OK);
+            check_equal(turbowasm_jit_instance_attach_backend(consumer.impl, &backend, 1u), TURBOWASM_OK);
+        }
+#endif
+        for (i = 0; i < turbowasm_module_export_count(&imported); ++i) {
+            const turbowasm_export_desc *desc = turbowasm_module_export_at(&imported, i);
+            turbowasm_value result = {0};
+            size_t count = 0;
+            turbowasm_trap trap;
+            check_equal(turbowasm_instance_invoke(&consumer, desc->item_index, &argument, 1,
+                &result, 1, &count, &trap), TURBOWASM_OK);
+            check_equal(count, 1u); same(&result, &argument); compiled("identity");
+#ifdef TURBOWASM_TEST_MIR
+            check_equal(((turbowasm_instance_impl *)consumer.impl)->jit_functions[desc->item_index].state,
+                TURBOWASM_JIT_COMPILED);
+#endif
+        }
+        turbowasm_instance_destroy(&consumer); turbowasm_linker_destroy(&imports);
+        turbowasm_module_destroy(&imported);
     }
 }

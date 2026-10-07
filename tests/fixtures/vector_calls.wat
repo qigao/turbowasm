@@ -1,7 +1,8 @@
 (module
   (type $v (func (param v128) (result v128)))
+  (type $node (struct (field i32)))
   (import "h" "vector" (func $host (type $v)))
-  (table 4 funcref)
+  (table (export "table") 4 funcref)
   (elem (i32.const 0) func $identity $interpreted $host)
   (func $identity (export "identity") (type $v) local.get 0)
   (func $interpreted (export "interpreted") (type $v)
@@ -9,7 +10,7 @@
   (func (export "direct") (type $v) local.get 0 call $identity)
   (func (export "tail") (type $v) local.get 0 return_call $identity)
   (func (export "host") (type $v) local.get 0 call $host)
-  (func (export "table") (param v128 i32) (result v128)
+  (func (export "table-call") (param v128 i32) (result v128)
     local.get 0 local.get 1 call_indirect (type $v))
   (func (export "tail-table") (param v128 i32) (result v128)
     local.get 0 local.get 1 return_call_indirect (type $v))
@@ -35,6 +36,22 @@
     end local.get 0 local.get 2)
   (func (export "operation") (param v128) (result v128)
     local.get 0 local.get 0 i32x4.add)
+  (func $make (export "make") (result anyref) i32.const 73 struct.new $node)
+  (func $read (export "read") (param anyref) (result i32)
+    local.get 0 ref.cast (ref $node) struct.get $node 0)
+  (func (export "live") (param v128 anyref) (result v128 anyref)
+    local.get 0 call $host local.get 1)
+  (func (export "live-native") (param v128) (result i32 v128) (local anyref v128)
+    call $make local.set 1
+    local.get 0 call $host local.set 2
+    local.get 1 call $read local.get 2)
+  (func $wide (param v128) (result v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128)
+    local.get 0 local.get 0 local.get 0 local.get 0
+    local.get 0 local.get 0 local.get 0 local.get 0
+    local.get 0 local.get 0 local.get 0 local.get 0
+    local.get 0 local.get 0 local.get 0 local.get 0)
+  (func (export "wide") (param v128) (result v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128)
+    local.get 0 call $wide)
   (func $trap (param v128) (result v128) unreachable)
   (func (export "trap") (param v128) (result v128) local.get 0 call $trap)
 )
