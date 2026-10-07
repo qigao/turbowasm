@@ -53,6 +53,8 @@ jobs:
             sudo apt-get install -y --no-install-recommends ninja-build pkg-config mono-runtime
           else
             command -v ninja >/dev/null || brew install ninja
+            # Match the published Salts SDK's GNU thread-local ABI (TinyTest).
+            brew install gcc@15
           fi
       - name: Prepare Windows toolchain
         if: runner.os == 'Windows'

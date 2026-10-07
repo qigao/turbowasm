@@ -341,6 +341,8 @@ static bool turbowasm_mir_emit_argument_loads(
     turbowasm_mir_text *text,
     const turbowasm_validation_func_type *type) {
     uint32_t index;
+    const size_t maximum_index =
+        (SIZE_MAX - offsetof(turbowasm_value, as)) / sizeof(turbowasm_value);
     for (index = 0u; index < type->param_count; ++index) {
         uint8_t value_type = type->params[index];
         const char *move = turbowasm_mir_move_name(value_type);
@@ -348,8 +350,7 @@ static bool turbowasm_mir_emit_argument_loads(
             ? "i32" : turbowasm_mir_type_name(value_type);
         size_t offset;
         if (move == NULL || memory_type == NULL ||
-            index > (SIZE_MAX - offsetof(turbowasm_value, as)) /
-                sizeof(turbowasm_value))
+            (size_t)index > maximum_index)
             return false;
         offset = (size_t)index * sizeof(turbowasm_value) +
             offsetof(turbowasm_value, as);

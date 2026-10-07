@@ -14,9 +14,9 @@ jobs:
     with:
       builds: >-
         {"include":[
-          {"runner":"ubuntu-latest","rid":"linux-x64","triplet":"x64-linux","host_triplet":"x64-linux","preset":"ci-linux-user","tests":true,"utils":true,"littlefs":true,"consumer":"ci-user"},
+          {"runner":"ubuntu-24.04","rid":"linux-x64","triplet":"x64-linux","host_triplet":"x64-linux","preset":"ci-linux-user","tests":true,"utils":true,"littlefs":true,"consumer":"ci-user"},
           {"runner":"windows-2025","rid":"windows-x64","triplet":"x64-windows","host_triplet":"x64-windows","preset":"ci-win-qualify-user","tests":true,"utils":true,"consumer":"ci-win-user"},
-          {"runner":"ubuntu-latest","rid":"android-arm64-v8a","triplet":"arm64-android","host_triplet":"x64-linux","preset":"ci-android-user","consumer":"ci-android-user"},
-          {"runner":"ubuntu-latest","rid":"linux-x64","triplet":"x64-linux","host_triplet":"x64-linux","preset":"ci-mir-user","tests":true},
-          {"runner":"macos-15","rid":"macos-arm64","triplet":"arm64-osx","host_triplet":"arm64-osx","preset":"ci-mir-user","tests":true}
+          {"runner":"ubuntu-24.04","rid":"android-arm64-v8a","triplet":"arm64-android","host_triplet":"x64-linux","preset":"ci-android-user","consumer":"ci-android-user"},
+          {"runner":"ubuntu-24.04","rid":"linux-x64","triplet":"x64-linux","host_triplet":"x64-linux","preset":"ci-mir-user","tests":true},
+          {"runner":"macos-15","rid":"macos-arm64","triplet":"arm64-osx","host_triplet":"arm64-osx","preset":"ci-macos-mir-user","tests":true}
         ]}

@@ -14,6 +14,7 @@ foreach(_dependency IN ITEMS Salts TurboWasm)
   endif()
   unset(${_dependency}_DIR CACHE)
   unset(${_dependency}_DIR)
+  file(TO_CMAKE_PATH "${_root}" _root)
   find_package(${_dependency} CONFIG REQUIRED
     PATHS "${_root}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 endforeach()

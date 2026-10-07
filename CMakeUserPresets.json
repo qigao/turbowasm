@@ -316,6 +316,10 @@
       }
     },
     {
+      "name": "ci-macos-mir-user",
+      "inherits": ["GccMac", "ci-mir-user"]
+    },
+    {
       "name": "ci-android-user",
       "inherits": [
         "android",
@@ -407,6 +411,15 @@
     }
   ],
   "buildPresets": [
+    {
+      "name": "ci-macos-mir-user",
+      "configurePreset": "ci-macos-mir-user"
+    },
+    {
+      "name": "install-ci-macos-mir-user",
+      "configurePreset": "ci-macos-mir-user",
+      "targets": ["install"]
+    },
     {
       "name": "win-release-user",
       "configurePreset": "win-release-user"
@@ -597,6 +610,11 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "ci-macos-mir-user",
+      "configurePreset": "ci-macos-mir-user",
+      "inherits": "ci-mir-user"
+    },
     {
       "name": "win-release-user",
       "configurePreset": "win-release-user",
