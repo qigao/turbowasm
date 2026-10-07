@@ -1750,7 +1750,7 @@ static turbowasm_status decode_canon_section(
                 }
             }
 
-            if ((lower.has_realloc || lower.is_async) && !lower.has_memory)
+            if (lower.has_realloc && !lower.has_memory)
                 return TURBOWASM_MALFORMED_MODULE;
             if (lower.is_async) {
                 const turbowasm_component_type *type = declared_function_type(component, lower.component_function_index);

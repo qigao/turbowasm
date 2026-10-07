@@ -1220,9 +1220,44 @@ strings and mixed-width stream copies, auxiliary suspension/unwind, task/handle
 capacity, moved endpoint lifetime, malformed callback/import signatures, missing
 realloc options and every constructor allocation failure. Related Component/WASI/resumable/host-wait/
 memory/link/fuel/interrupt regression passed 79/79 targets in 3.49 seconds.
-The MIR target runs this same suite with compiled-function assertions; native
-verification of this increment is pending.
+The MIR target runs this same suite with compiled-function assertions. At
+`249fbc0`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37696876045)
+passed all five matrix jobs. Linux MIR passed 196/196 in 1.94 seconds and macOS
+arm64 MIR passed 196/196 in 2.86 seconds, including the compiled async exec target
+in 0.02 seconds on each platform.
 
-This is an internal integration stage. Automatic async canon lower, per-call
-resource/endpoint-value transactions, retained public async owners and nested
-Component instantiation remain incomplete. Public async admission stays closed.
+This is an internal integration stage. Per-call resource/endpoint-value
+transactions, retained public async owners and nested Component instantiation
+remain incomplete. Public async admission stays closed.
+
+## Automatic local async lowering
+
+The shared inline-provider linker now binds async canon lower to validated local
+async lifts. An exec-owned FIFO retains each async-call frame through Core exit,
+terminal delivery and guest subtask drop. Eager completed children retire without
+callbacks while their parent continues, so repeated sequential calls reuse the
+bounded task capacity. Polling removes the running frame from the ready list
+before guest callbacks can create/collect nested calls. Each poll has a turn limit
+and an explicit per-turn fuel/interruption budget.
+
+Published failures remain observable to waiters. Unpublished failures unwind and
+release their arguments before collection. Private failure teardown requires
+exported caller tasks to be destroyed first; it is separate from cooperative guest
+subtask cancellation. Async unit calls without arguments/results no longer require
+a memory option. Memory remains mandatory for indirect arguments, dynamic values
+and canonical result destinations.
+
+`component_async_lower_test` runs actual Component binaries with local async
+lower imports, memory32-to-memory64 string parameters/results, deferred callbacks,
+early task.return, nested calls during polling, guest cancellation, capacity
+failures, published/unpublished traps, suspended realloc teardown and allocation
+failure sweeps. Windows ASan passed 14 cases with 713 assertions; related
+Component/WASI/resumable/host-wait/memory/link/fuel/interrupt regression passed
+80/80 targets in 3.79 seconds. Native MIR
+qualification of this increment is pending; both native MIR targets run the same
+suite with compiled-function assertions.
+
+The path currently admits local async lifts with scalar, string and plain
+composite payloads. Async capability
+imports, automatic resource/endpoint transactions, public task/endpoint owners,
+cross-instance progress ownership and the broader Component/WASI gaps remain open.

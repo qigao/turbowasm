@@ -182,7 +182,7 @@ spec("private Component async binary metadata") {
         base(false, false); lift(invalid[0], 1u, 1u); failed(TURBOWASM_MALFORMED_MODULE);
     }
 
-    it("requires async lowering to have memory and an async-typed callee") {
+    it("requires an async-typed callee and admits memory-free unit async lowering") {
         static const uint8_t valid[] = {6,3,0};
         static const uint8_t callback[] = {6,3,0,7,0};
         static const uint8_t duplicate[] = {6,3,0,6};
@@ -191,7 +191,9 @@ spec("private Component async binary metadata") {
         check_true(binary.canon_lowers[0].is_async); check_true(binary.canon_lowers[0].has_memory);
         turbowasm_component_binary_destroy(&binary);
         base(false, false); lift(NULL, 0u, 0u); lower(valid, sizeof(valid), 2u, 0u); failed(TURBOWASM_MALFORMED_MODULE);
-        base(true, false); lift(NULL, 0u, 0u); lower(valid, 1u, 1u, 0u); failed(TURBOWASM_MALFORMED_MODULE);
+        base(true, false); lift(NULL, 0u, 0u); lower(valid, 1u, 1u, 0u);
+        check_equal(decode(), TURBOWASM_OK); check_false(binary.canon_lowers[0].has_memory);
+        turbowasm_component_binary_destroy(&binary);
         base(true, false); lift(NULL, 0u, 0u); lower(callback, sizeof(callback), 3u, 0u); failed(TURBOWASM_MALFORMED_MODULE);
         base(true, false); lift(NULL, 0u, 0u); lower(duplicate, sizeof(duplicate), 3u, 0u); failed(TURBOWASM_MALFORMED_MODULE);
     }

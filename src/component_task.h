@@ -139,7 +139,8 @@ turbowasm_status turbowasm_component_task_return_flat(turbowasm_component_task_d
     const turbowasm_value *arguments, size_t argument_count);
 turbowasm_status turbowasm_component_task_take_result(turbowasm_component_task *task,
     turbowasm_component_value *out);
-/* Reject running/reentrant destruction. Unwind Core first, release set pin and
+/* Reject running/reentrant destruction, except an already exited empty sibling
+ * that requires no cleanup callbacks. Unwind Core first, release set pin and
  * result, unregister the task. Primary cleanup error is returned after teardown. */
 turbowasm_status turbowasm_component_task_destroy(turbowasm_component_task *task);
 

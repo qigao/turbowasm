@@ -752,9 +752,9 @@ and acknowledged by task.cancel; a result may win the race. Outstanding borrowed
 handles prevent either resolution. Destroy unwinds the Core callback first,
 releases a pinned wait, destroys any untaken result, and removes the task from
 its domain. Domains, graphs, instances, canonical codec contexts and prepared
-argument owners outlive all such tasks. This private runner is not yet selected
-by public Component calls; automatic builtin/lift/lower binding and
-public retained-instance task wrappers remain integration work.
+argument owners outlive all such tasks. The private instantiation/lowering path
+below selects this runner. Public retained-instance task wrappers remain
+integration work.
 
 Decoded task/context/backpressure/yield/waitable-set builtins now have a private
 Core host binding. Binding checks the resolved memory address width and derives
@@ -864,9 +864,9 @@ retained auxiliary invocation returns or unwinds. It forbids leaving the
 Component during that invocation. An auxiliary owner excludes other tasks in
 the domain across suspension until context restoration. No transient host-call
 pointer is retained.
-This stage admits same-domain task/endpoint execution; async canon lower and
-automatic resource/endpoint-valued argument/result transactions remain closed
-until their per-invocation ownership contexts are integrated. The private entry
+This stage admits same-domain task/endpoint execution and local async lowering;
+async imports and automatic resource/endpoint-valued argument/result transactions
+remain closed until their per-invocation ownership contexts are integrated. The private entry
 does not change public loading or host API admission.
 
 Exec destruction rejects registered tasks and live async table entries before
@@ -875,6 +875,25 @@ prevent destruction even after their handle leaves the local table. The caller
 must drain/drop these owners and retry; no forced cancellation or silent reclaim
 is performed. Constructor failure has no active task and rolls back all allocated
 bindings, Core instances and tables in the existing cleanup path.
+
+Automatic local async lowering uses the existing async-call frame and one
+instance-owned intrusive ready list. The task quota also bounds retained call
+frames, including returned callees that have not exited. Eager, fully delivered
+and exited calls are reclaimed inside the lower boundary without running cleanup
+callbacks; pending calls retain their raw arguments, memories and stable options.
+The driver polls a bounded number of call quanta in FIFO order with an explicit
+per-quantum execution budget. A running frame is removed from the ready list while
+it can create nested calls, preventing list traversal from retaining pointers
+that nested collection could free. No worker or implicit unbounded queue exists.
+
+Successful frames retire only after Core exit and terminal delivery plus guest
+subtask drop (or eager delivery without a handle). Failed published calls retain
+their error for the waiting caller; unpublished failed calls unwind during owner
+collection. A private failure-abort entry propagates a non-success reason,
+rejects active/pinned conversion and releases remaining calls after exported
+caller tasks have been destroyed. It is not public cooperative cancellation. Exec destruction requires
+the call list drained. This stage binds local async lifts; async capability
+imports and automatic ownership-bearing value transactions remain gated.
 
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and

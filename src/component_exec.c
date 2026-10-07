@@ -1141,7 +1141,11 @@ static turbowasm_status define_inline_provider(
                 &exec->canon_lower_contexts[
                     function->canon_lower_index];
             type = context->host_type;
-            host_function = component_canon_lower_host;
+            if (context->is_async) {
+                turbowasm_status status = initialize_lift_adapter(exec, binary, context->local_adapter_index);
+                if (status != TURBOWASM_OK) return status;
+            }
+            host_function = context->is_async ? turbowasm_component_exec_async_lower : component_canon_lower_host;
             host_context = context;
         } else {
             return TURBOWASM_UNSUPPORTED;
@@ -1892,6 +1896,7 @@ static turbowasm_status initialize_canon_lower_state(
             return TURBOWASM_MALFORMED_MODULE;
 
         context->exec = exec;
+        context->is_async = lower->is_async;
         context->local_adapter_index = exec->function_adapter_indices[lower->component_function_index];
         if (context->local_adapter_index != UINT32_MAX) {
             if (context->local_adapter_index >= binary->canon_lift_count)
@@ -1936,7 +1941,9 @@ static turbowasm_status initialize_canon_lower_state(
         function_type = turbowasm_component_type_graph_get(context->graph, context->function_type);
         if (function_type == NULL || function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
             return TURBOWASM_MALFORMED_MODULE;
-        if (function_type->as.function.is_async) return TURBOWASM_UNSUPPORTED;
+        if (function_type->as.function.is_async != lower->is_async ||
+            (lower->is_async && (exec->task_domain.table == NULL || context->local_adapter_index == UINT32_MAX)))
+            return TURBOWASM_UNSUPPORTED;
 
         if (lower->has_realloc && !lower->has_memory)
             return TURBOWASM_MALFORMED_MODULE;
@@ -1948,6 +1955,7 @@ static turbowasm_status initialize_canon_lower_state(
             if (status != TURBOWASM_OK)
                 return status;
         }
+        if (lower->is_async) context->realloc_context.domain = &exec->task_domain;
 
         memset(&signature, 0, sizeof(signature));
         {
@@ -1956,11 +1964,12 @@ static turbowasm_status initialize_canon_lower_state(
                     ? context->memory.pointer_type
                     : TURBOWASM_COMPONENT_POINTER_I32;
             turbowasm_status status =
-                turbowasm_component_canonical_flatten_function(
+                turbowasm_component_canonical_flatten_function_abi(
                     context->graph,
                     context->function_type,
                     pointer_type,
                     TURBOWASM_COMPONENT_CANONICAL_LOWER,
+                    lower->is_async ? TURBOWASM_COMPONENT_ABI_ASYNC : TURBOWASM_COMPONENT_ABI_SYNC,
                     &signature);
             if (status != TURBOWASM_OK)
                 return status;
@@ -2662,8 +2671,6 @@ static turbowasm_status initialize_exec(
     if (limits != NULL) {
         if (limits->tasks == 0u || limits->handles == 0u ||
             limits->handles > TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS) return TURBOWASM_INVALID_ARGUMENT;
-        for (i = 0; i < binary->canon_lower_count; ++i)
-            if (binary->canon_lowers[i].is_async) return TURBOWASM_UNSUPPORTED;
     }
 
     if ((import_set_count != 0u && import_sets == NULL) ||
@@ -3027,6 +3034,7 @@ turbowasm_status turbowasm_component_exec_destroy(
     turbowasm_component_exec *exec) {
     if (exec == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+    if (exec->async_call_count != 0u || exec->async_driving) return TURBOWASM_TRAPPED;
     if (exec->task_domain.table != NULL) {
         uint32_t i;
         turbowasm_status status;

@@ -513,6 +513,19 @@ turbowasm_status turbowasm_component_task_destroy(turbowasm_component_task *task
     if (task == NULL) return TURBOWASM_INVALID_ARGUMENT;
     domain = task->domain;
     if (domain == NULL) return TURBOWASM_OK;
+    /* An eager lower may retire an already exited, empty child while its parent
+     * is active. This path cannot execute guest code or a cleanup callback. */
+    if (domain->active != NULL && domain->active != task &&
+        task->state >= TURBOWASM_EXECUTION_COMPLETED && task->core.impl == NULL &&
+        task->binding.resolve == NULL && task->binding.abandon == NULL &&
+        task->result.kind == TURBOWASM_COMPONENT_TYPE_UNDEFINED && task->result.release == NULL &&
+        task->borrowed_handles == 0u && task->waiting_set == 0u &&
+        task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_NONE && !task->destroying && !task->resolving &&
+        domain->exclusive != task && domain->auxiliary != task) {
+        --domain->count;
+        memset(task, 0, sizeof(*task));
+        return TURBOWASM_OK;
+    }
     if (domain->active != NULL || task->destroying ||
         (task->resolving && task->state != TURBOWASM_EXECUTION_YIELDED)) return TURBOWASM_TRAPPED;
     if (task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_ENDPOINT) {

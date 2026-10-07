@@ -174,16 +174,17 @@ turbowasm_status turbowasm_component_async_call_create(turbowasm_component_async
              binding->callee.graph, target->as.function.result) ||
          !turbowasm_component_transfer_type_features(binding->caller_graph, source->as.function.result, &result)))
         return TURBOWASM_TYPE_MISMATCH;
-    status = memory_valid(&binding->caller_memory, true);
+    status = turbowasm_component_canonical_flatten_function_abi(binding->caller_graph, binding->caller_function_type,
+        binding->caller_memory.pointer_type, TURBOWASM_COMPONENT_CANONICAL_LOWER, TURBOWASM_COMPONENT_ABI_ASYNC, &signature);
+    if (status != TURBOWASM_OK) return status;
+    status = memory_valid(&binding->caller_memory, signature.params_indirect || source->as.function.has_result ||
+        (parameters & TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY) != 0u);
     if (status != TURBOWASM_OK) return status;
     status = memory_valid(&binding->callee.memory, false);
     if (status != TURBOWASM_OK) return status;
     status = transfer_valid(parameters, &binding->caller_memory, &binding->callee.memory, &binding->parameters);
     if (status != TURBOWASM_OK) return status;
     status = transfer_valid(result, &binding->callee.memory, &binding->caller_memory, &binding->result);
-    if (status != TURBOWASM_OK) return status;
-    status = turbowasm_component_canonical_flatten_function_abi(binding->caller_graph, binding->caller_function_type,
-        binding->caller_memory.pointer_type, TURBOWASM_COMPONENT_CANONICAL_LOWER, TURBOWASM_COMPONENT_ABI_ASYNC, &signature);
     if (status != TURBOWASM_OK) return status;
     status = turbowasm_component_canonical_flatten_function_abi(binding->callee.graph, binding->callee.function_type,
         binding->callee.memory.pointer_type, TURBOWASM_COMPONENT_CANONICAL_LIFT,

@@ -124,6 +124,7 @@ typedef struct turbowasm_component_exec_canon_lower_context {
     const turbowasm_component_type_graph *graph;
     turbowasm_component_type_id function_type;
     uint32_t local_adapter_index;
+    bool is_async;
 
     turbowasm_component_flat_signature flat_signature;
     turbowasm_host_function_type host_type;
@@ -183,6 +184,9 @@ typedef struct turbowasm_component_exec {
     turbowasm_component_task_domain task_domain;
     turbowasm_component_task_binding *async_functions;
     turbowasm_component_exec_async_builtin *async_builtins;
+    struct turbowasm_component_exec_async_call *async_calls, *async_calls_tail;
+    uint32_t async_call_count;
+    bool async_driving;
 
     bool may_leave;
     bool initialized;
@@ -220,7 +224,7 @@ turbowasm_status turbowasm_component_exec_resource_release(
     turbowasm_component_exec *exec, uint64_t identity, turbowasm_value rep);
 
 /* Private staged async integration. Explicit nonzero bounded quotas; borrows
- * binary/source bytes. Async lower and ownership-bearing boundary values remain
+ * binary/source bytes. Async imports and ownership-bearing boundary values remain
  * unsupported until their automatic invocation transactions are connected.
  * No public Component loader calls this entry. */
 turbowasm_status turbowasm_component_exec_init_async(
@@ -231,6 +235,20 @@ turbowasm_status turbowasm_component_exec_init_async(
 turbowasm_status turbowasm_component_exec_async_export(
     const turbowasm_component_exec *exec, const uint8_t *name, uint32_t name_size,
     const turbowasm_component_task_binding **out);
+/* Owner-thread driver: at most max_quanta FIFO call turns, each with options as
+ * its fresh budget. Does not drive externally owned exported tasks. Return the
+ * first call error; successful pending work yields. out_pending includes Core
+ * continuations and completed calls awaiting terminal delivery/handle drop. */
+turbowasm_status turbowasm_component_exec_async_poll(turbowasm_component_exec *exec,
+    uint32_t max_quanta, const turbowasm_execution_options *options, uint32_t *out_pending);
+/* Private failure teardown after exported caller tasks are destroyed. A non-OK/non-YIELDED
+ * reason fails retained subtasks, then unwinds their tasks before releasing
+ * memory/loans. Pinned/in-conversion owners reject abort and remain retryable. */
+turbowasm_status turbowasm_component_exec_async_abort(turbowasm_component_exec *exec, turbowasm_status reason);
+/* Internal host binding selected by the shared inline-provider linker. */
+turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_host_call *call,
+    const turbowasm_value *arguments, size_t argument_count, turbowasm_value *results,
+    size_t result_capacity, size_t *result_count, turbowasm_trap *trap);
 /* Refuses live async owners without destroying instances or bindings. */
 turbowasm_status turbowasm_component_exec_destroy(
     turbowasm_component_exec *exec);

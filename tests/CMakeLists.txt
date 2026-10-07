@@ -275,6 +275,13 @@ set_target_properties(turbowasm_component_async_exec_test PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/component")
 add_test(NAME turbowasm_component_async_exec_test COMMAND turbowasm_component_async_exec_test)
 
+add_executable(turbowasm_component_async_lower_test component_async_lower_test.c)
+target_link_libraries(turbowasm_component_async_lower_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_lower_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_lower_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/component")
+add_test(NAME turbowasm_component_async_lower_test COMMAND turbowasm_component_async_lower_test)
+
 add_executable(turbowasm_component_endpoint_builtin_test component_endpoint_builtin_test.c)
 target_link_libraries(turbowasm_component_endpoint_builtin_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
 target_include_directories(turbowasm_component_endpoint_builtin_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
@@ -2177,6 +2184,13 @@ if(TURBOWASM_ENABLE_MIR_JIT)
   target_link_libraries(turbowasm_mir_component_async_exec_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
   set_target_properties(turbowasm_mir_component_async_exec_test PROPERTIES FOLDER "tests/component")
   add_test(NAME turbowasm_mir_component_async_exec_test COMMAND turbowasm_mir_component_async_exec_test)
+
+  add_executable(turbowasm_mir_component_async_lower_test component_async_lower_test.c)
+  target_include_directories(turbowasm_mir_component_async_lower_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_component_async_lower_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_component_async_lower_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  set_target_properties(turbowasm_mir_component_async_lower_test PROPERTIES FOLDER "tests/component")
+  add_test(NAME turbowasm_mir_component_async_lower_test COMMAND turbowasm_mir_component_async_lower_test)
 
   add_executable(turbowasm_mir_component_endpoint_builtin_test component_endpoint_builtin_test.c)
   target_include_directories(turbowasm_mir_component_endpoint_builtin_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
