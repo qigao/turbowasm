@@ -1090,8 +1090,37 @@ deferred cleanup failures, argument/result failures, and handle allocation OOM.
 The same tests are compiled into the existing interpreter and MIR task targets.
 Windows ASan passed 43 task cases with 4989 assertions. The related
 Component/WASI/resumable/host-wait/memory/link/fuel/interrupt selection passed
-76/76 targets in 3.02 seconds. Linux/macOS MIR verification of this subtask
-increment is pending; the preceding builtin increment's results are above.
+76/76 targets in 3.02 seconds. At `d47fdd3`, the
+[native run](https://github.com/qigao/turbowasm/actions/runs/37687006122) passed all
+five jobs: Linux MIR passed 190/190 in 1.43 seconds and macOS arm64 MIR passed
+190/190 in 2.88 seconds. Their MIR task targets passed in 0.02 and 0.03 seconds,
+respectively, including compiled cancellation and inherited-budget assertions.
 This remains private integration: automatic canonical argument/result adapters,
 endpoint builtin bindings, retained public async owners and end-to-end Component
 instantiation are still required before opening public async admission.
+
+## Retained async argument preparation
+
+Task argument preparation now executes once on the same retained coroutine as
+the Core entry. Runtime allocates the typed argument storage first, then the
+private preparation hook validates and copies converted carriers only on success.
+This makes guest realloc suspension part of the task execution: fuel exhaustion,
+interruption and host waits retain the conversion frame instead of replaying it.
+Destroy unwinds that frame before caller abandonment, so temporary strings and
+borrow scopes remain alive until their actual users have stopped. Core allocation
+failure occurs before caller arguments are consumed. Callback exclusivity remains
+held throughout preparation; no callback turn repeats the preparation hook.
+
+The task fixture lowers a real canonical string through memory32/64 guest realloc
+functions and verifies the prepared guest entry reads the converted bytes. Tests
+cover host waits, cancellation while converting, fuel/interruption resumes,
+callback exclusivity, malformed prepared carriers, realloc traps/exceptions,
+destruction while preparing, and an allocation-failure sweep. MIR runs assert
+that the realloc functions and prepared entries actually compiled.
+
+Windows ASan passed 50 task cases with 5988 assertions. The related
+Component/WASI/resumable/host-wait/memory/link/fuel/interrupt regression passed
+76/76 targets in 3.04 seconds. Native MIR verification of this increment is
+pending. This fixes the execution boundary required by async canonical argument
+adapters; automatic binary binding, endpoint builtins and retained public async
+owners remain incomplete, and public async admission stays closed.

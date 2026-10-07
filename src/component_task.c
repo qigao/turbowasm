@@ -193,22 +193,40 @@ static bool can_start(const turbowasm_component_task *task) {
         (task->binding.callback_instance == NULL || task->domain->exclusive == NULL);
 }
 
-static turbowasm_status start_core(turbowasm_component_task *task) {
+static turbowasm_status prepare_core(void *context, turbowasm_value *reserved, size_t reserved_count,
+    turbowasm_jit_execution_control *control, turbowasm_trap *trap) {
+    turbowasm_component_task *task = context;
     turbowasm_value arguments[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS] = {0};
     size_t count = 0u, i;
     turbowasm_status status;
+    (void)control;
     task->phase = TURBOWASM_COMPONENT_TASK_STARTED;
     if (task->binding.prepare != NULL) {
         status = task->binding.prepare(task->binding.prepare_context, task, arguments,
             TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS, &count);
-        if (status != TURBOWASM_OK) return status;
+        if (status != TURBOWASM_OK) { *trap = task->trap; return status; }
     }
-    if (count != task->signature.param_count) return TURBOWASM_TYPE_MISMATCH;
+    if (count != task->signature.param_count || count != reserved_count) return TURBOWASM_TYPE_MISMATCH;
     for (i = 0u; i < count; ++i)
         if (arguments[i].kind != flat_kind(task->signature.params[i])) return TURBOWASM_TYPE_MISMATCH;
+    if (count != 0u) memcpy(reserved, arguments, count * sizeof(*reserved));
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status start_core(turbowasm_component_task *task) {
+    turbowasm_value arguments[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS] = {0};
+    turbowasm_status status;
+    uint32_t i;
+    /* Reserve numeric carrier storage before touching any caller values. The
+     * preparation hook executes on the same coroutine as realloc and entry. */
+    for (i = 0u; i < task->signature.param_count; ++i)
+        arguments[i].kind = flat_kind(task->signature.params[i]);
     task->core_instance = task->binding.instance;
-    return turbowasm_execution_create(&task->core, task->core_instance,
-        task->binding.function_index, arguments, count);
+    status = turbowasm_execution_create(&task->core, task->core_instance,
+        task->binding.function_index, arguments, task->signature.param_count);
+    if (status == TURBOWASM_OK)
+        status = turbowasm_execution_set_prepare(&task->core, prepare_core, task);
+    return status;
 }
 
 static turbowasm_status start_callback(turbowasm_component_task *task) {

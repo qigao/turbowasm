@@ -91,4 +91,28 @@
     (loop $again
       local.get $n i32.const 1 i32.sub local.tee $n br_if $again)
     call $cancel i32.const 0)
+  (func (export "prepare-realloc32") (param i32 i32 i32 i32) (result i32) (local $n i32)
+    i32.const 40 local.set $n
+    (loop $again local.get $n i32.const 1 i32.sub local.tee $n br_if $again)
+    i32.const 256)
+  (func (export "prepare-realloc64") (param i64 i64 i64 i64) (result i64) (local $n i32)
+    i32.const 40 local.set $n
+    (loop $again local.get $n i32.const 1 i32.sub local.tee $n br_if $again)
+    i64.const 256)
+  (func (export "prepare-realloc-wait32") (param i32 i32 i32 i32) (result i32)
+    call $wait i32.const 256)
+  (func (export "prepare-realloc-wait64") (param i64 i64 i64 i64) (result i64)
+    call $wait i64.const 256)
+  (func (export "prepare-realloc-trap") (param i32 i32 i32 i32) (result i32) unreachable)
+  (func (export "prepare-realloc-throw") (param i32 i32 i32 i32) (result i32) throw $failure)
+  (func $prepared-string32 (export "prepared-string32") (param i32 i32)
+    local.get 0 i32.load8_u i32.const 104 i32.ne if unreachable end
+    local.get 1 i32.const 5 i32.ne if unreachable end
+    i32.const 42 call $return)
+  (func (export "prepared-string-callback32") (param i32 i32) (result i32)
+    local.get 0 local.get 1 call $prepared-string32 i32.const 0)
+  (func (export "prepared-string64") (param i64 i64)
+    local.get 0 i32.load8_u 1 i32.const 104 i32.ne if unreachable end
+    local.get 1 i64.const 5 i64.ne if unreachable end
+    i32.const 42 call $return)
 )

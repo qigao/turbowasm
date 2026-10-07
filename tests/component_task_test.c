@@ -1,6 +1,7 @@
 #include "component_task.h"
 #include "component_task_builtin.h"
 #include "component_subtask.h"
+#include "execution_internal.h"
 #include "runtime_alloc.h"
 #include <tinytest.h>
 #include <stdlib.h>
@@ -47,6 +48,10 @@ static turbowasm_component_resource_handle lender;
 static uint64_t lower_address;
 static unsigned loans, lowered, released;
 static bool lower_failure, release_failure, check_release_reentry, check_cancel_pin, prepare_failure;
+static const char *prepare_realloc_entry;
+static unsigned prepare_realloc_calls, prepare_completed;
+static bool prepare_interrupt;
+static bool prepare_wrong_kind, prepare_wrong_count;
 
 static turbowasm_status subtask_prepare(void *context, turbowasm_component_task *task,
     turbowasm_value *arguments, size_t capacity, size_t *out_count);
@@ -89,10 +94,12 @@ static turbowasm_status prepare(void *context, turbowasm_component_task *task,
     check_true(task->domain->active == task); check_greater_equal(capacity, 1u);
     arguments[0].kind = TURBOWASM_VALUE_I32; arguments[0].as.i32 = (int32_t)prepared_argument;
     *out_count = task->binding.function_type == 1u ? 1u : 0u;
+    if (prepare_wrong_kind) arguments[0].kind = TURBOWASM_VALUE_I64;
+    if (prepare_wrong_count) *out_count = 0;
     return TURBOWASM_OK;
 }
 static turbowasm_status return_value(const turbowasm_value *args, size_t count) {
-    turbowasm_component_canonical_memory memory = {0};
+    turbowasm_component_canonical_memory memory = domain.active->binding.memory;
     turbowasm_component_type_ref type = u32_type();
     if (mismatch_return) type = turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_S32);
     if (mismatched_encoding) memory.string_encoding = TURBOWASM_COMPONENT_STRING_UTF16;
@@ -265,6 +272,65 @@ static bool interrupt_child(void *context) {
     return domain.active == &tasks[0];
 }
 
+static bool interrupt_prepare(void *context) { (void)context; return prepare_interrupt; }
+
+static turbowasm_status prepare_realloc(void *context, uint64_t old_pointer, uint64_t old_size,
+    uint64_t alignment, uint64_t new_size, uint64_t *out_pointer) {
+    turbowasm_component_task *task = context;
+    turbowasm_value args[4] = {0}, value = {0};
+    const uint64_t inputs[] = {old_pointer, old_size, alignment, new_size};
+    bool wide = task->binding.memory.pointer_type == TURBOWASM_COMPONENT_POINTER_I64;
+    bool was_allowed = *task->domain->may_leave;
+    turbowasm_status status;
+    size_t i, count = 0;
+    ++prepare_realloc_calls;
+    for (i = 0; i < 4; ++i) {
+        args[i].kind = wide ? TURBOWASM_VALUE_I64 : TURBOWASM_VALUE_I32;
+        if (wide) args[i].as.i64 = (int64_t)inputs[i]; else args[i].as.i32 = (int32_t)inputs[i];
+    }
+    *task->domain->may_leave = false;
+    status = turbowasm_instance_invoke_internal(instance.impl, function_index(prepare_realloc_entry),
+        args, 4, &value, 1, &count, &task->trap, turbowasm_execution_control_get(&task->core));
+    *task->domain->may_leave = was_allowed;
+    if (status != TURBOWASM_OK) return status;
+    check_equal(count, 1u);
+    *out_pointer = wide ? (uint64_t)value.as.i64 : (uint32_t)value.as.i32;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status prepare_string(void *context, turbowasm_component_task *task,
+    turbowasm_value *arguments, size_t capacity, size_t *out_count) {
+    turbowasm_component_canonical_memory memory = task->binding.memory;
+    turbowasm_component_value value = {0};
+    turbowasm_status status, cleanup;
+    uint32_t count = 0;
+    (void)context;
+    ++prepared;
+    check_true(task->domain->active == task);
+    check_equal(task->phase, TURBOWASM_COMPONENT_TASK_STARTED);
+    value.kind = TURBOWASM_COMPONENT_TYPE_STRING;
+    value.as.string.data = turbowasm_rt_malloc(5);
+    if (value.as.string.data == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    value.as.string.size = 5; memcpy(value.as.string.data, "hello", 5);
+    memory.guest_realloc = prepare_realloc; memory.realloc_context = task;
+    status = turbowasm_component_canonical_lower_flat_value(&graph,
+        turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_STRING), &memory, &value,
+        arguments, (uint32_t)capacity, &count);
+    cleanup = turbowasm_component_value_destroy(&value);
+    if (status == TURBOWASM_OK) status = cleanup;
+    if (status == TURBOWASM_OK) { *out_count = count; ++prepare_completed; }
+    return status;
+}
+
+static void create_prepared_string(unsigned wide, const char *realloc_entry) {
+    turbowasm_component_task_binding b = binding(wide ? "prepared-string64" : "prepared-string32", NULL, false);
+    prepare_realloc_entry = realloc_entry;
+    b.function_type = 6; b.prepare = prepare_string;
+    b.memory.instance = &instance; b.memory.memory_index = wide;
+    b.memory.pointer_type = wide ? TURBOWASM_COMPONENT_POINTER_I64 : TURBOWASM_COMPONENT_POINTER_I32;
+    check_equal(turbowasm_component_task_create(&tasks[0], &domain, &b), TURBOWASM_OK);
+}
+
 spec("private async Component Core task execution") {
     before_each() {
         static const turbowasm_value_kind i32s[] = {TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I32};
@@ -287,13 +353,15 @@ spec("private async Component Core task execution") {
         lower_memory.instance = &instance; lower_address = 128;
         loans = lowered = released = 0; lender = 0;
         lower_failure = release_failure = check_release_reentry = check_cancel_pin = prepare_failure = false;
+        prepare_realloc_entry = NULL; prepare_realloc_calls = prepare_completed = 0; prepare_interrupt = false;
+        prepare_wrong_kind = prepare_wrong_count = false;
         memset(builtins, 0, sizeof(builtins));
         entry_word = 1; callback_word = 0; prepared_argument = 42;
         entered = callbacks = prepared = wait_started = wait_resumed = wait_interrupted = 0;
         memset(&last_event, 0, sizeof(last_event)); memset(&set, 0, sizeof(set)); memset(&item, 0, sizeof(item));
         check_true(turbowasm_component_resource_table_init(&table, 32));
         check_true(turbowasm_component_task_domain_init(&domain, &table, &may_leave, 2));
-        check_true(turbowasm_component_type_graph_allocate(&graph, 6));
+        check_true(turbowasm_component_type_graph_allocate(&graph, 7));
         for (i = 0; i < 2; ++i) {
             check_true(turbowasm_component_type_graph_define_function(&graph, i, &param, i, true, u32_type()));
             graph.types[i].as.function.is_async = true;
@@ -306,6 +374,9 @@ spec("private async Component Core task execution") {
             turbowasm_component_type_ref_indexed(3)));
         check_true(turbowasm_component_type_graph_define_function(&graph, 5, NULL, 0, false, param));
         graph.types[2].as.function.is_async = graph.types[4].as.function.is_async = graph.types[5].as.function.is_async = true;
+        { turbowasm_component_type_ref string = turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_STRING);
+          check_true(turbowasm_component_type_graph_define_function(&graph, 6, &string, 1, true, u32_type()));
+          graph.types[6].as.function.is_async = true; }
         check_equal(turbowasm_module_load_borrowed_with_config(&module, component_task_bytes, sizeof(component_task_bytes), &config), TURBOWASM_OK);
         check_equal(turbowasm_linker_init_with_config(&linker, &config), TURBOWASM_OK);
         for (i = 0; i < 5; ++i)
@@ -501,6 +572,149 @@ spec("private async Component Core task execution") {
         { turbowasm_status status = turbowasm_component_task_resume(&tasks[0], NULL);
           allowance = SIZE_MAX; check_equal(status, TURBOWASM_OUT_OF_MEMORY); }
         check_equal(tasks[0].state, TURBOWASM_EXECUTION_FAILED); check_null(domain.active); check_null(domain.exclusive);
+    }
+
+    it("retains dynamic parameter preparation across guest realloc host waits for both memory widths") {
+        unsigned wide;
+        for (wide = 0; wide < 2; ++wide) {
+            create_prepared_string(wide, wide ? "prepare-realloc-wait64" : "prepare-realloc-wait32");
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+            check_equal(turbowasm_execution_yield_reason_get(&tasks[0].core), TURBOWASM_YIELD_HOST_WAIT);
+            check_equal(prepared, 1u); check_equal(prepare_realloc_calls, 1u); check_equal(prepare_completed, 0u);
+            check_equal(tasks[0].phase, TURBOWASM_COMPONENT_TASK_STARTED); check_equal(tasks[0].result.kind, 0);
+            check_false(may_leave);
+            /* Requesting cancellation does not free conversion storage or
+             * complete realloc's underlying host operation. */
+            check_equal(turbowasm_component_task_request_cancel(&tasks[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+            check_equal(prepare_realloc_calls, 1u);
+            complete_wait(0);
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+            check_equal(tasks[0].result.as.u32, 42u); check_equal(prepare_completed, 1u);
+            check_equal(prepared, 1u); check_true(may_leave);
+            compiled(wide ? "prepare-realloc-wait64" : "prepare-realloc-wait32");
+            compiled(wide ? "prepared-string64" : "prepared-string32");
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+            prepared = prepare_realloc_calls = prepare_completed = 0;
+        }
+    }
+
+    it("shares one fuel and interruption continuation across preparation and the guest entry") {
+        unsigned i;
+        turbowasm_execution_options options = {0};
+        options.has_fuel_limit = true; options.fuel = 8;
+        create_prepared_string(0, "prepare-realloc32");
+        for (i = 0; i < 200; ++i) {
+            turbowasm_status status = turbowasm_component_task_resume(&tasks[0], &options);
+            if (status == TURBOWASM_OK) break;
+            check_equal(status, TURBOWASM_YIELDED);
+            check_equal(turbowasm_execution_yield_reason_get(&tasks[0].core), TURBOWASM_YIELD_FUEL);
+            check_equal(prepared, 1u); check_equal(prepare_realloc_calls, 1u);
+        }
+        check_greater(i, 0u); check_less(i, 200u); check_equal(prepare_completed, 1u);
+        check_equal(tasks[0].result.as.u32, 42u);
+        compiled("prepare-realloc32"); compiled("prepared-string32");
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        prepared = prepare_realloc_calls = prepare_completed = 0;
+        options.has_fuel_limit = false; options.should_interrupt = interrupt_prepare;
+        prepare_interrupt = true;
+        create_prepared_string(1, "prepare-realloc64");
+        check_equal(turbowasm_component_task_resume(&tasks[0], &options), TURBOWASM_YIELDED);
+        check_equal(turbowasm_execution_yield_reason_get(&tasks[0].core), TURBOWASM_YIELD_INTERRUPTION);
+        check_equal(prepared, 1u); check_equal(prepare_realloc_calls, 1u); check_equal(prepare_completed, 0u);
+        prepare_interrupt = false;
+        check_equal(turbowasm_component_task_resume(&tasks[0], &options), TURBOWASM_OK);
+        check_equal(tasks[0].result.as.u32, 42u); check_equal(prepare_completed, 1u);
+        check_equal(prepared, 1u); check_equal(prepare_realloc_calls, 1u);
+        compiled("prepare-realloc64"); compiled("prepared-string64");
+    }
+
+    it("holds callback exclusivity throughout suspended argument preparation") {
+        turbowasm_component_task_binding b = binding("prepared-string-callback32", "callback", false);
+        b.function_type = 6; b.prepare = prepare_string; b.memory.instance = &instance;
+        prepare_realloc_entry = "prepare-realloc-wait32";
+        check_equal(turbowasm_component_task_create(&tasks[0], &domain, &b), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_true(domain.exclusive == &tasks[0]); check_equal(prepare_completed, 0u);
+        create(1, "entry", "callback", false);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_YIELDED);
+        check_equal(tasks[1].phase, TURBOWASM_COMPONENT_TASK_INITIAL); check_equal(prepared, 1u);
+        complete_wait(0);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(tasks[0].result.as.u32, 42u); check_null(domain.exclusive); check_true(may_leave);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_YIELDED);
+        check_equal(prepared, 2u); check_equal(entered, 1u);
+        compiled("prepared-string-callback32");
+    }
+
+    it("rejects malformed prepared carriers before invoking the reserved Core entry") {
+        unsigned mode;
+        for (mode = 0; mode < 2; ++mode) {
+            prepare_wrong_kind = mode == 0; prepare_wrong_count = mode == 1;
+            create(0, "argument", NULL, true);
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_TYPE_MISMATCH);
+            check_equal(tasks[0].result.kind, 0); check_equal(tasks[0].phase, TURBOWASM_COMPONENT_TASK_STARTED);
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        }
+    }
+
+    it("unwinds suspended parameter owners before detaching task state") {
+        size_t baseline = live;
+        create_prepared_string(0, "prepare-realloc-wait32");
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_greater(live, baseline); check_equal(prepare_completed, 0u);
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        check_equal(wait_interrupted, 1u); check_equal(prepare_completed, 0u); check_true(may_leave);
+        check_null(domain.active); check_null(domain.exclusive); check_equal(domain.count, 0u);
+#ifndef TURBOWASM_TEST_MIR
+        check_equal(live, baseline);
+#endif
+    }
+
+    it("turns preparation Core exceptions into traps and never enters with partial arguments") {
+        unsigned i;
+        static const char *entries[] = {"prepare-realloc-trap", "prepare-realloc-throw"};
+        for (i = 0; i < 2; ++i) {
+            create_prepared_string(0, entries[i]);
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_TRAPPED);
+            check_equal(tasks[0].trap, TURBOWASM_TRAP_UNREACHABLE);
+            check_equal(tasks[0].result.kind, 0); check_equal(prepare_completed, 0u); check_true(may_leave);
+            check_null(((turbowasm_instance_impl *)instance.impl)->pending_exception);
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        }
+        create(0, "stackful", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(tasks[0].result.as.u32, 42u);
+    }
+
+    it("does not consume parameters on Core allocation failure and cleans every failed preparation allocation") {
+        unsigned n;
+        bool succeeded = false;
+        size_t baseline;
+#ifdef TURBOWASM_TEST_MIR
+        create_prepared_string(0, "prepare-realloc32");
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+#endif
+        baseline = live;
+        for (n = 0; n < 64; ++n) {
+            turbowasm_status status;
+            prepared = prepare_realloc_calls = prepare_completed = 0;
+            create_prepared_string(0, "prepare-realloc32");
+            allowance = n;
+            status = turbowasm_component_task_resume(&tasks[0], NULL);
+            allowance = SIZE_MAX;
+            if (status == TURBOWASM_OK) {
+                succeeded = true; check_equal(tasks[0].result.as.u32, 42u);
+            } else {
+                check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_less_equal(prepare_completed, 1u);
+                if (n == 0) { check_equal(prepared, 0u); check_equal(tasks[0].phase, TURBOWASM_COMPONENT_TASK_INITIAL); }
+            }
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+            check_equal(live, baseline); check_true(may_leave);
+            if (succeeded) break;
+        }
+        check_true(succeeded); check_greater(n, 2u);
     }
 
     it("lifts owned dynamic and indirect task returns through memory32 and memory64") {

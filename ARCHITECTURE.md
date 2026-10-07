@@ -801,6 +801,18 @@ the callee's own resumable execution and never retains the caller's control
 pointer. These tests exercise the internal ownership adapter; automatic canonical
 argument/result wiring and retained public Component owners remain gated work.
 
+Async argument preparation must execute inside the callee's retained Core
+coroutine. The runtime reserves a correctly typed argument array before starting,
+then invokes one private preparation hook before the guest entry. The hook fills
+that array only after conversion succeeds; intermediate values remain owned by
+the preparation frame across realloc fuel/interruption/host-wait suspension.
+Preparation and guest entry share one execution control and unwind path. Core
+allocation failure therefore cannot consume caller arguments. Cancellation before
+start skips preparation; cancellation after preparation begins remains cooperative.
+The hook is private, cannot change the function's argument count/types, and is
+never replayed when the execution resumes. Existing public Core invocation APIs
+and synchronous Component adapters retain their current entry semantics.
+
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and
 terminal-event delivery separately. Subtask start and resolve notifications

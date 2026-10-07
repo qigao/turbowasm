@@ -32,6 +32,8 @@ typedef struct turbowasm_execution_impl {
     turbowasm_yield_reason yield_reason;
 
     turbowasm_jit_execution_control control;
+    turbowasm_execution_prepare_fn prepare;
+    void *prepare_context;
     turbowasm_execution_completion_fn completion;
     void *completion_context;
     coro_t *coroutine;
@@ -185,7 +187,11 @@ static void turbowasm_execution_entry(coro_t *co, void *arg) {
         return;
 
     execution->instance->pending_exception = NULL;
-    status = turbowasm_instance_invoke_internal(
+    status = execution->prepare != NULL
+        ? execution->prepare(execution->prepare_context, execution->arguments,
+            execution->argument_count, &execution->control, &execution->trap)
+        : TURBOWASM_OK;
+    if (status == TURBOWASM_OK) status = turbowasm_instance_invoke_internal(
         execution->instance,
         execution->function_index,
         execution->arguments,
@@ -235,6 +241,15 @@ turbowasm_status turbowasm_execution_set_completion(
 turbowasm_jit_execution_control *turbowasm_execution_control_get(turbowasm_execution *execution) {
     turbowasm_execution_impl *impl = turbowasm_execution_impl_mut(execution);
     return impl == NULL ? NULL : &impl->control;
+}
+
+turbowasm_status turbowasm_execution_set_prepare(turbowasm_execution *execution,
+    turbowasm_execution_prepare_fn prepare, void *context) {
+    turbowasm_execution_impl *impl = turbowasm_execution_impl_mut(execution);
+    if (impl == NULL || impl->state != TURBOWASM_EXECUTION_READY || impl->prepare != NULL || prepare == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    impl->prepare = prepare; impl->prepare_context = context;
+    return TURBOWASM_OK;
 }
 
 turbowasm_status turbowasm_execution_create(

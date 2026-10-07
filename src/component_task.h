@@ -17,8 +17,11 @@ typedef struct turbowasm_component_task_domain {
     uint32_t count, limit, backpressure;
 } turbowasm_component_task_domain;
 
-/* Called exactly once after backpressure clears, with the task active. Fill
- * already-lowered Core arguments; the runner copies them before returning.
+/* Called exactly once after backpressure clears, on the retained Core coroutine
+ * with the task active. Fill already-lowered Core arguments; the runner copies
+ * them after success. Guest realloc may use that execution's control and suspend;
+ * all temporary owners must survive and clean up when the callback unwinds.
+ * Set task->trap when returning a specific Core trap from argument conversion.
  * The adapter owns admission/rollback and outstanding borrowed-handle accounting.
  * It must not destroy its task/domain or retain the output array. */
 typedef turbowasm_status (*turbowasm_component_task_prepare_fn)(

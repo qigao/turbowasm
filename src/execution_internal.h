@@ -11,6 +11,17 @@ typedef turbowasm_status (*turbowasm_execution_completion_fn)(
     void *context, const turbowasm_value *results, size_t result_count,
     turbowasm_jit_execution_control *control, turbowasm_trap *trap);
 
+/* Runs once on the invocation coroutine before Core entry. Fills the reserved
+ * fixed-signature arguments; context/temporary owners survive suspension. The
+ * adapter validates types and cleans partial conversion before returning an
+ * error. No borrowed argument/control pointer may outlive this execution. */
+typedef turbowasm_status (*turbowasm_execution_prepare_fn)(
+    void *context, turbowasm_value *arguments, size_t argument_count,
+    turbowasm_jit_execution_control *control, turbowasm_trap *trap);
+
+turbowasm_status turbowasm_execution_set_prepare(turbowasm_execution *execution,
+    turbowasm_execution_prepare_fn prepare, void *context);
+
 turbowasm_status turbowasm_execution_set_completion(
     turbowasm_execution *execution,
     turbowasm_execution_completion_fn completion, void *context);
