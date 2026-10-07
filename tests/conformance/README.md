@@ -185,7 +185,44 @@ failure. Expected status, trap, scalar result, all table entries and segment dro
 state are compared against the interpreter. Fixture binaries were generated and
 validated with the pinned wasm-tools 1.261.0.
 
-These tests qualify this table storage subset. They do not qualify native
-reference-value frames, table.get/set/grow/fill, indirect calls or GC instruction
-lowering; those remain explicit gaps. The existing full interpreter Core 3.0 gate
-is separate from this native subset qualification.
+These tests qualify this table storage subset. At that revision they did not
+qualify native reference-value frames or table.get/set/grow/fill; those are covered
+by the increment below. Indirect calls and GC instruction lowering remain gaps.
+The full interpreter Core 3.0 gate is separate from native subset qualification.
+
+## Native reference frame qualification
+
+At revision `3bb8acc`, [native CI](https://github.com/qigao/turbowasm/actions/runs/37621377230)
+passed all five jobs. Linux MIR passed 156/156 tests in 0.73 seconds and macOS
+arm64 MIR passed 156/156 in 1.65 seconds. Windows qualification passed 139/139
+plus 16/16 installed-package tests; Linux qualification passed 140/140 plus
+17/17 installed-package tests. Android cross-compilation and installed-consumer
+builds passed; no Android runtime execution is claimed.
+
+The Runtime implementation and tests at `40d338f` passed the complete Windows
+ASan profile: 141/141 tests in 261.99 seconds, including Core 3.0
+`pass=63970 fail=0 unsupported=0` and the reference gate
+`pass=1364 fail=0 unsupported=0`. The only subsequent code change in `3bb8acc`
+corrected MIR address temporaries to use integer local registers. The first native
+run caught invalid `local p` declarations on macOS; its Linux MIR job stopped in
+vcpkg bootstrap before building TurboWasm. The successful run above tests the
+corrected revision on both native platforms.
+
+`reference_native_test.c` has 11 cases and requires compiled functions in the MIR
+variant. It checks reference locals, structured branches and typed select; mixed
+reference parameters/results; direct calls and 1024-step mutual tail chains;
+native-only GC values across host collection and re-entry; self-tail local reset;
+table32/table64 get/set/grow/fill; full-width bounds and failed-fill atomicity;
+fuel and interruption parity; logical call depth; stale, foreign-store, null and
+nominal type rejection; root-budget exhaustion; and every Runtime allocation
+failure in nested reference calls. Managed externref identity, function owners
+and all supported null carriers are preserved. The table storage, scalar, SIMD,
+memory64 and atomic native regressions also passed with the expanded private ABI.
+
+This qualifies rooted reference cells and the listed operations, not a complete
+native Core 3.0 backend. Native GC instructions, full EH, reference globals and
+remaining reference-control instructions, general indirect calls/tails, vector
+call signatures and remaining numeric instructions still need implementation and
+qualification. Public resumable execution continues to use the interpreter.
+Component UTF-16/Latin1+UTF-16, post-return and full async/future/stream coverage,
+and broader WASI 0.2 data paths remain separate work.
