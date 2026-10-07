@@ -56,7 +56,8 @@ also use these helpers, including atomic load/store, RMW, compare-exchange,
 fence and interruptible wait/notify. The private entry
 accepts mixed scalar/reference parameters and zero or multiple results.
 Direct, table-indirect and typed-reference calls and their tail forms support these tuples
-through Runtime, including interpreted callees and host imports. Tail dispatch
+through Runtime, including interpreted callees and imports admitted by the
+existing host-signature API. Tail dispatch
 reuses the logical call depth. Reference locals, control merges and call scratch
 use complete value cells rooted in the owning store. Instruction admission still
 excludes vector call signatures. Indirect targets retain Runtime's table bounds,

@@ -6145,6 +6145,7 @@ static turbowasm_status turbowasm_dispatch_function(
         instance, execution, depth, TURBOWASM_OK, TURBOWASM_TRAP_NONE};
     turbowasm_gc_source source = {NULL, execution, &context, turbowasm_jit_trace_frame};
     bool rooted = false;
+    bool tail_reentered = false;
 
     if (instance == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -6166,6 +6167,25 @@ dispatch_again:
     context.results = results;
     context.result_count = 0u;
     context.tail_call_pending = false;
+    if (tail_reentered) {
+        /* An imported alias must not add an interpreter wrapper frame to a
+         * tail chain. Resolve its borrowed provider before entering any tier. */
+        module = turbowasm_module_impl_get(instance->module);
+        function = module == NULL ? NULL : turbowasm_validation_context_function(
+            &module->validation, function_index);
+        if (function == NULL) {
+            status = TURBOWASM_INVALID_ARGUMENT;
+            goto done;
+        }
+        if (function->imported && function_index < instance->linked_function_count) {
+            const turbowasm_linked_function *binding = &instance->linked_functions[function_index];
+            if (binding->host_function == NULL && binding->provider != NULL) {
+                instance = binding->provider;
+                function_index = binding->function_index;
+                goto dispatch_again;
+            }
+        }
+    }
     if (!instance->jit_backend_attached ||
         instance->jit_functions == NULL ||
         function_index >= instance->jit_function_count ||
@@ -6279,6 +6299,7 @@ invoke_compiled:
         if (context.tail_instance != NULL)
             instance = context.tail_instance;
         argument_count = context.tail_argument_count;
+        tail_reentered = true;
         if (result_count != NULL)
             *result_count = 0u;
         if (trap != NULL)

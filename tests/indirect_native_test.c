@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { TUPLE_COUNT = 7, ARGUMENT_COUNT = 8, CHAIN_LENGTH = 1024, FUEL_LIMIT = 40 };
+enum { TUPLE_COUNT = 7, ARGUMENT_COUNT = 8, CHAIN_LENGTH = 1024, FUEL_LIMIT = 40, ROOT_LIMIT = 32 };
 static turbowasm_module module, imported_module;
 static turbowasm_instance instance, reference, consumer, foreign;
 static turbowasm_store store, other_store;
@@ -148,6 +148,16 @@ static turbowasm_status host_zero(void *context, turbowasm_host_call *call,
         args, count, results, capacity, out_count, trap);
 }
 
+static void create_consumer(void) {
+    check_equal(turbowasm_module_load_borrowed(&imported_module,
+        indirect_imports_bytes, sizeof(indirect_imports_bytes)), TURBOWASM_OK);
+    check_equal(turbowasm_linker_init(&imports), TURBOWASM_OK);
+    check_equal(turbowasm_linker_define_instance(&imports,
+        (turbowasm_name){(const uint8_t *)"p", 1}, &instance), TURBOWASM_OK);
+    check_equal(turbowasm_instance_create_in_store(&consumer, &imported_module, &imports, &store), TURBOWASM_OK);
+    attach(&consumer);
+}
+
 spec("native indirect calls") {
     before_each() {
         const turbowasm_value_kind result_kind = TURBOWASM_VALUE_I32;
@@ -159,7 +169,7 @@ spec("native indirect calls") {
         memset(&allocations, 0, sizeof(allocations)); collections = 0;
         turbowasm_runtime_config_init(&runtime);
         runtime.allocator.allocate = allocate; runtime.allocator.deallocate = deallocate;
-        turbowasm_store_config_init(&config); config.runtime = runtime;
+        turbowasm_store_config_init(&config); config.runtime = runtime; config.max_roots = ROOT_LIMIT;
         check_equal(turbowasm_store_create(&store, &config), TURBOWASM_OK);
         check_equal(turbowasm_module_load_borrowed_with_config(&module,
             indirect_native_bytes, sizeof(indirect_native_bytes), &runtime), TURBOWASM_OK);
@@ -179,6 +189,9 @@ spec("native indirect calls") {
     }
     after_each() {
         allocations.fail_at = 0u;
+        if (consumer.impl != NULL)
+            check_equal(turbowasm_instance_table_set64(&consumer, 0u, 4u,
+                function(&instance, "chain32")), TURBOWASM_OK);
         turbowasm_instance_destroy(&consumer); turbowasm_linker_destroy(&imports);
         turbowasm_module_destroy(&imported_module);
         turbowasm_instance_destroy(&foreign);
@@ -272,13 +285,7 @@ spec("native indirect calls") {
         turbowasm_value args[ARGUMENT_COUNT];
         unsigned i;
         tuple_arguments(args);
-        check_equal(turbowasm_module_load_borrowed(&imported_module,
-            indirect_imports_bytes, sizeof(indirect_imports_bytes)), TURBOWASM_OK);
-        check_equal(turbowasm_linker_init(&imports), TURBOWASM_OK);
-        check_equal(turbowasm_linker_define_instance(&imports,
-            (turbowasm_name){(const uint8_t *)"p", 1}, &instance), TURBOWASM_OK);
-        check_equal(turbowasm_instance_create_in_store(&consumer, &imported_module, &imports, &store), TURBOWASM_OK);
-        attach(&consumer);
+        create_consumer();
         for (i = 0; i < 4; ++i) {
             outcome actual, expected;
             args[7] = integer(0, i >= 2u);
@@ -292,6 +299,20 @@ spec("native indirect calls") {
             check_not_null(((turbowasm_instance_impl *)consumer.impl)->pending_exception);
             check_null(((turbowasm_instance_impl *)instance.impl)->pending_exception);
         }
+    }
+    it("keeps imported-alias tail chains within a fixed root and native frame budget") {
+        turbowasm_value args[] = {integer(CHAIN_LENGTH, false), node};
+        turbowasm_value alias;
+        turbowasm_store_stats before, after;
+        outcome result;
+        create_consumer(); alias = function(&consumer, "alias");
+        check_equal(turbowasm_instance_table_set64(&consumer, 0u, 4u, alias), TURBOWASM_OK);
+        check_equal(turbowasm_store_get_stats(&store, &before), TURBOWASM_OK);
+        result = invoke(&instance, "chain32", args, 2u, NULL);
+        check_equal(result.status, TURBOWASM_OK); same_values(result.values, &node, 1u);
+        compiled(&instance, "chain32"); check_equal(collections, (unsigned)CHAIN_LENGTH);
+        check_equal(turbowasm_store_get_stats(&store, &after), TURBOWASM_OK);
+        check_equal(after.bytes, before.bytes);
     }
     it("switches target stores without retaining an obsolete root registration") {
         const char *names[] = {"call-zero", "tail-zero"};

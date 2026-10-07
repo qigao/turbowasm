@@ -308,7 +308,8 @@ and pending exceptions return to the originating instance. Ordinary calls add on
 logical depth; tail requests copy parameters into dispatcher-owned bounded storage
 and publish the target instance/index only after validation and allocation succeed.
 After generated code unwinds, the dispatcher switches the active instance and
-store root registration at unchanged depth. Nested calls own separate frames;
+store root registration at unchanged depth. Imported function aliases resolve
+in that same loop, without adding interpreter wrapper frames. Nested calls own separate frames;
 tail chains retain one pending tuple. No locks, retained public handles, new
 configuration or public ABI are introduced.
 
