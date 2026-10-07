@@ -39,7 +39,10 @@ typedef enum turbowasm_component_type_kind {
     TURBOWASM_COMPONENT_TYPE_RESOURCE,
     TURBOWASM_COMPONENT_TYPE_OWN,
     TURBOWASM_COMPONENT_TYPE_BORROW,
-    TURBOWASM_COMPONENT_TYPE_INSTANCE
+    TURBOWASM_COMPONENT_TYPE_INSTANCE,
+    /* Private metadata until async execution and the host boundary are ready. */
+    TURBOWASM_COMPONENT_TYPE_FUTURE,
+    TURBOWASM_COMPONENT_TYPE_STREAM
 } turbowasm_component_type_kind;
 
 typedef enum turbowasm_component_type_ref_kind {
@@ -82,6 +85,10 @@ typedef struct turbowasm_component_type {
         struct {
             turbowasm_component_type_ref element_type;
         } list;
+        struct {
+            bool has_payload;
+            turbowasm_component_type_ref payload;
+        } async_value;
         struct {
             turbowasm_component_record_field *fields;
             uint32_t count;
@@ -194,6 +201,17 @@ bool turbowasm_component_type_graph_define_scalar(
 bool turbowasm_component_type_graph_define_string(
     turbowasm_component_type_graph *graph,
     turbowasm_component_type_id id);
+
+/* Retain optional future/stream payload metadata in an undefined slot. Forward
+ * references are allowed; graph validation rejects non-value payloads, cycles,
+ * excessive nesting and transitive borrows. A unit endpoint has no payload.
+ * This does not enable canonical execution or public host admission. */
+bool turbowasm_component_type_graph_define_async_value(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_type_kind kind,
+    bool has_payload,
+    turbowasm_component_type_ref payload);
 
 bool turbowasm_component_type_graph_define_list(
     turbowasm_component_type_graph *graph,

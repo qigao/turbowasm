@@ -225,6 +225,26 @@ set_target_properties(turbowasm_component_type_graph_test PROPERTIES
 add_test(NAME turbowasm_component_type_graph_test
          COMMAND turbowasm_component_type_graph_test)
 
+add_executable(turbowasm_component_async_type_test component_async_type_test.c)
+target_link_libraries(turbowasm_component_async_type_test
+  PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_type_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_type_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_async_type_test
+         COMMAND turbowasm_component_async_type_test)
+
+add_executable(turbowasm_component_async_state_test component_async_state_test.c)
+target_link_libraries(turbowasm_component_async_state_test
+  PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_state_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_state_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_async_state_test
+         COMMAND turbowasm_component_async_state_test)
+
 if(TARGET turbowasm_wasi02_core)
   add_executable(turbowasm_wasi02_descriptor_test
     wasi02_descriptor_test.c)

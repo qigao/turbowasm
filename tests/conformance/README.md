@@ -698,5 +698,34 @@ local-lower fixture additionally checks that whole-tuple bounds failure leaves
 an input own untouched, while a later invalid character releases an already
 lifted own exactly once. All three WAT fixtures pass wasm-tools 1.261.0
 validation. The final Windows ASan Component/WASI 0.2/resumable/host-wait
-selection passed 52/52 in 2.03 seconds. Native MIR qualification for this
-increment is pending; the preceding green run does not qualify these new paths.
+selection passed 52/52 in 2.03 seconds. At `d148ae5`, the
+[native run](https://github.com/qigao/turbowasm/actions/runs/37659894577)
+passed all five jobs, including Linux MIR 181/181 in 2.40 seconds and macOS arm64
+MIR 181/181 in 2.14 seconds. Windows, ordinary Linux and the Android cross-build
+also passed. This qualifies indirect parameters; it does not qualify async
+tasks, future/stream execution or the remaining WASI interfaces.
+
+## Private async type and notification primitives
+
+Future/stream metadata now retains optional payloads in the private type graph.
+Validation rejects non-value payloads, transitive borrows, cycles, excessive
+nesting and the pinned proposal's immediate `stream<char>` restriction. This
+does not enable these types in the binary loader or synchronous host admission.
+
+The private async notification primitive separates progress publication from
+event delivery. Subtask notifications coalesce into the latest state; terminal
+delivery is distinguished from merely starting or resolving. Endpoint state
+preserves partial stream progress, deferred host cancellation acknowledgement,
+and the different future/stream precedence when completion, cancellation and
+peer closure race. This primitive allocates nothing and owns no data buffers,
+resources or execution frames. The enclosing owner must eventually perform
+loan/buffer release and guest resumption; that integration is not yet present.
+
+`component_async_type_test.c` and `component_async_state_test.c` cover primitive,
+composite and nested endpoint payloads, invalid references and ownership, depth
+boundaries, notification coalescing, all six orderings of completion/cancel/close,
+progress limits and exactly-once event delivery. Windows ASan passed the three
+type/state targets in 0.10 seconds, followed by the related
+Component/WASI 0.2/resumable/host-wait selection: 54/54 in 4.38 seconds.
+Task scheduling, waitable sets, canonical async decoding, actual endpoint copies
+and public host integration remain unqualified and under implementation.

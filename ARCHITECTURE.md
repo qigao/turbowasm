@@ -607,6 +607,107 @@ with retained-owner bookkeeping; no persisted data format requires migration.
 The imported-resource table routing and consuming canonical destructors must roll
 back together; mixing raw provider handles with canonical handles is invalid.
 
+## Component async tasks and endpoint ownership
+
+The remaining async work follows the pinned [Component Model binary format](https://github.com/WebAssembly/component-model/blob/a25fc0b372dd21f07f0242c46e98bd0f1ea0c0e1/design/mvp/Binary.md)
+and [Canonical ABI](https://github.com/WebAssembly/component-model/blob/a25fc0b372dd21f07f0242c46e98bd0f1ea0c0e1/design/mvp/CanonicalABI.md).
+Runtime fuel/host-wait suspension alone does not implement Component tasks,
+subtasks, waitable sets, callbacks, backpressure or future/stream endpoints.
+The user approved this extension of the synchronous host-value boundary on
+2026-10-08. Public integration remains under implementation.
+
+The Component instance owns task admission, canonical handle tables, waitable
+membership and a cooperative ready queue. All mutation and guest execution stays
+on its existing execution owner thread. External I/O reports completion through
+the existing host-wait bridge; it does not mutate Component state from another
+thread. Runtime continues to own native/interpreted frames, fuel, interruption
+and cancellation unwind. Component scheduling must preserve that control across
+guest entry, callbacks, realloc, post-return and resource destruction.
+
+Planned public additions are opaque task, endpoint and transfer owners; appended
+host-value kinds for readable future/stream endpoints; an instance-options entry
+point with explicit async limits; and create/resume/state/result/cancel-request/
+destroy operations for tasks and endpoint transfers. Existing synchronous APIs
+retain their contract. Async-typed exports use the task entry point. A host can
+create a typed endpoint pair, transfer its readable end through a move call,
+write through its writable end, and later close that end. Endpoint payload types
+come from the loaded Component type graph, including composite and own values;
+no parallel host type registry is introduced. A future accepts one value (or one
+unit completion); a stream supports partial transfers and end-of-stream.
+
+Readable endpoints are unique movable owners. Copying the C carrier does not
+duplicate ownership; move admission preflights the entire value tree before
+consuming anything. Endpoints and outstanding tasks/transfers retain the backing
+instance. A transferring endpoint cannot move or drop until the operation has
+completed or cancellation has been acknowledged. Payloads cannot contain borrow
+values. Host write admission copies ordinary values and explicitly moves own or
+endpoint leaves into transfer-owned storage; read results are privately owned
+until published once. Guest memory is represented by instance plus checked
+offset/length and is reacquired after reentry or suspension, never by a retained
+raw address. Already transferred elements remain committed on partial completion
+or cancellation; untransferred owned elements are returned or destroyed exactly
+once according to the transfer's terminal result.
+
+Task cancellation is a request with a later terminal acknowledgement, distinct
+from Runtime's immediate execution unwind. Task/subtask state and cancellation
+delivery follow the pinned ABI, including cancellation before entry and before
+return. Borrow loans remain live through resolve-event delivery. Waitable sets
+store membership and pending event state, not duplicated event payloads;
+completion, cancellation and drop cannot publish a second terminal event.
+Destroying a live public async owner reports a busy state without mutation;
+the host requests cancellation, drives progress, takes/releases results and
+then destroys it. An explicit instance shutdown operation rejects new admission,
+requests cancellation, drains terminal obligations and reports completion only
+after outstanding handles and loans are released. Guest traps preserve the
+primary error while terminal cleanup releases host-owned storage.
+
+Async options bound live tasks, canonical handles (including waitable sets and
+endpoint ends), outstanding transfers and retained host payload bytes. Counts
+and byte products are checked before allocation or ownership transfer. Defaults
+are finite; options cannot request unlimited async storage. Exhaustion reports
+`TURBOWASM_OUT_OF_MEMORY`, preserves unadmitted inputs and becomes
+retryable after owners are released. Runtime allocation/stack budgets apply in
+addition. Explicit and implicit guest backpressure use the same bounded pending
+task state and preserve queued admission order; they do not create a worker pool
+or an unbounded event queue. No new logging subsystem is required.
+
+Alternatives rejected: treating a fuel yield as async completion loses task
+state; detached threads violate instance affinity; implicitly cloning endpoints
+breaks unique ownership; unbounded buffering hides backpressure. The chosen
+model costs retained instances and bounded task/transfer bookkeeping. There is
+no performance claim. Host-value additions require Component consumers to
+rebuild; old synchronous entry points and Core Runtime ABI remain stable. There
+is no persisted-data migration. Before publication, rollback removes async
+entry points and restores explicit rejection of async binaries together with
+their task/endpoint machinery; it must never leave accepted partial execution.
+
+Implementation order is private type validation, canonical signatures/decoding,
+task and waitable state, endpoint transfers, then public host integration and
+installed C/C++ consumers. Private future/stream type metadata can be tested
+before runtime integration; the synchronous feature predicate and binary loader
+continue to reject them until their complete execution path is available.
+Qualification must cover scalar/composite/own payloads, unit futures, nested
+endpoints, memory32/64, partial transfers, all cancellation phases, event ordering,
+backpressure, capacity exhaustion, allocation failure, traps and exactly-once
+cleanup under interpreted and Linux/macOS MIR execution. WASI 0.2 streams remain
+their existing resource interfaces; Component streams do not silently replace
+those contracts.
+
+The first private execution primitive is allocation-free notification state
+embedded in the eventual task/endpoint owner. It tracks pending progress and
+terminal-event delivery separately. Subtask start and resolve notifications
+coalesce into the latest state; a terminal event authorizes the enclosing owner
+to release loans before returning control to the guest. Endpoint completion is
+classified at delivery: a stream prioritizes peer drop, then cancellation, then
+progress; a future prioritizes its one completed value, then peer drop, then
+cancellation. No pointer, buffer or resource ownership moves in this primitive.
+Its caller owns transfer buffers, affinity, waitable membership and generation
+checks. It has no scheduler, queue or allocation; every operation is O(1), with
+one pending notification per owner. Failed transitions leave state/output
+unchanged. Host cancellation may await acknowledgement while retaining the copy
+obligation. Canonical decoding and host admission remain closed until these
+states are connected to actual transfers, waitables and execution.
+
 ## Canonical post-return lifecycle
 
 Synchronous lifts with `post-return` copy/lift the Core results before invoking

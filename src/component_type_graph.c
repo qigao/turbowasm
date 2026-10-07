@@ -15,6 +15,11 @@ static bool inline_kind(turbowasm_component_type_kind kind) {
            kind == TURBOWASM_COMPONENT_TYPE_STRING;
 }
 
+static bool value_type_features(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    uint32_t depth, bool allow_async, uint32_t *features);
+
 turbowasm_component_type_ref turbowasm_component_type_ref_indexed(
     turbowasm_component_type_id id) {
     turbowasm_component_type_ref ref;
@@ -203,6 +208,27 @@ static bool retained_ref_in_range(
         return inline_kind(ref.as.inline_type);
     return ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INDEXED &&
            ref.as.indexed < graph->count;
+}
+
+bool turbowasm_component_type_graph_define_async_value(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_type_kind kind,
+    bool has_payload,
+    turbowasm_component_type_ref payload) {
+    turbowasm_component_type *type = slot(graph, id);
+
+    if (type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        (kind != TURBOWASM_COMPONENT_TYPE_FUTURE &&
+         kind != TURBOWASM_COMPONENT_TYPE_STREAM) ||
+        (has_payload && !retained_ref_in_range(graph, payload)))
+        return false;
+
+    type->kind = kind;
+    type->as.async_value.has_payload = has_payload;
+    if (has_payload)
+        type->as.async_value.payload = payload;
+    return true;
 }
 
 bool turbowasm_component_type_graph_define_record(
@@ -593,6 +619,10 @@ static bool type_ref_contains_borrow(
     type = &graph->types[ref.as.indexed];
     if (type->kind == TURBOWASM_COMPONENT_TYPE_BORROW)
         return true;
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_FUTURE ||
+        type->kind == TURBOWASM_COMPONENT_TYPE_STREAM)
+        return type->as.async_value.has_payload && type_ref_contains_borrow(
+            graph, type->as.async_value.payload, depth + 1u);
     if (type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
         return type_ref_contains_borrow(
             graph, type->as.list.element_type, depth + 1u);
@@ -658,6 +688,31 @@ bool turbowasm_component_type_graph_validate(
             return false;
 
         switch (type->kind) {
+            case TURBOWASM_COMPONENT_TYPE_FUTURE:
+            case TURBOWASM_COMPONENT_TYPE_STREAM: {
+                uint32_t payload_features = 0u;
+                /* The pinned Component binary proposal excludes stream<char>.
+                 * This applies to the immediate element, not nested records. */
+                if (type->kind == TURBOWASM_COMPONENT_TYPE_STREAM &&
+                    type->as.async_value.has_payload) {
+                    turbowasm_component_type_ref payload = type->as.async_value.payload;
+                    const turbowasm_component_type *payload_type =
+                        payload.kind == TURBOWASM_COMPONENT_TYPE_REF_INDEXED
+                            ? turbowasm_component_type_graph_get(graph, payload.as.indexed)
+                            : NULL;
+                    if ((payload.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE &&
+                         payload.as.inline_type == TURBOWASM_COMPONENT_TYPE_CHAR) ||
+                        (payload_type != NULL && payload_type->kind == TURBOWASM_COMPONENT_TYPE_CHAR))
+                        return false;
+                }
+                if (type->as.async_value.has_payload &&
+                    (!value_type_features(graph, type->as.async_value.payload,
+                        1u, true, &payload_features) ||
+                     type_ref_contains_borrow(
+                        graph, type->as.async_value.payload, 0u)))
+                    return false;
+                break;
+            }
             case TURBOWASM_COMPONENT_TYPE_LIST:
                 if (!turbowasm_component_type_ref_validate(
                         graph, type->as.list.element_type))
@@ -917,7 +972,7 @@ const cmeta_type_desc *turbowasm_component_scalar_cmeta_type(
 static bool value_type_features(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
-    uint32_t depth, uint32_t *features) {
+    uint32_t depth, bool allow_async, uint32_t *features) {
     const turbowasm_component_type *type;
     turbowasm_component_type_kind kind;
     uint32_t i;
@@ -940,6 +995,15 @@ static bool value_type_features(
     if (type == NULL)
         return false;
 
+    /* Async payload validation reuses the value walker, but the synchronous
+     * admission predicate must keep rejecting endpoint values until their
+     * transfer and execution lifecycle is implemented. */
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_FUTURE ||
+        type->kind == TURBOWASM_COMPONENT_TYPE_STREAM)
+        return allow_async && (!type->as.async_value.has_payload ||
+            value_type_features(graph, type->as.async_value.payload,
+                depth + 1u, true, features));
+
     if (type->kind == TURBOWASM_COMPONENT_TYPE_STRING ||
         type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
         *features |= TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY;
@@ -953,35 +1017,35 @@ static bool value_type_features(
         return true;
     if (type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
         return value_type_features(
-            graph, type->as.list.element_type, depth + 1u, features);
+            graph, type->as.list.element_type, depth + 1u, allow_async, features);
     switch (type->kind) {
         case TURBOWASM_COMPONENT_TYPE_RECORD:
             for (i = 0u; i < type->as.record.count; ++i)
                 if (!value_type_features(graph,
-                        type->as.record.fields[i].type, depth + 1u, features))
+                        type->as.record.fields[i].type, depth + 1u, allow_async, features))
                     return false;
             return true;
         case TURBOWASM_COMPONENT_TYPE_TUPLE:
             for (i = 0u; i < type->as.tuple.count; ++i)
                 if (!value_type_features(graph,
-                        type->as.tuple.elements[i], depth + 1u, features))
+                        type->as.tuple.elements[i], depth + 1u, allow_async, features))
                     return false;
             return true;
         case TURBOWASM_COMPONENT_TYPE_VARIANT:
             for (i = 0u; i < type->as.variant.count; ++i)
                 if (type->as.variant.cases[i].has_payload &&
                     !value_type_features(graph,
-                        type->as.variant.cases[i].payload, depth + 1u, features))
+                        type->as.variant.cases[i].payload, depth + 1u, allow_async, features))
                     return false;
             return true;
         case TURBOWASM_COMPONENT_TYPE_OPTION:
             return value_type_features(graph,
-                type->as.option.payload, depth + 1u, features);
+                type->as.option.payload, depth + 1u, allow_async, features);
         case TURBOWASM_COMPONENT_TYPE_RESULT:
             return (!type->as.result.has_ok || value_type_features(
-                        graph, type->as.result.ok, depth + 1u, features)) &&
+                        graph, type->as.result.ok, depth + 1u, allow_async, features)) &&
                    (!type->as.result.has_error || value_type_features(
-                        graph, type->as.result.error, depth + 1u, features));
+                        graph, type->as.result.error, depth + 1u, allow_async, features));
         case TURBOWASM_COMPONENT_TYPE_ENUM:
         case TURBOWASM_COMPONENT_TYPE_FLAGS:
             return true;
@@ -995,7 +1059,7 @@ bool turbowasm_component_value_type_features(
     turbowasm_component_type_ref ref,
     uint32_t *out_features) {
     uint32_t features = 0u;
-    if (out_features == NULL || !value_type_features(graph, ref, 0u, &features))
+    if (out_features == NULL || !value_type_features(graph, ref, 0u, false, &features))
         return false;
     *out_features = features;
     return true;
