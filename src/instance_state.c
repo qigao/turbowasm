@@ -281,7 +281,7 @@ static turbowasm_status turbowasm_eval_value_expr(
                     status = TURBOWASM_MALFORMED_MODULE;
                     break;
                 }
-                salts_simd_v128_load(
+                cmeta_simd_v128_load(
                     &value.as.v128.bits, bytes.cursor);
                 status = turbowasm_const_value_stack_push(
                     &stack, value);
