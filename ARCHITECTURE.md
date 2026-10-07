@@ -733,6 +733,29 @@ memory/realloc signatures and connect these descriptors to task/endpoint owners.
 Error-context and explicit-thread proposal builtins remain unsupported by this
 decoder. This metadata boundary has no additional threads, callbacks or queues.
 
+The private async task runner owns one resumable Core execution and an optional
+lifted result at a stable caller-provided address. Its domain borrows the shared
+canonical handle table and may_leave flag, limits live tasks explicitly, and
+tracks active/exclusive tasks on the execution owner thread. The driver selects
+pending tasks; explicit backpressure delays argument preparation, so
+cancellation before start cannot consume arguments. The preparation callback is
+the canonical adapter boundary and runs once after admission; it owns rollback
+of any argument conversion failure. Core execution still owns fuel, interruption
+and host-wait continuations. No extra worker or unbounded queue is introduced.
+
+Callback tasks retain the exclusive execution slot across Core suspension, but
+release it between callback turns. WAIT pins its set until event delivery,
+cancellation or teardown; YIELD gives control back to the driver. Task resolution
+is distinct from thread exit: a result can be taken after task.return even while
+guest cleanup continues. Cancellation is requested once, delivered as an event,
+and acknowledged by task.cancel; a result may win the race. Outstanding borrowed
+handles prevent either resolution. Destroy unwinds the Core callback first,
+releases a pinned wait, destroys any untaken result, and removes the task from
+its domain. Domains, graphs, instances, canonical codec contexts and prepared
+argument owners outlive all such tasks. This private runner is not yet selected
+by public Component calls; automatic builtin binding, subtask propagation and
+public retained-instance task wrappers remain integration work.
+
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and
 terminal-event delivery separately. Subtask start and resolve notifications

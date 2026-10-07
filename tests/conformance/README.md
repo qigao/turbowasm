@@ -983,3 +983,38 @@ remain incomplete.
 Windows ASan passed five focused targets in 0.16 seconds. After the final context
 width consistency test and decoder adjustment, the related Component/WASI/resume
 regression passed 59/59 targets in 2.55 seconds.
+At `3eef5b3`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37676566968)
+passed all five jobs, including Linux MIR (188/188 in 1.92 seconds) and macOS
+arm64 MIR (188/188 in 3.00 seconds).
+
+## Private async Core task execution
+
+The private task runner now drives real resumable Core entry and callback calls.
+It checks their exact signatures, defers argument preparation behind backpressure,
+bounds live tasks, distinguishes task resolution from Core exit, pins callback
+waitable sets, and retains callback exclusivity across Core host/fuel suspension.
+Stackful tasks do not require that exclusive slot. Callback cancellation precedes
+ready events and is delivered once; guest task.cancel requires delivery and no
+outstanding borrowed handles. A result may still win a pending cancellation.
+
+task.return matches the active lift's result type and memory/encoding before
+lifting values through existing canonical codecs. Results move to the task and
+then to its caller, or are destroyed on teardown. Destroy unwinds any retained
+Core host callback before releasing waits/results/domain admission. Uncaught
+Core exceptions become canonical traps. Argument ownership and borrow cleanup
+remain with the preparing canonical adapter; the runner does not invent another
+resource table or take ownership of borrowed graphs/instances.
+
+`component_task_test.c` runs the committed Wasm fixture through actual imports,
+covering callback events, cancellation acknowledgement and return races,
+backpressure/quota, early results, retained host waits, repeated fuel suspension,
+memory32/64 string/indirect-tuple/unit returns, invalid options/loans/signatures,
+Core exception isolation, and allocation failure cleanup. The interpreter suite
+passed 17 cases with 865 assertions on Windows ASan; related regression passed
+60/60 targets in 2.48 seconds. A separate MIR target uses the same suite with
+compiled-execution assertions; its Linux/macOS verification is pending.
+
+This qualifies an internal execution owner, not public async Component support.
+Automatic binding of decoded builtins/lifts, canonical argument ownership,
+subtask propagation, instance-retaining public task/endpoint/transfer APIs, and
+the remaining Component/WASI integration are still incomplete.
