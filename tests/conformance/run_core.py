@@ -1124,6 +1124,10 @@ def run_file(
         compared_mir = MIR_REPLAY_RE.search(compared.stdout)
         if compared_mir is not None:
             mir_stats = tuple(map(int, compared_mir.groups()))
+            print(f"SPEC_MIR {filename} {compared_mir.group(0)}")
+            for admission in compared.stdout.splitlines():
+                if admission.startswith("MIR_ADMISSION "):
+                    print(f"SPEC_MIR {filename} {admission}")
 
         if differential_mismatches:
             failed += differential_mismatches

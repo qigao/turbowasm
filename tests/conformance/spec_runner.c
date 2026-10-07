@@ -207,6 +207,15 @@ static void spec_collect_mir_stats(
                     break;
                 case TURBOWASM_JIT_INTERPRET_ONLY:
                     ++*interpret_only;
+                    {
+                        const turbowasm_module_impl *module = turbowasm_module_impl_get(&slot->module);
+                        const turbowasm_validation_function *function =
+                            turbowasm_validation_context_function(&module->validation, function_index);
+                        printf("MIR_ADMISSION slot=%zu function=%u imported=%u eligible=%u\n",
+                            slot_index, function_index, (unsigned)function->imported,
+                            (unsigned)impl->jit_backend.is_function_eligible(impl->jit_backend.context,
+                                &module->validation, function_index, function));
+                    }
                     break;
                 case TURBOWASM_JIT_INTERPRET:
                 default:
