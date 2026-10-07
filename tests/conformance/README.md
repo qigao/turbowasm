@@ -596,10 +596,13 @@ checks that canon lower traps before leaving the Component during cleanup.
 All four WAT fixtures passed wasm-tools 1.261.0 validation. Malformed-option
 cases check duplicates, absent/out-of-range indices and post-return on lower.
 
-Windows ASan passed all 48 selected Component/WASI 0.2/resumable/host-wait tests
-in 2.78 seconds. The MIR variant additionally asserts that the producer and
+Implementation `6d108a7` passed all 48 selected Windows ASan
+Component/WASI 0.2/resumable/host-wait tests in 2.78 seconds and the complete
+150/150 tests in 218.86 seconds, using the VS developer environment required
+for the ASan runtime DLLs. The MIR variant additionally asserts that the producer and
 cleanup function are compiled while the cleanup frame is suspended; native
-qualification is pending. Direct canonical builtins as cleanup targets remain
+qualification is pending in [this run](https://github.com/qigao/turbowasm/actions/runs/37650266391).
+Direct canonical builtins as cleanup targets remain
 part of the general canonical-function binding work.
 
 ```powershell
