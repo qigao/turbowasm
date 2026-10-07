@@ -461,6 +461,7 @@ turbowasm_status turbowasm_wasi02_component_instance_create(
     instance_state->owner_context = wasi_state;
     instance_state->owner_release =
         wasi02_instance_release;
+    instance_state->ref_count = 1u;
     instance->impl = instance_state;
     return TURBOWASM_OK;
 }

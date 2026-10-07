@@ -48,7 +48,14 @@ typedef enum turbowasm_component_host_value_kind {
     TURBOWASM_COMPONENT_HOST_F64,
     TURBOWASM_COMPONENT_HOST_CHAR,
     TURBOWASM_COMPONENT_HOST_STRING,
-    TURBOWASM_COMPONENT_HOST_LIST
+    TURBOWASM_COMPONENT_HOST_LIST,
+    TURBOWASM_COMPONENT_HOST_RECORD,
+    TURBOWASM_COMPONENT_HOST_TUPLE,
+    TURBOWASM_COMPONENT_HOST_VARIANT,
+    TURBOWASM_COMPONENT_HOST_OPTION,
+    TURBOWASM_COMPONENT_HOST_RESULT,
+    TURBOWASM_COMPONENT_HOST_ENUM,
+    TURBOWASM_COMPONENT_HOST_FLAGS
 } turbowasm_component_host_value_kind;
 
 typedef struct turbowasm_component_host_value
@@ -63,6 +70,23 @@ typedef struct turbowasm_component_host_list {
     turbowasm_component_host_value *items;
     size_t count;
 } turbowasm_component_host_list;
+
+/* Ordered fields/elements use declaration order, not names. */
+typedef turbowasm_component_host_list turbowasm_component_host_sequence;
+
+/* Variant case index; option none/some = 0/1; result ok/error = 0/1.
+ * Payload is NULL exactly when the selected case has no payload. */
+typedef struct turbowasm_component_host_variant {
+    uint32_t case_index;
+    turbowasm_component_host_value *payload;
+} turbowasm_component_host_variant;
+
+/* Little-endian words of flag bits. The synchronous MVP allows 1..32 flags,
+ * hence word_count must be 1. Bits beyond the declared flags must be zero. */
+typedef struct turbowasm_component_host_flags {
+    uint32_t *words;
+    size_t word_count;
+} turbowasm_component_host_flags;
 
 struct turbowasm_component_host_value {
     turbowasm_component_host_value_kind kind;
@@ -81,6 +105,13 @@ struct turbowasm_component_host_value {
         uint32_t character;
         turbowasm_component_host_bytes string;
         turbowasm_component_host_list list;
+        turbowasm_component_host_sequence record;
+        turbowasm_component_host_sequence tuple;
+        turbowasm_component_host_variant variant;
+        turbowasm_component_host_variant option;
+        turbowasm_component_host_variant result;
+        uint32_t enum_index;
+        turbowasm_component_host_flags flags;
     } as;
 };
 
@@ -113,16 +144,15 @@ void turbowasm_component_instance_destroy(
 /*
  * Invoke one synchronous Component function export.
  *
- * The currently installed façade supports the stable scalar/string/list host
- * value subset. Resource own/borrow values remain private until their public
- * ownership contract is frozen.
+ * Supports scalars, strings and synchronous non-resource composites. Resource
+ * own/borrow values are not yet exposed by this facade.
  *
  * A synchronous Component MVP function has at most one result. result_capacity
  * may therefore be 0 or 1. out_result_count is always written on successful
  * invocation.
  *
- * Input values are borrowed and never consumed. Returned string/list storage is
- * owned by TurboWasm and must be released with
+ * Input values are borrowed and never consumed. Returned composite/string
+ * storage is owned by TurboWasm and must be released with
  * turbowasm_component_host_value_destroy().
  */
 turbowasm_status turbowasm_component_instance_invoke(
@@ -138,7 +168,9 @@ turbowasm_status turbowasm_component_instance_invoke(
 /*
  * Create a restartable invocation of one Component function export.
  *
- * The call borrows the Component instance, which must outlive the call.
+ * The call retains the Component instance and its capability owner. Releasing
+ * the public instance/component handles does not invalidate an admitted call.
+ * The borrowed component source bytes must still outlive the call.
  * Arguments are canonically lowered during create and need not outlive this
  * function. The retained Runtime execution may then yield for fuel,
  * interruption, or host-wait without replaying canonical lowering or the
@@ -192,9 +224,11 @@ turbowasm_status turbowasm_component_call_take_result(
 
 /*
  * Destroy a value returned by turbowasm_component_instance_invoke().
- * Do not call this on caller-owned input values.
+ * Do not call this on caller-owned input values. Recursively releases storage
+ * and clears the value. NULL and already-cleared values succeed.
+ * Returns TURBOWASM_OK for the currently supported non-resource values.
  */
-void turbowasm_component_host_value_destroy(
+turbowasm_status turbowasm_component_host_value_destroy(
     turbowasm_component_host_value *value);
 
 #ifdef __cplusplus

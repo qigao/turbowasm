@@ -154,6 +154,20 @@ struct turbowasm_component_instance_type {
     uint32_t export_count;
 };
 
+enum {
+    TURBOWASM_COMPONENT_VALUE_MAX_DEPTH = 64,
+    TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY = 1u,
+    TURBOWASM_COMPONENT_VALUE_RESOURCES = 2u
+};
+
+/* Inspect a synchronous value tree without allocation. False rejects non-value
+ * nodes, invalid references and excessive depth; output is unchanged on error.
+ * Time O(expanded value-type tree), stack O(depth), bounded above. */
+bool turbowasm_component_value_type_features(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    uint32_t *out_features);
+
 /*
  * Allocate an exact number of stable type-id slots. The graph owns all nodes
  * but never owns Core Wasm validation metadata. Allocation uses the current
@@ -197,6 +211,12 @@ bool turbowasm_component_type_graph_define_tuple(
     const turbowasm_component_type_ref *elements,
     uint32_t element_count);
 
+/* Pure preflight separates malformed cases from allocation failure. */
+bool turbowasm_component_variant_cases_valid(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_variant_case *cases,
+    uint32_t case_count);
+
 bool turbowasm_component_type_graph_define_variant(
     turbowasm_component_type_graph *graph,
     turbowasm_component_type_id id,
@@ -215,6 +235,10 @@ bool turbowasm_component_type_graph_define_result(
     turbowasm_component_type_ref ok,
     bool has_error,
     turbowasm_component_type_ref error);
+
+bool turbowasm_component_labels_valid(
+    const turbowasm_component_label *labels,
+    uint32_t label_count);
 
 bool turbowasm_component_type_graph_define_enum(
     turbowasm_component_type_graph *graph,

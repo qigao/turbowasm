@@ -26,89 +26,6 @@ static bool align_up_u64(
     return true;
 }
 
-static bool type_ref_supported(
-    const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_ref ref,
-    uint32_t depth) {
-    const turbowasm_component_type *type;
-    turbowasm_component_type_kind kind;
-
-    if (graph == NULL || depth >= 64u)
-        return false;
-
-    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE) {
-        kind = ref.as.inline_type;
-        return kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
-               kind <= TURBOWASM_COMPONENT_TYPE_STRING;
-    }
-
-    if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
-        return false;
-    type = turbowasm_component_type_graph_get(
-        graph, ref.as.indexed);
-    if (type == NULL)
-        return false;
-
-    kind = type->kind;
-    if (kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
-        kind <= TURBOWASM_COMPONENT_TYPE_STRING)
-        return true;
-    if (kind == TURBOWASM_COMPONENT_TYPE_LIST)
-        return type_ref_supported(
-            graph, type->as.list.element_type, depth + 1u);
-    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
-        kind == TURBOWASM_COMPONENT_TYPE_BORROW)
-        return true;
-
-    return false;
-}
-
-static bool type_ref_uses_memory(
-    const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_ref ref,
-    uint32_t depth) {
-    const turbowasm_component_type *type;
-
-    if (graph == NULL || depth >= 64u)
-        return true;
-
-    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE)
-        return ref.as.inline_type ==
-            TURBOWASM_COMPONENT_TYPE_STRING;
-    if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
-        return true;
-
-    type = turbowasm_component_type_graph_get(
-        graph, ref.as.indexed);
-    if (type == NULL)
-        return true;
-    if (type->kind == TURBOWASM_COMPONENT_TYPE_STRING ||
-        type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
-        return true;
-    return false;
-}
-
-static bool type_ref_uses_resources(
-    const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_ref ref,
-    uint32_t depth) {
-    const turbowasm_component_type *type;
-
-    if (graph == NULL || depth >= 64u ||
-        ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
-        return false;
-    type = turbowasm_component_type_graph_get(
-        graph, ref.as.indexed);
-    if (type == NULL)
-        return false;
-    if (type->kind == TURBOWASM_COMPONENT_TYPE_OWN ||
-        type->kind == TURBOWASM_COMPONENT_TYPE_BORROW)
-        return true;
-    if (type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
-        return type_ref_uses_resources(
-            graph, type->as.list.element_type, depth + 1u);
-    return false;
-}
 static bool type_ref_is_resource_handle(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref) {
@@ -857,16 +774,15 @@ turbowasm_status turbowasm_component_core_call_adapter_init_with_resources(
         return TURBOWASM_INVALID_ARGUMENT;
 
     for (i = 0u; i < function->as.function.param_count; ++i) {
-        if (!type_ref_supported(
-                graph, function->as.function.params[i], 0u))
+        uint32_t features;
+        if (!turbowasm_component_value_type_features(
+                graph, function->as.function.params[i], &features))
             return TURBOWASM_UNSUPPORTED;
-        if (type_ref_uses_memory(
-                graph, function->as.function.params[i], 0u)) {
+        if ((features & TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY) != 0u) {
             uses_memory = true;
             needs_realloc = true;
         }
-        if (type_ref_uses_resources(
-                graph, function->as.function.params[i], 0u))
+        if ((features & TURBOWASM_COMPONENT_VALUE_RESOURCES) != 0u)
             uses_resources = true;
     }
 
@@ -875,14 +791,13 @@ turbowasm_status turbowasm_component_core_call_adapter_init_with_resources(
         uint64_t result_identity = 0u;
         turbowasm_value_kind result_rep_kind = (turbowasm_value_kind)0;
 
-        if (!type_ref_supported(
-                graph, function->as.function.result, 0u))
+        uint32_t features;
+        if (!turbowasm_component_value_type_features(
+                graph, function->as.function.result, &features))
             return TURBOWASM_UNSUPPORTED;
-        if (type_ref_uses_memory(
-                graph, function->as.function.result, 0u))
+        if ((features & TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY) != 0u)
             uses_memory = true;
-        if (type_ref_uses_resources(
-                graph, function->as.function.result, 0u)) {
+        if ((features & TURBOWASM_COMPONENT_VALUE_RESOURCES) != 0u) {
             uses_resources = true;
             if (type_ref_is_resource_handle(
                     graph, function->as.function.result)) {

@@ -68,6 +68,8 @@ int main(void) {
                &instance,
                name,
                NULL, 0u) == TURBOWASM_OK);
+    turbowasm_component_instance_destroy(&instance);
+    assert(instance.impl == NULL);
     assert(turbowasm_component_call_state_get(
                &call) == TURBOWASM_EXECUTION_READY);
     assert(turbowasm_component_call_resume(
@@ -83,9 +85,9 @@ int main(void) {
     assert(call_result.kind == TURBOWASM_COMPONENT_HOST_U32);
     assert(call_result.as.u32 == 42u);
 
-    turbowasm_component_host_value_destroy(&call_result);
+    assert(turbowasm_component_host_value_destroy(&call_result) == TURBOWASM_OK);
     turbowasm_component_call_destroy(&call);
-    turbowasm_component_host_value_destroy(&result);
+    assert(turbowasm_component_host_value_destroy(&result) == TURBOWASM_OK);
     turbowasm_component_instance_destroy(&instance);
     assert(instance.impl == NULL);
     return 0;

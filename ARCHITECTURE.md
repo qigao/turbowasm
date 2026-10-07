@@ -201,8 +201,10 @@ Rollback removes general-call admission, emission and scratch allocation togethe
 
 ## Component host values and resource ownership (approved design)
 
-Approved by the user on 2026-10-07; implementation is pending. This design closes
-the current scalar/string/list-only host boundary in `component_api.c`; it does
+Approved by the user on 2026-10-07. Non-resource composite host values, status-returning
+value destruction and instance retention by restartable calls are implemented.
+Resource handles, move admission and borrow loans remain pending. This design
+extends the former scalar/string/list-only boundary in `component_api.c`; it does
 not change Core Runtime value layouts. The existing canonical codec, type graph,
 resource table and call-scope rollback remain the semantic implementation.
 The reference contract is the [Component Model Canonical ABI](https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md).

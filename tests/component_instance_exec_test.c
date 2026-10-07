@@ -70,8 +70,8 @@ static void test_inline_component_instance_alias_executes(void) {
 
     assert(component.canon_lift_count == 1u);
     assert(component.component_instance_count == 1u);
-    assert(component.component_function_alias_count == 1u);
-    assert(component.component_function_count == 2u);
+    assert(component.component_function_alias_count == 2u);
+    assert(component.component_function_count == 3u);
 
     instance =
         turbowasm_component_binary_component_instance_at(
@@ -92,7 +92,7 @@ static void test_inline_component_instance_alias_executes(void) {
     assert(turbowasm_component_exec_init(
                &exec, &component) == TURBOWASM_OK);
     assert(exec.adapter_count == 1u);
-    assert(exec.function_count == 2u);
+    assert(exec.function_count == 3u);
     assert(exec.function_adapter_indices[0] == 0u);
     assert(exec.function_adapter_indices[1] == 0u);
 

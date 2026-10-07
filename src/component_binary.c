@@ -747,9 +747,11 @@ record_done:
             }
         }
 
-        if (!turbowasm_component_type_graph_define_variant(
-                graph, type_index, cases, count))
+        if (!turbowasm_component_variant_cases_valid(graph, cases, count))
             status = TURBOWASM_MALFORMED_MODULE;
+        else if (!turbowasm_component_type_graph_define_variant(
+                     graph, type_index, cases, count))
+            status = TURBOWASM_OUT_OF_MEMORY;
         else
             status = TURBOWASM_OK;
 
@@ -835,14 +837,18 @@ static turbowasm_status decode_label_type_into_graph(
         labels[i].name_size = name.size;
     }
 
+    if (!turbowasm_component_labels_valid(labels, count)) {
+        status = TURBOWASM_MALFORMED_MODULE;
+        goto done;
+    }
     if (kind == TURBOWASM_COMPONENT_TYPE_ENUM) {
         if (!turbowasm_component_type_graph_define_enum(
                 graph, type_index, labels, count))
-            status = TURBOWASM_MALFORMED_MODULE;
+            status = TURBOWASM_OUT_OF_MEMORY;
     } else {
         if (!turbowasm_component_type_graph_define_flags(
                 graph, type_index, labels, count))
-            status = TURBOWASM_MALFORMED_MODULE;
+            status = TURBOWASM_OUT_OF_MEMORY;
     }
 
 done:
@@ -2273,8 +2279,8 @@ static turbowasm_status decode_component_import_section(
 static turbowasm_status decode_component_export_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
-    uint32_t current_type_count,
-    uint32_t current_component_function_count) {
+    uint32_t *current_type_count,
+    uint32_t *current_component_function_count) {
     uint32_t count;
     uint32_t i;
 
@@ -2282,49 +2288,70 @@ static turbowasm_status decode_component_export_section(
         return TURBOWASM_MALFORMED_MODULE;
 
     for (i = 0u; i < count; ++i) {
-        turbowasm_component_export export_desc;
-        uint8_t sort;
-        uint8_t optional_type;
+        turbowasm_component_export export_desc = {0};
+        uint8_t sort, optional_type;
+        uint32_t index_limit;
         turbowasm_status status;
 
-        memset(&export_desc, 0, sizeof(export_desc));
         export_desc.type_index = UINT32_MAX;
-
-        status = read_name_attributes(
-            &section, &export_desc.name);
+        status = read_name_attributes(&section, &export_desc.name);
         if (status != TURBOWASM_OK)
             return status;
-
         if (!turbowasm_reader_u8(&section, &sort))
             return TURBOWASM_MALFORMED_MODULE;
-        if (sort != 0x01u)
+        if (sort != TURBOWASM_COMPONENT_EXTERN_FUNCTION &&
+            sort != TURBOWASM_COMPONENT_EXTERN_TYPE)
             return TURBOWASM_UNSUPPORTED;
-        export_desc.kind = TURBOWASM_COMPONENT_EXTERN_FUNCTION;
-
-        if (!turbowasm_reader_uleb32(
-                &section, &export_desc.item_index) ||
-            export_desc.item_index >= current_component_function_count ||
+        export_desc.kind = (turbowasm_component_external_kind)sort;
+        index_limit = sort == TURBOWASM_COMPONENT_EXTERN_TYPE
+            ? *current_type_count : *current_component_function_count;
+        if (!turbowasm_reader_uleb32(&section, &export_desc.item_index) ||
+            export_desc.item_index >= index_limit ||
             !turbowasm_reader_u8(&section, &optional_type))
             return TURBOWASM_MALFORMED_MODULE;
-
         if (optional_type == 1u) {
+            if (sort != TURBOWASM_COMPONENT_EXTERN_FUNCTION)
+                return TURBOWASM_UNSUPPORTED;
             export_desc.has_ascribed_type = true;
-            status = read_function_externtype(
-                &section, component, current_type_count,
-                &export_desc.type_index);
+            status = read_function_externtype(&section, component,
+                *current_type_count, &export_desc.type_index);
             if (status != TURBOWASM_OK)
                 return status;
         } else if (optional_type != 0u) {
             return TURBOWASM_MALFORMED_MODULE;
         }
 
+        /* Exports introduce aliases in their own index space. Keep them in
+         * declaration order so later canon lifts/lowers see the correct IDs.
+         * https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md#import-and-export-definitions */
+        if (sort == TURBOWASM_COMPONENT_EXTERN_TYPE) {
+            const turbowasm_component_type *type = turbowasm_component_type_graph_get(
+                &component->type_graph, export_desc.item_index);
+            if (type == NULL || *current_type_count >= component->type_graph.count)
+                return TURBOWASM_MALFORMED_MODULE;
+            if (type->kind == TURBOWASM_COMPONENT_TYPE_INSTANCE ||
+                type->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE)
+                return TURBOWASM_UNSUPPORTED;
+            if (!clone_local_type(&component->type_graph,
+                    *current_type_count, export_desc.item_index))
+                return TURBOWASM_OUT_OF_MEMORY;
+            ++*current_type_count;
+        } else {
+            turbowasm_component_function_alias alias = {0};
+            if (*current_component_function_count == UINT32_MAX)
+                return TURBOWASM_OUT_OF_MEMORY;
+            alias.component_function_index = *current_component_function_count;
+            alias.local_source = true;
+            alias.source_function_index = export_desc.item_index;
+            if (!append_component_function_alias(component, alias))
+                return TURBOWASM_OUT_OF_MEMORY;
+            ++*current_component_function_count;
+        }
         if (!append_export(component, export_desc))
             return TURBOWASM_OUT_OF_MEMORY;
     }
-
     return turbowasm_reader_remaining(&section) == 0u
-        ? TURBOWASM_OK
-        : TURBOWASM_MALFORMED_MODULE;
+        ? TURBOWASM_OK : TURBOWASM_MALFORMED_MODULE;
 }
 
 static turbowasm_status decode_component_semantics(
@@ -2346,7 +2373,7 @@ static turbowasm_status decode_component_semantics(
         const turbowasm_component_section *section =
             &component->sections[i];
 
-        if (section->id == 7u || section->id == 6u) {
+        if (section->id == 7u || section->id == 6u || section->id == 11u) {
             turbowasm_reader reader;
             uint32_t count;
             turbowasm_reader_init(
@@ -2355,8 +2382,8 @@ static turbowasm_status decode_component_semantics(
                 count > UINT32_MAX - total_types)
                 return TURBOWASM_MALFORMED_MODULE;
             /*
-             * Alias sections are an upper bound: only type aliases consume
-             * Component type indices. The graph is trimmed to current_types
+             * Alias/export sections are an upper bound: only type entries
+             * consume Component type indices. The graph is trimmed to current_types
              * after semantic decoding.
              */
             total_types += count;
@@ -2432,8 +2459,8 @@ static turbowasm_status decode_component_semantics(
             status = decode_component_export_section(
                 reader,
                 component,
-                current_types,
-                next_component_function_index);
+                &current_types,
+                &next_component_function_index);
         }
 
         if (status != TURBOWASM_OK)

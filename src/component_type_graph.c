@@ -270,20 +270,13 @@ bool turbowasm_component_type_graph_define_tuple(
     return true;
 }
 
-bool turbowasm_component_type_graph_define_variant(
-    turbowasm_component_type_graph *graph,
-    turbowasm_component_type_id id,
+bool turbowasm_component_variant_cases_valid(
+    const turbowasm_component_type_graph *graph,
     const turbowasm_component_variant_case *cases,
     uint32_t case_count) {
-    turbowasm_component_type *type = slot(graph, id);
-    turbowasm_component_variant_case *copy;
     uint32_t i;
-
-    if (type == NULL ||
-        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
-        cases == NULL || case_count == 0u)
+    if (graph == NULL || cases == NULL || case_count == 0u)
         return false;
-
     for (i = 0u; i < case_count; ++i) {
         uint32_t previous;
         if (cases[i].name == NULL ||
@@ -300,6 +293,22 @@ bool turbowasm_component_type_graph_define_variant(
                 return false;
         }
     }
+
+    return true;
+}
+
+bool turbowasm_component_type_graph_define_variant(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    const turbowasm_component_variant_case *cases,
+    uint32_t case_count) {
+    turbowasm_component_type *type = slot(graph, id);
+    turbowasm_component_variant_case *copy;
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        !turbowasm_component_variant_cases_valid(graph, cases, case_count))
+        return false;
 
     if ((size_t)case_count > SIZE_MAX / sizeof(*copy))
         return false;
@@ -353,21 +362,12 @@ bool turbowasm_component_type_graph_define_result(
     return true;
 }
 
-static bool define_labels(
-    turbowasm_component_type *type,
-    turbowasm_component_type_kind kind,
+bool turbowasm_component_labels_valid(
     const turbowasm_component_label *labels,
     uint32_t label_count) {
-    turbowasm_component_label *copy;
     uint32_t i;
-
-    if (type == NULL ||
-        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
-        labels == NULL || label_count == 0u ||
-        (kind == TURBOWASM_COMPONENT_TYPE_FLAGS &&
-         label_count > 32u))
+    if (labels == NULL || label_count == 0u)
         return false;
-
     for (i = 0u; i < label_count; ++i) {
         uint32_t j;
         if (labels[i].name == NULL || labels[i].name_size == 0u)
@@ -381,6 +381,23 @@ static bool define_labels(
                 return false;
         }
     }
+
+    return true;
+}
+
+static bool define_labels(
+    turbowasm_component_type *type,
+    turbowasm_component_type_kind kind,
+    const turbowasm_component_label *labels,
+    uint32_t label_count) {
+    turbowasm_component_label *copy;
+
+    if (type == NULL ||
+        type->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        !turbowasm_component_labels_valid(labels, label_count) ||
+        (kind == TURBOWASM_COMPONENT_TYPE_FLAGS &&
+         label_count > 32u))
+        return false;
 
     if ((size_t)label_count > SIZE_MAX / sizeof(*copy))
         return false;
@@ -895,4 +912,91 @@ const cmeta_type_desc *turbowasm_component_scalar_cmeta_type(
         case TURBOWASM_COMPONENT_TYPE_CHAR: return &cmeta_type_uint32;
         default: return NULL;
     }
+}
+
+static bool value_type_features(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    uint32_t depth, uint32_t *features) {
+    const turbowasm_component_type *type;
+    turbowasm_component_type_kind kind;
+    uint32_t i;
+
+    if (graph == NULL || depth >= TURBOWASM_COMPONENT_VALUE_MAX_DEPTH)
+        return false;
+
+    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE) {
+        kind = ref.as.inline_type;
+        if (kind == TURBOWASM_COMPONENT_TYPE_STRING)
+            *features |= TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY;
+        return kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
+               kind <= TURBOWASM_COMPONENT_TYPE_STRING;
+    }
+
+    if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
+        return false;
+    type = turbowasm_component_type_graph_get(
+        graph, ref.as.indexed);
+    if (type == NULL)
+        return false;
+
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_STRING ||
+        type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
+        *features |= TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY;
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_OWN ||
+        type->kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+        *features |= TURBOWASM_COMPONENT_VALUE_RESOURCES;
+        return true;
+    }
+    if (type->kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
+        type->kind <= TURBOWASM_COMPONENT_TYPE_STRING)
+        return true;
+    if (type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
+        return value_type_features(
+            graph, type->as.list.element_type, depth + 1u, features);
+    switch (type->kind) {
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+            for (i = 0u; i < type->as.record.count; ++i)
+                if (!value_type_features(graph,
+                        type->as.record.fields[i].type, depth + 1u, features))
+                    return false;
+            return true;
+        case TURBOWASM_COMPONENT_TYPE_TUPLE:
+            for (i = 0u; i < type->as.tuple.count; ++i)
+                if (!value_type_features(graph,
+                        type->as.tuple.elements[i], depth + 1u, features))
+                    return false;
+            return true;
+        case TURBOWASM_COMPONENT_TYPE_VARIANT:
+            for (i = 0u; i < type->as.variant.count; ++i)
+                if (type->as.variant.cases[i].has_payload &&
+                    !value_type_features(graph,
+                        type->as.variant.cases[i].payload, depth + 1u, features))
+                    return false;
+            return true;
+        case TURBOWASM_COMPONENT_TYPE_OPTION:
+            return value_type_features(graph,
+                type->as.option.payload, depth + 1u, features);
+        case TURBOWASM_COMPONENT_TYPE_RESULT:
+            return (!type->as.result.has_ok || value_type_features(
+                        graph, type->as.result.ok, depth + 1u, features)) &&
+                   (!type->as.result.has_error || value_type_features(
+                        graph, type->as.result.error, depth + 1u, features));
+        case TURBOWASM_COMPONENT_TYPE_ENUM:
+        case TURBOWASM_COMPONENT_TYPE_FLAGS:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool turbowasm_component_value_type_features(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    uint32_t *out_features) {
+    uint32_t features = 0u;
+    if (out_features == NULL || !value_type_features(graph, ref, 0u, &features))
+        return false;
+    *out_features = features;
+    return true;
 }

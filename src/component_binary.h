@@ -150,6 +150,8 @@ typedef struct turbowasm_component_function_alias {
     uint32_t component_function_index;
     uint32_t instance_index;
     turbowasm_component_name name;
+    bool local_source;
+    uint32_t source_function_index;
 } turbowasm_component_function_alias;
 
 typedef struct turbowasm_component_binary {

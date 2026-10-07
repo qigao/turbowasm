@@ -15,6 +15,14 @@ static_assert(
     std::is_standard_layout<turbowasm_component_call>::value,
     "Component call handle must remain standard-layout");
 
+static_assert(std::is_same<decltype(&turbowasm_component_host_value_destroy),
+    turbowasm_status (*)(turbowasm_component_host_value *)>::value,
+    "Component value destruction reports status");
+static_assert(std::is_standard_layout<turbowasm_component_host_variant>::value &&
+    std::is_standard_layout<turbowasm_component_host_sequence>::value &&
+    std::is_standard_layout<turbowasm_component_host_flags>::value,
+    "Composite carriers must remain C-compatible");
+
 auto *tw_component_load = &turbowasm_component_load_borrowed;
 auto *tw_component_load_config =
     &turbowasm_component_load_borrowed_with_config;

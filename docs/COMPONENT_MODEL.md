@@ -489,7 +489,7 @@ No C4 dependency is introduced into the generic C3 canonical codec.
 
 ## C6a installed façade boundary
 
-The stable synchronous scalar/string/list subset is exposed through a separate
+The synchronous non-resource host types are exposed through a separate
 installed target:
 
 ```cmake
@@ -512,21 +512,48 @@ state reference, so destroying the public component handle does not invalidate
 already-created instances; the borrowed source bytes still must outlive all
 instances.
 
-The first public host-value ABI freezes only:
+The public host-value ABI supports:
 
 - bool and signed/unsigned integer scalars;
 - float32 / float64;
 - char;
 - UTF-8 string;
-- recursive list values.
+- recursive list values;
+- records and tuples, in declaration order;
+- variant, option and result, with case index and optional payload;
+- enum indices and counted flag words (one word for the MVP limit of 32 flags).
 
-Resource own/borrow remains private until its public host ownership/identity
-contract is intentionally frozen. An export whose parameter/result tree contains
-resource values is rejected by the façade before Core execution begins.
+The resource ownership contract in [ARCHITECTURE.md](../ARCHITECTURE.md#component-host-values-and-resource-ownership-approved-design)
+is approved; its own/borrow implementation is still pending. Exports containing
+resource values are rejected before Core execution begins. Non-resource type
+exports introduce retained type aliases; function exports introduce function
+aliases, including re-exports referenced by subsequent definitions. Type exports
+with explicit ascriptions and resource/instance type exports remain unsupported.
 
-Input values are caller-owned and borrowed for the duration of an invocation.
-Lifted string/list results are TurboWasm-owned and released recursively with
-`turbowasm_component_host_value_destroy()`.
+Input values are borrowed and never consumed. Returned strings, sequence arrays,
+variant payloads and flag words belong to TurboWasm and are released recursively
+with `turbowasm_component_host_value_destroy()`, which now returns
+`turbowasm_status`. NULL and already-cleared values succeed. Existing callers
+may ignore the return value; Component consumers must rebuild for the expanded
+value union and changed function type.
+
+Restartable calls retain the instance and its capability owner until call
+destruction. The public component and instance handles can be released after
+call creation; immutable borrowed binary bytes and allocator contexts must still
+outlive their dependent allocations. Fuel/host-wait suspension preserves the
+retained instance. Taking a completed result twice returns an error without
+modifying the first result. Result conversion uses the instance allocator,
+including when the public instance handle has already been destroyed.
+
+`tests/component_host_values_test.c` covers canonical-memory and flat composite
+roundtrips, indirect tuple parameters, nested UTF-8 strings, invalid tags and
+flag bits, allocation failure at each conversion step, repeated result moves,
+and unstarted/suspended call destruction. The fixture source is
+[`component_host_composites.wat`](../tests/fixtures/component_host_composites.wat),
+validated and compiled with wasm-tools 1.261.0. The retained type graph supplies
+one value-feature query for public admission, Core-call adapters and canonical
+import memory requirements, so nested variant strings/resources cannot drift
+between those layers.
 
 The installed `TurboWasm::Component` library is a real façade target that
 depends publicly on `TurboWasm::Runtime`. Runtime never links back to the

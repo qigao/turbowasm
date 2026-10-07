@@ -42,6 +42,27 @@ TW_COMPONENT_PUBLIC_KIND_MATCH(
 TW_COMPONENT_PUBLIC_KIND_MATCH(
     TURBOWASM_COMPONENT_HOST_LIST, TURBOWASM_COMPONENT_TYPE_LIST);
 
+TW_COMPONENT_PUBLIC_KIND_MATCH(
+    TURBOWASM_COMPONENT_HOST_RECORD, TURBOWASM_COMPONENT_TYPE_RECORD);
+
+TW_COMPONENT_PUBLIC_KIND_MATCH(
+    TURBOWASM_COMPONENT_HOST_TUPLE, TURBOWASM_COMPONENT_TYPE_TUPLE);
+
+TW_COMPONENT_PUBLIC_KIND_MATCH(
+    TURBOWASM_COMPONENT_HOST_VARIANT, TURBOWASM_COMPONENT_TYPE_VARIANT);
+
+TW_COMPONENT_PUBLIC_KIND_MATCH(
+    TURBOWASM_COMPONENT_HOST_OPTION, TURBOWASM_COMPONENT_TYPE_OPTION);
+
+TW_COMPONENT_PUBLIC_KIND_MATCH(
+    TURBOWASM_COMPONENT_HOST_RESULT, TURBOWASM_COMPONENT_TYPE_RESULT);
+
+TW_COMPONENT_PUBLIC_KIND_MATCH(
+    TURBOWASM_COMPONENT_HOST_ENUM, TURBOWASM_COMPONENT_TYPE_ENUM);
+
+TW_COMPONENT_PUBLIC_KIND_MATCH(
+    TURBOWASM_COMPONENT_HOST_FLAGS, TURBOWASM_COMPONENT_TYPE_FLAGS);
+
 #undef TW_COMPONENT_PUBLIC_KIND_MATCH
 
 turbowasm_component_public_impl *
@@ -89,42 +110,60 @@ void turbowasm_component_public_impl_release(
     turbowasm_runtime_scope_leave(scope);
 }
 
+enum { COMPONENT_PUBLIC_MAX_DEPTH = 64, COMPONENT_PUBLIC_FLAGS_WORDS = 1 };
+
 static bool public_kind_supported(
     turbowasm_component_host_value_kind kind) {
     return kind >= TURBOWASM_COMPONENT_HOST_BOOL &&
-           kind <= TURBOWASM_COMPONENT_HOST_LIST;
+           kind <= TURBOWASM_COMPONENT_HOST_FLAGS;
 }
 
 static bool public_type_ref_supported(
     const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_ref ref,
-    uint32_t depth) {
-    const turbowasm_component_type *type;
-    turbowasm_component_type_kind kind;
+    turbowasm_component_type_ref ref) {
+    uint32_t features;
+    return turbowasm_component_value_type_features(graph, ref, &features) &&
+        (features & TURBOWASM_COMPONENT_VALUE_RESOURCES) == 0u;
+}
 
-    if (graph == NULL || depth >= 64u)
-        return false;
-
-    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE) {
-        kind = ref.as.inline_type;
-        return kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
-               kind <= TURBOWASM_COMPONENT_TYPE_STRING;
+static const turbowasm_component_host_sequence *public_sequence(
+    const turbowasm_component_host_value *value) {
+    switch (value->kind) {
+        case TURBOWASM_COMPONENT_HOST_LIST: return &value->as.list;
+        case TURBOWASM_COMPONENT_HOST_RECORD: return &value->as.record;
+        case TURBOWASM_COMPONENT_HOST_TUPLE: return &value->as.tuple;
+        default: return NULL;
     }
+}
 
-    if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
-        return false;
-    type = turbowasm_component_type_graph_get(
-        graph, ref.as.indexed);
-    if (type == NULL)
-        return false;
+static const turbowasm_component_host_variant *public_variant(
+    const turbowasm_component_host_value *value) {
+    switch (value->kind) {
+        case TURBOWASM_COMPONENT_HOST_VARIANT: return &value->as.variant;
+        case TURBOWASM_COMPONENT_HOST_OPTION: return &value->as.option;
+        case TURBOWASM_COMPONENT_HOST_RESULT: return &value->as.result;
+        default: return NULL;
+    }
+}
 
-    if (type->kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
-        type->kind <= TURBOWASM_COMPONENT_TYPE_STRING)
-        return true;
-    if (type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
-        return public_type_ref_supported(
-            graph, type->as.list.element_type, depth + 1u);
-    return false;
+static turbowasm_component_value_list *internal_sequence(
+    turbowasm_component_value *value) {
+    switch (value->kind) {
+        case TURBOWASM_COMPONENT_TYPE_LIST: return &value->as.list;
+        case TURBOWASM_COMPONENT_TYPE_RECORD: return &value->as.record;
+        case TURBOWASM_COMPONENT_TYPE_TUPLE: return &value->as.tuple;
+        default: return NULL;
+    }
+}
+
+static turbowasm_component_value_variant *internal_variant(
+    turbowasm_component_value *value) {
+    switch (value->kind) {
+        case TURBOWASM_COMPONENT_TYPE_VARIANT: return &value->as.variant;
+        case TURBOWASM_COMPONENT_TYPE_OPTION: return &value->as.option;
+        case TURBOWASM_COMPONENT_TYPE_RESULT: return &value->as.result;
+        default: return NULL;
+    }
 }
 
 static void internal_input_destroy(
@@ -134,10 +173,17 @@ static void internal_input_destroy(
     if (value == NULL)
         return;
 
-    if (value->kind == TURBOWASM_COMPONENT_TYPE_LIST) {
-        for (i = 0u; i < value->as.list.count; ++i)
-            internal_input_destroy(&value->as.list.items[i]);
-        turbowasm_rt_free(value->as.list.items);
+    {
+        turbowasm_component_value_list *sequence = internal_sequence(value);
+        turbowasm_component_value_variant *variant = internal_variant(value);
+        if (sequence != NULL) {
+            for (i = 0u; i < sequence->count; ++i)
+                internal_input_destroy(&sequence->items[i]);
+            turbowasm_rt_free(sequence->items);
+        } else if (variant != NULL && variant->payload != NULL) {
+            internal_input_destroy(variant->payload);
+            turbowasm_rt_free(variant->payload);
+        }
     }
 
     /*
@@ -156,7 +202,7 @@ static turbowasm_status public_to_internal(
     if (source == NULL || out == NULL ||
         !public_kind_supported(source->kind))
         return TURBOWASM_INVALID_ARGUMENT;
-    if (depth >= 64u)
+    if (depth >= COMPONENT_PUBLIC_MAX_DEPTH)
         return TURBOWASM_TRAPPED;
 
     memset(out, 0, sizeof(*out));
@@ -209,33 +255,60 @@ static turbowasm_status public_to_internal(
             return TURBOWASM_OK;
 
         case TURBOWASM_COMPONENT_HOST_LIST:
-            if (source->as.list.count != 0u &&
-                source->as.list.items == NULL)
+        case TURBOWASM_COMPONENT_HOST_RECORD:
+        case TURBOWASM_COMPONENT_HOST_TUPLE: {
+            const turbowasm_component_host_sequence *input = public_sequence(source);
+            turbowasm_component_value_list *sequence = internal_sequence(out);
+            if (input->count != 0u && input->items == NULL)
                 return TURBOWASM_INVALID_ARGUMENT;
-            if (source->as.list.count >
-                SIZE_MAX / sizeof(*out->as.list.items))
+            if (input->count > SIZE_MAX / sizeof(*sequence->items))
                 return TURBOWASM_OUT_OF_MEMORY;
-
-            if (source->as.list.count != 0u) {
-                out->as.list.items =
-                    (turbowasm_component_value *)turbowasm_rt_calloc(
-                        source->as.list.count,
-                        sizeof(*out->as.list.items));
-                if (out->as.list.items == NULL)
+            if (input->count != 0u) {
+                sequence->items = (turbowasm_component_value *)
+                    turbowasm_rt_calloc(input->count, sizeof(*sequence->items));
+                if (sequence->items == NULL)
                     return TURBOWASM_OUT_OF_MEMORY;
             }
-            out->as.list.count = source->as.list.count;
-
-            for (i = 0u; i < source->as.list.count; ++i) {
+            sequence->count = input->count;
+            for (i = 0u; i < input->count; ++i) {
                 turbowasm_status status = public_to_internal(
-                    &source->as.list.items[i],
-                    &out->as.list.items[i],
-                    depth + 1u);
+                    &input->items[i], &sequence->items[i], depth + 1u);
                 if (status != TURBOWASM_OK) {
                     internal_input_destroy(out);
                     return status;
                 }
             }
+            return TURBOWASM_OK;
+        }
+        case TURBOWASM_COMPONENT_HOST_VARIANT:
+        case TURBOWASM_COMPONENT_HOST_OPTION:
+        case TURBOWASM_COMPONENT_HOST_RESULT: {
+            const turbowasm_component_host_variant *input = public_variant(source);
+            turbowasm_component_value_variant *variant = internal_variant(out);
+            variant->case_index = input->case_index;
+            if (input->payload != NULL) {
+                turbowasm_status status;
+                variant->payload = (turbowasm_component_value *)
+                    turbowasm_rt_calloc(1u, sizeof(*variant->payload));
+                if (variant->payload == NULL)
+                    return TURBOWASM_OUT_OF_MEMORY;
+                status = public_to_internal(input->payload,
+                    variant->payload, depth + 1u);
+                if (status != TURBOWASM_OK) {
+                    internal_input_destroy(out);
+                    return status;
+                }
+            }
+            return TURBOWASM_OK;
+        }
+        case TURBOWASM_COMPONENT_HOST_ENUM:
+            out->as.enum_index = source->as.enum_index;
+            return TURBOWASM_OK;
+        case TURBOWASM_COMPONENT_HOST_FLAGS:
+            if (source->as.flags.word_count != COMPONENT_PUBLIC_FLAGS_WORDS ||
+                source->as.flags.words == NULL)
+                return TURBOWASM_INVALID_ARGUMENT;
+            out->as.flags = source->as.flags.words[0];
             return TURBOWASM_OK;
 
         default:
@@ -251,10 +324,10 @@ static turbowasm_status internal_to_public(
 
     if (source == NULL || out == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (depth >= 64u)
+    if (depth >= COMPONENT_PUBLIC_MAX_DEPTH)
         return TURBOWASM_TRAPPED;
     if (source->kind < TURBOWASM_COMPONENT_TYPE_BOOL ||
-        source->kind > TURBOWASM_COMPONENT_TYPE_LIST)
+        source->kind > TURBOWASM_COMPONENT_TYPE_FLAGS)
         return TURBOWASM_UNSUPPORTED;
 
     memset(out, 0, sizeof(*out));
@@ -307,32 +380,76 @@ static turbowasm_status internal_to_public(
             break;
 
         case TURBOWASM_COMPONENT_TYPE_LIST:
-            if (source->as.list.count > (uint64_t)SIZE_MAX)
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+        case TURBOWASM_COMPONENT_TYPE_TUPLE: {
+            turbowasm_component_value_list *input = internal_sequence(source);
+            turbowasm_component_host_sequence sequence = {0};
+            if (input->count > SIZE_MAX / sizeof(*sequence.items))
                 return TURBOWASM_OUT_OF_MEMORY;
-            if (source->as.list.count != 0u) {
-                out->as.list.items =
-                    (turbowasm_component_host_value *)turbowasm_rt_calloc(
-                        (size_t)source->as.list.count,
-                        sizeof(*out->as.list.items));
-                if (out->as.list.items == NULL)
+            if (input->count != 0u) {
+                sequence.items = (turbowasm_component_host_value *)
+                    turbowasm_rt_calloc((size_t)input->count, sizeof(*sequence.items));
+                if (sequence.items == NULL)
                     return TURBOWASM_OUT_OF_MEMORY;
             }
-            out->as.list.count = (size_t)source->as.list.count;
-
-            for (i = 0u; i < source->as.list.count; ++i) {
+            sequence.count = (size_t)input->count;
+            switch (out->kind) {
+                case TURBOWASM_COMPONENT_HOST_LIST: out->as.list = sequence; break;
+                case TURBOWASM_COMPONENT_HOST_RECORD: out->as.record = sequence; break;
+                default: out->as.tuple = sequence; break;
+            }
+            for (i = 0u; i < input->count; ++i) {
                 turbowasm_status status = internal_to_public(
-                    &source->as.list.items[i],
-                    &out->as.list.items[i],
-                    depth + 1u);
+                    &input->items[i], &sequence.items[i], depth + 1u);
                 if (status != TURBOWASM_OK) {
                     turbowasm_component_host_value_destroy(out);
                     return status;
                 }
             }
-
-            turbowasm_rt_free(source->as.list.items);
-            source->as.list.items = NULL;
-            source->as.list.count = 0u;
+            turbowasm_rt_free(input->items);
+            input->items = NULL;
+            input->count = 0u;
+            break;
+        }
+        case TURBOWASM_COMPONENT_TYPE_VARIANT:
+        case TURBOWASM_COMPONENT_TYPE_OPTION:
+        case TURBOWASM_COMPONENT_TYPE_RESULT: {
+            turbowasm_component_value_variant *input = internal_variant(source);
+            turbowasm_component_host_variant variant = {0};
+            variant.case_index = input->case_index;
+            if (input->payload != NULL) {
+                turbowasm_status status;
+                variant.payload = (turbowasm_component_host_value *)
+                    turbowasm_rt_calloc(1u, sizeof(*variant.payload));
+                if (variant.payload == NULL)
+                    return TURBOWASM_OUT_OF_MEMORY;
+                status = internal_to_public(input->payload,
+                    variant.payload, depth + 1u);
+                if (status != TURBOWASM_OK) {
+                    turbowasm_component_host_value_destroy(variant.payload);
+                    turbowasm_rt_free(variant.payload);
+                    return status;
+                }
+                turbowasm_rt_free(input->payload);
+                input->payload = NULL;
+            }
+            switch (out->kind) {
+                case TURBOWASM_COMPONENT_HOST_VARIANT: out->as.variant = variant; break;
+                case TURBOWASM_COMPONENT_HOST_OPTION: out->as.option = variant; break;
+                default: out->as.result = variant; break;
+            }
+            break;
+        }
+        case TURBOWASM_COMPONENT_TYPE_ENUM:
+            out->as.enum_index = source->as.enum_index;
+            break;
+        case TURBOWASM_COMPONENT_TYPE_FLAGS:
+            out->as.flags.words = (uint32_t *)turbowasm_rt_calloc(
+                COMPONENT_PUBLIC_FLAGS_WORDS, sizeof(*out->as.flags.words));
+            if (out->as.flags.words == NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+            out->as.flags.words[0] = source->as.flags;
+            out->as.flags.word_count = COMPONENT_PUBLIC_FLAGS_WORDS;
             break;
 
         default:
@@ -343,23 +460,30 @@ static turbowasm_status internal_to_public(
     return TURBOWASM_OK;
 }
 
-void turbowasm_component_host_value_destroy(
+turbowasm_status turbowasm_component_host_value_destroy(
     turbowasm_component_host_value *value) {
+    const turbowasm_component_host_sequence *sequence;
+    const turbowasm_component_host_variant *variant;
     size_t i;
 
     if (value == NULL)
-        return;
-
-    if (value->kind == TURBOWASM_COMPONENT_HOST_STRING) {
+        return TURBOWASM_OK;
+    sequence = public_sequence(value);
+    variant = public_variant(value);
+    if (sequence != NULL) {
+        for (i = 0u; i < sequence->count; ++i)
+            turbowasm_component_host_value_destroy(&sequence->items[i]);
+        turbowasm_rt_free(sequence->items);
+    } else if (variant != NULL) {
+        turbowasm_component_host_value_destroy(variant->payload);
+        turbowasm_rt_free(variant->payload);
+    } else if (value->kind == TURBOWASM_COMPONENT_HOST_STRING) {
         turbowasm_rt_free(value->as.string.data);
-    } else if (value->kind == TURBOWASM_COMPONENT_HOST_LIST) {
-        for (i = 0u; i < value->as.list.count; ++i)
-            turbowasm_component_host_value_destroy(
-                &value->as.list.items[i]);
-        turbowasm_rt_free(value->as.list.items);
+    } else if (value->kind == TURBOWASM_COMPONENT_HOST_FLAGS) {
+        turbowasm_rt_free(value->as.flags.words);
     }
-
     memset(value, 0, sizeof(*value));
+    return TURBOWASM_OK;
 }
 
 turbowasm_status turbowasm_component_load_borrowed(
@@ -463,23 +587,28 @@ turbowasm_status turbowasm_component_instance_create(
         return status;
     }
 
+    impl->ref_count = 1u;
     instance->impl = impl;
     return TURBOWASM_OK;
 }
 
-void turbowasm_component_instance_destroy(
-    turbowasm_component_instance *instance) {
-    turbowasm_component_instance_public_impl *impl;
+static bool component_instance_retain(
+    turbowasm_component_instance_public_impl *impl) {
+    if (impl == NULL || impl->ref_count == 0u || impl->ref_count == UINT32_MAX)
+        return false;
+    ++impl->ref_count;
+    return true;
+}
+
+static void component_instance_release(
+    turbowasm_component_instance_public_impl *impl) {
     turbowasm_component_public_impl *component_state;
     turbowasm_runtime_config config;
     turbowasm_runtime_scope scope;
 
-    if (instance == NULL)
+    if (impl == NULL || impl->ref_count == 0u)
         return;
-
-    impl = turbowasm_component_instance_public_impl_get(instance);
-    instance->impl = NULL;
-    if (impl == NULL)
+    if (--impl->ref_count != 0u)
         return;
 
     component_state = impl->component;
@@ -495,6 +624,16 @@ void turbowasm_component_instance_destroy(
     turbowasm_runtime_scope_leave(scope);
 
     turbowasm_component_public_impl_release(component_state);
+}
+
+void turbowasm_component_instance_destroy(
+    turbowasm_component_instance *instance) {
+    turbowasm_component_instance_public_impl *impl;
+    if (instance == NULL)
+        return;
+    impl = turbowasm_component_instance_public_impl_get(instance);
+    instance->impl = NULL;
+    component_instance_release(impl);
 }
 
 static bool public_export_result_type(
@@ -555,8 +694,7 @@ static bool public_export_result_type(
                  ++param_index) {
                 if (!public_type_ref_supported(
                         adapter->graph,
-                        function->as.function.params[param_index],
-                        0u))
+                        function->as.function.params[param_index]))
                     return false;
             }
         }
@@ -564,8 +702,7 @@ static bool public_export_result_type(
         if (function->as.function.has_result &&
             !public_type_ref_supported(
                 adapter->graph,
-                function->as.function.result,
-                0u))
+                function->as.function.result))
             return false;
 
         *out_has_result = function->as.function.has_result;
@@ -615,6 +752,8 @@ turbowasm_status turbowasm_component_instance_invoke(
     *out_result_count = 0u;
     *trap = TURBOWASM_TRAP_NONE;
 
+    if (!component_instance_retain(impl))
+        return TURBOWASM_INVALID_ARGUMENT;
     scope = turbowasm_runtime_scope_enter(
         &impl->component->binary.config);
 
@@ -665,6 +804,7 @@ done:
         turbowasm_component_value_destroy(&internal_result);
 
     turbowasm_runtime_scope_leave(scope);
+    component_instance_release(impl);
     return status;
 }
 
@@ -720,6 +860,8 @@ turbowasm_status turbowasm_component_call_create(
             instance_impl, export_name, &has_result))
         return TURBOWASM_UNSUPPORTED;
 
+    if (!component_instance_retain(instance_impl))
+        return TURBOWASM_INVALID_ARGUMENT;
     scope = turbowasm_runtime_scope_enter(
         &instance_impl->component->binary.config);
 
@@ -775,6 +917,8 @@ done:
         turbowasm_rt_free(call_impl);
     }
     turbowasm_runtime_scope_leave(scope);
+    if (status != TURBOWASM_OK)
+        component_instance_release(instance_impl);
     return status;
 }
 
@@ -782,23 +926,19 @@ void turbowasm_component_call_destroy(
     turbowasm_component_call *call) {
     turbowasm_component_call_public_impl *impl =
         component_call_public_impl_mut(call);
+    turbowasm_component_instance_public_impl *instance;
     turbowasm_runtime_scope scope;
 
     if (impl == NULL)
         return;
-
-    if (impl->instance == NULL ||
-        impl->instance->component == NULL) {
-        call->impl = NULL;
-        return;
-    }
-
+    instance = impl->instance;
+    call->impl = NULL;
     scope = turbowasm_runtime_scope_enter(
-        &impl->instance->component->binary.config);
+        &instance->component->binary.config);
     turbowasm_component_exec_call_destroy(&impl->call);
     turbowasm_rt_free(impl);
     turbowasm_runtime_scope_leave(scope);
-    call->impl = NULL;
+    component_instance_release(instance);
 }
 
 turbowasm_status turbowasm_component_call_resume(
@@ -899,6 +1039,7 @@ turbowasm_status turbowasm_component_call_take_result(
         component_call_public_impl_mut(call);
     turbowasm_component_value internal_result = {0};
     turbowasm_status status;
+    turbowasm_runtime_scope scope;
 
     if (impl == NULL || out_result == NULL ||
         !impl->has_result ||
@@ -906,12 +1047,15 @@ turbowasm_status turbowasm_component_call_take_result(
             &impl->call) != 1u)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    memset(out_result, 0, sizeof(*out_result));
     status = turbowasm_component_exec_call_take_result(
         &impl->call, &internal_result);
     if (status != TURBOWASM_OK)
         return status;
 
+    /* A repeated take must not erase an already-owned caller result. */
+    memset(out_result, 0, sizeof(*out_result));
+    scope = turbowasm_runtime_scope_enter(
+        &impl->instance->component->binary.config);
     status = internal_to_public(
         &internal_result, out_result, 0u);
     if (internal_result.kind !=
@@ -921,5 +1065,6 @@ turbowasm_status turbowasm_component_call_take_result(
     if (status != TURBOWASM_OK)
         turbowasm_component_host_value_destroy(
             out_result);
+    turbowasm_runtime_scope_leave(scope);
     return status;
 }

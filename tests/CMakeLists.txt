@@ -33,6 +33,11 @@ add_test(NAME turbowasm_artifact_restore_test
          COMMAND turbowasm_artifact_restore_test)
 
 if(TURBOWASM_ENABLE_COMPONENT)
+  add_executable(turbowasm_component_host_values_test component_host_values_test.c)
+  target_link_libraries(turbowasm_component_host_values_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  set_target_properties(turbowasm_component_host_values_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_host_values_test COMMAND turbowasm_component_host_values_test)
   add_executable(turbowasm_component_public_hardening_test
     component_public_hardening_test.c)
   target_link_libraries(turbowasm_component_public_hardening_test

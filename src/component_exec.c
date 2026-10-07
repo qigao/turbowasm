@@ -1164,10 +1164,16 @@ find_component_function_alias(
 
     if (binary == NULL)
         return NULL;
-    for (i = 0u; i < binary->component_function_alias_count; ++i) {
-        if (binary->component_function_aliases[i]
-                .component_function_index == function_index)
-            return &binary->component_function_aliases[i];
+    /* Sources precede exports, so a reverse scan follows an arbitrary chain
+     * without recursion or additional allocation. */
+    for (i = binary->component_function_alias_count; i != 0u; --i) {
+        const turbowasm_component_function_alias *alias =
+            &binary->component_function_aliases[i - 1u];
+        if (alias->component_function_index != function_index)
+            continue;
+        if (!alias->local_source)
+            return alias;
+        function_index = alias->source_function_index;
     }
     return NULL;
 }
@@ -1206,63 +1212,10 @@ find_core_function_alias_by_index(
 
 static bool type_ref_contains_dynamic_memory(
     const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_ref ref,
-    uint32_t depth) {
-    const turbowasm_component_type *type;
-    uint32_t i;
-
-    if (graph == NULL || depth > 64u)
-        return true;
-    if (ref.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE)
-        return ref.as.inline_type ==
-               TURBOWASM_COMPONENT_TYPE_STRING;
-    if (ref.kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED)
-        return true;
-
-    type = turbowasm_component_type_graph_get(
-        graph, ref.as.indexed);
-    if (type == NULL)
-        return true;
-
-    switch (type->kind) {
-        case TURBOWASM_COMPONENT_TYPE_STRING:
-        case TURBOWASM_COMPONENT_TYPE_LIST:
-            return true;
-        case TURBOWASM_COMPONENT_TYPE_RECORD:
-            for (i = 0u; i < type->as.record.count; ++i) {
-                if (type_ref_contains_dynamic_memory(
-                        graph,
-                        type->as.record.fields[i].type,
-                        depth + 1u))
-                    return true;
-            }
-            return false;
-        case TURBOWASM_COMPONENT_TYPE_TUPLE:
-            for (i = 0u; i < type->as.tuple.count; ++i) {
-                if (type_ref_contains_dynamic_memory(
-                        graph,
-                        type->as.tuple.elements[i],
-                        depth + 1u))
-                    return true;
-            }
-            return false;
-        case TURBOWASM_COMPONENT_TYPE_OPTION:
-            return type_ref_contains_dynamic_memory(
-                graph, type->as.option.payload, depth + 1u);
-        case TURBOWASM_COMPONENT_TYPE_RESULT:
-            return (type->as.result.has_ok &&
-                    type_ref_contains_dynamic_memory(
-                        graph,
-                        type->as.result.ok,
-                        depth + 1u)) ||
-                   (type->as.result.has_error &&
-                    type_ref_contains_dynamic_memory(
-                        graph,
-                        type->as.result.error,
-                        depth + 1u));
-        default:
-            return false;
-    }
+    turbowasm_component_type_ref ref) {
+    uint32_t features;
+    return !turbowasm_component_value_type_features(graph, ref, &features) ||
+        (features & TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY) != 0u;
 }
 
 static turbowasm_status configure_canon_lower_memory(
@@ -1537,8 +1490,7 @@ static turbowasm_status initialize_canon_lower_state(
              ++j) {
             if (type_ref_contains_dynamic_memory(
                     context->graph,
-                    function_type->as.function.params[j],
-                    0u) &&
+                    function_type->as.function.params[j]) &&
                 !context->uses_memory)
                 return TURBOWASM_UNSUPPORTED;
         }
@@ -1546,8 +1498,7 @@ static turbowasm_status initialize_canon_lower_state(
         if (function_type->as.function.has_result &&
             type_ref_contains_dynamic_memory(
                 context->graph,
-                function_type->as.function.result,
-                0u) &&
+                function_type->as.function.result) &&
             !lower->has_realloc)
             return TURBOWASM_UNSUPPORTED;
 
@@ -1622,6 +1573,14 @@ static turbowasm_status resolve_component_function_aliases(
 
         if (alias->component_function_index >= exec->function_count)
             return TURBOWASM_MALFORMED_MODULE;
+
+        if (alias->local_source) {
+            if (alias->source_function_index >= alias->component_function_index)
+                return TURBOWASM_MALFORMED_MODULE;
+            exec->function_adapter_indices[alias->component_function_index] =
+                exec->function_adapter_indices[alias->source_function_index];
+            continue;
+        }
 
         /*
          * Imported-instance functions are consumed by canon lower and do not
@@ -2393,6 +2352,9 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
         const turbowasm_component_export *export_desc =
             &binary->exports[i];
         uint32_t adapter_index;
+
+        if (export_desc->kind == TURBOWASM_COMPONENT_EXTERN_TYPE)
+            continue;
 
         if (export_desc->kind !=
                 TURBOWASM_COMPONENT_EXTERN_FUNCTION ||
