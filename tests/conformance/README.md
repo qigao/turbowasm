@@ -432,3 +432,64 @@ This closes the globals and nullable-reference control gaps. Native GC instructi
 (including cast branches), EH and resumable native execution remain incomplete.
 Component encoding/post-return/async and broader WASI 0.2 coverage remain separate
 work; these test counts do not qualify those features.
+
+## MIR GC instructions and complete Core 3.0 differential replay
+
+Implementation `b13a687` lowers all 31 GC-prefixed operations through the existing
+Runtime GC executor. A private instruction view describes fixed, repeated or
+heterogeneous operands without allocation. Constructor scratch demand comes from
+reachable emission, so an unreachable `array.new_fixed 4294967295` does not
+allocate a corresponding argument buffer. Complete argument/result cells use the
+existing native frame root source. The store retains object ownership, recursive
+type identities, quotas and collection. Cast branches reuse taken-edge control
+merges; no installed API or heap layout changes.
+
+`gc_native_test.c` has eight cases covering every opcode with extrema/packed values
+and fuel boundaries, heterogeneous constructors, vectors and their shapes,
+transitive roots under host collection, repeated native allocations with an
+eight-object quota, cast branches at block/loop targets, external identity/null
+conversions, dropped segments, null/bounds/cast traps, quota failure and injected
+allocation failures. Its MIR variant requires compiled functions. Fixtures are
+independently validated with wasm-tools 1.261.0.
+
+Windows ASan passed the three focused tests in 0.40 seconds and all 146 tests in
+445.73 seconds, including both Core 3.0 gates. The
+[native CI run at `b13a687`](https://github.com/qigao/turbowasm/actions/runs/37637794241)
+passed all five jobs:
+
+- Linux MIR: 166/166 tests, 1.91 seconds.
+- macOS arm64 MIR: 166/166 tests, 2.73 seconds.
+- Windows qualification: 144/144 tests; installed package: 16/16.
+- Linux qualification: 145/145 tests; installed package: 17/17.
+- Android arm64: cross-build and installed consumer build; no device execution.
+
+The existing `turbowasm_conformance_core3-mir` gate now recursively replays the
+entire pinned suite, expanding its previous memory64-only scope. The
+[first full differential run](https://github.com/qigao/turbowasm/actions/runs/37637802570)
+passed in 18.05 seconds. Logging-only follow-up `f588db7` enables verbose CTest
+output so successful conformance statistics remain in CI logs. Its
+[detailed run](https://github.com/qigao/turbowasm/actions/runs/37638555437)
+passed in 17.28 seconds:
+
+```text
+CORE_CONFORMANCE pass=63970 fail=0 unsupported=0 total=63970 files=258
+TEXT_FRONTEND_CONFORMANCE pass=1229 fail=0 provider=wasm-tools (excluded from TurboWasm binary counts)
+MIR_REPLAY compiled=6556 interpret_only=272 cold=2187 calls=6828 files=258
+DIFFERENTIAL_REPLAY files=258 commands=63970 mismatches=0
+```
+
+The MIR counters describe function-state entries across retained instances, not
+instruction coverage or a percentage of native execution. The 272 interpret-only
+entries remain an admission-audit target; this replay qualifies mixed-tier parity,
+not complete native Core 3.0. Native EH, resumable native execution, Component
+encoding/post-return/async and broader WASI 0.2 coverage remain outstanding.
+
+```powershell
+cmake --build --preset win-core3-asan-user
+ctest --preset win-core3-asan-user -R "gc_native|reference_native|vector_calls" --output-on-failure
+```
+
+With the pinned tool/spec environment on Linux, reproduce the full differential
+gate using `cmake --preset ci-core3-mir-user`,
+`cmake --build --preset ci-core3-mir-user` and
+`ctest --preset ci-core3-mir-user --verbose -R "^turbowasm_conformance_core3-mir$"`.

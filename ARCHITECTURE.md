@@ -657,6 +657,7 @@ optional CFlow deadline adapter         implemented
 optional NativeIO host-wait bridge      implemented
 lazy per-function MIR JIT               implemented
 scalar/helper-backed SIMD MIR           implemented
+helper-backed GC MIR                    implemented
 per-function fallback isolation         implemented
 backend-neutral JIT artifact cache       implemented for opt-in backends
 MIR native artifact persistence          intentionally unsupported
@@ -779,7 +780,8 @@ and JIT architecture. A store-local tracing collector fits the current explicit
 instance/execution boundaries with fewer hidden lifetime rules. Its cost is
 stop-the-world collection and a new public ownership contract. MIR may continue
 using its documented interpreter admission path for unsupported functions;
-native GC lowering requires separate root-map validation before admission.
+native GC lowering uses the invocation root source described above, qualified by
+collection/quota/failure tests and complete Core 3.0 differential replay.
 
 Migration is ordered: strict upstream reporting, reference/control validation,
 canonical recursive types, store/root lifecycle, GC execution and constants,
