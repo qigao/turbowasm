@@ -215,4 +215,19 @@ spec("local canonical lowering") {
         }
         check_true(succeeded); check_equal(allocations.live, baseline);
     }
+    it("validates an entire indirect tuple before consuming its owned resource") {
+        check_equal(invoke("many-bounds", &result), TURBOWASM_TRAPPED);
+        check_equal(exec.resource_table.live_count, 1u); check_equal(number("drops"), 0u);
+        check_equal(invoke("cleanup", NULL), TURBOWASM_OK);
+        check_equal(exec.resource_table.live_count, 0u); check_equal(number("drops"), 1u);
+        check_equal(number("many-valid"), 42u);
+        check_equal(exec.resource_table.live_count, 0u); check_equal(number("drops"), 2u);
+    }
+    it("releases an already lifted indirect own when a later character is invalid") {
+        check_equal(invoke("many-invalid-char", &result), TURBOWASM_TRAPPED);
+        check_equal(result.kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+        check_equal(exec.resource_table.live_count, 0u); check_equal(number("drops"), 1u);
+        check_not_equal(invoke("cleanup", NULL), TURBOWASM_OK);
+        check_equal(number("drops"), 1u);
+    }
 }

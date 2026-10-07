@@ -12,22 +12,6 @@
 #include <stdint.h>
 #include <string.h>
 
-static bool align_up_u64(
-    uint64_t value,
-    uint64_t alignment,
-    uint64_t *out) {
-    uint64_t mask;
-
-    if (out == NULL || alignment == 0u ||
-        (alignment & (alignment - 1u)) != 0u)
-        return false;
-    mask = alignment - 1u;
-    if (value > UINT64_MAX - mask)
-        return false;
-    *out = (value + mask) & ~mask;
-    return true;
-}
-
 static bool type_ref_is_resource_handle(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref) {
@@ -611,126 +595,28 @@ static turbowasm_status validate_memory_binding(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status parameter_tuple_layout(
-    const turbowasm_component_core_call_adapter *adapter,
-    uint64_t *out_alignment,
-    uint64_t *out_size) {
-    const turbowasm_component_type *function;
-    uint64_t offset = 0u;
-    uint64_t maximum_alignment = 1u;
-    uint32_t i;
-
-    if (adapter == NULL || out_alignment == NULL || out_size == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    function = turbowasm_component_type_graph_get(
-        adapter->graph, adapter->function_type);
-    if (function == NULL ||
-        function->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
-        return TURBOWASM_MALFORMED_MODULE;
-
-    for (i = 0u; i < function->as.function.param_count; ++i) {
-        turbowasm_component_layout layout;
-        turbowasm_status status =
-            turbowasm_component_canonical_layout(
-                adapter->graph,
-                function->as.function.params[i],
-                adapter->memory.pointer_type,
-                &layout);
-        if (status != TURBOWASM_OK)
-            return status;
-        if (!align_up_u64(offset, layout.alignment, &offset))
-            return TURBOWASM_OUT_OF_MEMORY;
-        if (layout.size > UINT64_MAX - offset)
-            return TURBOWASM_OUT_OF_MEMORY;
-        offset += layout.size;
-        if (layout.alignment > maximum_alignment)
-            maximum_alignment = layout.alignment;
-    }
-
-    if (!align_up_u64(offset, maximum_alignment, &offset))
-        return TURBOWASM_OUT_OF_MEMORY;
-    *out_alignment = maximum_alignment;
-    *out_size = offset;
-    return TURBOWASM_OK;
-}
-
 static turbowasm_status lower_indirect_parameters(
     const turbowasm_component_core_call_adapter *adapter,
     const turbowasm_component_canonical_memory *memory,
     const turbowasm_component_value *arguments,
     uint64_t *out_pointer) {
-    const turbowasm_component_type *function;
-    turbowasm_instance_impl *instance;
-    uint64_t alignment;
-    uint64_t size;
+    turbowasm_component_layout layout;
     uint64_t pointer;
-    uint64_t offset = 0u;
-    uint32_t i;
     turbowasm_status status;
-
-    if (adapter == NULL || memory == NULL ||
-        arguments == NULL || out_pointer == NULL)
+    if (adapter == NULL || memory == NULL || arguments == NULL || out_pointer == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (memory->guest_realloc == NULL)
         return TURBOWASM_UNSUPPORTED;
-
-    function = turbowasm_component_type_graph_get(
-        adapter->graph, adapter->function_type);
-    if (function == NULL)
-        return TURBOWASM_MALFORMED_MODULE;
-
-    status = parameter_tuple_layout(adapter, &alignment, &size);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    status = memory->guest_realloc(
-        memory->realloc_context,
-        0u, 0u, alignment, size, &pointer);
-    if (status != TURBOWASM_OK)
-        return status;
-    if ((alignment != 0u && pointer % alignment != 0u) ||
-        size > (uint64_t)SIZE_MAX)
-        return TURBOWASM_TRAPPED;
-
-    instance =
-        (turbowasm_instance_impl *)memory->instance->impl;
-    if (instance == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-    {
-        uint8_t *range = NULL;
-        status = turbowasm_instance_memory_bounds(
-            instance, memory->memory_index,
-            pointer, 0u, (size_t)size, &range);
-        if (status != TURBOWASM_OK)
-            return status;
-    }
-
-    for (i = 0u; i < function->as.function.param_count; ++i) {
-        turbowasm_component_layout layout;
-        status = turbowasm_component_canonical_layout(
-            adapter->graph,
-            function->as.function.params[i],
-            adapter->memory.pointer_type,
-            &layout);
-        if (status != TURBOWASM_OK)
-            return status;
-        if (!align_up_u64(offset, layout.alignment, &offset))
-            return TURBOWASM_OUT_OF_MEMORY;
-
-        status = turbowasm_component_canonical_lower_value(
-            adapter->graph,
-            function->as.function.params[i],
-            memory,
-            pointer + offset,
-            &arguments[i]);
-        if (status != TURBOWASM_OK)
-            return status;
-        offset += layout.size;
-    }
-
-    *out_pointer = pointer;
-    return TURBOWASM_OK;
+    status = turbowasm_component_canonical_parameter_layout(adapter->graph,
+        adapter->function_type, memory->pointer_type, &layout);
+    if (status != TURBOWASM_OK) return status;
+    status = memory->guest_realloc(memory->realloc_context,
+        0u, 0u, layout.alignment, layout.size, &pointer);
+    if (status != TURBOWASM_OK) return status;
+    status = turbowasm_component_canonical_lower_parameters(adapter->graph,
+        adapter->function_type, memory, pointer, arguments);
+    if (status == TURBOWASM_OK) *out_pointer = pointer;
+    return status;
 }
 
 turbowasm_status turbowasm_component_core_call_adapter_init(

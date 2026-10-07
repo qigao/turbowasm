@@ -177,6 +177,25 @@ turbowasm_status turbowasm_component_canonical_layout(
     turbowasm_component_pointer_type pointer_type,
     turbowasm_component_layout *out);
 
+turbowasm_status turbowasm_component_canonical_parameter_layout(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_layout *out);
+
+/* Validate the whole aligned tuple before transferring fields. Lift requires
+ * zeroed output cells; the caller destroys all cells even on partial failure. */
+turbowasm_status turbowasm_component_canonical_lift_parameters(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_canonical_memory *memory,
+    uint64_t address, turbowasm_component_value *out);
+turbowasm_status turbowasm_component_canonical_lower_parameters(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_canonical_memory *memory,
+    uint64_t address, const turbowasm_component_value *values);
+
 turbowasm_status turbowasm_component_canonical_flatten_type(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref type,
@@ -191,10 +210,9 @@ turbowasm_status turbowasm_component_canonical_flatten_function(
     turbowasm_component_flat_signature *out);
 
 /*
- * Canonical flat value conversion for the retained synchronous subset.
- * Scalars convert directly. Dynamic string/list values use canonical guest
- * memory and therefore require a valid memory option; resource handles remain
- * outside this layer until C5b.
+ * Canonical flat value conversion for synchronous values. Dynamic string/list
+ * values use canonical guest memory. Resource handles require the owning
+ * composition layer's explicit conversion callbacks.
  */
 turbowasm_status turbowasm_component_canonical_lower_flat_value(
     const turbowasm_component_type_graph *graph,
@@ -214,10 +232,9 @@ turbowasm_status turbowasm_component_canonical_lift_flat_value(
     turbowasm_component_value *out);
 
 /*
- * Lift/lower the canonical in-memory representation of the retained
- * scalar/string/list subset. String lowering currently implements the pinned
- * UTF-8 canonical option. Resource handles are supported only when explicit
- * resource callbacks are attached by the C5 composition layer.
+ * Lift/lower synchronous scalar/composite values in canonical memory. Strings
+ * follow the selected UTF-8, UTF-16 or compact encoding. Resource handles use
+ * explicit callbacks attached by the owning composition layer.
  */
 turbowasm_status turbowasm_component_canonical_lift_value(
     const turbowasm_component_type_graph *graph,

@@ -721,6 +721,20 @@ start functions, scalar/composite/string values, memory32/64, own/borrow movemen
 allocation failure, post-return, cancellation and native re-entry. Rollback is
 to reject local canonical lowering before instance publication.
 
+## Canonical parameter tuples
+
+Canonical parameter tuples use one shared layout and memory-transfer path for
+lift and lower. Indirect calls validate the complete aligned tuple range before
+consuming any resource field; pointer width follows the selected memory32/64
+option. The caller-provided indirect result pointer remains a separate flat
+argument after the input tuple pointer. Larger logical argument lists use one
+checked allocation sized from the validated function parameter count, subject to
+the existing Runtime allocation limit, rather than a growing container. Small
+tuples retain inline storage. Storage and lifted values belong to the active
+callback frame across suspension and are destroyed on every return path; an
+allocation or conversion failure never invokes the provider. Partially lifted
+own values and borrow loans follow the existing local/import rollback contract.
+
 ## Canonical string encodings
 
 The [pinned Canonical ABI](https://github.com/WebAssembly/component-model/blob/a25fc0b372dd21f07f0242c46e98bd0f1ea0c0e1/design/mvp/CanonicalABI.md#storing)

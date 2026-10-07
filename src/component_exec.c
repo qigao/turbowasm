@@ -819,7 +819,8 @@ static turbowasm_status component_canon_lower_host(
     turbowasm_component_canonical_memory call_memory;
     turbowasm_component_exec_realloc_context call_realloc;
     turbowasm_component_value
-        component_arguments[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {{0}};
+        inline_arguments[TURBOWASM_COMPONENT_MAX_FLAT_PARAMS] = {{0}};
+    turbowasm_component_value *component_arguments = inline_arguments;
     turbowasm_component_value component_result = {0};
     component_local_call local = {0};
     uint32_t component_param_count;
@@ -841,8 +842,6 @@ static turbowasm_status component_canon_lower_host(
         lower_context->graph, lower_context->function_type);
     if (function_type == NULL ||
         function_type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
-        function_type->as.function.param_count >
-            TURBOWASM_COMPONENT_MAX_FLAT_PARAMS ||
         argument_count !=
             lower_context->flat_signature.param_count ||
         (argument_count != 0u && arguments == NULL))
@@ -851,7 +850,7 @@ static turbowasm_status component_canon_lower_host(
     component_param_count =
         function_type->as.function.param_count;
     local.exec = lower_context->exec; local.call = call;
-    local.arguments = component_arguments; local.argument_count = component_param_count;
+    local.argument_count = component_param_count;
     if (lower_context->local_adapter_index != UINT32_MAX || lower_context->uses_memory ||
         lower_context->memory.resource_lower != NULL ||
         lower_context->memory.resource_lift != NULL) {
@@ -878,7 +877,26 @@ static turbowasm_status component_canon_lower_host(
         return TURBOWASM_TRAPPED;
     }
 
-    for (i = 0u; i < component_param_count; ++i) {
+    if (component_param_count > TURBOWASM_COMPONENT_MAX_FLAT_PARAMS) {
+        if ((size_t)component_param_count > SIZE_MAX / sizeof(*component_arguments))
+            return TURBOWASM_OUT_OF_MEMORY;
+        component_arguments = turbowasm_rt_calloc(component_param_count, sizeof(*component_arguments));
+        if (component_arguments == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    }
+    local.arguments = component_arguments;
+    if (lower_context->flat_signature.params_indirect) {
+        uint64_t pointer;
+        if (memory == NULL || argument_count == 0u) {
+            status = TURBOWASM_TYPE_MISMATCH;
+            goto done;
+        }
+        status = core_pointer_read(memory->pointer_type, &arguments[0], &pointer);
+        if (status != TURBOWASM_OK) goto done;
+        status = turbowasm_component_canonical_lift_parameters(lower_context->graph,
+            lower_context->function_type, memory, pointer, component_arguments);
+        if (status != TURBOWASM_OK) goto done;
+        core_cursor = 1u;
+    } else for (i = 0u; i < component_param_count; ++i) {
         turbowasm_component_flat_type_list flat;
         turbowasm_component_pointer_type pointer_type =
             memory != NULL
@@ -1005,6 +1023,8 @@ done:
         turbowasm_component_value_destroy(
             &component_arguments[i]);
     turbowasm_component_value_destroy(&component_result);
+    if (component_arguments != inline_arguments)
+        turbowasm_rt_free(component_arguments);
     return status;
 }
 
@@ -1838,18 +1858,13 @@ static turbowasm_status initialize_canon_lower_state(
                 return status;
         }
 
-        /*
-         * W2b3c keeps >16-parameter tuple passing fail-closed, but admits the
-         * standard synchronous indirect-result out-pointer shape.
-         */
-        if (signature.params_indirect ||
-            signature.param_count >
+        if (signature.param_count >
                 TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS ||
             signature.result_count >
                 TURBOWASM_COMPONENT_MAX_FLAT_RESULTS)
             return TURBOWASM_UNSUPPORTED;
 
-        if (signature.results_indirect && !context->uses_memory)
+        if ((signature.params_indirect || signature.results_indirect) && !context->uses_memory)
             return TURBOWASM_UNSUPPORTED;
 
         for (j = 0u;

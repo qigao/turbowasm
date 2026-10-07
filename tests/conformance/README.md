@@ -637,7 +637,8 @@ has reached compiled state. The WAT fixture passes wasm-tools 1.261.0 validation
 Windows ASan passed the related 49/49 tests in 2.71 seconds and the complete
 151/151 suite in 245.59 seconds. The subsequently added host-wait case passed
 with all seven re-entry cases (3,398 assertions) in the same preset; production
-code was unchanged after the full run. Native MIR qualification is pending.
+code was unchanged after the full run. Native MIR qualification passed at
+`13ac5e3`, as recorded below.
 This closes destructor budget/depth reset, not local-function canonical lowering
 or the remaining Component async and WASI 0.2 surface.
 
@@ -651,8 +652,8 @@ realloc function's compiled state. Both WAT fixtures pass wasm-tools 1.261.0
 validation. Windows ASan passed the focused test and the related 50/50 tests in
 2.48 seconds. Runtime code is unchanged from the preceding full qualification;
 the changes are private Component call contexts and error propagation. Native
-MIR qualification remains pending while GitHub rejects branch pushes with an
-Internal Server Error. Local-function canonical lowering remains separate work.
+MIR qualification passed at `13ac5e3`, after branch pushes recovered from the
+GitHub server error. Local-function canonical lowering follows below.
 
 ## Local canonical lowering
 
@@ -670,6 +671,32 @@ composite-result rollback and early/lazy initialization allocation failures.
 Its WAT fixture passes wasm-tools 1.261.0 validation. Windows ASan passed the
 related 51/51 tests in 2.59 seconds; the final initialization-failure extension
 passed with all eleven cases and 48,391 assertions. Native variants check that
-the suspended local body and post-return functions are compiled; their CI
-qualification is still pending. Large/indirect canonical parameter tuples,
-complete async/future/stream and broader WASI 0.2 remain separate work.
+the suspended local body and post-return functions are compiled.
+At `13ac5e3`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37657819525)
+passed all five jobs: Linux MIR 179/179 in 2.15 seconds, macOS arm64 MIR 179/179
+in 2.51 seconds, Windows, ordinary Linux and the Android cross-build. This also
+qualifies the preceding destructor and realloc control increments. The
+[Core 3.0 MIR differential run](https://github.com/qigao/turbowasm/actions/runs/37657827907)
+retained 63,970 passes, zero failures/unsupported commands, and zero differences
+across 258 files; MIR counters were compiled=6606, interpret_only=230, cold=2179,
+calls=6836. Indirect parameters follow below; complete async/future/stream and
+broader WASI 0.2 remain separate work.
+
+## Indirect canonical parameter tuples
+
+Canonical lower now accepts parameter tuples beyond the flat ABI limit. Lift
+and lower share complete tuple layout, alignment and bounds validation, including
+memory64 arithmetic. Larger logical argument lists use checked fixed-size
+storage retained until callback return or cancellation. The output pointer is
+separate from the input tuple pointer.
+
+`component_indirect_lower_test.c` exercises 17 mixed-width parameters, a single
+large composite parameter, local and host providers, memory32/memory64, tuples
+ending exactly at the memory boundary, invalid alignment/bounds/overflow,
+indirect results, fuel suspension/cancellation and allocation failures. The
+local-lower fixture additionally checks that whole-tuple bounds failure leaves
+an input own untouched, while a later invalid character releases an already
+lifted own exactly once. All three WAT fixtures pass wasm-tools 1.261.0
+validation. The final Windows ASan Component/WASI 0.2/resumable/host-wait
+selection passed 52/52 in 2.03 seconds. Native MIR qualification for this
+increment is pending; the preceding green run does not qualify these new paths.

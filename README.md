@@ -108,8 +108,9 @@ or cancelled result conversion restores the leave gate without publishing a
 partial host result.
 Local-function canonical lowering shares these adapters and resource ownership
 rules, including aliases, Core start calls, nested composite values and string
-conversion across memory32/memory64. Lowering of large or indirect parameter tuples,
-the full async/future/stream surface and broader WASI 0.2 interfaces remain work
+conversion across memory32/memory64. Large parameter tuples use the canonical
+indirect ABI with aligned, checked memory access and a separate result pointer.
+The full async/future/stream surface and broader WASI 0.2 interfaces remain work
 in progress; the Component Model is not yet complete.
 
 MIR admits the complete helper-backed SIMD instruction set, including shuffle,

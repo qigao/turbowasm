@@ -415,6 +415,51 @@ turbowasm_status turbowasm_component_canonical_layout(
         graph, ref, pointer_type, 0u, out);
 }
 
+turbowasm_status turbowasm_component_canonical_parameter_layout(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_layout *out) {
+    const turbowasm_component_type *function;
+    uint64_t offset = 0u;
+    uint64_t maximum_alignment = 1u;
+    uint32_t i;
+
+    if (graph == NULL || out == NULL || !pointer_type_valid(pointer_type))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    function = turbowasm_component_type_graph_get(
+        graph, function_type);
+    if (function == NULL ||
+        function->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    for (i = 0u; i < function->as.function.param_count; ++i) {
+        turbowasm_component_layout layout;
+        turbowasm_status status =
+            turbowasm_component_canonical_layout(
+                graph,
+                function->as.function.params[i],
+                pointer_type,
+                &layout);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (!align_up_u64(offset, layout.alignment, &offset))
+            return TURBOWASM_OUT_OF_MEMORY;
+        if (layout.size > UINT64_MAX - offset)
+            return TURBOWASM_OUT_OF_MEMORY;
+        offset += layout.size;
+        if (layout.alignment > maximum_alignment)
+            maximum_alignment = layout.alignment;
+    }
+
+    if (!align_up_u64(offset, maximum_alignment, &offset))
+        return TURBOWASM_OUT_OF_MEMORY;
+    out->alignment = maximum_alignment;
+    out->size = offset;
+    return TURBOWASM_OK;
+}
+
 static bool append_flat_capped(
     turbowasm_component_flat_type_list *out,
     const turbowasm_component_flat_type_list *part) {
@@ -3131,6 +3176,68 @@ turbowasm_status turbowasm_component_canonical_lower_value(
     return lower_value_inner(
         graph, type, memory, instance,
         address, 0u, value);
+}
+
+static turbowasm_status transfer_parameter_tuple(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_canonical_memory *memory,
+    uint64_t address, const turbowasm_component_value *inputs,
+    turbowasm_component_value *outputs) {
+    const turbowasm_component_type *function;
+    turbowasm_component_layout tuple;
+    turbowasm_instance_impl *instance;
+    turbowasm_status status;
+    uint8_t *range = NULL;
+    uint64_t offset = 0u;
+    uint32_t i;
+    if (graph == NULL || (inputs == NULL) == (outputs == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+    status = canonical_memory_validate(memory, &instance);
+    if (status != TURBOWASM_OK) return status;
+    status = turbowasm_component_canonical_parameter_layout(
+        graph, function_type, memory->pointer_type, &tuple);
+    if (status != TURBOWASM_OK) return status;
+    if (tuple.alignment == 0u || address % tuple.alignment != 0u ||
+        tuple.size > (uint64_t)SIZE_MAX ||
+        (memory->pointer_type == TURBOWASM_COMPONENT_POINTER_I32 && address > UINT32_MAX))
+        return TURBOWASM_TRAPPED;
+    status = turbowasm_instance_memory_bounds(instance, memory->memory_index,
+        address, 0u, (size_t)tuple.size, &range);
+    if (status != TURBOWASM_OK) return status;
+    function = turbowasm_component_type_graph_get(graph, function_type);
+    for (i = 0u; i < function->as.function.param_count; ++i) {
+        turbowasm_component_layout field;
+        status = turbowasm_component_canonical_layout(graph,
+            function->as.function.params[i], memory->pointer_type, &field);
+        if (status != TURBOWASM_OK) return status;
+        if (!align_up_u64(offset, field.alignment, &offset))
+            return TURBOWASM_OUT_OF_MEMORY;
+        status = inputs != NULL
+            ? turbowasm_component_canonical_lower_value(graph, function->as.function.params[i],
+                memory, address + offset, &inputs[i])
+            : turbowasm_component_canonical_lift_value(graph, function->as.function.params[i],
+                memory, address + offset, &outputs[i]);
+        if (status != TURBOWASM_OK) return status;
+        offset += field.size;
+    }
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_canonical_lift_parameters(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_canonical_memory *memory,
+    uint64_t address, turbowasm_component_value *out) {
+    return transfer_parameter_tuple(graph, function_type, memory, address, NULL, out);
+}
+
+turbowasm_status turbowasm_component_canonical_lower_parameters(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_canonical_memory *memory,
+    uint64_t address, const turbowasm_component_value *values) {
+    return transfer_parameter_tuple(graph, function_type, memory, address, values, NULL);
 }
 
 static turbowasm_status validate_host_value(

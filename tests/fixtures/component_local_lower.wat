@@ -29,6 +29,7 @@
       i32.const 0 local.get 0 i32.store
       i32.const 4 local.get 1 i32.store i32.const 0)
     (func (export "own") (param i32) (result i32) local.get 0)
+    (func (export "many-own") (param i32) (result i32) local.get 0 i32.load)
     (func (export "borrow") (param i32) (result i32) (local $n i32)
       global.get $borrows i32.const 1 i32.add global.set $borrows
       i32.const 8 local.set $n
@@ -49,6 +50,7 @@
   (alias core export $impl "post" (core func $post))
   (alias core export $impl "text" (core func $text))
   (alias core export $impl "own" (core func $own))
+  (alias core export $impl "many-own" (core func $many-own))
   (alias core export $impl "borrow" (core func $borrow))
   (alias core export $impl "borrows" (core func $borrows))
   (alias core export $impl "fail-post" (core func $fail-post))
@@ -67,6 +69,8 @@
   (func $borrow (param "r" (borrow $resource)) (result u32) (canon lift (core func $borrow)))
   (type $pair (record (field "r" (own $resource)) (field "s" string)))
   (func $pair (result $pair) (canon lift (core func $pair) (memory $mem32) string-encoding=utf16))
+  (func $many-own (param "r" (own $resource)) (param "p0" u32) (param "p1" u32) (param "p2" u32) (param "p3" u32) (param "p4" u32) (param "p5" u32) (param "p6" u32) (param "p7" u32) (param "p8" u32) (param "p9" u32) (param "p10" u32) (param "p11" u32) (param "p12" u32) (param "p13" u32) (param "p14" u32) (param "c" char) (result (own $resource))
+    (canon lift (core func $many-own) (memory $mem32) (realloc $realloc32)))
   (core module $storage
     (memory (export "memory") i64 1)
     (global $fail (mut i32) (i32.const 0))
@@ -83,12 +87,13 @@
   (core func $lower-own (canon lower (func $own)))
   (core func $lower-own-fail (canon lower (func $own-fail)))
   (core func $lower-borrow (canon lower (func $borrow)))
+  (core func $lower-many (canon lower (func $many-own) (memory $mem64)))
   (core func $lower-pair (canon lower (func $pair) (memory $mem64) (realloc $realloc64)))
   (core instance $imports
     (export "scalar" (func $lower-scalar)) (export "text" (func $lower-text))
     (export "own" (func $lower-own)) (export "borrow" (func $lower-borrow))
     (export "own-fail" (func $lower-own-fail))
-    (export "pair" (func $lower-pair))
+    (export "pair" (func $lower-pair)) (export "many" (func $lower-many))
     (export "new" (func $new)) (export "drop" (func $drop)))
   (core module $relay
     (import "storage" "memory" (memory i64 1))
@@ -100,6 +105,7 @@
     (import "local" "new" (func $new (param i32) (result i32)))
     (import "local" "drop" (func $drop (param i32)))
     (import "local" "pair" (func $pair (param i64)))
+    (import "local" "many" (func $many (param i64) (result i32)))
     (global $started (mut i32) (i32.const 0))
     (global $last (mut i32) (i32.const 0))
     (func $start i32.const 41 call $scalar global.set $started)
@@ -116,6 +122,15 @@
     (func (export "cleanup") global.get $last call $drop)
     (func (export "resources-fail") (result i32)
       i32.const 42 call $new call $own-fail)
+    (func $many-call (param $p i64) (param $c i32) (result i32)
+      local.get $p i32.const 42 call $new global.set $last
+      global.get $last i32.store
+      local.get $p i64.const 65528 i64.ne if
+        local.get $p local.get $c i32.store offset=64 end
+      local.get $p call $many call $drop i32.const 42)
+    (func (export "many-valid") (result i32) i64.const 32 i32.const 65 call $many-call)
+    (func (export "many-invalid-char") (result i32) i64.const 32 i32.const 1114112 call $many-call)
+    (func (export "many-bounds") (result i32) i64.const 65528 i32.const 65 call $many-call)
     (func (export "pair") (result i32)
       i64.const 0 call $pair i64.const 0 i32.load call $drop i32.const 42))
   (core instance $relay (instantiate $relay (with "local" (instance $imports)) (with "storage" (instance $storage))))
@@ -126,6 +141,12 @@
   (alias core export $relay "resources-fail" (core func $resources-fail))
   (alias core export $relay "cleanup" (core func $cleanup))
   (alias core export $relay "pair" (core func $relay-pair))
+  (alias core export $relay "many-valid" (core func $many-valid))
+  (func (export "many-valid") (result u32) (canon lift (core func $many-valid)))
+  (alias core export $relay "many-invalid-char" (core func $many-invalid-char))
+  (func (export "many-invalid-char") (result u32) (canon lift (core func $many-invalid-char)))
+  (alias core export $relay "many-bounds" (core func $many-bounds))
+  (func (export "many-bounds") (result u32) (canon lift (core func $many-bounds)))
   (func (export "started") (result u32) (canon lift (core func $started)))
   (func (export "run") (result u32) (canon lift (core func $run)))
   (func (export "text") (result string) (canon lift (core func $relay-text) (memory $mem64)))
