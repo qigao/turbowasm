@@ -31,7 +31,7 @@ typedef struct turbowasm_mir_backend_context {
 
 typedef struct turbowasm_mir_compiled {
     void *generated;
-    uint8_t result_type;
+    uint32_t result_count;
     uint32_t param_count;
     /* Borrowed from the validated module, like the function's retained code. */
     const uint8_t *param_types;
@@ -326,7 +326,7 @@ static bool turbowasm_mir_emit_argument_locals(
     turbowasm_mir_text *text,
     const turbowasm_validation_function *function) {
     uint32_t index;
-    if (!turbowasm_mir_text_appendf(text, ", p:jit_args\n"))
+    if (!turbowasm_mir_text_appendf(text, ", p:jit_args, p:jit_results\n"))
         return false;
     for (index = 0u; index < function->local_count; ++index) {
         const char *name = turbowasm_mir_type_name(function->local_types[index]);
@@ -360,6 +360,35 @@ static bool turbowasm_mir_emit_argument_loads(
             return false;
     }
     return true;
+}
+
+
+static bool turbowasm_mir_emit_result_store(
+    turbowasm_mir_text *text, uint32_t index, uint8_t type,
+    const char *prefix, uint32_t reg) {
+    const char *move = turbowasm_mir_move_name(type);
+    const char *memory_type = type == 0x7fu
+        ? "i32" : turbowasm_mir_type_name(type);
+    turbowasm_value_kind kind;
+    size_t base;
+    _Static_assert(sizeof(kind) == sizeof(int32_t), "MIR value kind width");
+    if ((size_t)index > (SIZE_MAX - sizeof(turbowasm_value)) /
+            sizeof(turbowasm_value) || move == NULL || memory_type == NULL ||
+        prefix == NULL)
+        return false;
+    switch (type) {
+        case 0x7fu: kind = TURBOWASM_VALUE_I32; break;
+        case 0x7eu: kind = TURBOWASM_VALUE_I64; break;
+        case 0x7du: kind = TURBOWASM_VALUE_F32; break;
+        case 0x7cu: kind = TURBOWASM_VALUE_F64; break;
+        default: return false;
+    }
+    base = (size_t)index * sizeof(turbowasm_value);
+    return turbowasm_mir_text_appendf(text,
+        "mov i32:%zu(jit_results), %u\n"
+        "%s %s:%zu(jit_results), %s%u\n",
+        base + offsetof(turbowasm_value, kind), (unsigned)kind,
+        move, memory_type, base + offsetof(turbowasm_value, as), prefix, reg);
 }
 
 
@@ -1475,7 +1504,6 @@ typedef struct turbowasm_mir_scan_control {
 static bool turbowasm_mir_structured_control_signature(
     const turbowasm_validation_context *validation,
     const turbowasm_validation_control *annotation,
-    uint8_t function_result_type,
     const uint8_t **out_start_types,
     uint32_t *out_start_count,
     const uint8_t **out_end_types,
@@ -1485,8 +1513,6 @@ static bool turbowasm_mir_structured_control_signature(
     uint32_t start_count = 0u;
     uint32_t end_count = 0u;
     uint32_t index;
-
-    (void)function_result_type;
 
     if (!turbowasm_validation_control_signature(
             validation, annotation,
@@ -1519,11 +1545,9 @@ static bool turbowasm_mir_structured_control_signature(
 static bool turbowasm_mir_scalar_function_shape(
     const turbowasm_validation_context *validation,
     uint32_t function_index,
-    const turbowasm_validation_function *function,
-    uint8_t *out_result_type) {
+    const turbowasm_validation_function *function) {
     const turbowasm_validation_func_type *type;
     uint32_t index;
-    uint8_t result_type;
 
     if (validation == NULL || function == NULL ||
         function->imported || function->code == NULL)
@@ -1532,13 +1556,13 @@ static bool turbowasm_mir_scalar_function_shape(
     type = turbowasm_validation_context_function_type(
         validation, function_index);
     if (type == NULL || !type->defined ||
-        type->result_count != 1u ||
         function->local_count < type->param_count)
         return false;
 
-    result_type = type->results[0];
-    if (!turbowasm_mir_scalar_type(result_type))
-        return false;
+    for (index = 0u; index < type->result_count; ++index) {
+        if (!turbowasm_mir_scalar_type(type->results[index]))
+            return false;
+    }
 
     for (index = 0u; index < type->param_count; ++index) {
         if (!turbowasm_mir_scalar_type(type->params[index]))
@@ -1549,25 +1573,21 @@ static bool turbowasm_mir_scalar_function_shape(
             return false;
     }
 
-    if (out_result_type != NULL)
-        *out_result_type = result_type;
     return true;
 }
 
 static bool turbowasm_mir_scan_structured_scalar(
     const turbowasm_validation_context *validation,
     uint32_t function_index,
-    const turbowasm_validation_function *function,
-    uint8_t *out_result_type) {
+    const turbowasm_validation_function *function) {
     const turbowasm_validation_func_type *type;
     turbowasm_mir_scan_control *controls = NULL;
     turbowasm_reader reader;
     uint32_t control_size = 0u;
-    uint8_t result_type = 0u;
     bool ok = false;
 
     if (!turbowasm_mir_scalar_function_shape(
-            validation, function_index, function, &result_type) ||
+            validation, function_index, function) ||
         function->code_size == 0u)
         return false;
 
@@ -1627,7 +1647,7 @@ static bool turbowasm_mir_scan_structured_scalar(
                     annotation->body_offset < current_offset ||
                     annotation->body_offset > function->code_size ||
                     !turbowasm_mir_structured_control_signature(
-                        validation, annotation, result_type,
+                        validation, annotation,
                         NULL, NULL, NULL, NULL))
                     goto done;
 
@@ -1730,20 +1750,6 @@ static bool turbowasm_mir_scan_structured_scalar(
                 if (callee == NULL || callee->imported ||
                     !turbowasm_mir_call_signature_supported(callee_type))
                     goto done;
-                if (turbowasm_mir_float_type(result_type)) {
-                    uint32_t arg_index;
-                    if (callee_type->results[0] != result_type)
-                        goto done;
-                    for (arg_index = 0u;
-                         arg_index < callee_type->param_count;
-                         ++arg_index) {
-                        if (callee_type->params[arg_index] != result_type)
-                            goto done;
-                    }
-                } else if (!turbowasm_mir_integer_type(
-                               callee_type->results[0])) {
-                    goto done;
-                }
                 break;
             }
 
@@ -1820,18 +1826,12 @@ static bool turbowasm_mir_scan_structured_scalar(
 
             case 0x6au: case 0x6bu: case 0x6cu:
             case 0x7cu: case 0x7du: case 0x7eu:
-                if (turbowasm_mir_float_type(result_type))
-                    goto done;
                 break;
 
             case 0x92u: case 0x93u: case 0x94u: case 0x95u:
-                if (result_type != 0x7du)
-                    goto done;
                 break;
 
             case 0xa0u: case 0xa1u: case 0xa2u: case 0xa3u:
-                if (result_type != 0x7cu)
-                    goto done;
                 break;
 
             case 0x1bu: /* select */
@@ -1886,8 +1886,6 @@ static bool turbowasm_mir_scan_structured_scalar(
 
 done:
     free(controls);
-    if (ok && out_result_type != NULL)
-        *out_result_type = result_type;
     return ok;
 }
 
@@ -1916,7 +1914,7 @@ static bool turbowasm_mir_is_function_eligible(
     return turbowasm_mir_scan_scalar_locals(
                validation, function_index, function, NULL, NULL) ||
            turbowasm_mir_scan_structured_scalar(
-               validation, function_index, function, NULL) ||
+               validation, function_index, function) ||
            turbowasm_mir_scan_simd_straightline(
                validation, function_index, function,
                NULL, NULL, NULL);
@@ -2169,7 +2167,6 @@ static bool turbowasm_mir_push_locations(
 static bool turbowasm_mir_control_location_budget(
     const turbowasm_validation_context *validation,
     const turbowasm_validation_function *function,
-    uint8_t function_result_type,
     uint32_t *out_register_extra,
     uint32_t *out_slot_extra) {
     uint64_t register_total = 0u;
@@ -2193,7 +2190,7 @@ static bool turbowasm_mir_control_location_budget(
         uint32_t end_slots = 0u;
 
         if (!turbowasm_mir_structured_control_signature(
-                validation, control, function_result_type,
+                validation, control,
                 &start_types, &start_count,
                 &end_types, &end_count) ||
             !turbowasm_mir_count_location_types(
@@ -2331,7 +2328,6 @@ static bool turbowasm_mir_materialize_branch_target(
     uint32_t depth,
     const turbowasm_mir_stack_value *stack,
     uint32_t stack_size,
-    uint8_t function_result_type,
     turbowasm_mir_control_frame **out_target) {
     uint32_t target_index;
     turbowasm_mir_control_frame *target;
@@ -2343,20 +2339,7 @@ static bool turbowasm_mir_materialize_branch_target(
     target_index = control_size - 1u - depth;
     target = &controls[target_index];
 
-    if (target->kind == TURBOWASM_MIR_CONTROL_FUNCTION) {
-        const char *move_name =
-            turbowasm_mir_move_name(function_result_type);
-        const char *prefix =
-            turbowasm_mir_reg_prefix(function_result_type);
-        if (stack_size == 0u ||
-            stack[stack_size - 1u].type != function_result_type ||
-            move_name == NULL || prefix == NULL ||
-            !turbowasm_mir_text_appendf(
-                text, "%s jit_return_value, %s%u\n",
-                move_name, prefix,
-                stack[stack_size - 1u].reg))
-            return false;
-    } else if (target->kind == TURBOWASM_MIR_CONTROL_LOOP) {
+    if (target->kind == TURBOWASM_MIR_CONTROL_LOOP) {
         if (target->annotation == NULL ||
             !turbowasm_mir_emit_stack_to_locations(
                 text, stack, stack_size,
@@ -2364,8 +2347,7 @@ static bool turbowasm_mir_materialize_branch_target(
                 target->start_reg_base, target->start_slot_base))
             return false;
     } else {
-        if (target->annotation == NULL ||
-            !turbowasm_mir_emit_stack_to_locations(
+        if (!turbowasm_mir_emit_stack_to_locations(
                 text, stack, stack_size,
                 target->end_types, target->end_count,
                 target->end_reg_base, target->end_slot_base))
@@ -2420,7 +2402,6 @@ static bool turbowasm_mir_structured_branch_target(
     uint32_t depth,
     turbowasm_mir_stack_value *stack,
     uint32_t stack_size,
-    uint8_t function_result_type,
     bool conditional,
     uint32_t condition_reg,
     uint32_t branch_opcode_offset) {
@@ -2440,7 +2421,7 @@ static bool turbowasm_mir_structured_branch_target(
 
     if (!turbowasm_mir_materialize_branch_target(
             text, controls, control_size, depth,
-            stack, stack_size, function_result_type,
+            stack, stack_size,
             &target) ||
         !turbowasm_mir_emit_target_jump(
             text, target, false, 0u))
@@ -2830,13 +2811,11 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     uint32_t stack_size = 0u;
     uint32_t control_size = 0u;
     uint32_t index;
-    uint8_t result_type = 0u;
     uint32_t module_id;
     char function_name[64];
     bool reachable = true;
     bool finished = false;
     turbowasm_status status = TURBOWASM_UNSUPPORTED;
-    const char *structured_result_name = NULL;
 
     if (backend == NULL || backend->mir == NULL ||
         validation == NULL || function == NULL || out == NULL)
@@ -2845,7 +2824,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     out->impl = NULL;
 
     if (!turbowasm_mir_scan_structured_scalar(
-            validation, function_index, function, &result_type))
+            validation, function_index, function))
         return TURBOWASM_UNSUPPORTED;
 
     type = turbowasm_validation_context_function_type(
@@ -2854,18 +2833,18 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
         return TURBOWASM_INVALID_ARGUMENT;
 
     if (!turbowasm_mir_control_location_budget(
-            validation, function, result_type,
+            validation, function,
             &control_register_count, &control_slot_count))
         return TURBOWASM_UNSUPPORTED;
 
     if ((uint64_t)function->code_size + 1u +
-            (uint64_t)control_register_count > UINT32_MAX ||
+            (uint64_t)control_register_count + type->result_count >= UINT32_MAX ||
         (uint64_t)function->code_size + 1u +
             (uint64_t)control_slot_count > UINT32_MAX)
         return TURBOWASM_OUT_OF_MEMORY;
 
     register_count =
-        function->code_size + 1u + control_register_count;
+        function->code_size + 1u + control_register_count + type->result_count;
     slot_limit =
         function->code_size + 1u + control_slot_count;
     stack = (turbowasm_mir_stack_value *)calloc(
@@ -2881,7 +2860,10 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     controls[0].height = 0u;
     controls[0].start_reg_base = UINT32_MAX;
     controls[0].start_slot_base = UINT32_MAX;
-    controls[0].end_reg_base = UINT32_MAX;
+    controls[0].end_reg_base = 0u;
+    controls[0].end_types = type->results;
+    controls[0].end_count = type->result_count;
+    next_reg = type->result_count;
     controls[0].end_slot_base = UINT32_MAX;
     control_size = 1u;
 
@@ -2889,11 +2871,6 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     if (snprintf(
             function_name, sizeof(function_name),
             "tw_jit_f_%u", module_id) <= 0)
-        goto done;
-
-    structured_result_name =
-        turbowasm_mir_type_name(result_type);
-    if (structured_result_name == NULL)
         goto done;
 
     if (!turbowasm_mir_text_appendf(
@@ -2935,9 +2912,8 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             "tw_jit_simd_splat_f64, tw_jit_simd_op, "
             "tw_jit_simd_reduce, tw_jit_simd_memory\n"
             "export %s\n"
-            "%s: func %s, p:jit_ctx",
-            module_id, function_name, function_name,
-            structured_result_name))
+            "%s: func p:jit_ctx",
+            module_id, function_name, function_name))
         goto oom;
 
     if (!turbowasm_mir_emit_argument_locals(&text, function))
@@ -2953,11 +2929,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     }
     if (!turbowasm_mir_text_appendf(
             &text,
-            "local i64:jit_status\n"
-            "local %s:jit_return_value\n"
-            "local %s:jit_fail_value\n",
-            structured_result_name,
-            structured_result_name))
+            "local i64:jit_status\n"))
         goto oom;
 
     /*
@@ -3086,40 +3058,25 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                 if (turbowasm_reader_remaining(&reader) != 0u)
                     goto done;
 
-                if (reachable) {
-                    const char *move_name =
-                        turbowasm_mir_move_name(result_type);
-                    const char *prefix =
-                        turbowasm_mir_reg_prefix(result_type);
-                    if (!turbowasm_mir_emit_checkpoint_text(&text) ||
-                        stack_size != 1u ||
-                        stack[0].type != result_type ||
-                        move_name == NULL || prefix == NULL ||
-                        !turbowasm_mir_text_appendf(
-                            &text,
-                            "%s jit_return_value, %s%u\n",
-                            move_name, prefix, stack[0].reg))
-                        goto done;
-                }
+                if (reachable &&
+                    (!turbowasm_mir_emit_checkpoint_text(&text) ||
+                     stack_size != type->result_count ||
+                     !turbowasm_mir_emit_stack_to_locations(
+                         &text, stack, stack_size, type->results,
+                         type->result_count, 0u, UINT32_MAX)))
+                    goto done;
 
-                {
-                    const char *fail_move =
-                        turbowasm_mir_move_name(result_type);
-                    const char *fail_zero =
-                        turbowasm_mir_zero_literal(result_type);
-                    if (fail_move == NULL || fail_zero == NULL ||
-                        !turbowasm_mir_text_appendf(
-                            &text,
-                            "jit_return:\n"
-                            "ret jit_return_value\n"
-                            "jit_fail:\n"
-                            "%s jit_fail_value, %s\n"
-                            "ret jit_fail_value\n"
-                            "endfunc\n"
-                            "endmodule\n",
-                            fail_move, fail_zero))
+                if (!turbowasm_mir_text_appendf(&text, "jit_return:\n"))
+                    goto oom;
+                for (index = 0u; index < type->result_count; ++index) {
+                    if (!turbowasm_mir_emit_result_store(
+                            &text, index, type->results[index],
+                            turbowasm_mir_reg_prefix(type->results[index]), index))
                         goto oom;
                 }
+                if (!turbowasm_mir_text_appendf(&text,
+                        "ret\njit_fail:\nret\nendfunc\nendmodule\n"))
+                    goto oom;
 
                 finished = true;
                 break;
@@ -3227,7 +3184,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                     annotation->body_offset > function->code_size ||
                     control_size > function->control_count ||
                     !turbowasm_mir_structured_control_signature(
-                        validation, annotation, result_type,
+                        validation, annotation,
                         &start_types, &start_count,
                         &end_types, &end_count) ||
                     !turbowasm_mir_count_location_types(
@@ -3355,7 +3312,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
 
                 if (!turbowasm_mir_structured_branch_target(
                         &text, controls, control_size, depth,
-                        stack, stack_size, result_type,
+                        stack, stack_size,
                         conditional, condition_reg, opcode_offset))
                     goto oom;
 
@@ -3430,7 +3387,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                         !turbowasm_mir_materialize_branch_target(
                             &text, controls, control_size,
                             depths[case_index],
-                            stack, stack_size, result_type,
+                            stack, stack_size,
                             &target) ||
                         !turbowasm_mir_emit_target_jump(
                             &text, target, false, 0u)) {
@@ -3445,7 +3402,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
                     !turbowasm_mir_materialize_branch_target(
                         &text, controls, control_size,
                         depths[count],
-                        stack, stack_size, result_type,
+                        stack, stack_size,
                         &target) ||
                     !turbowasm_mir_emit_target_jump(
                         &text, target, false, 0u)) {
@@ -3460,19 +3417,9 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
             }
 
             case 0x0fu: { /* return */
-                const char *move_name =
-                    turbowasm_mir_move_name(result_type);
-                const char *prefix =
-                    turbowasm_mir_reg_prefix(result_type);
-                if (stack_size == 0u ||
-                    stack[stack_size - 1u].type != result_type ||
-                    move_name == NULL || prefix == NULL ||
-                    !turbowasm_mir_text_appendf(
-                        &text,
-                        "%s jit_return_value, %s%u\n"
-                        "jmp jit_return\n",
-                        move_name, prefix,
-                        stack[stack_size - 1u].reg))
+                if (!turbowasm_mir_structured_branch_target(
+                        &text, controls, control_size, control_size - 1u,
+                        stack, stack_size, false, 0u, opcode_offset))
                     goto done;
                 reachable = false;
                 break;
@@ -3816,7 +3763,7 @@ static turbowasm_status turbowasm_mir_compile_structured_scalar(
     if (compiled->generated == NULL)
         goto done;
 
-    compiled->result_type = result_type;
+    compiled->result_count = type->result_count;
     compiled->simd_slot_count = next_slot;
     compiled->param_count = type->param_count;
     compiled->param_types = type->params;
@@ -3847,8 +3794,7 @@ static bool turbowasm_mir_simd_emit_status_guard(
 static bool turbowasm_mir_simd_emit_helper_header(
     turbowasm_mir_text *text,
     uint32_t module_id,
-    const char *function_name,
-    const char *result_name) {
+    const char *function_name) {
     return turbowasm_mir_text_appendf(
         text,
         "tw_jit_simd_m_%u: module\n"
@@ -3875,8 +3821,8 @@ static bool turbowasm_mir_simd_emit_helper_header(
             "tw_jit_simd_memory, tw_jit_call_status, "
             "tw_jit_checkpoint\n"
         "export %s\n"
-        "%s: func %s, p:jit_ctx",
-        module_id, function_name, function_name, result_name);
+        "%s: func p:jit_ctx",
+        module_id, function_name, function_name);
 }
 
 static turbowasm_status turbowasm_mir_compile_simd_straightline(
@@ -3936,7 +3882,7 @@ static turbowasm_status turbowasm_mir_compile_simd_straightline(
         goto done;
 
     if (!turbowasm_mir_simd_emit_helper_header(
-            &text, module_id, function_name, result_name))
+            &text, module_id, function_name))
         goto oom;
 
     if (!turbowasm_mir_emit_argument_locals(&text, function))
@@ -3959,9 +3905,7 @@ static turbowasm_status turbowasm_mir_compile_simd_straightline(
 
     if (!turbowasm_mir_text_appendf(
             &text,
-            "local i64:jit_status\n"
-            "local %s:jit_fail_value\n",
-            result_name))
+            "local i64:jit_status\n"))
         goto oom;
 
     if (!turbowasm_mir_emit_argument_loads(&text, type))
@@ -4422,29 +4366,13 @@ static turbowasm_status turbowasm_mir_compile_simd_straightline(
         }
 
         if (opcode == 0x0bu) {
-            const char *prefix;
-            const char *fail_move;
-            const char *fail_zero;
-
             if (turbowasm_reader_remaining(&reader) != 0u ||
-                stack_size != 1u ||
-                stack[0].type != result_type)
+                stack_size != 1u || stack[0].type != result_type)
                 goto done;
-
-            prefix = turbowasm_mir_reg_prefix(result_type);
-            fail_move = turbowasm_mir_move_name(result_type);
-            fail_zero = turbowasm_mir_zero_literal(result_type);
-            if (prefix == NULL || fail_move == NULL || fail_zero == NULL ||
-                !turbowasm_mir_text_appendf(
-                    &text,
-                    "ret %s%u\n"
-                    "jit_fail:\n"
-                    "%s jit_fail_value, %s\n"
-                    "ret jit_fail_value\n"
-                    "endfunc\n"
-                    "endmodule\n",
-                    prefix, stack[0].reg,
-                    fail_move, fail_zero))
+            if (!turbowasm_mir_emit_result_store(&text, 0u, result_type,
+                    turbowasm_mir_reg_prefix(result_type), stack[0].reg) ||
+                !turbowasm_mir_text_appendf(&text,
+                    "ret\njit_fail:\nret\nendfunc\nendmodule\n"))
                 goto oom;
 
             finished = true;
@@ -4483,7 +4411,7 @@ static turbowasm_status turbowasm_mir_compile_simd_straightline(
     if (compiled->generated == NULL)
         goto done;
 
-    compiled->result_type = result_type;
+    compiled->result_count = type->result_count;
     compiled->param_count = type->param_count;
     compiled->simd_slot_count = slot_count;
     compiled->param_types = type->params;
@@ -4592,9 +4520,8 @@ static turbowasm_status turbowasm_mir_compile_function(
             "tw_jit_tail_f32_1, tw_jit_tail_f64_1, "
             "tw_jit_call_status, tw_jit_checkpoint\n"
             "export %s\n"
-            "%s: func %s, p:jit_ctx",
-            module_id, function_name, function_name,
-            result_name))
+            "%s: func p:jit_ctx",
+            module_id, function_name, function_name))
         goto oom;
 
     if (!turbowasm_mir_emit_argument_locals(&text, function))
@@ -4609,9 +4536,7 @@ static turbowasm_status turbowasm_mir_compile_function(
 
     if (!turbowasm_mir_text_appendf(
             &text,
-            "local i64:jit_status\n"
-            "local %s:jit_fail_value\n",
-            result_name))
+            "local i64:jit_status\n"))
         goto oom;
 
     if (!turbowasm_mir_emit_argument_loads(&text, type))
@@ -4759,8 +4684,6 @@ static turbowasm_status turbowasm_mir_compile_function(
             const turbowasm_validation_func_type *callee_type;
             const char *proto_name = NULL;
             const char *external_name = NULL;
-            const char *fail_move;
-            const char *fail_zero;
             uint32_t arg_index;
             uint32_t base;
 
@@ -4815,10 +4738,7 @@ static turbowasm_status turbowasm_mir_compile_function(
                 external_name = "tw_jit_tail_i64_2";
             }
 
-            fail_move = turbowasm_mir_move_name(result_type);
-            fail_zero = turbowasm_mir_zero_literal(result_type);
-            if (proto_name == NULL || external_name == NULL ||
-                fail_move == NULL || fail_zero == NULL)
+            if (proto_name == NULL || external_name == NULL)
                 goto done;
 
             if (!turbowasm_mir_text_appendf(
@@ -4840,13 +4760,11 @@ static turbowasm_status turbowasm_mir_compile_function(
                     &text,
                     "\n"
                     "bne jit_fail, jit_status, 0\n"
-                    "ret %s\n"
+                    "ret\n"
                     "jit_fail:\n"
-                    "%s jit_fail_value, %s\n"
-                    "ret jit_fail_value\n"
+                    "ret\n"
                     "endfunc\n"
-                    "endmodule\n",
-                    fail_zero, fail_move, fail_zero))
+                    "endmodule\n"))
                 goto oom;
 
             finished = true;
@@ -4997,26 +4915,11 @@ static turbowasm_status turbowasm_mir_compile_function(
                 stack_size != 1u ||
                 stack[0].type != result_type)
                 goto done;
-            {
-                const char *fail_move =
-                    turbowasm_mir_move_name(result_type);
-                const char *fail_zero =
-                    result_type == 0x7du ? "0.0f" :
-                    result_type == 0x7cu ? "0.0" : "0";
-                if (fail_move == NULL ||
-                    !turbowasm_mir_text_appendf(
-                        &text,
-                        "ret r%u\n"
-                        "jit_fail:\n"
-                        "%s jit_fail_value, %s\n"
-                        "ret jit_fail_value\n"
-                        "endfunc\n"
-                        "endmodule\n",
-                        stack[0].reg,
-                        fail_move,
-                        fail_zero))
-                    goto oom;
-            }
+            if (!turbowasm_mir_emit_result_store(
+                    &text, 0u, result_type, "r", stack[0].reg) ||
+                !turbowasm_mir_text_appendf(&text,
+                    "ret\njit_fail:\nret\nendfunc\nendmodule\n"))
+                goto oom;
             finished = true;
             break;
         }
@@ -5053,7 +4956,7 @@ static turbowasm_status turbowasm_mir_compile_function(
     if (compiled->generated == NULL)
         goto done;
 
-    compiled->result_type = result_type;
+    compiled->result_count = type->result_count;
     compiled->param_count = type->param_count;
     compiled->param_types = type->params;
 
@@ -5102,7 +5005,7 @@ static turbowasm_status turbowasm_mir_invoke_compiled_inner(
 
     if (compiled == NULL || compiled->impl == NULL ||
         context == NULL || context->instance == NULL ||
-        results == NULL || result_count == NULL || trap == NULL)
+        result_count == NULL || trap == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     *result_count = 0u;
@@ -5112,10 +5015,10 @@ static turbowasm_status turbowasm_mir_invoke_compiled_inner(
     context->tail_call_pending = false;
     context->tail_argument_count = 0u;
 
-    if (result_capacity < 1u)
-        return TURBOWASM_INVALID_ARGUMENT;
-
     function = (const turbowasm_mir_compiled *)compiled->impl;
+    if (result_capacity < function->result_count ||
+        (function->result_count != 0u && results == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
     if (argument_count != function->param_count ||
         (argument_count != 0u && arguments == NULL))
         return TURBOWASM_INVALID_ARGUMENT;
@@ -5131,71 +5034,20 @@ static turbowasm_status turbowasm_mir_invoke_compiled_inner(
     if (generated == NULL)
         return TURBOWASM_UNSUPPORTED;
 
-    if (function->result_type == 0x7fu ||
-        function->result_type == 0x7eu) {
-        int64_t (*entry)(turbowasm_jit_invocation_context *,
-                         const turbowasm_value *);
-        int64_t raw;
+    {
+        void (*entry)(turbowasm_jit_invocation_context *,
+                      const turbowasm_value *, turbowasm_value *);
         _Static_assert(sizeof(entry) == sizeof(generated),
                        "MIR generated entry pointer size mismatch");
         memcpy(&entry, &generated, sizeof(entry));
-        raw = entry(context, arguments);
-
-        if (context->call_status != TURBOWASM_OK) {
-            *trap = context->call_trap;
-            return context->call_status;
-        }
-        if (context->tail_call_pending)
-            return TURBOWASM_OK;
-
-        if (function->result_type == 0x7fu) {
-            results[0].kind = TURBOWASM_VALUE_I32;
-            results[0].as.i32 = (int32_t)(uint32_t)raw;
-        } else {
-            results[0].kind = TURBOWASM_VALUE_I64;
-            results[0].as.i64 = raw;
-        }
-    } else if (function->result_type == 0x7du) {
-        float (*entry)(turbowasm_jit_invocation_context *,
-                        const turbowasm_value *);
-        float raw;
-        _Static_assert(sizeof(entry) == sizeof(generated),
-                       "MIR generated entry pointer size mismatch");
-        memcpy(&entry, &generated, sizeof(entry));
-        raw = entry(context, arguments);
-
-        if (context->call_status != TURBOWASM_OK) {
-            *trap = context->call_trap;
-            return context->call_status;
-        }
-        if (context->tail_call_pending)
-            return TURBOWASM_OK;
-
-        results[0].kind = TURBOWASM_VALUE_F32;
-        results[0].as.f32 = raw;
-    } else if (function->result_type == 0x7cu) {
-        double (*entry)(turbowasm_jit_invocation_context *,
-                        const turbowasm_value *);
-        double raw;
-        _Static_assert(sizeof(entry) == sizeof(generated),
-                       "MIR generated entry pointer size mismatch");
-        memcpy(&entry, &generated, sizeof(entry));
-        raw = entry(context, arguments);
-
-        if (context->call_status != TURBOWASM_OK) {
-            *trap = context->call_trap;
-            return context->call_status;
-        }
-        if (context->tail_call_pending)
-            return TURBOWASM_OK;
-
-        results[0].kind = TURBOWASM_VALUE_F64;
-        results[0].as.f64 = raw;
-    } else {
-        return TURBOWASM_UNSUPPORTED;
+        entry(context, arguments, results);
     }
-
-    *result_count = 1u;
+    if (context->call_status != TURBOWASM_OK) {
+        *trap = context->call_trap;
+        return context->call_status;
+    }
+    if (!context->tail_call_pending)
+        *result_count = function->result_count;
     return TURBOWASM_OK;
 }
 

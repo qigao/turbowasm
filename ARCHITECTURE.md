@@ -135,8 +135,8 @@ the bridge performs no allocation or ownership transfer and writes no input
 values. Trap/status handling remains at the invocation boundary.
 
 This removes the private native entry's arity and mixed-scalar argument limits
-without changing the installed API or its data layout. Single-result admission
-and the separate direct-call helper signatures are independent restrictions.
+without changing the installed API or its data layout. The separate direct-call
+helper signatures remain an independent restriction.
 The alternative of generating every C signature combination scales
 exponentially with arity and does not solve mixed types or future reference
 carriers. The array boundary adds scalar loads at function entry. Regression
@@ -144,6 +144,34 @@ coverage checks mixed memory64 addresses/float payloads, more than two integer
 parameters, NaN payloads, negative zero, input immutability and trap parity;
 MIR tests require a compiled handle. Removing this boundary requires reverting
 entry emission, invocation and admission together, never only the scanner.
+
+### MIR scalar result boundary
+
+All native entry points return through a caller-owned `turbowasm_value` array;
+the machine function itself returns void. Validated result metadata determines
+the required capacity, including zero results. The invocation boundary checks
+capacity before entering generated code and publishes the count only after a
+successful return. A trap or pending tail transfer publishes no results. Output
+stores occur after the final checkpoint, so failing execution leaves the caller's
+result array unchanged. Input and output may alias because parameters have
+already been copied into invocation-local registers.
+
+Structured functions reserve typed merge registers for every function result.
+Natural completion, return and branches to the function label all materialize
+the same ordered result tuple; conditional branches materialize only when taken.
+The module's existing result and code limits bound this register budget, with
+checked capacity arithmetic. This adds no runtime allocation and transfers no
+ownership. The boundary is single-threaded within an invocation; nested calls
+use their own result buffers. Scalar payloads, including floating-point bit
+patterns, retain their public representation.
+
+The array ABI avoids architecture-specific native multi-return limits and an
+exponential family of typed function pointers. It adds output stores in exchange
+for a single private calling convention. No installed API, configuration or
+serialized format changes. Verification covers empty and mixed result tuples,
+natural and explicit returns, conditional/table branches, self tail calls,
+capacity rejection and fuel/trap parity against the interpreter. Rollback must
+revert all three emitters and their common invocation bridge together.
 
 ## Reusable compiled-artifact policy
 
