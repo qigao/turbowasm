@@ -708,6 +708,33 @@ unchanged. Host cancellation may await acknowledgement while retaining the copy
 obligation. Canonical decoding and host admission remain closed until these
 states are connected to actual transfers, waitables and execution.
 
+Canonical async handles share the existing generation-protected resource table.
+Each live slot carries an explicit kind; resource operations reject waitable and
+waitable-set slots before inspecting nominal identity or invoking destructors.
+The existing slot quota and nonwrapping generation retirement apply across all
+kinds. The table remains the only authority for handle existence and kind.
+Async slots borrow stable objects owned by the enclosing task/endpoint/instance;
+these owners must unregister objects before freeing them or destroying the table.
+Table growth moves slots, so callers retain handles and stable object addresses,
+never pointers into the slot array across allocation or callbacks.
+
+The private waitable layer stores each waitable's set handle and exclusive
+synchronous-wait flag. Waitable sets store an active-wait count and a scan cursor;
+membership and pending events are read from live table entries. Moving membership
+validates both handles before mutation. A nonempty or actively waited-on set
+cannot drop; a synchronous waiter prevents join/drop/event theft. Poll selects
+one pending notification, advances its round-robin scan cursor and consumes the
+notification through the existing state primitive. Empty polling returns the
+canonical NONE tuple. No separate event payload, list or queue is allocated.
+Poll/drop checks are O(table capacity), bounded by the shared slot quota; other
+membership transitions are O(1). This deliberately follows the specification's
+simple search model until measurement justifies an additional index. Terminal
+subtask delivery invokes the owner's nonblocking loan-release hook before making
+the event observable. The hook may grow the table, so delivery retains only the
+stable owner pointer and copies the event before invoking it; no slot pointer
+survives that callback. These interfaces remain private until canonical guest
+bindings and async task/transfer owners are complete.
+
 ## Canonical post-return lifecycle
 
 Synchronous lifts with `post-return` copy/lift the Core results before invoking

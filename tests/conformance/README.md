@@ -729,3 +729,31 @@ type/state targets in 0.10 seconds, followed by the related
 Component/WASI 0.2/resumable/host-wait selection: 54/54 in 4.38 seconds.
 Task scheduling, waitable sets, canonical async decoding, actual endpoint copies
 and public host integration remain unqualified and under implementation.
+At `5cc254c`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37662445331)
+passed all five jobs: Linux MIR 183/183 in 2.34 seconds, macOS arm64 MIR 183/183
+in 2.53 seconds, Windows, ordinary Linux and the Android cross-build. These
+results cover the private type/notification primitives and existing behavior.
+
+## Shared async handles and private waitable sets
+
+Resource, waitable and waitable-set slots now share one bounded canonical handle
+table. Explicit kinds prevent cross-kind access; generation retirement prevents
+stale handles from becoming valid again when a slot changes kind. Async objects
+remain caller-owned at stable addresses, independent of table reallocations.
+
+The private waitable layer supports set membership transfer, fair event polling,
+active-wait pins and exclusive individual waits. Empty polling yields the NONE
+tuple. Nonempty or pinned sets cannot drop, and individual waits prevent event
+theft or membership changes. Terminal subtask delivery releases actual resource
+loans before publishing the event, with a guarded callback that may grow the
+table. Callback failure consumes the notification without replaying cleanup.
+
+`component_waitable_test.c` checks shared quotas, all five waitable event kinds,
+membership rollback, stale and wrong-kind handles, cancellation pins, pending
+copy retention, round-robin delivery, allocation failure, generation exhaustion
+and terminal release/reentry. Its allocator forces table growth to relocate
+storage and tracks live allocations. Windows ASan passed four focused targets
+in 0.18 seconds and the related 55/55 tests in 4.36 seconds. A final focused run
+also covers invalid event outputs and retaining an endpoint through deferred
+cancellation. Canonical guest bindings, scheduling, endpoint data transfers and
+public async host APIs still need implementation and end-to-end qualification.

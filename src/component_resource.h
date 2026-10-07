@@ -15,7 +15,20 @@ enum {
 
 typedef uint32_t turbowasm_component_resource_handle;
 
+typedef enum turbowasm_component_handle_kind {
+    TURBOWASM_COMPONENT_HANDLE_RESOURCE = 0,
+    TURBOWASM_COMPONENT_HANDLE_WAITABLE_SET,
+    TURBOWASM_COMPONENT_HANDLE_SUBTASK,
+    TURBOWASM_COMPONENT_HANDLE_STREAM_READ,
+    TURBOWASM_COMPONENT_HANDLE_STREAM_WRITE,
+    TURBOWASM_COMPONENT_HANDLE_FUTURE_READ,
+    TURBOWASM_COMPONENT_HANDLE_FUTURE_WRITE,
+    TURBOWASM_COMPONENT_HANDLE_INVALID
+} turbowasm_component_handle_kind;
+
 typedef struct turbowasm_component_resource_entry {
+    turbowasm_component_handle_kind kind;
+    void *object;
     uint64_t resource_identity;
     turbowasm_value rep;
     uint32_t generation;
@@ -31,6 +44,31 @@ typedef struct turbowasm_component_resource_table {
     uint32_t live_count;
     uint32_t max_entries;
 } turbowasm_component_resource_table;
+
+/* Private non-resource slots share the resource handle namespace and quota.
+ * Objects are borrowed at stable addresses until removed; the caller owns
+ * lifecycle preflight and cleanup. Never retain an entry pointer across growth.
+ * Resource APIs cannot access or consume these slots. Failed mutations preserve
+ * output and ownership. Remove does not call guest code or release the object. */
+turbowasm_status turbowasm_component_handle_insert(
+    turbowasm_component_resource_table *table,
+    turbowasm_component_handle_kind kind, void *object,
+    turbowasm_component_resource_handle *out_handle);
+turbowasm_component_handle_kind turbowasm_component_handle_kind_get(
+    const turbowasm_component_resource_table *table,
+    turbowasm_component_resource_handle handle);
+void *turbowasm_component_handle_object(
+    const turbowasm_component_resource_table *table,
+    turbowasm_component_resource_handle handle,
+    turbowasm_component_handle_kind kind);
+bool turbowasm_component_handle_at(
+    const turbowasm_component_resource_table *table, uint32_t slot,
+    turbowasm_component_resource_handle *out_handle,
+    turbowasm_component_handle_kind *out_kind, void **out_object);
+turbowasm_status turbowasm_component_handle_remove(
+    turbowasm_component_resource_table *table,
+    turbowasm_component_resource_handle handle,
+    turbowasm_component_handle_kind kind, void **out_object);
 
 typedef turbowasm_status (*turbowasm_component_resource_destructor_fn)(
     void *context,

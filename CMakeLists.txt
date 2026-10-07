@@ -50,6 +50,7 @@ add_library(turbowasm
   src/atomic.c
   src/component_binary.c
   src/component_async_state.c
+  src/component_waitable.c
   src/component_canonical.c
   src/component_string.c
   src/component_core_call.c
