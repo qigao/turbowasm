@@ -49,6 +49,9 @@ turbowasm_status turbowasm_execution_create(
     const turbowasm_value *arguments,
     size_t argument_count);
 
+/* Destroy on the execution's owner thread while it is not running. Suspended
+ * frames unwind at their safe point. A pending host wait returns INTERRUPTED
+ * to its callback, which must release its resources and propagate the status. */
 void turbowasm_execution_destroy(turbowasm_execution *execution);
 
 /*

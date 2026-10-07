@@ -65,7 +65,7 @@ static void test_memory64_load_requires_i64_address(void) {
            TURBOWASM_MALFORMED_MODULE);
 }
 
-static void test_shared_memory64_is_explicitly_unsupported(void) {
+static void test_shared_memory64_is_supported(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
         0x05, 0x04, 0x01, 0x07, 0x01, 0x02
@@ -73,12 +73,36 @@ static void test_shared_memory64_is_explicitly_unsupported(void) {
     turbowasm_module module = {0};
 
     assert(turbowasm_module_load_borrowed(
-               &module, bytes, sizeof(bytes)) == TURBOWASM_UNSUPPORTED);
+               &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    turbowasm_module_destroy(&module);
+}
+
+static void test_atomic_address_type_and_exact_alignment(void) {
+    uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
+        0x03, 0x02, 0x01, 0x00,
+        0x05, 0x04, 0x01, 0x07, 0x01, 0x02,
+        0x0a, 0x0a, 0x01, 0x08, 0x00,
+        0x42, 0x00, 0xfe, 0x10, 0x02, 0x00, 0x0b
+    };
+    turbowasm_module module = {0};
+    enum { ADDRESS_OPCODE_FROM_END = 7, ALIGNMENT_FROM_END = 3 };
+    assert(turbowasm_module_load_borrowed(&module, bytes, sizeof(bytes)) == TURBOWASM_OK);
+    turbowasm_module_destroy(&module);
+    bytes[sizeof(bytes) - ADDRESS_OPCODE_FROM_END] = 0x41;
+    assert(turbowasm_module_load_borrowed(&module, bytes, sizeof(bytes)) ==
+        TURBOWASM_MALFORMED_MODULE);
+    bytes[sizeof(bytes) - ADDRESS_OPCODE_FROM_END] = 0x42;
+    bytes[sizeof(bytes) - ALIGNMENT_FROM_END] = 0x01;
+    assert(turbowasm_module_load_borrowed(&module, bytes, sizeof(bytes)) ==
+        TURBOWASM_MALFORMED_MODULE);
 }
 
 int main(void) {
     test_memory64_size_and_grow_typing();
     test_memory64_load_requires_i64_address();
-    test_shared_memory64_is_explicitly_unsupported();
+    test_shared_memory64_is_supported();
+    test_atomic_address_type_and_exact_alignment();
     return 0;
 }

@@ -2,6 +2,7 @@
 
 #include "module_internal.h"
 #include "runtime_alloc.h"
+#include "validate_type.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -30,7 +31,10 @@ enum {
     TW_FEATURE_TAIL_CALL = UINT64_C(1) << 8,
     TW_FEATURE_EXCEPTION_HANDLING = UINT64_C(1) << 9,
     TW_FEATURE_THREADS = UINT64_C(1) << 10,
-    TW_FEATURE_MEMORY64 = UINT64_C(1) << 11
+    TW_FEATURE_MEMORY64 = UINT64_C(1) << 11,
+    TW_FEATURE_REFERENCE_CONTROL = UINT64_C(1) << 12,
+    TW_FEATURE_GC = UINT64_C(1) << 13,
+    TW_FEATURE_TABLE64 = UINT64_C(1) << 14
 };
 
 typedef struct tw_writer {
@@ -120,6 +124,7 @@ static bool get_bytes(tw_reader *r, uint8_t *out, size_t n) {
 }
 
 typedef struct tw_core_metadata_counts {
+    uint32_t requires_store;
     uint32_t type_count;
     uint32_t function_count;
     uint32_t import_count;
@@ -210,7 +215,37 @@ static bool read_semantic_value(tw_reader *r) {
     return carrier<=UINT8_MAX &&
            is_reference<=1u &&
            nullable<=1u &&
-           heap_kind<=(uint32_t)TURBOWASM_VALIDATION_HEAP_TYPE_INDEX;
+           heap_kind<=(uint32_t)TURBOWASM_VALIDATION_HEAP_BOTTOM;
+}
+
+static bool read_type_layout(tw_reader *r, uint32_t index, uint32_t count,
+                             turbowasm_validation_func_type *type) {
+    uint32_t kind, final_type;
+    if(!get_u32(r,&kind) || !get_u32(r,&final_type) ||
+       !get_u32(r,&type->super_index) || !get_u32(r,&type->group_count) ||
+       !get_u32(r,&type->group_offset) || !get_u32(r,&type->field_count) ||
+       kind>TURBOWASM_TYPE_ARRAY || final_type>1u ||
+       (type->super_index!=UINT32_MAX && type->super_index>=index) ||
+       type->group_offset>index || type->group_count<=type->group_offset ||
+       type->group_count>count-(index-type->group_offset) ||
+       (kind==TURBOWASM_TYPE_FUNCTION && type->field_count!=0u) ||
+       (kind==TURBOWASM_TYPE_ARRAY && type->field_count!=1u) ||
+       (kind!=TURBOWASM_TYPE_FUNCTION &&
+        (type->param_count!=0u || type->result_count!=0u)))
+        return false;
+    type->kind=(turbowasm_validation_type_kind)kind;
+    type->final_type=final_type!=0u;
+    return true;
+}
+
+static bool read_field_layout(tw_reader *r, turbowasm_validation_field *field) {
+    uint32_t packed, mutable_value;
+    if(!get_u32(r,&packed) || !get_u32(r,&mutable_value) ||
+       (packed!=0u && packed!=8u && packed!=16u) || mutable_value>1u)
+        return false;
+    field->packed_bits=(uint8_t)packed;
+    field->mutable_value=mutable_value!=0u;
+    return true;
 }
 
 static bool write_name_span(
@@ -269,7 +304,8 @@ uint64_t turbowasm_artifact_current_feature_fingerprint(void) {
            TW_FEATURE_TAIL_CALL |
            TW_FEATURE_EXCEPTION_HANDLING |
            TW_FEATURE_THREADS |
-           TW_FEATURE_MEMORY64;
+           TW_FEATURE_MEMORY64 |
+           TW_FEATURE_REFERENCE_CONTROL | TW_FEATURE_GC | TW_FEATURE_TABLE64;
 }
 
 static bool write_summary(
@@ -349,7 +385,8 @@ static bool write_core_metadata(
         return false;
     v=&impl->validation;
 
-    if(!put_u32(w,v->type_count) ||
+    if(!put_u32(w,v->requires_store?1u:0u) ||
+       !put_u32(w,v->type_count) ||
        !put_u32(w,v->function_count) ||
        !put_u32(w,v->import_count) ||
        !put_u32(w,v->export_count) ||
@@ -360,7 +397,13 @@ static bool write_core_metadata(
         const turbowasm_validation_func_type *type=&v->types[i];
         if(!put_u32(w,type->defined?1u:0u) ||
            !put_u32(w,type->param_count) ||
-           !put_u32(w,type->result_count))
+           !put_u32(w,type->result_count) ||
+           !put_u32(w,(uint32_t)type->kind) ||
+           !put_u32(w,type->final_type?1u:0u) ||
+           !put_u32(w,type->super_index) ||
+           !put_u32(w,type->group_count) ||
+           !put_u32(w,type->group_offset) ||
+           !put_u32(w,type->field_count))
             return false;
         if((type->param_count!=0u &&
             (type->params==NULL||type->param_semantics==NULL)) ||
@@ -375,6 +418,12 @@ static bool write_core_metadata(
         for(j=0u;j<type->result_count;++j) {
             if(!put_u32(w,(uint32_t)type->results[j]) ||
                !write_semantic_value(w,&type->result_semantics[j]))
+                return false;
+        }
+        for(j=0u;j<type->field_count;++j) {
+            if(!put_u32(w,type->fields[j].packed_bits) ||
+               !put_u32(w,type->fields[j].mutable_value?1u:0u) ||
+               !write_semantic_value(w,&type->fields[j].type))
                 return false;
         }
     }
@@ -492,7 +541,8 @@ static bool read_core_metadata(
     if(r==NULL||out==NULL)
         return false;
     memset(&counts,0,sizeof(counts));
-    if(!get_u32(r,&counts.type_count) ||
+    if(!get_u32(r,&counts.requires_store) || counts.requires_store>1u ||
+       !get_u32(r,&counts.type_count) ||
        !get_u32(r,&counts.function_count) ||
        !get_u32(r,&counts.import_count) ||
        !get_u32(r,&counts.export_count) ||
@@ -503,10 +553,15 @@ static bool read_core_metadata(
         uint32_t defined;
         uint32_t param_count;
         uint32_t result_count;
+        turbowasm_validation_func_type layout={0};
         if(!get_u32(r,&defined) ||
            !get_u32(r,&param_count) ||
            !get_u32(r,&result_count) ||
-           defined>1u)
+           defined!=1u)
+            return false;
+        layout.param_count=param_count;
+        layout.result_count=result_count;
+        if(!read_type_layout(r,i,counts.type_count,&layout))
             return false;
         for(j=0u;j<param_count;++j) {
             uint32_t carrier;
@@ -520,6 +575,11 @@ static bool read_core_metadata(
             if(!get_u32(r,&carrier) ||
                carrier>UINT8_MAX ||
                !read_semantic_value(r))
+                return false;
+        }
+        for(j=0u;j<layout.field_count;++j) {
+            turbowasm_validation_field field={0};
+            if(!read_field_layout(r,&field) || !read_semantic_value(r))
                 return false;
         }
     }
@@ -648,7 +708,7 @@ static bool read_core_metadata(
            !get_u32(r,&has_maximum) ||
            imported>1u || shared>1u || memory64>1u ||
            has_maximum>1u || page_size==0u ||
-           (shared!=0u && memory64!=0u) ||
+           (shared!=0u && has_maximum==0u) ||
            (has_maximum!=0u && maximum<minimum))
             return false;
     }
@@ -704,9 +764,10 @@ static bool write_state_metadata(
            !put_u32(w,(uint32_t)table->reference_type) ||
            !write_semantic_value(w,&table->semantic_type) ||
            !put_u32(w,table->imported?1u:0u) ||
-           !put_u32(w,table->limits.minimum) ||
-           !put_u32(w,table->limits.maximum) ||
+           !put_u64(w,table->limits.minimum) ||
+           !put_u64(w,table->limits.maximum) ||
            !put_u32(w,table->limits.has_maximum?1u:0u) ||
+           !put_u32(w,table->limits.table64?1u:0u) ||
            !put_u64(w,initializer_offset) ||
            !put_u32(w,table->initializer_size))
             return false;
@@ -821,16 +882,19 @@ static bool read_state_metadata(
     for(i=0u;i<counts.table_count;++i) {
         uint32_t reference_type;
         uint32_t imported;
-        uint32_t minimum;
-        uint32_t maximum;
+        uint64_t minimum;
+        uint64_t maximum;
         uint32_t has_maximum;
+        uint32_t table64;
         if(!get_u32(r,&reference_type) ||
            reference_type>UINT8_MAX ||
            !read_semantic_value(r) ||
            !get_u32(r,&imported) ||
-           !get_u32(r,&minimum) ||
-           !get_u32(r,&maximum) ||
+           !get_u64(r,&minimum) ||
+           !get_u64(r,&maximum) ||
            !get_u32(r,&has_maximum) ||
+           !get_u32(r,&table64) || table64>1u ||
+           (table64==0u && (minimum>UINT32_MAX || maximum>UINT32_MAX)) ||
            imported>1u || has_maximum>1u ||
            (has_maximum!=0u && maximum<minimum) ||
            !read_source_span(r,source_size))
@@ -1202,7 +1266,7 @@ static bool restore_semantic_value(
        carrier>UINT8_MAX ||
        is_reference>1u ||
        nullable>1u ||
-       heap_kind>(uint32_t)TURBOWASM_VALIDATION_HEAP_TYPE_INDEX)
+       heap_kind>(uint32_t)TURBOWASM_VALIDATION_HEAP_BOTTOM)
         return false;
 
     memset(out,0,sizeof(*out));
@@ -1302,6 +1366,7 @@ static turbowasm_status restore_core_metadata(
     const uint8_t *source,
     size_t source_size,
     turbowasm_validation_context *context) {
+    uint32_t requires_store;
     uint32_t type_count;
     uint32_t function_count;
     uint32_t import_count;
@@ -1311,6 +1376,7 @@ static turbowasm_status restore_core_metadata(
     uint32_t j;
 
     if(r==NULL||context==NULL ||
+       !get_u32(r,&requires_store) || requires_store>1u ||
        !get_u32(r,&type_count) ||
        !get_u32(r,&function_count) ||
        !get_u32(r,&import_count) ||
@@ -1318,6 +1384,7 @@ static turbowasm_status restore_core_metadata(
        !get_u32(r,&memory_count))
         return TURBOWASM_MALFORMED_MODULE;
 
+    context->requires_store=requires_store!=0u;
     if(!turbowasm_validation_context_allocate_types(
             context,type_count))
         return TURBOWASM_OUT_OF_MEMORY;
@@ -1327,18 +1394,17 @@ static turbowasm_status restore_core_metadata(
         uint32_t param_count;
         uint32_t result_count;
         turbowasm_validation_func_type *type;
+        turbowasm_validation_func_type layout={0};
 
         if(!get_u32(r,&defined) ||
            !get_u32(r,&param_count) ||
            !get_u32(r,&result_count) ||
-           defined>1u)
+           defined!=1u)
             return TURBOWASM_MALFORMED_MODULE;
-
-        if(defined==0u) {
-            if(param_count!=0u||result_count!=0u)
-                return TURBOWASM_MALFORMED_MODULE;
-            continue;
-        }
+        layout.param_count=param_count;
+        layout.result_count=result_count;
+        if(!read_type_layout(r,i,type_count,&layout))
+            return TURBOWASM_MALFORMED_MODULE;
 
         if(!turbowasm_validation_context_define_type(
                 context,i,param_count,result_count))
@@ -1346,6 +1412,20 @@ static turbowasm_status restore_core_metadata(
         type=turbowasm_validation_context_type_mut(context,i);
         if(type==NULL)
             return TURBOWASM_MALFORMED_MODULE;
+        type->kind=layout.kind;
+        type->final_type=layout.final_type;
+        type->super_index=layout.super_index;
+        type->super=layout.super_index==UINT32_MAX?NULL:&context->types[layout.super_index];
+        type->group_count=layout.group_count;
+        type->group_offset=layout.group_offset;
+        type->group=&context->types[i-layout.group_offset];
+        type->field_count=layout.field_count;
+        if(type->field_count!=0u) {
+            type->fields=(turbowasm_validation_field *)turbowasm_rt_calloc(
+                type->field_count,sizeof(*type->fields));
+            if(type->fields==NULL)
+                return TURBOWASM_OUT_OF_MEMORY;
+        }
 
         for(j=0u;j<param_count;++j) {
             uint32_t carrier;
@@ -1371,6 +1451,17 @@ static turbowasm_status restore_core_metadata(
                type->results[j])
                 return TURBOWASM_MALFORMED_MODULE;
         }
+        for(j=0u;j<type->field_count;++j) {
+            if(!read_field_layout(r,&type->fields[j]) ||
+               !restore_semantic_value(r,&type->fields[j].type))
+                return TURBOWASM_MALFORMED_MODULE;
+        }
+    }
+
+    {
+        turbowasm_status status=turbowasm_validation_types_finalize(context);
+        if(status!=TURBOWASM_OK)
+            return status;
     }
 
     for(i=0u;i<function_count;++i) {
@@ -1623,6 +1714,7 @@ static turbowasm_status restore_state_metadata(
         uint32_t imported;
         turbowasm_validation_limits limits={0};
         uint32_t has_maximum;
+        uint32_t table64;
         const uint8_t *initializer;
         uint32_t initializer_size;
         bool ok;
@@ -1632,9 +1724,10 @@ static turbowasm_status restore_state_metadata(
            !restore_semantic_value(r,&semantic) ||
            semantic.carrier!=(uint8_t)reference_type ||
            !get_u32(r,&imported) ||
-           !get_u32(r,&limits.minimum) ||
-           !get_u32(r,&limits.maximum) ||
+           !get_u64(r,&limits.minimum) ||
+           !get_u64(r,&limits.maximum) ||
            !get_u32(r,&has_maximum) ||
+           !get_u32(r,&table64) || table64>1u ||
            imported>1u || has_maximum>1u ||
            !restore_source_span(
                r,source,source_size,
@@ -1642,6 +1735,7 @@ static turbowasm_status restore_state_metadata(
             return TURBOWASM_MALFORMED_MODULE;
 
         limits.has_maximum=has_maximum!=0u;
+        limits.table64=table64!=0u;
         if(initializer!=NULL) {
             if(imported!=0u)
                 return TURBOWASM_MALFORMED_MODULE;
@@ -1765,6 +1859,24 @@ static turbowasm_status restore_state_metadata(
         : TURBOWASM_MALFORMED_MODULE;
 }
 
+static bool bind_state_types(turbowasm_validation_context *context) {
+    uint32_t i,j;
+    for(i=0u;i<context->function_count;++i)
+        for(j=0u;j<context->functions[i].local_count;++j)
+            if(!turbowasm_validation_bind_value(context,&context->functions[i].local_semantics[j]))
+                return false;
+    for(i=0u;i<context->global_count;++i)
+        if(!turbowasm_validation_bind_value(context,&context->globals[i].semantic_type))
+            return false;
+    for(i=0u;i<context->table_count;++i)
+        if(!turbowasm_validation_bind_value(context,&context->tables[i].semantic_type))
+            return false;
+    for(i=0u;i<context->element_segment_count;++i)
+        if(!turbowasm_validation_bind_value(context,&context->element_segments[i].semantic_type))
+            return false;
+    return true;
+}
+
 turbowasm_status turbowasm_artifact_restore(
     const uint8_t *artifact,
     size_t artifact_size,
@@ -1813,6 +1925,10 @@ turbowasm_status turbowasm_artifact_restore(
         return status;
     }
 
+    if(!bind_state_types(out_validation)) {
+        turbowasm_validation_context_destroy(out_validation);
+        return TURBOWASM_MALFORMED_MODULE;
+    }
     *out_summary=info.summary;
     return TURBOWASM_OK;
 }

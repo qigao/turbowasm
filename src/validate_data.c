@@ -1,5 +1,6 @@
 #include "validate_data.h"
 #include "validate_type.h"
+#include "validate_instr.h"
 #include "runtime_alloc.h"
 
 #include <stdbool.h>
@@ -220,7 +221,7 @@ turbowasm_status turbowasm_validate_const_expr_semantic(
                 turbowasm_validation_value_type type;
 
                 status = turbowasm_validation_read_heaptype(
-                    reader, &type);
+                    reader, context, &type);
                 if (status != TURBOWASM_OK)
                     break;
                 if (type.heap_kind ==
@@ -265,6 +266,7 @@ turbowasm_status turbowasm_validate_const_expr_semantic(
                 type.heap_kind =
                     TURBOWASM_VALIDATION_HEAP_TYPE_INDEX;
                 type.type_index = function->type_index;
+                type.definition = &context->types[function->type_index];
                 status = turbowasm_const_type_stack_push(
                     &stack, type);
                 break;
@@ -279,7 +281,7 @@ turbowasm_status turbowasm_validate_const_expr_semantic(
                     break;
                 }
                 if (subopcode != 0x0cu) {
-                    status = TURBOWASM_UNSUPPORTED;
+                    status = TURBOWASM_MALFORMED_MODULE;
                     break;
                 }
                 if (!turbowasm_reader_slice(
@@ -293,6 +295,10 @@ turbowasm_status turbowasm_validate_const_expr_semantic(
                         TURBOWASM_VAL_V128));
                 break;
             }
+            case 0xfbu:
+                status=turbowasm_validate_gc_constant(reader,context,
+                    &stack.values,&stack.size,&stack.capacity);
+                break;
             case 0x23u: {
                 uint32_t global_index;
                 const turbowasm_validation_global *global;
@@ -331,7 +337,7 @@ turbowasm_status turbowasm_validate_const_expr_semantic(
                 break;
 
             default:
-                status = TURBOWASM_UNSUPPORTED;
+                status = TURBOWASM_MALFORMED_MODULE;
                 break;
         }
 
@@ -514,7 +520,7 @@ turbowasm_status turbowasm_validate_data_section(
                 if (status != TURBOWASM_OK) return status;
                 break;
             default:
-                return TURBOWASM_UNSUPPORTED;
+                return TURBOWASM_MALFORMED_MODULE;
         }
 
         status = turbowasm_read_byte_vector(

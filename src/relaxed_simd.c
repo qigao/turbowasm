@@ -67,14 +67,14 @@ static uint32_t relaxed_trunc_u32(double value) {
 }
 
 static bool relaxed_trunc_f32x4(
-    salts_v128 *out,
-    const salts_v128 *value,
+    cmeta_v128 *out,
+    const cmeta_v128 *value,
     bool is_signed) {
     uint8_t source[16];
     uint8_t result[16];
     size_t lane;
 
-    salts_simd_v128_store(source, value);
+    cmeta_simd_v128_store(source, value);
     for (lane = 0u; lane < 4u; ++lane) {
         uint32_t bits = read_u32_le(source + lane * 4u);
         float input;
@@ -87,19 +87,19 @@ static bool relaxed_trunc_f32x4(
                 : relaxed_trunc_u32((double)input));
     }
 
-    salts_simd_v128_load(out, result);
+    cmeta_simd_v128_load(out, result);
     return true;
 }
 
 static bool relaxed_trunc_f64x2_zero(
-    salts_v128 *out,
-    const salts_v128 *value,
+    cmeta_v128 *out,
+    const cmeta_v128 *value,
     bool is_signed) {
     uint8_t source[16];
     uint8_t result[16] = {0};
     size_t lane;
 
-    salts_simd_v128_store(source, value);
+    cmeta_simd_v128_store(source, value);
     for (lane = 0u; lane < 2u; ++lane) {
         uint64_t bits = read_u64_le(source + lane * 8u);
         double input;
@@ -112,22 +112,22 @@ static bool relaxed_trunc_f64x2_zero(
                 : relaxed_trunc_u32(input));
     }
 
-    salts_simd_v128_load(out, result);
+    cmeta_simd_v128_load(out, result);
     return true;
 }
 
 static bool relaxed_minmax_f32(
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b,
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b,
     bool is_min) {
     uint8_t left[16];
     uint8_t right[16];
     uint8_t result[16];
     size_t lane;
 
-    salts_simd_v128_store(left, a);
-    salts_simd_v128_store(right, b);
+    cmeta_simd_v128_store(left, a);
+    cmeta_simd_v128_store(right, b);
 
     for (lane = 0u; lane < 4u; ++lane) {
         uint32_t abits = read_u32_le(left + lane * 4u);
@@ -154,22 +154,22 @@ static bool relaxed_minmax_f32(
         write_u32_le(result + lane * 4u, chosen);
     }
 
-    salts_simd_v128_load(out, result);
+    cmeta_simd_v128_load(out, result);
     return true;
 }
 
 static bool relaxed_minmax_f64(
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b,
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b,
     bool is_min) {
     uint8_t left[16];
     uint8_t right[16];
     uint8_t result[16];
     size_t lane;
 
-    salts_simd_v128_store(left, a);
-    salts_simd_v128_store(right, b);
+    cmeta_simd_v128_store(left, a);
+    cmeta_simd_v128_store(right, b);
 
     for (lane = 0u; lane < 2u; ++lane) {
         uint64_t abits = read_u64_le(left + lane * 8u);
@@ -191,20 +191,20 @@ static bool relaxed_minmax_f64(
         write_u64_le(result + lane * 8u, chosen);
     }
 
-    salts_simd_v128_load(out, result);
+    cmeta_simd_v128_load(out, result);
     return true;
 }
 
 static void relaxed_dot_i8_i7_pairs(
     int16_t out[8],
-    const salts_v128 *a,
-    const salts_v128 *b) {
+    const cmeta_v128 *a,
+    const cmeta_v128 *b) {
     uint8_t left[16];
     uint8_t right[16];
     size_t pair;
 
-    salts_simd_v128_store(left, a);
-    salts_simd_v128_store(right, b);
+    cmeta_simd_v128_store(left, a);
+    cmeta_simd_v128_store(right, b);
 
     for (pair = 0u; pair < 8u; ++pair) {
         size_t lane = pair * 2u;
@@ -224,9 +224,9 @@ static void relaxed_dot_i8_i7_pairs(
 }
 
 static bool relaxed_dot_i16(
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b) {
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b) {
     int16_t pairs[8];
     uint8_t result[16];
     size_t lane;
@@ -237,22 +237,22 @@ static bool relaxed_dot_i16(
             result + lane * 2u,
             (uint16_t)pairs[lane]);
 
-    salts_simd_v128_load(out, result);
+    cmeta_simd_v128_load(out, result);
     return true;
 }
 
 static bool relaxed_dot_add_i32(
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b,
-    const salts_v128 *c) {
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b,
+    const cmeta_v128 *c) {
     int16_t pairs[8];
     uint8_t addend[16];
     uint8_t result[16];
     size_t lane;
 
     relaxed_dot_i8_i7_pairs(pairs, a, b);
-    salts_simd_v128_store(addend, c);
+    cmeta_simd_v128_store(addend, c);
 
     for (lane = 0u; lane < 4u; ++lane) {
         int32_t dot =
@@ -264,20 +264,20 @@ static bool relaxed_dot_add_i32(
         write_u32_le(result + lane * 4u, sum);
     }
 
-    salts_simd_v128_load(out, result);
+    cmeta_simd_v128_load(out, result);
     return true;
 }
 
 static bool relaxed_madd(
     const cmeta_vector_desc *desc,
     bool negative,
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b,
-    const salts_v128 *c) {
-    salts_v128 product;
-    salts_v128 negated_a;
-    const salts_v128 *multiplicand = a;
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b,
+    const cmeta_v128 *c) {
+    cmeta_v128 product;
+    cmeta_v128 negated_a;
+    const cmeta_v128 *multiplicand = a;
 
     /*
      * Choose the proposal-permitted unfused projection:
@@ -287,19 +287,19 @@ static bool relaxed_madd(
      * relaxed-nmadd operation order for signed zero and NaN propagation.
      */
     if (negative) {
-        if (!salts_simd_unary(
+        if (!cmeta_simd_unary(
                 desc, SALTS_SIMD_UNARY_NEG,
                 &negated_a, a))
             return false;
         multiplicand = &negated_a;
     }
 
-    if (!salts_simd_binary(
+    if (!cmeta_simd_binary(
             desc, SALTS_SIMD_BINARY_MUL,
             &product, multiplicand, b))
         return false;
 
-    return salts_simd_binary(
+    return cmeta_simd_binary(
         desc, SALTS_SIMD_BINARY_ADD,
         out, &product, c);
 }
@@ -321,17 +321,17 @@ uint8_t turbowasm_relaxed_simd_arity(uint32_t opcode) {
 
 bool turbowasm_relaxed_simd_execute(
     uint32_t opcode,
-    salts_v128 *out,
-    const salts_v128 *a,
-    const salts_v128 *b,
-    const salts_v128 *c) {
+    cmeta_v128 *out,
+    const cmeta_v128 *a,
+    const cmeta_v128 *b,
+    const cmeta_v128 *c) {
     if (out == NULL || a == NULL)
         return false;
 
     switch (opcode) {
         case 0x100u:
             return b != NULL &&
-                   salts_simd_swizzle_bytes(out, a, b);
+                   cmeta_simd_swizzle_bytes(out, a, b);
 
         case 0x101u:
             return relaxed_trunc_f32x4(out, a, true);
@@ -368,7 +368,7 @@ bool turbowasm_relaxed_simd_execute(
         case 0x10bu:
         case 0x10cu:
             return b != NULL && c != NULL &&
-                   salts_simd_select(
+                   cmeta_simd_select(
                        &cmeta_vector_i8x16,
                        out, a, b, c);
 
@@ -387,7 +387,7 @@ bool turbowasm_relaxed_simd_execute(
 
         case 0x111u:
             return b != NULL &&
-                   salts_simd_q15mulr_sat(
+                   cmeta_simd_q15mulr_sat(
                        &cmeta_vector_i16x8, out, a, b);
 
         case 0x112u:

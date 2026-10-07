@@ -357,18 +357,18 @@ if(TARGET turbowasm_wasi02_cnet_core)
   # Salts::CNet is a released shared SDK dependency. Keep its runtime payload
   # explicit for CTest instead of relying on a system-wide Salts install.
   if(WIN32)
-    set_tests_properties(turbowasm_wasi02_cnet_control_test PROPERTIES
-      ENVIRONMENT
-        "PATH=$<TARGET_FILE_DIR:Salts::CNet>$<SEMICOLON>${SALTS_ROOT_PATH}/bin$<SEMICOLON>${SALTS_ROOT_PATH}/lib$<SEMICOLON>$ENV{PATH}")
+    set(_turbowasm_cnet_runtime_path PATH)
   elseif(APPLE)
-    set_tests_properties(turbowasm_wasi02_cnet_control_test PROPERTIES
-      ENVIRONMENT
-        "DYLD_LIBRARY_PATH=$<TARGET_FILE_DIR:Salts::CNet>:${SALTS_ROOT_PATH}/lib:$ENV{DYLD_LIBRARY_PATH}")
+    set(_turbowasm_cnet_runtime_path DYLD_LIBRARY_PATH)
   else()
-    set_tests_properties(turbowasm_wasi02_cnet_control_test PROPERTIES
-      ENVIRONMENT
-        "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Salts::CNet>:${SALTS_ROOT_PATH}/lib:$ENV{LD_LIBRARY_PATH}")
+    set(_turbowasm_cnet_runtime_path LD_LIBRARY_PATH)
   endif()
+  # Preserve the launch-time toolchain/sanitizer path. ENVIRONMENT is a CMake
+  # list, so embedding a Windows PATH there splits it into separate entries.
+  set_tests_properties(turbowasm_wasi02_cnet_control_test PROPERTIES
+    ENVIRONMENT_MODIFICATION
+      "${_turbowasm_cnet_runtime_path}=path_list_prepend:${SALTS_ROOT_PATH}/lib;${_turbowasm_cnet_runtime_path}=path_list_prepend:${SALTS_ROOT_PATH}/bin;${_turbowasm_cnet_runtime_path}=path_list_prepend:$<TARGET_FILE_DIR:Salts::CNet>")
+  unset(_turbowasm_cnet_runtime_path)
 endif()
 
 set(_turbowasm_wasi02_fixture_dir
@@ -739,6 +739,13 @@ set_target_properties(turbowasm_header_cpp_test PROPERTIES
   CXX_STANDARD_REQUIRED ON
   CXX_EXTENSIONS OFF)
 add_test(NAME turbowasm_header_cpp_test COMMAND turbowasm_header_cpp_test)
+
+add_executable(turbowasm_store_test store_test.c)
+target_link_libraries(turbowasm_store_test PRIVATE TurboWasm::Runtime Salts::Platform)
+target_include_directories(turbowasm_store_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+set_target_properties(turbowasm_store_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_store_test COMMAND turbowasm_store_test)
 
 add_executable(turbowasm_semantic_type_test
   semantic_type_test.c)
@@ -1164,6 +1171,12 @@ set_target_properties(turbowasm_reference_table_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_reference_table_test
          COMMAND turbowasm_reference_table_test)
+
+add_executable(turbowasm_function_reference_test function_reference_test.c)
+target_link_libraries(turbowasm_function_reference_test PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_function_reference_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_function_reference_test COMMAND turbowasm_function_reference_test)
 
 
 add_executable(turbowasm_funcref_identity_test
@@ -1921,4 +1934,17 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
     set_tests_properties(turbowasm_wasi_threads_proc_exit_test PROPERTIES
       TIMEOUT 20)
   endif()
+endif()
+
+add_executable(turbowasm_memory64_execution_test memory64_execution_test.c)
+target_include_directories(turbowasm_memory64_execution_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_memory64_execution_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_memory64_execution_test COMMAND turbowasm_memory64_execution_test)
+
+if(TURBOWASM_ENABLE_MIR_JIT)
+  add_executable(turbowasm_mir_memory64_test memory64_execution_test.c)
+  target_include_directories(turbowasm_mir_memory64_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_memory64_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_memory64_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_memory64_test COMMAND turbowasm_mir_memory64_test)
 endif()

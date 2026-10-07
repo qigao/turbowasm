@@ -1,45 +1,23 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
+
+include(CMakeOptions.cmake)
 
 project(TurboWasm LANGUAGES C CXX)
+
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(CTest)
+include(cmake/Sanitizers.cmake)
 
-option(TURBOWASM_BUILD_TOOLS "Build TurboWasm command-line tools" ON)
-option(TURBOWASM_BUILD_TESTS "Build TurboWasm tests" ON)
-option(TURBOWASM_BUILD_CONFORMANCE_RUNNER
-  "Build the non-installed WebAssembly spec conformance runner" OFF)
-option(TURBOWASM_ENABLE_MIR_JIT "Enable optional MIR JIT backend" OFF)
-option(TURBOWASM_ENABLE_COMPONENT
-  "Build installed synchronous Component Model façade" ON)
-option(TURBOWASM_ENABLE_WASI02_ADAPTER
-  "Build experimental WASI 0.2 typed Component capability layer" ON)
-option(TURBOWASM_ENABLE_WASI02_CNET_ADAPTER
-  "Build optional released-Salts CNet WASI 0.2 TCP control-plane provider" ON)
-option(TURBOWASM_ENABLE_CFLOW_ADAPTER "Build optional CFlow execution adapter" ON)
-option(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER
-  "Build optional Salts NativeIO host-wait adapter" ON)
-option(TURBOWASM_ENABLE_WASI_ADAPTER
-  "Build optional WASI Preview1 capability adapter" ON)
-option(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN
-  "Regenerate the checked Preview1 adapter plan with SaltsUtils tooling" OFF)
-option(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER
-  "Build optional legacy WASI Preview1 threads adapter" ON)
-option(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER
-  "Build optional WASI Preview1 NativeIO fd adapter" ON)
-option(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER
-  "Build optional Salts-backed WASI filesystem provider" ON)
-option(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER
-  "Build optional littlefs-backed WASI filesystem provider" OFF)
-set(TURBOWASM_LITTLEFS_SOURCE_DIR "" CACHE PATH
-  "Path to an externally acquired littlefs source checkout")
-
-if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
+if(NOT DEFINED ENV{SALTS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
   message(FATAL_ERROR "SALTS_ROOT must point at an installed Salts SDK")
 endif()
 
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTS_ROOT_PATH)
+unset(Salts_DIR CACHE)
+unset(Salts_DIR)
 find_package(Salts CONFIG REQUIRED
   PATHS "${SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
@@ -66,6 +44,8 @@ if(NOT TARGET Salts::Platform)
 endif()
 
 add_library(turbowasm
+  src/store.c
+  src/gc_exec.c
   src/artifact.c
   src/atomic.c
   src/component_binary.c
@@ -78,6 +58,7 @@ add_library(turbowasm
   src/execution.c
   src/instance.c
   src/instance_state.c
+  src/jit_memory_helper.c
   src/jit_simd_helper.c
   src/link.c
   src/module.c
@@ -91,6 +72,7 @@ add_library(turbowasm
   src/value.c
   src/validation_context.c
   src/validate.c
+  src/validate_composite.c
   src/validate_data.c
   src/validate_element.c
   src/validate_instr.c
@@ -104,6 +86,8 @@ set_target_properties(turbowasm PROPERTIES
   EXPORT_NAME Runtime)
 
 target_compile_features(turbowasm PUBLIC c_std_11)
+target_compile_definitions(turbowasm PRIVATE
+  TURBOWASM_TYPE_DEPENDENCY_LIMIT=${TURBOWASM_TYPE_DEPENDENCY_LIMIT})
 target_include_directories(turbowasm
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -472,12 +456,14 @@ if(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN)
       "Preview1 adapter-plan qualification requires TURBOWASM_ENABLE_WASI_ADAPTER")
   endif()
   if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR
-     "$ENV{SALTS_UTILS_ROOT}" STREQUAL "")
+     NOT IS_DIRECTORY "$ENV{SALTS_UTILS_ROOT}")
     message(FATAL_ERROR
       "SALTS_UTILS_ROOT must point at an installed SaltsUtils SDK for adapter-plan qualification")
   endif()
 
   file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" SALTS_UTILS_ROOT_PATH)
+  unset(SaltsUtils_DIR CACHE)
+  unset(SaltsUtils_DIR)
   find_package(SaltsUtils CONFIG REQUIRED
     PATHS "${SALTS_UTILS_ROOT_PATH}"
     NO_DEFAULT_PATH

@@ -24,6 +24,10 @@ turbowasm_validation_value_type_legacy(uint8_t carrier) {
         type.is_reference = true;
         type.nullable = true;
         type.heap_kind = TURBOWASM_VALIDATION_HEAP_EXN;
+    } else if (carrier == 0x6eu) {
+        type.is_reference = true;
+        type.nullable = true;
+        type.heap_kind = TURBOWASM_VALIDATION_HEAP_ANY;
     }
     return type;
 }
@@ -43,8 +47,11 @@ bool turbowasm_validation_value_type_equal(
         left->heap_kind != right->heap_kind)
         return false;
 
-    if (left->heap_kind == TURBOWASM_VALIDATION_HEAP_TYPE_INDEX)
-        return left->type_index == right->type_index;
+    if (left->heap_kind == TURBOWASM_VALIDATION_HEAP_TYPE_INDEX) {
+        if (left->definition != NULL && right->definition != NULL)
+            return turbowasm_validation_defined_type_equal(left->definition, right->definition);
+        return left->definition == right->definition && left->type_index == right->type_index;
+    }
 
     return true;
 }
@@ -66,12 +73,36 @@ bool turbowasm_validation_value_type_matches(
     if (actual->heap_kind == expected->heap_kind) {
         if (actual->heap_kind ==
             TURBOWASM_VALIDATION_HEAP_TYPE_INDEX)
-            return actual->type_index == expected->type_index;
+            return actual->definition != NULL && expected->definition != NULL
+                ? turbowasm_validation_defined_type_matches(actual->definition, expected->definition)
+                : actual->definition == expected->definition && actual->type_index == expected->type_index;
         return true;
     }
 
     if (actual->heap_kind == TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
         expected->heap_kind == TURBOWASM_VALIDATION_HEAP_FUNC)
+        return true;
+
+    if (actual->carrier == 0x6eu) {
+        turbowasm_validation_heap_kind kind = actual->heap_kind;
+        if (kind == TURBOWASM_VALIDATION_HEAP_BOTTOM ||
+            expected->heap_kind == TURBOWASM_VALIDATION_HEAP_ANY)
+            return true;
+        if (kind == TURBOWASM_VALIDATION_HEAP_TYPE_INDEX && actual->definition != NULL)
+            kind = actual->definition->kind == TURBOWASM_TYPE_STRUCT
+                ? TURBOWASM_VALIDATION_HEAP_STRUCT : TURBOWASM_VALIDATION_HEAP_ARRAY;
+        return kind == expected->heap_kind ||
+            (expected->heap_kind == TURBOWASM_VALIDATION_HEAP_EQ &&
+             (kind == TURBOWASM_VALIDATION_HEAP_I31 || kind == TURBOWASM_VALIDATION_HEAP_STRUCT ||
+              kind == TURBOWASM_VALIDATION_HEAP_ARRAY));
+    }
+
+    if (actual->heap_kind == TURBOWASM_VALIDATION_HEAP_NOFUNC &&
+        (expected->heap_kind == TURBOWASM_VALIDATION_HEAP_FUNC ||
+         expected->heap_kind == TURBOWASM_VALIDATION_HEAP_TYPE_INDEX))
+        return true;
+    if (actual->heap_kind == TURBOWASM_VALIDATION_HEAP_NOEXTERN &&
+        expected->heap_kind == TURBOWASM_VALIDATION_HEAP_EXTERN)
         return true;
 
     return actual->heap_kind == TURBOWASM_VALIDATION_HEAP_NOEXN &&
@@ -131,6 +162,7 @@ void turbowasm_validation_context_destroy(
         turbowasm_rt_free(context->types[index].param_semantics);
         turbowasm_rt_free(context->types[index].results);
         turbowasm_rt_free(context->types[index].result_semantics);
+        turbowasm_rt_free(context->types[index].fields);
     }
 
     turbowasm_rt_free(context->imports);
@@ -273,6 +305,11 @@ bool turbowasm_validation_context_define_type(
     type->param_count = param_count;
     type->result_count = result_count;
     type->defined = true;
+    type->final_type = true;
+    type->super_index = UINT32_MAX;
+    type->group = type;
+    type->group_count = 1u;
+    type->canonical = type;
     return true;
 }
 
@@ -678,6 +715,10 @@ bool turbowasm_validation_func_type_equal(
         left->param_count != right->param_count ||
         left->result_count != right->result_count)
         return false;
+
+    if (left->group != NULL && right->group != NULL)
+        return left->kind == TURBOWASM_TYPE_FUNCTION && right->kind == TURBOWASM_TYPE_FUNCTION &&
+            turbowasm_validation_defined_type_equal(left, right);
 
     if (left->param_count != 0u) {
         uint32_t index;

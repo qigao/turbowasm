@@ -1,0 +1,748 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "vcpkg-cache-ci",
+      "hidden": true,
+      "inherits": "vcpkg-cache",
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
+        "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}"
+      }
+    },
+    {
+      "name": "vcpkg-cache-linux",
+      "hidden": true,
+      "inherits": "vcpkg-cache",
+      "cacheVariables": {
+        "VCPKG_HOST_TRIPLET": "x64-linux"
+      },
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{HOME}/.cache/qigao/vcpkg-cache"
+      }
+    },
+    {
+      "name": "vcpkg-cache-windows",
+      "hidden": true,
+      "inherits": "vcpkg-cache",
+      "cacheVariables": {
+        "VCPKG_HOST_TRIPLET": "x64-windows"
+      },
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{LOCALAPPDATA}/qigao/vcpkg-cache",
+        "RE2C_ROOT": "$env{PKG_ROOT}/re2c/windows-x64"
+      }
+    },
+    {
+      "name": "native-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "VCPKG_MANIFEST_MODE": true
+      }
+    },
+    {
+      "name": "release",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "debug",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "windows",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "CMAKE_C_FLAGS": "/utf-8",
+        "CMAKE_CXX_FLAGS": "/utf-8"
+      }
+    },
+    {
+      "name": "linux",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "android",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "Android",
+        "VCPKG_TARGET_TRIPLET": "arm64-android",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-26",
+        "ANDROID_STL": "c++_shared",
+        "TURBOWASM_BUILD_TESTS": false,
+        "TURBOWASM_BUILD_TOOLS": false,
+        "TURBOWASM_ENABLE_CFLOW_ADAPTER": false,
+        "TURBOWASM_ENABLE_NATIVE_IO_ADAPTER": false,
+        "TURBOWASM_ENABLE_WASI_THREADS_ADAPTER": false,
+        "TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER": false
+      }
+    },
+    {
+      "name": "sdk-options",
+      "hidden": true,
+      "cacheVariables": {
+        "TURBOWASM_BUILD_TESTS": false,
+        "TURBOWASM_BUILD_TOOLS": false,
+        "TURBOWASM_ENABLE_COMPONENT": true,
+        "TURBOWASM_ENABLE_MIR_JIT": false,
+        "TURBOWASM_ENABLE_WASI02_ADAPTER": false,
+        "TURBOWASM_ENABLE_WASI02_CNET_ADAPTER": false,
+        "TURBOWASM_ENABLE_CFLOW_ADAPTER": false,
+        "TURBOWASM_ENABLE_NATIVE_IO_ADAPTER": false,
+        "TURBOWASM_ENABLE_WASI_ADAPTER": false,
+        "TURBOWASM_ENABLE_WASI_THREADS_ADAPTER": false,
+        "TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER": false,
+        "TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER": false,
+        "TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER": false
+      }
+    },
+    {
+      "name": "vcpkg-cache",
+      "hidden": true,
+      "inherits": "native-base",
+      "toolchainFile": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/cmake/QigaoVcpkgToolchain.cmake",
+      "environment": {
+        "VCPKG_BINARY_SOURCES": "clear;default,readwrite;nugettimeout,1800;nugetconfig,${sourceDir}/cmake/vcpkg-cache.nuget.config,read",
+        "VCPKG_OVERLAY_PORTS": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/ports",
+        "RE2C_ROOT": "$penv{RE2C_ROOT}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
+      "name": "local-paths",
+      "hidden": true,
+      "inherits": "vcpkg-cache",
+      "environment": {
+        "PROJECT_ROOT": "$penv{PROJECT_ROOT}",
+        "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
+        "VCPKG_ROOT": "$penv{VCPKG_ROOT}",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed/${presetName}"
+      },
+      "cacheVariables": {
+        "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}"
+      }
+    },
+    {
+      "name": "win-paths",
+      "hidden": true,
+      "inherits": [
+        "vcpkg-cache-windows",
+        "windows",
+        "local-paths"
+      ],
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{LOCALAPPDATA}/qigao/vcpkg-cache",
+        "TURBOWASM_TRIPLET": "x64-windows"
+      },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_HOST_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "linux-paths",
+      "hidden": true,
+      "inherits": [
+        "linux",
+        "local-paths",
+        "vcpkg-cache-linux"
+      ],
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
+        "TURBOWASM_TRIPLET": "x64-linux"
+      },
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "VCPKG_HOST_TRIPLET": "x64-linux"
+      }
+    },
+    {
+      "name": "win-release-user",
+      "inherits": [
+        "win-paths",
+        "release"
+      ],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turbowasm/release",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}"
+      },
+      "environment": {
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+      }
+    },
+    {
+      "name": "win-dev-user",
+      "inherits": [
+        "win-paths",
+        "debug"
+      ],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turbowasm/debug",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug"
+      },
+      "environment": {
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+      }
+    },
+    {
+      "name": "linux-release-user",
+      "inherits": [
+        "linux-paths",
+        "release"
+      ],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turbowasm/release",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}"
+      },
+      "environment": {
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+      }
+    },
+    {
+      "name": "linux-dev-user",
+      "inherits": [
+        "linux-paths",
+        "debug"
+      ],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turbowasm/debug",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug"
+      },
+      "environment": {
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+      }
+    },
+    {
+      "name": "ci-paths",
+      "hidden": true,
+      "inherits": [
+        "vcpkg-cache-ci",
+        "vcpkg-cache",
+        "release"
+      ],
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
+        "VCPKG_TARGET_TRIPLET": "$env{TURBOWASM_TRIPLET}",
+        "VCPKG_HOST_TRIPLET": "$env{TURBOWASM_HOST_TRIPLET}",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/sdk/$env{TURBOWASM_SDK_RID}"
+      },
+      "environment": {
+        "VCPKG_ROOT": "$penv{VCPKG_ROOT}",
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
+        "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}",
+        "VCPKG_OVERLAY_PORTS": "$penv{VCPKG_OVERLAY_PORTS}",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed/${presetName}",
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+      }
+    },
+    {
+      "name": "ci-native-user",
+      "inherits": "ci-paths"
+    },
+    {
+      "name": "ci-win-user",
+      "inherits": [
+        "windows",
+        "ci-native-user"
+      ]
+    },
+    {
+      "name": "ci-linux-user",
+      "inherits": "ci-native-user",
+      "cacheVariables": {
+        "TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN": true,
+        "TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER": true,
+        "TURBOWASM_LITTLEFS_SOURCE_DIR": "${sourceDir}/build/littlefs"
+      }
+    },
+    {
+      "name": "ci-win-qualify-user",
+      "inherits": "ci-win-user",
+      "cacheVariables": {
+        "TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN": true
+      }
+    },
+    {
+      "name": "ci-mir-user",
+      "inherits": "ci-native-user",
+      "cacheVariables": {
+        "TURBOWASM_ENABLE_MIR_JIT": true
+      }
+    },
+    {
+      "name": "ci-android-user",
+      "inherits": [
+        "android",
+        "ci-native-user"
+      ]
+    },
+    {
+      "name": "ci-sdk-user",
+      "inherits": [
+        "sdk-options",
+        "ci-native-user"
+      ]
+    },
+    {
+      "name": "ci-win-sdk-user",
+      "inherits": [
+        "windows",
+        "ci-sdk-user"
+      ]
+    },
+    {
+      "name": "ci-android-sdk-user",
+      "inherits": [
+        "sdk-options",
+        "android",
+        "ci-native-user"
+      ]
+    },
+    {
+      "name": "ci-conformance-user",
+      "inherits": [
+        "linux",
+        "ci-native-user"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_FLAGS": "-O1",
+        "ENABLE_SANITIZER_ADDRESS": true,
+        "TURBOWASM_BUILD_TESTS": false,
+        "TURBOWASM_BUILD_TOOLS": false,
+        "TURBOWASM_ENABLE_CFLOW_ADAPTER": false,
+        "TURBOWASM_BUILD_CONFORMANCE_RUNNER": true,
+        "TURBOWASM_SPEC_ROOT": "${sourceDir}/build/wasm-spec"
+      }
+    },
+    {
+      "name": "ci-conformance-mir-user",
+      "inherits": "ci-conformance-user",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS": "",
+        "ENABLE_SANITIZER_ADDRESS": false,
+        "TURBOWASM_ENABLE_MIR_JIT": true
+      }
+    },
+    {
+      "name": "win-core3-user",
+      "inherits": "win-release-user",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "TURBOWASM_BUILD_CONFORMANCE_RUNNER": true,
+        "TURBOWASM_CORE3_TOOLS": "$env{TURBOWASM_CORE3_TOOLS}",
+        "TURBOWASM_SPEC_ROOT": "$env{TURBOWASM_SPEC_ROOT}"
+      }
+    },
+    {
+      "name": "ci-core3-user",
+      "inherits": "ci-conformance-user",
+      "cacheVariables": {
+        "TURBOWASM_CORE3_TOOLS": "$env{TURBOWASM_CORE3_TOOLS}"
+      }
+    },
+    {
+      "name": "win-core3-asan-user",
+      "inherits": "win-core3-user",
+      "cacheVariables": {
+        "ENABLE_SANITIZER_ADDRESS": true
+      }
+    },
+    {
+      "name": "ci-core3-mir-user",
+      "inherits": "ci-core3-user",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS": "",
+        "ENABLE_SANITIZER_ADDRESS": false,
+        "TURBOWASM_ENABLE_MIR_JIT": true
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "win-release-user",
+      "configurePreset": "win-release-user"
+    },
+    {
+      "name": "win-dev-user",
+      "configurePreset": "win-dev-user"
+    },
+    {
+      "name": "linux-release-user",
+      "configurePreset": "linux-release-user"
+    },
+    {
+      "name": "linux-dev-user",
+      "configurePreset": "linux-dev-user"
+    },
+    {
+      "name": "ci-native-user",
+      "configurePreset": "ci-native-user"
+    },
+    {
+      "name": "ci-win-user",
+      "configurePreset": "ci-win-user"
+    },
+    {
+      "name": "ci-linux-user",
+      "configurePreset": "ci-linux-user"
+    },
+    {
+      "name": "ci-win-qualify-user",
+      "configurePreset": "ci-win-qualify-user"
+    },
+    {
+      "name": "ci-mir-user",
+      "configurePreset": "ci-mir-user"
+    },
+    {
+      "name": "ci-android-user",
+      "configurePreset": "ci-android-user"
+    },
+    {
+      "name": "ci-sdk-user",
+      "configurePreset": "ci-sdk-user"
+    },
+    {
+      "name": "ci-win-sdk-user",
+      "configurePreset": "ci-win-sdk-user"
+    },
+    {
+      "name": "ci-android-sdk-user",
+      "configurePreset": "ci-android-sdk-user"
+    },
+    {
+      "name": "install-win-release-user",
+      "configurePreset": "win-release-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-win-dev-user",
+      "configurePreset": "win-dev-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-linux-release-user",
+      "configurePreset": "linux-release-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-linux-dev-user",
+      "configurePreset": "linux-dev-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-ci-native-user",
+      "configurePreset": "ci-native-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-ci-win-user",
+      "configurePreset": "ci-win-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-ci-linux-user",
+      "configurePreset": "ci-linux-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-ci-win-qualify-user",
+      "configurePreset": "ci-win-qualify-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-ci-mir-user",
+      "configurePreset": "ci-mir-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-ci-android-user",
+      "configurePreset": "ci-android-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-ci-sdk-user",
+      "configurePreset": "ci-sdk-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-ci-win-sdk-user",
+      "configurePreset": "ci-win-sdk-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-ci-android-sdk-user",
+      "configurePreset": "ci-android-sdk-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "ci-conformance-user",
+      "configurePreset": "ci-conformance-user"
+    },
+    {
+      "name": "install-ci-conformance-user",
+      "configurePreset": "ci-conformance-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "ci-conformance-mir-user",
+      "configurePreset": "ci-conformance-mir-user"
+    },
+    {
+      "name": "install-ci-conformance-mir-user",
+      "configurePreset": "ci-conformance-mir-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "win-core3-user",
+      "configurePreset": "win-core3-user"
+    },
+    {
+      "name": "ci-core3-user",
+      "configurePreset": "ci-core3-user"
+    },
+    {
+      "name": "win-core3-asan-user",
+      "configurePreset": "win-core3-asan-user"
+    },
+    {
+      "name": "ci-core3-mir-user",
+      "configurePreset": "ci-core3-mir-user"
+    },
+    {
+      "name": "install-ci-core3-mir-user",
+      "configurePreset": "ci-core3-mir-user",
+      "targets": [
+        "install"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "win-release-user",
+      "configurePreset": "win-release-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "win-dev-user",
+      "configurePreset": "win-dev-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "linux-release-user",
+      "configurePreset": "linux-release-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "linux-dev-user",
+      "configurePreset": "linux-dev-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-native-user",
+      "configurePreset": "ci-native-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-win-user",
+      "configurePreset": "ci-win-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-linux-user",
+      "configurePreset": "ci-linux-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-win-qualify-user",
+      "configurePreset": "ci-win-qualify-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-mir-user",
+      "configurePreset": "ci-mir-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-conformance-user",
+      "configurePreset": "ci-conformance-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-conformance-mir-user",
+      "configurePreset": "ci-conformance-mir-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "win-core3-user",
+      "configurePreset": "win-core3-user",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-core3-user",
+      "configurePreset": "ci-core3-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "win-core3-asan-user",
+      "configurePreset": "win-core3-asan-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-core3-mir-user",
+      "configurePreset": "ci-core3-mir-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}

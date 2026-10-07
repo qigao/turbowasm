@@ -1,0 +1,25 @@
+{
+  "name": "turbowasm",
+  "description": "TurboWasm native dependencies",
+  "dependencies": [],
+  "features": {
+    "mir": {
+      "description": "Optional MIR JIT backend",
+      "dependencies": [
+        "mir-jit"
+      ]
+    },
+    "spec-tools": {
+      "description": "Host WABT tools for conformance tests",
+      "dependencies": [
+        {
+          "name": "wabt",
+          "host": true,
+          "features": [
+            "tools"
+          ]
+        }
+      ]
+    }
+  }
+}

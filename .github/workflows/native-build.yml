@@ -1,0 +1,159 @@
+name: TurboWasm native build
+
+on:
+  workflow_call:
+    inputs:
+      builds:
+        type: string
+        required: true
+      version:
+        type: string
+        default: 0.0.0-ci
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  build:
+    name: ${{ matrix.rid }} / ${{ matrix.preset }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.builds) }}
+    env:
+      TURBOWASM_SDK_RID: ${{ matrix.rid }}
+      TURBOWASM_TRIPLET: ${{ matrix.triplet }}
+      TURBOWASM_HOST_TRIPLET: ${{ matrix.host_triplet }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: matrix.littlefs
+        with:
+          repository: littlefs-project/littlefs
+          path: build/littlefs
+          persist-credentials: false
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Prepare Unix tools
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ninja-build pkg-config mono-runtime
+          else
+            command -v ninja >/dev/null || brew install ninja
+          fi
+      - name: Prepare Windows toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsInstall) { throw 'Visual Studio x64 C++ toolchain is required' }
+          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
+          "TURBOWASM_VCPKG_ROOT=$env:VCPKG_ROOT" >> $env:GITHUB_ENV
+          if (-not $env:QIGAO_VCPKG_WINDOWS_TRIPLET) { throw 'Shared Windows triplet is required' }
+          "TURBOWASM_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+          "TURBOWASM_HOST_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Ninja installation failed' }
+          }
+      - name: Restore latest published SDKs
+        shell: pwsh
+        run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid '${{ matrix.rid }}' -WithSaltsUtils:${{ matrix.utils && '$true' || '$false' }}
+      - name: Configure, build and install Unix graph
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset '${{ matrix.preset }}'
+          cmake --build --preset '${{ matrix.preset }}' --parallel 2
+          cmake --build --preset 'install-${{ matrix.preset }}' --parallel 2
+      - name: Configure, build and install Windows graph
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%TURBOWASM_VCPKG_ROOT%"
+          cmake --preset "${{ matrix.preset }}"
+          if errorlevel 1 exit /b 1
+          cmake --build --preset "${{ matrix.preset }}" --parallel 2
+          if errorlevel 1 exit /b 1
+          cmake --build --preset "install-${{ matrix.preset }}" --parallel 2
+          if errorlevel 1 exit /b 1
+      - name: Run Unix tests
+        if: matrix.tests && runner.os != 'Windows'
+        shell: bash
+        run: ctest --preset '${{ matrix.preset }}'
+      - name: Run Windows tests
+        if: matrix.tests && runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%TURBOWASM_VCPKG_ROOT%"
+          ctest --preset "${{ matrix.preset }}"
+          if errorlevel 1 exit /b 1
+      - name: Build existing installed-package tests on Unix
+        if: matrix.consumer && runner.os != 'Windows'
+        working-directory: tests/installed_consumer
+        shell: bash
+        env:
+          TURBOWASM_ROOT: ${{ github.workspace }}/stage/sdk/${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+          cmake --preset '${{ matrix.consumer }}'
+          cmake --build --preset '${{ matrix.consumer }}' --parallel 2
+          if [ '${{ matrix.tests }}' = true ]; then
+            ctest --preset '${{ matrix.consumer }}'
+          fi
+      - name: Run existing installed-package tests on Windows
+        if: matrix.consumer && runner.os == 'Windows'
+        working-directory: tests/installed_consumer
+        shell: cmd
+        env:
+          TURBOWASM_ROOT: ${{ github.workspace }}/stage/sdk/${{ matrix.rid }}
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%TURBOWASM_VCPKG_ROOT%"
+          cmake --preset "${{ matrix.consumer }}"
+          if errorlevel 1 exit /b 1
+          cmake --build --preset "${{ matrix.consumer }}" --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --preset "${{ matrix.consumer }}"
+          if errorlevel 1 exit /b 1
+      - name: Record SDK provenance
+        if: matrix.package
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage/sdk/$env:TURBOWASM_SDK_RID"
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read source commit' }
+          @("version=$env:PACKAGE_VERSION", "commit=$commit", "rid=$env:TURBOWASM_SDK_RID",
+            'profile=runtime+component', "salts_version=$env:SALTS_VERSION") |
+            Set-Content (Join-Path $prefix 'turbowasm-sdk-manifest.txt')
+      - uses: actions/upload-artifact@v4
+        if: matrix.package
+        with:
+          name: turbowasm-sdk-${{ matrix.rid }}
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9

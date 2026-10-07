@@ -20,7 +20,7 @@ static void reset_status(turbowasm_jit_invocation_context *context) {
 }
 
 static void test_slot_ops_and_reduce(void) {
-    salts_v128 slots[4] = {{{0}}};
+    cmeta_v128 slots[4] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
     uint8_t raw[16] = {0};
     int32_t lanes[4] = {0};
@@ -35,13 +35,13 @@ static void test_slot_ops_and_reduce(void) {
                INT64_C(0x0706050403020100),
                INT64_C(0x0f0e0d0c0b0a0908)) ==
            TURBOWASM_OK);
-    salts_simd_v128_store(raw, &slots[0]);
+    cmeta_simd_v128_store(raw, &slots[0]);
     for (uint32_t index = 0u; index < 16u; ++index)
         assert(raw[index] == (uint8_t)index);
 
     assert(turbowasm_jit_simd_splat_i64(
                &context, 0x11, 1, 7) == TURBOWASM_OK);
-    salts_simd_v128_store(lanes, &slots[1]);
+    cmeta_simd_v128_store(lanes, &slots[1]);
     assert(lanes[0] == 7 && lanes[1] == 7 &&
            lanes[2] == 7 && lanes[3] == 7);
 
@@ -49,7 +49,7 @@ static void test_slot_ops_and_reduce(void) {
                &context,
                0xae, /* i32x4.add */
                2, 1, 1, -1, 0) == TURBOWASM_OK);
-    salts_simd_v128_store(lanes, &slots[2]);
+    cmeta_simd_v128_store(lanes, &slots[2]);
     assert(lanes[0] == 14 && lanes[1] == 14 &&
            lanes[2] == 14 && lanes[3] == 14);
 
@@ -68,7 +68,7 @@ static void test_slot_ops_and_reduce(void) {
 }
 
 static void test_slot_copy(void) {
-    salts_v128 slots[3] = {{{0}}};
+    cmeta_v128 slots[3] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
     uint8_t expected[16];
     uint8_t actual[16] = {0};
@@ -81,10 +81,10 @@ static void test_slot_copy(void) {
     context.simd_slot_count = 3u;
     reset_status(&context);
 
-    salts_simd_v128_load(&slots[0], expected);
+    cmeta_simd_v128_load(&slots[0], expected);
     assert(turbowasm_jit_simd_copy(
                &context, 2, 0) == TURBOWASM_OK);
-    salts_simd_v128_store(actual, &slots[2]);
+    cmeta_simd_v128_store(actual, &slots[2]);
     assert(memcmp(actual, expected, sizeof(actual)) == 0);
     assert(context.call_status == TURBOWASM_OK);
     assert(context.call_trap == TURBOWASM_TRAP_NONE);
@@ -106,7 +106,7 @@ static void test_memory_helper_and_trap(void) {
     };
     turbowasm_module module = {0};
     turbowasm_instance instance = {0};
-    salts_v128 slots[2] = {{{0}}};
+    cmeta_v128 slots[2] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
     int32_t input[4] = {1, 2, 3, 4};
     int32_t output[4] = {0};
@@ -122,7 +122,7 @@ static void test_memory_helper_and_trap(void) {
     context.simd_slot_count = 2u;
     reset_status(&context);
 
-    salts_simd_v128_load(&slots[0], input);
+    cmeta_simd_v128_load(&slots[0], input);
 
     assert(turbowasm_jit_simd_memory(
                &context,
@@ -133,13 +133,13 @@ static void test_memory_helper_and_trap(void) {
                0x00, /* v128.load */
                0, 1, 0, 0) == TURBOWASM_OK);
 
-    salts_simd_v128_store(output, &slots[1]);
+    cmeta_simd_v128_store(output, &slots[1]);
     assert(memcmp(input, output, sizeof(input)) == 0);
 
     {
         int32_t input1[4] = {5, 6, 7, 8};
         memset(output, 0, sizeof(output));
-        salts_simd_v128_load(&slots[0], input1);
+        cmeta_simd_v128_load(&slots[0], input1);
         assert(turbowasm_jit_simd_memory(
                    &context,
                    0x0b, /* v128.store */
@@ -148,7 +148,7 @@ static void test_memory_helper_and_trap(void) {
                    &context,
                    0x00, /* v128.load */
                    1, 1, 0, 0) == TURBOWASM_OK);
-        salts_simd_v128_store(output, &slots[1]);
+        cmeta_simd_v128_store(output, &slots[1]);
         assert(memcmp(input1, output, sizeof(input1)) == 0);
     }
 
@@ -167,7 +167,7 @@ static void test_memory_helper_and_trap(void) {
 
 
 static void test_invalid_slot_is_invalid_argument(void) {
-    salts_v128 slots[1] = {{{0}}};
+    cmeta_v128 slots[1] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
 
     context.simd_slots = slots;
@@ -182,7 +182,7 @@ static void test_invalid_slot_is_invalid_argument(void) {
 }
 
 static void test_success_does_not_set_trap(void) {
-    salts_v128 slots[2] = {{{0}}};
+    cmeta_v128 slots[2] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
 
     context.simd_slots = slots;
@@ -199,7 +199,7 @@ static void test_success_does_not_set_trap(void) {
 }
 
 static void test_relaxed_helper_parity(void) {
-    salts_v128 slots[4] = {{{0}}};
+    cmeta_v128 slots[4] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
     uint8_t source[16];
     uint8_t indexes[16] = {0};
@@ -220,34 +220,34 @@ static void test_relaxed_helper_parity(void) {
 
     for (index = 0u; index < 16u; ++index)
         source[index] = UINT8_C(0x80) + (uint8_t)index;
-    salts_simd_v128_load(&slots[0], source);
-    salts_simd_v128_load(&slots[1], indexes);
+    cmeta_simd_v128_load(&slots[0], source);
+    cmeta_simd_v128_load(&slots[1], indexes);
 
     assert(turbowasm_jit_simd_op(
                &context,
                0x100, /* i8x16.relaxed_swizzle */
                2, 0, 1, -1, 0) == TURBOWASM_OK);
-    salts_simd_v128_store(actual_bytes, &slots[2]);
+    cmeta_simd_v128_store(actual_bytes, &slots[2]);
     for (index = 0u; index < 16u; ++index)
         assert(actual_bytes[index] == source[0]);
 
-    salts_simd_v128_load(&slots[0], trunc_source);
+    cmeta_simd_v128_load(&slots[0], trunc_source);
     assert(turbowasm_jit_simd_op(
                &context,
                0x101, /* i32x4.relaxed_trunc_f32x4_s */
                2, 0, -1, -1, 0) == TURBOWASM_OK);
-    salts_simd_v128_store(trunc_actual, &slots[2]);
+    cmeta_simd_v128_store(trunc_actual, &slots[2]);
     assert(memcmp(
         trunc_actual, trunc_expected, sizeof(trunc_actual)) == 0);
 
-    salts_simd_v128_load(&slots[0], left);
-    salts_simd_v128_load(&slots[1], right);
-    salts_simd_v128_load(&slots[2], mask);
+    cmeta_simd_v128_load(&slots[0], left);
+    cmeta_simd_v128_load(&slots[1], right);
+    cmeta_simd_v128_load(&slots[2], mask);
     assert(turbowasm_jit_simd_op(
                &context,
                0x10b, /* i32x4.relaxed_laneselect */
                3, 0, 1, 2, 0) == TURBOWASM_OK);
-    salts_simd_v128_store(select_actual, &slots[3]);
+    cmeta_simd_v128_store(select_actual, &slots[3]);
     assert(memcmp(
         select_actual, select_expected,
         sizeof(select_actual)) == 0);
@@ -257,7 +257,7 @@ static void test_relaxed_helper_parity(void) {
 }
 
 static void test_unsupported_kind_records_status(void) {
-    salts_v128 slots[3] = {{{0}}};
+    cmeta_v128 slots[3] = {{{0}}};
     turbowasm_jit_invocation_context context = {0};
 
     context.simd_slots = slots;

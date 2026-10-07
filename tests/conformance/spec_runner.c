@@ -33,7 +33,7 @@ typedef struct spec_state spec_state;
 typedef struct spec_thread {
     char *name_hex;
     char *manifest_path;
-    salts_thread_t handle;
+    cmeta_thread_t handle;
     spec_state *child;
     int rc;
     bool joined;
@@ -59,6 +59,7 @@ struct spec_state {
     size_t retained_failure_capacity;
 
     turbowasm_linker linker;
+    turbowasm_store gc_store;
     turbowasm_module spectest_module;
     turbowasm_instance spectest_instance;
     bool spectest_ready;
@@ -79,7 +80,14 @@ typedef enum spec_expected_pattern {
     SPEC_EXPECT_EXACT = 0,
     SPEC_EXPECT_NAN_CANONICAL,
     SPEC_EXPECT_NAN_ARITHMETIC,
-    SPEC_EXPECT_FUNCREF_NONNULL
+    SPEC_EXPECT_FUNCREF_NONNULL,
+    SPEC_EXPECT_EXTERNREF_NONNULL,
+    SPEC_EXPECT_REF_NULL,
+    SPEC_EXPECT_GC_ANY,
+    SPEC_EXPECT_GC_EQ,
+    SPEC_EXPECT_GC_I31,
+    SPEC_EXPECT_GC_STRUCT,
+    SPEC_EXPECT_GC_ARRAY
 } spec_expected_pattern;
 
 typedef struct spec_expected_value {
@@ -95,6 +103,9 @@ typedef struct spec_expected_value {
     spec_expected_pattern v128_lane_patterns[16];
 } spec_expected_value;
 
+/* Manifest-only placeholder, resolved into a store object before invocation. */
+#define SPEC_HOSTREF_TOKEN ((turbowasm_value_kind)0x101)
+
 /*
  * Canonical WebAssembly spec-test host module.
  *
@@ -108,26 +119,27 @@ static const uint8_t spec_spectest_module_bytes[] = {
     0x00, 0x00, 0x60, 0x01, 0x7f, 0x00, 0x60, 0x01, 0x7e, 0x00, 0x60, 0x01,
     0x7d, 0x00, 0x60, 0x01, 0x7c, 0x00, 0x60, 0x02, 0x7f, 0x7d, 0x00, 0x60,
     0x02, 0x7c, 0x7c, 0x00, 0x03, 0x08, 0x07, 0x00, 0x01, 0x02, 0x03, 0x04,
-    0x05, 0x06, 0x04, 0x05, 0x01, 0x70, 0x01, 0x0a, 0x14, 0x05, 0x04, 0x01,
-    0x01, 0x01, 0x02, 0x06, 0x21, 0x04, 0x7f, 0x00, 0x41, 0x9a, 0x05, 0x0b,
-    0x7e, 0x00, 0x42, 0x9a, 0x05, 0x0b, 0x7d, 0x00, 0x43, 0x66, 0xa6, 0x26,
-    0x44, 0x0b, 0x7c, 0x00, 0x44, 0xcd, 0xcc, 0xcc, 0xcc, 0xcc, 0xd4, 0x84,
-    0x40, 0x0b, 0x07, 0x9e, 0x01, 0x0d, 0x0a, 0x67, 0x6c, 0x6f, 0x62, 0x61,
-    0x6c, 0x5f, 0x69, 0x33, 0x32, 0x03, 0x00, 0x0a, 0x67, 0x6c, 0x6f, 0x62,
-    0x61, 0x6c, 0x5f, 0x69, 0x36, 0x34, 0x03, 0x01, 0x0a, 0x67, 0x6c, 0x6f,
-    0x62, 0x61, 0x6c, 0x5f, 0x66, 0x33, 0x32, 0x03, 0x02, 0x0a, 0x67, 0x6c,
-    0x6f, 0x62, 0x61, 0x6c, 0x5f, 0x66, 0x36, 0x34, 0x03, 0x03, 0x05, 0x74,
-    0x61, 0x62, 0x6c, 0x65, 0x01, 0x00, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72,
-    0x79, 0x02, 0x00, 0x05, 0x70, 0x72, 0x69, 0x6e, 0x74, 0x00, 0x00, 0x09,
-    0x70, 0x72, 0x69, 0x6e, 0x74, 0x5f, 0x69, 0x33, 0x32, 0x00, 0x01, 0x09,
-    0x70, 0x72, 0x69, 0x6e, 0x74, 0x5f, 0x69, 0x36, 0x34, 0x00, 0x02, 0x09,
-    0x70, 0x72, 0x69, 0x6e, 0x74, 0x5f, 0x66, 0x33, 0x32, 0x00, 0x03, 0x09,
-    0x70, 0x72, 0x69, 0x6e, 0x74, 0x5f, 0x66, 0x36, 0x34, 0x00, 0x04, 0x0d,
-    0x70, 0x72, 0x69, 0x6e, 0x74, 0x5f, 0x69, 0x33, 0x32, 0x5f, 0x66, 0x33,
-    0x32, 0x00, 0x05, 0x0d, 0x70, 0x72, 0x69, 0x6e, 0x74, 0x5f, 0x66, 0x36,
-    0x34, 0x5f, 0x66, 0x36, 0x34, 0x00, 0x06, 0x0a, 0x16, 0x07, 0x02, 0x00,
-    0x0b, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b, 0x02, 0x00,
-    0x0b, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b
+    0x05, 0x06, 0x04, 0x09, 0x02, 0x70, 0x01, 0x0a, 0x14, 0x70, 0x05, 0x0a,
+    0x14, 0x05, 0x04, 0x01, 0x01, 0x01, 0x02, 0x06, 0x21, 0x04, 0x7f, 0x00,
+    0x41, 0x9a, 0x05, 0x0b, 0x7e, 0x00, 0x42, 0x9a, 0x05, 0x0b, 0x7d, 0x00,
+    0x43, 0x66, 0xa6, 0x26, 0x44, 0x0b, 0x7c, 0x00, 0x44, 0xcd, 0xcc, 0xcc,
+    0xcc, 0xcc, 0xd4, 0x84, 0x40, 0x0b, 0x07, 0xa8, 0x01, 0x0e, 0x0a, 0x67,
+    0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x5f, 0x69, 0x33, 0x32, 0x03, 0x00, 0x0a,
+    0x67, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x5f, 0x69, 0x36, 0x34, 0x03, 0x01,
+    0x0a, 0x67, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x5f, 0x66, 0x33, 0x32, 0x03,
+    0x02, 0x0a, 0x67, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x5f, 0x66, 0x36, 0x34,
+    0x03, 0x03, 0x05, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x01, 0x00, 0x06, 0x6d,
+    0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x05, 0x70, 0x72, 0x69, 0x6e,
+    0x74, 0x00, 0x00, 0x09, 0x70, 0x72, 0x69, 0x6e, 0x74, 0x5f, 0x69, 0x33,
+    0x32, 0x00, 0x01, 0x09, 0x70, 0x72, 0x69, 0x6e, 0x74, 0x5f, 0x69, 0x36,
+    0x34, 0x00, 0x02, 0x09, 0x70, 0x72, 0x69, 0x6e, 0x74, 0x5f, 0x66, 0x33,
+    0x32, 0x00, 0x03, 0x09, 0x70, 0x72, 0x69, 0x6e, 0x74, 0x5f, 0x66, 0x36,
+    0x34, 0x00, 0x04, 0x0d, 0x70, 0x72, 0x69, 0x6e, 0x74, 0x5f, 0x69, 0x33,
+    0x32, 0x5f, 0x66, 0x33, 0x32, 0x00, 0x05, 0x0d, 0x70, 0x72, 0x69, 0x6e,
+    0x74, 0x5f, 0x66, 0x36, 0x34, 0x5f, 0x66, 0x36, 0x34, 0x00, 0x06, 0x07,
+    0x74, 0x61, 0x62, 0x6c, 0x65, 0x36, 0x34, 0x01, 0x01, 0x0a, 0x16, 0x07,
+    0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b,
+    0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b,
 };
 
 #ifdef TURBOWASM_SPEC_ENABLE_MIR
@@ -226,7 +238,8 @@ static bool spec_init_spectest(spec_state *state) {
     if (status != TURBOWASM_OK)
         return false;
 
-    status = turbowasm_instance_create(
+    status = state->gc_store.impl!=NULL?turbowasm_instance_create_in_store(
+        &state->spectest_instance,&state->spectest_module,NULL,&state->gc_store):turbowasm_instance_create(
         &state->spectest_instance,
         &state->spectest_module);
     if (status != TURBOWASM_OK) {
@@ -459,11 +472,19 @@ static bool spec_state_init(spec_state *state) {
 
     memset(state, 0, sizeof(*state));
     state->current_slot = -1;
-
-    if (turbowasm_linker_init(&state->linker) != TURBOWASM_OK)
+    if(getenv("TURBOWASM_SPEC_GC_STORE")!=NULL &&
+       turbowasm_store_create(&state->gc_store,NULL)!=TURBOWASM_OK)
         return false;
+
+    if (turbowasm_linker_init(&state->linker) != TURBOWASM_OK) {
+        if(state->gc_store.impl!=NULL && turbowasm_store_destroy(&state->gc_store)!=TURBOWASM_OK)
+            abort();
+        return false;
+    }
     if (!spec_init_spectest(state)) {
         turbowasm_linker_destroy(&state->linker);
+        if(state->gc_store.impl!=NULL && turbowasm_store_destroy(&state->gc_store)!=TURBOWASM_OK)
+            abort();
         memset(state, 0, sizeof(*state));
         return false;
     }
@@ -689,7 +710,7 @@ static void spec_command_thread(
         return;
     }
 
-    if (salts_thread_create(
+    if (cmeta_thread_create(
             &thread->handle,
             spec_thread_main,
             thread) != 0) {
@@ -727,7 +748,7 @@ static void spec_command_wait(
         return;
     }
 
-    if (salts_thread_join(&thread->handle) != 0) {
+    if (cmeta_thread_join(&thread->handle) != 0) {
         spec_note_failure(state, line, "thread join failed");
         return;
     }
@@ -764,7 +785,7 @@ static void spec_state_destroy(spec_state *state) {
             continue;
 
         if (!thread->joined && thread->handle != NULL) {
-            (void)salts_thread_join(&thread->handle);
+            (void)cmeta_thread_join(&thread->handle);
             thread->joined = true;
         }
         if (thread->child != NULL) {
@@ -802,6 +823,8 @@ static void spec_state_destroy(spec_state *state) {
         turbowasm_module_destroy(&state->spectest_module);
     }
     turbowasm_linker_destroy(&state->linker);
+    if(state->gc_store.impl!=NULL && turbowasm_store_destroy(&state->gc_store)!=TURBOWASM_OK)
+        abort();
     memset(state, 0, sizeof(*state));
 }
 
@@ -1085,6 +1108,23 @@ static bool spec_parse_value(const char *token,
         out->as.funcref.owner = NULL;
         return true;
     }
+    if(type_size==7u && memcmp(token,"hostref",7u)==0) {
+        if(!spec_parse_u64(colon+1u,&bits) || bits>UINTPTR_MAX) return false;
+        out->kind=SPEC_HOSTREF_TOKEN;
+        out->as.externref.is_null=false;
+        out->as.externref.token=(uintptr_t)bits;
+        return true;
+    }
+    if (strcmp(token,"gcref:null")==0) {
+        out->kind=TURBOWASM_VALUE_GCREF;
+        out->as.gcref=(turbowasm_gcref){0};
+        return true;
+    }
+    if (strcmp(token,"exnref:null")==0) {
+        out->kind=TURBOWASM_VALUE_EXNREF;
+        out->as.exnref.is_null=true;
+        return true;
+    }
     if (type_size == 9u &&
         memcmp(token, "externref", 9u) == 0) {
         out->kind = TURBOWASM_VALUE_EXTERNREF;
@@ -1111,6 +1151,15 @@ static bool spec_values_equal(const turbowasm_value *actual,
     uint64_t f64_actual;
     uint64_t f64_expected;
 
+    if(actual!=NULL && expected!=NULL && expected->kind==SPEC_HOSTREF_TOKEN &&
+       actual->kind==TURBOWASM_VALUE_GCREF) {
+        turbowasm_gc_object *object=turbowasm_gc_resolve(
+            (turbowasm_store_impl *)actual->as.gcref.store,actual->as.gcref);
+        return object!=NULL && object->type==NULL && object->count==1u &&
+            object->values[0].kind==TURBOWASM_VALUE_EXTERNREF &&
+            object->values[0].as.externref.token==expected->as.externref.token;
+    }
+
     if (actual == NULL || expected == NULL ||
         actual->kind != expected->kind)
         return false;
@@ -1133,6 +1182,10 @@ static bool spec_values_equal(const turbowasm_value *actual,
         case TURBOWASM_VALUE_FUNCREF:
             return actual->as.funcref.is_null &&
                    expected->as.funcref.is_null;
+        case TURBOWASM_VALUE_GCREF:
+            return actual->as.gcref.handle==0u && expected->as.gcref.handle==0u;
+        case TURBOWASM_VALUE_EXNREF:
+            return actual->as.exnref.is_null && expected->as.exnref.is_null;
         case TURBOWASM_VALUE_EXTERNREF:
             if (actual->as.externref.is_null ||
                 expected->as.externref.is_null)
@@ -1265,6 +1318,24 @@ static bool spec_parse_expected_value(
     if (strcmp(token, "funcref:nonnull") == 0) {
         out->value.kind = TURBOWASM_VALUE_FUNCREF;
         out->pattern = SPEC_EXPECT_FUNCREF_NONNULL;
+        return true;
+    }
+    if(strcmp(token,"externref:nonnull")==0) {
+        out->pattern=SPEC_EXPECT_EXTERNREF_NONNULL;
+        return true;
+    }
+    if(strcmp(token,"ref:null")==0) {
+        out->pattern=SPEC_EXPECT_REF_NULL;
+        return true;
+    }
+    if(strncmp(token,"gcref:",6u)==0 && strcmp(token+6u,"null")!=0) {
+        out->value.kind=TURBOWASM_VALUE_GCREF;
+        if(strcmp(token+6u,"anyref")==0) out->pattern=SPEC_EXPECT_GC_ANY;
+        else if(strcmp(token+6u,"eqref")==0) out->pattern=SPEC_EXPECT_GC_EQ;
+        else if(strcmp(token+6u,"i31ref")==0) out->pattern=SPEC_EXPECT_GC_I31;
+        else if(strcmp(token+6u,"structref")==0) out->pattern=SPEC_EXPECT_GC_STRUCT;
+        else if(strcmp(token+6u,"arrayref")==0) out->pattern=SPEC_EXPECT_GC_ARRAY;
+        else return false;
         return true;
     }
 
@@ -1407,12 +1478,33 @@ static bool spec_expected_matches(
     if (expected->pattern == SPEC_EXPECT_EXACT)
         return spec_values_equal(actual, &expected->value);
 
+    if(expected->pattern==SPEC_EXPECT_REF_NULL)
+        return (actual->kind==TURBOWASM_VALUE_GCREF && actual->as.gcref.handle==0u) ||
+            (actual->kind==TURBOWASM_VALUE_FUNCREF && actual->as.funcref.is_null) ||
+            (actual->kind==TURBOWASM_VALUE_EXTERNREF && actual->as.externref.is_null) ||
+            (actual->kind==TURBOWASM_VALUE_EXNREF && actual->as.exnref.is_null);
+    if(expected->pattern==SPEC_EXPECT_EXTERNREF_NONNULL)
+        return (actual->kind==TURBOWASM_VALUE_EXTERNREF && !actual->as.externref.is_null) ||
+            (actual->kind==TURBOWASM_VALUE_MANAGED_EXTERNREF && actual->as.gcref.handle!=0u);
     if (actual->kind != expected->value.kind)
         return false;
 
     if (expected->pattern == SPEC_EXPECT_FUNCREF_NONNULL)
         return actual->kind == TURBOWASM_VALUE_FUNCREF &&
                !actual->as.funcref.is_null;
+
+    if(expected->pattern>=SPEC_EXPECT_GC_ANY) {
+        turbowasm_gc_object *object;
+        if(actual->as.gcref.handle==0u) return false;
+        if(expected->pattern==SPEC_EXPECT_GC_ANY) return true;
+        if(turbowasm_gc_is_i31(actual->as.gcref))
+            return expected->pattern==SPEC_EXPECT_GC_I31 || expected->pattern==SPEC_EXPECT_GC_EQ;
+        object=turbowasm_gc_resolve((turbowasm_store_impl *)actual->as.gcref.store,actual->as.gcref);
+        if(object==NULL || object->type==NULL) return false;
+        return expected->pattern==SPEC_EXPECT_GC_EQ ||
+            (expected->pattern==SPEC_EXPECT_GC_STRUCT && object->type->kind==TURBOWASM_TYPE_STRUCT) ||
+            (expected->pattern==SPEC_EXPECT_GC_ARRAY && object->type->kind==TURBOWASM_TYPE_ARRAY);
+    }
 
     if (actual->kind == TURBOWASM_VALUE_F32) {
         memcpy(&f32_bits, &actual->as.f32, sizeof(f32_bits));
@@ -1450,10 +1542,11 @@ static int64_t spec_resolve_slot(const spec_state *state,
     return (int64_t)parsed;
 }
 
-static bool spec_export_function(const spec_slot *slot,
+static bool spec_export_item(const spec_slot *slot,
                                  const uint8_t *name,
                                  size_t name_size,
-                                 uint32_t *out_index) {
+                                 uint32_t *out_index,
+                                 turbowasm_external_kind kind) {
     size_t index;
     size_t count;
 
@@ -1465,7 +1558,7 @@ static bool spec_export_function(const spec_slot *slot,
         const turbowasm_export_desc *desc =
             turbowasm_module_export_at(&slot->module, index);
         if (desc == NULL ||
-            desc->kind != TURBOWASM_EXTERN_FUNCTION ||
+            desc->kind != kind ||
             desc->name.size != name_size)
             continue;
         if (name_size == 0u ||
@@ -1477,6 +1570,16 @@ static bool spec_export_function(const spec_slot *slot,
     return false;
 }
 
+typedef struct spec_gc_arguments {
+    turbowasm_value *values;
+    size_t count;
+} spec_gc_arguments;
+
+static void spec_trace_arguments(turbowasm_store_impl *store,void *context) {
+    spec_gc_arguments *arguments=context;
+    turbowasm_gc_mark_values(store,arguments->values,arguments->count);
+}
+
 static turbowasm_status spec_invoke(spec_state *state,
                                     int64_t slot_index,
                                     const char *field_hex,
@@ -1484,7 +1587,8 @@ static turbowasm_status spec_invoke(spec_state *state,
                                     turbowasm_value **out_results,
                                     size_t *out_result_count,
                                     turbowasm_trap *out_trap,
-                                    bool *out_unsupported) {
+                                    bool *out_unsupported,
+                                    bool get_global) {
     spec_slot *slot;
     uint8_t *field = NULL;
     size_t field_size = 0u;
@@ -1495,6 +1599,9 @@ static turbowasm_status spec_invoke(spec_state *state,
     turbowasm_value *results = NULL;
     size_t result_count = 0u;
     turbowasm_status status;
+    spec_gc_arguments gc_arguments={0};
+    turbowasm_gc_source gc_source={NULL,NULL,&gc_arguments,spec_trace_arguments};
+    size_t argument_index;
 
     *out_results = NULL;
     *out_result_count = 0u;
@@ -1515,12 +1622,31 @@ static turbowasm_status spec_invoke(spec_state *state,
     if (field == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    if (!spec_export_function(
-            slot, field, field_size, &function_index)) {
+    if (!spec_export_item(
+            slot, field, field_size, &function_index,
+            get_global ? TURBOWASM_EXTERN_GLOBAL : TURBOWASM_EXTERN_FUNCTION)) {
         free(field);
         return TURBOWASM_INVALID_ARGUMENT;
     }
     free(field);
+
+    if (get_global) {
+        if (strcmp(args_text, "-") != 0)
+            return TURBOWASM_INVALID_ARGUMENT;
+        results = (turbowasm_value *)calloc(1u, sizeof(*results));
+        if (results == NULL)
+            return TURBOWASM_OUT_OF_MEMORY;
+        status = turbowasm_instance_global_get(
+            (const turbowasm_instance_impl *)slot->instance.impl,
+            function_index, results);
+        if (status != TURBOWASM_OK) {
+            free(results);
+            return status;
+        }
+        *out_results = results;
+        *out_result_count = 1u;
+        return TURBOWASM_OK;
+    }
 
     if (!turbowasm_module_function_signature_get(
             &slot->module, function_index, &signature))
@@ -1543,6 +1669,22 @@ static turbowasm_status spec_invoke(spec_state *state,
         }
     }
 
+    gc_arguments=(spec_gc_arguments){arguments,argument_count};
+    status=turbowasm_gc_source_add(state->gc_store.impl,&gc_source);
+    if(status!=TURBOWASM_OK) {
+        free(arguments);
+        free(results);
+        return status;
+    }
+    for(argument_index=0u;argument_index<argument_count;++argument_index) {
+        if(arguments[argument_index].kind==SPEC_HOSTREF_TOKEN) {
+            turbowasm_value external=arguments[argument_index];
+            external.kind=TURBOWASM_VALUE_EXTERNREF;
+            status=turbowasm_gc_allocate(state->gc_store.impl,NULL,1u,&arguments[argument_index]);
+            if(status!=TURBOWASM_OK) goto invoked;
+            turbowasm_gc_resolve(state->gc_store.impl,arguments[argument_index].as.gcref)->values[0]=external;
+        }
+    }
     status = turbowasm_instance_invoke(
         &slot->instance,
         function_index,
@@ -1553,6 +1695,8 @@ static turbowasm_status spec_invoke(spec_state *state,
         &result_count,
         out_trap);
 
+invoked:
+    turbowasm_gc_source_remove(state->gc_store.impl,&gc_source);
     free(arguments);
 
     if (status == TURBOWASM_UNSUPPORTED) {
@@ -1631,7 +1775,8 @@ static void spec_command_module(spec_state *state,
     }
 
     slot->loaded = true;
-    status = turbowasm_instance_create_linked(
+    status = state->gc_store.impl!=NULL?turbowasm_instance_create_in_store(
+        &slot->instance,&slot->module,&state->linker,&state->gc_store):turbowasm_instance_create_linked(
         &slot->instance, &slot->module, &state->linker);
     if (status == TURBOWASM_UNSUPPORTED ||
         status == TURBOWASM_LINK_ERROR) {
@@ -1743,10 +1888,12 @@ static void spec_command_negative_module(spec_state *state,
     }
 
     if (strcmp(kind, "assert_uninstantiable") == 0) {
-        status = turbowasm_instance_create_linked_preserve_failure(
+        status = state->gc_store.impl!=NULL?turbowasm_instance_create_in_store_preserve_failure(
+            &instance,&module,&state->linker,&state->gc_store):turbowasm_instance_create_linked_preserve_failure(
             &instance, &module, &state->linker);
     } else {
-        status = turbowasm_instance_create_linked(
+        status = state->gc_store.impl!=NULL?turbowasm_instance_create_in_store(
+            &instance,&module,&state->linker,&state->gc_store):turbowasm_instance_create_linked(
             &instance, &module, &state->linker);
     }
 
@@ -1794,14 +1941,15 @@ static void spec_command_action(spec_state *state,
                                 unsigned line,
                                 int64_t slot_index,
                                 const char *field_hex,
-                                const char *args_text) {
+                                const char *args_text,
+                                bool get_global) {
     turbowasm_value *results = NULL;
     size_t result_count = 0u;
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
     bool unsupported = false;
     turbowasm_status status = spec_invoke(
         state, slot_index, field_hex, args_text,
-        &results, &result_count, &trap, &unsupported);
+        &results, &result_count, &trap, &unsupported, get_global);
 
     free(results);
     if (unsupported) {
@@ -1818,7 +1966,8 @@ static void spec_command_assert_return(spec_state *state,
                                        int64_t slot_index,
                                        const char *field_hex,
                                        const char *args_text,
-                                       const char *expected_text) {
+                                       const char *expected_text,
+                                       bool get_global) {
     turbowasm_value *results = NULL;
     spec_expected_value *expected = NULL;
     size_t result_count = 0u;
@@ -1836,13 +1985,15 @@ static void spec_command_assert_return(spec_state *state,
 
     status = spec_invoke(
         state, slot_index, field_hex, args_text,
-        &results, &result_count, &trap, &unsupported);
+        &results, &result_count, &trap, &unsupported, get_global);
 
     if (unsupported) {
         spec_note_runtime_unsupported(state, line, "assert_return invoke unsupported");
         goto done;
     }
     if (status != TURBOWASM_OK) {
+        if(!state->printed_first_failure)
+            printf("INVOKE_FAILURE status=%s trap=%s\n",turbowasm_status_string(status),turbowasm_trap_string(trap));
         spec_note_failure(state, line, "assert_return did not complete");
         goto done;
     }
@@ -1871,7 +2022,8 @@ static void spec_command_assert_return_either(
     int64_t slot_index,
     const char *field_hex,
     const char *args_text,
-    const char *alternatives_text) {
+    const char *alternatives_text,
+    bool get_global) {
     turbowasm_value *results = NULL;
     size_t result_count = 0u;
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
@@ -1889,7 +2041,7 @@ static void spec_command_assert_return_either(
 
     status = spec_invoke(
         state, slot_index, field_hex, args_text,
-        &results, &result_count, &trap, &unsupported);
+        &results, &result_count, &trap, &unsupported, get_global);
 
     if (unsupported) {
         spec_note_runtime_unsupported(
@@ -1955,14 +2107,16 @@ static void spec_command_assert_trap(spec_state *state,
                                      int64_t slot_index,
                                      const char *field_hex,
                                      const char *args_text,
-                                     int expected_trap) {
+                                     int expected_trap,
+                                     turbowasm_status expected_status) {
+    const bool get_global = false;
     turbowasm_value *results = NULL;
     size_t result_count = 0u;
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
     bool unsupported = false;
     turbowasm_status status = spec_invoke(
         state, slot_index, field_hex, args_text,
-        &results, &result_count, &trap, &unsupported);
+        &results, &result_count, &trap, &unsupported, get_global);
 
     free(results);
 
@@ -1970,11 +2124,11 @@ static void spec_command_assert_trap(spec_state *state,
         spec_note_runtime_unsupported(state, line, "assert_trap invoke unsupported");
         return;
     }
-    if (status != TURBOWASM_TRAPPED) {
-        spec_note_failure(state, line, "expected Wasm trap");
+    if (status != expected_status) {
+        spec_note_failure(state, line, "expected Wasm trap or exception");
         return;
     }
-    if ((int)trap != expected_trap) {
+    if (expected_status == TURBOWASM_TRAPPED && (int)trap != expected_trap) {
         spec_note_failure(state, line, "trap kind mismatch");
         return;
     }
@@ -2151,28 +2305,34 @@ static int spec_run_manifest(spec_state *state, const char *path) {
             goto command_done;
         }
 
-        if (strcmp(fields[0], "action") == 0 && field_count == 5u) {
+        if ((strcmp(fields[0], "action") == 0 ||
+             strcmp(fields[0], "action_get") == 0) && field_count == 5u) {
             int64_t slot = spec_resolve_slot(state, fields[2]);
             spec_command_action(
-                state, line, slot, fields[3], fields[4]);
+                state, line, slot, fields[3], fields[4],
+                strcmp(fields[0], "action_get") == 0);
             goto command_done;
         }
 
-        if (strcmp(fields[0], "assert_return") == 0 &&
+        if ((strcmp(fields[0], "assert_return") == 0 ||
+             strcmp(fields[0], "assert_return_get") == 0) &&
             field_count == 6u) {
             int64_t slot = spec_resolve_slot(state, fields[2]);
             spec_command_assert_return(
                 state, line, slot, fields[3],
-                fields[4], fields[5]);
+                fields[4], fields[5],
+                strcmp(fields[0], "assert_return_get") == 0);
             goto command_done;
         }
 
-        if (strcmp(fields[0], "assert_return_either") == 0 &&
+        if ((strcmp(fields[0], "assert_return_either") == 0 ||
+             strcmp(fields[0], "assert_return_either_get") == 0) &&
             field_count == 6u) {
             int64_t slot = spec_resolve_slot(state, fields[2]);
             spec_command_assert_return_either(
                 state, line, slot, fields[3],
-                fields[4], fields[5]);
+                fields[4], fields[5],
+                strcmp(fields[0], "assert_return_either_get") == 0);
             goto command_done;
         }
 
@@ -2189,7 +2349,14 @@ static int spec_run_manifest(spec_state *state, const char *path) {
             }
             spec_command_assert_trap(
                 state, line, slot, fields[3],
-                fields[4], (int)trap_value);
+                fields[4], (int)trap_value, TURBOWASM_TRAPPED);
+            goto command_done;
+        }
+
+        if (strcmp(fields[0], "assert_exception") == 0 && field_count == 5u) {
+            int64_t slot = spec_resolve_slot(state, fields[2]);
+            spec_command_assert_trap(state, line, slot, fields[3], fields[4],
+                                     TURBOWASM_TRAP_NONE, TURBOWASM_EXCEPTION);
             goto command_done;
         }
 

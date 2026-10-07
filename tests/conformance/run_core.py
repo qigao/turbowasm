@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 SUMMARY_RE = re.compile(
     r"CONFORMANCE pass=(\d+) fail=(\d+) unsupported=(\d+) total=(\d+)"
@@ -31,6 +32,16 @@ TRAP_MAP = [
     ("undefined element", 6),
     ("uninitialized element", 7),
     ("indirect call type mismatch", 8),
+    ("null reference", 10),
+    ("null function reference", 10),
+    ("out of bounds array access", 14),
+    ("cast failure", 15),
+    ("null array reference", 10),
+    ("null structure reference", 10),
+    ("null i31 reference", 10),
+    ("indirect call", 8),
+    ("cast", 15),
+    ("out of bounds", 5),
 ]
 
 
@@ -55,6 +66,12 @@ def encode_value(value, expected=False):
             and raw in ("nan:canonical", "nan:arithmetic")
         ):
             return f"{value_type}:{raw}", None
+        if value_type in ("i32", "i64") and re.fullmatch(r"-?[0-9]+", raw):
+            width = 32 if value_type == "i32" else 64
+            number = int(raw)
+            if number < -(1 << (width - 1)) or number >= 1 << width:
+                return None, f"{value_type} value outside bit width"
+            return f"{value_type}:{number % (1 << width)}", None
         if not raw.isdigit():
             return None, f"{value_type} non-decimal encoding unsupported"
         return f"{value_type}:{raw}", None
@@ -62,7 +79,7 @@ def encode_value(value, expected=False):
     if value_type == "funcref":
         if raw == "null":
             return "funcref:null", None
-        if expected and raw == "0":
+        if expected and raw in ("0", None):
             # WABT's script expected (ref.func) pattern is encoded via
             # Const::set_funcref(), which writes the sentinel payload 0.
             # It means any non-null function reference, not function index 0.
@@ -70,11 +87,30 @@ def encode_value(value, expected=False):
         return None, "funcref non-null argument/payload unsupported"
 
     if value_type == "externref":
+        if expected and raw is None:
+            return "externref:nonnull", None
         if raw == "null":
             return "externref:null", None
         if isinstance(raw, str) and raw.isdigit():
             return f"externref:{raw}", None
         return None, "externref payload encoding unsupported"
+
+    if value_type == "refnull" and expected:
+        return "ref:null", None
+    if value_type == "nullref":
+        return "gcref:null", None
+    if value_type == "anyref" and isinstance(raw, str) and raw.isdigit():
+        return f"hostref:{raw}", None
+    if value_type in ("anyref", "eqref", "i31ref", "structref", "arrayref"):
+        if raw == "null":
+            return "gcref:null", None
+        if expected and raw is None:
+            return f"gcref:{value_type}", None
+        return None, f"{value_type} payload encoding unsupported"
+
+    if value_type in ("nullfuncref", "nullexternref", "nullexnref", "exnref") and raw in ("null", None):
+        carrier = {"nullfuncref": "funcref", "nullexternref": "externref"}.get(value_type, "exnref")
+        return f"{carrier}:null", None
 
     if value_type == "v128":
         lane_type = value.get("lane_type")
@@ -103,6 +139,13 @@ def encode_value(value, expected=False):
                 and lane in ("nan:canonical", "nan:arithmetic")
             ):
                 encoded_lanes.append(lane)
+                continue
+            if lane_type.startswith("i") and re.fullmatch(r"-?[0-9]+", lane):
+                width = int(lane_type[1:])
+                number = int(lane)
+                if number < -(1 << (width - 1)) or number >= 1 << width:
+                    return None, f"v128 {lane_type} lane outside bit width"
+                encoded_lanes.append(str(number % (1 << width)))
                 continue
             if not lane.isdigit():
                 return None, f"v128 {lane_type} non-decimal lane unsupported"
@@ -144,12 +187,16 @@ def action_slot(action, named_slots, current_slot):
     return named_slots.get(module_name)
 
 
-def convert_json(json_path, manifest_path):
+def convert_json(json_path, manifest_path, wasm_tools=None):
     with open(json_path, "r", encoding="utf-8") as handle:
         document = json.load(handle)
 
     json_dir = os.path.dirname(os.path.abspath(json_path))
     named_slots = {}
+    definitions = {}
+    last_definition = None
+    frontend_passed = 0
+    frontend_failed = 0
     current_slot = None
     next_slot = 0
     lines = ["TWCF1"]
@@ -161,9 +208,10 @@ def convert_json(json_path, manifest_path):
 
     def encode_invoke(command, action, command_type, expected=None, trap=None):
         line = command.get("line", 0)
-        if action.get("type") != "invoke":
-            emit_unsupported(line, "get action not yet qualified")
+        if action.get("type") not in ("invoke", "get"):
+            emit_unsupported(line, "unknown action type")
             return
+        suffix = "_get" if action["type"] == "get" else ""
 
         slot = action_slot(action, named_slots, current_slot)
         if slot is None:
@@ -185,12 +233,15 @@ def convert_json(json_path, manifest_path):
 
         if command_type == "action":
             lines.append(
-                f"action\t{line}\t{slot_text}\t{field_hex}\t{args}"
+                f"action{suffix}\t{line}\t{slot_text}\t{field_hex}\t{args}"
             )
             return
 
         if command_type == "assert_return":
             either = command.get("either")
+            if (either is None and len(expected or []) == 1
+                    and expected[0].get("type") == "either"):
+                either = expected[0].get("values")
             if either is not None:
                 if not isinstance(either, list) or not either:
                     emit_unsupported(line, "either expectation is empty")
@@ -205,7 +256,7 @@ def convert_json(json_path, manifest_path):
                         return
                     encoded_alternatives.append(token)
                 lines.append(
-                    f"assert_return_either\t{line}\t{slot_text}"
+                    f"assert_return_either{suffix}\t{line}\t{slot_text}"
                     f"\t{field_hex}\t{args}\t"
                     + "|".join(encoded_alternatives)
                 )
@@ -218,7 +269,7 @@ def convert_json(json_path, manifest_path):
                 emit_unsupported(line, reason)
                 return
             lines.append(
-                f"assert_return\t{line}\t{slot_text}\t{field_hex}"
+                f"assert_return{suffix}\t{line}\t{slot_text}\t{field_hex}"
                 f"\t{args}\t{encoded_expected}"
             )
             return
@@ -233,20 +284,39 @@ def convert_json(json_path, manifest_path):
             )
             return
 
+        if command_type == "assert_exception" and not suffix:
+            lines.append(f"assert_exception\t{line}\t{slot_text}\t{field_hex}\t{args}")
+            return
+
         raise AssertionError(command_type)
 
     for command in document.get("commands", []):
         command_type = command.get("type")
         line = command.get("line", 0)
 
-        if command_type == "module":
+        if command_type in ("module", "module_definition"):
             filename = command.get("filename")
             if not isinstance(filename, str):
                 emit_unsupported(line, "module filename missing")
                 continue
 
             path = os.path.abspath(os.path.join(json_dir, filename))
-            if command.get("definition") in (True, "true"):
+            if command.get("module_type") == "text":
+                if wasm_tools is None:
+                    emit_unsupported(line, "quoted text module requires wasm-tools")
+                    continue
+                binary_path = path + ".wasm"
+                parsed = subprocess.run([wasm_tools, "parse", path, "-o", binary_path],
+                                        capture_output=True, text=True, check=False)
+                if parsed.returncode != 0:
+                    emit_unsupported(line, f"quoted module conversion failed: {parsed.stderr}")
+                    continue
+                path = binary_path
+            if (command_type == "module_definition" or
+                    command.get("definition") in (True, "true")):
+                last_definition = path
+                if isinstance(command.get("name"), str):
+                    definitions[command["name"]] = path
                 lines.append(f"module_definition\t{line}\t{path}")
                 continue
 
@@ -258,6 +328,20 @@ def convert_json(json_path, manifest_path):
             if isinstance(name, str):
                 named_slots[name] = slot
 
+            lines.append(f"module\t{line}\t{slot}\t{path}")
+            continue
+
+        if command_type == "module_instance":
+            name = command.get("module")
+            path = definitions.get(name) if name is not None else last_definition
+            if path is None:
+                emit_unsupported(line, "module definition unavailable")
+                continue
+            slot = next_slot
+            next_slot += 1
+            current_slot = slot
+            if isinstance(command.get("instance"), str):
+                named_slots[command["instance"]] = slot
             lines.append(f"module\t{line}\t{slot}\t{path}")
             continue
 
@@ -310,23 +394,40 @@ def convert_json(json_path, manifest_path):
             )
             continue
 
+        if command_type == "assert_exception":
+            encode_invoke(command, command.get("action", {}), "assert_exception")
+            continue
+
         if command_type in (
             "assert_invalid",
             "assert_malformed",
             "assert_unlinkable",
             "assert_uninstantiable",
         ):
-            if command.get("module_type") != "binary":
-                emit_unsupported(
-                    line,
-                    f"{command_type} text module not run through TurboWasm binary reader",
-                )
-                continue
             filename = command.get("filename")
             if not isinstance(filename, str):
                 emit_unsupported(line, f"{command_type} filename missing")
                 continue
             path = os.path.abspath(os.path.join(json_dir, filename))
+            if command.get("module_type") != "binary":
+                if wasm_tools is None:
+                    emit_unsupported(line, f"{command_type} text module requires a text frontend")
+                    continue
+                binary_path = path + ".wasm"
+                parsed = subprocess.run([wasm_tools, "parse", path, "-o", binary_path],
+                                        capture_output=True, text=True, check=False)
+                if parsed.returncode != 0:
+                    if command_type == "assert_malformed" and parsed.returncode == 1 and "error:" in parsed.stderr:
+                        frontend_passed += 1
+                    else:
+                        frontend_failed += 1
+                        print(f"TEXT_FRONTEND_FAILURE line={line} command={command_type} {parsed.stderr}")
+                    continue
+                if command_type == "assert_malformed":
+                    frontend_failed += 1
+                    print(f"TEXT_FRONTEND_FAILURE line={line} malformed text accepted")
+                    continue
+                path = binary_path
             lines.append(f"{command_type}\t{line}\t{path}")
             continue
 
@@ -335,6 +436,7 @@ def convert_json(json_path, manifest_path):
     with open(manifest_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\n".join(lines))
         handle.write("\n")
+    return frontend_passed, frontend_failed
 
 
 
@@ -846,8 +948,10 @@ def run_file(
     temp_root,
     compare_runner=None,
     wast2json_flags=None,
+    wasm_tools=None,
 ):
     wast_path = os.path.join(core_dir, filename)
+    frontend_passed = frontend_failed = 0
     case_dir = os.path.join(
         temp_root, os.path.splitext(filename)[0].replace("/", "_")
     )
@@ -862,7 +966,7 @@ def run_file(
         except (OSError, ValueError) as error:
             print(f"SPEC {filename} converter_unsupported")
             print(error)
-            return 0, 0, 1, 1, None, 0, 0, 0
+            return 0, 0, 1, 1, None, 0, 0, 0, 0, 0
 
     if uses_thread_commands:
         try:
@@ -876,18 +980,15 @@ def run_file(
         except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
             print(f"SPEC {filename} converter_unsupported")
             print(error)
-            return 0, 0, 1, 1, None, 0, 0, 0
+            return 0, 0, 1, 1, None, 0, 0, 0, 0, 0
     else:
-        convert_args = [
-            wast2json,
-            "--enable-function-references",
-        ]
-        convert_args.extend(wast2json_flags or [])
-        convert_args.extend([
-            wast_path,
-            "-o",
-            json_path,
-        ])
+        if wasm_tools is not None:
+            convert_args = [wasm_tools, "json-from-wast", wast_path,
+                            "--wasm-dir", case_dir, "-o", json_path]
+        else:
+            convert_args = [wast2json, "--enable-function-references"]
+            convert_args.extend(wast2json_flags or [])
+            convert_args.extend([wast_path, "-o", json_path])
 
         convert = subprocess.run(
             convert_args,
@@ -899,11 +1000,13 @@ def run_file(
         if convert.returncode != 0:
             print(f"SPEC {filename} converter_unsupported")
             print(convert.stdout)
-            return 0, 0, 1, 1, None, 0, 0, 0
+            return 0, 0, 1, 1, None, 0, 0, 0, 0, 0
 
-        convert_json(json_path, manifest_path)
+        frontend_passed, frontend_failed = convert_json(json_path, manifest_path, wasm_tools=wasm_tools)
 
     run_env = os.environ.copy()
+    if wasm_tools is not None:
+        run_env["TURBOWASM_SPEC_GC_STORE"] = "1"
     if compare_runner is not None:
         run_env["TURBOWASM_SPEC_RESULT_TRACE"] = "1"
 
@@ -923,7 +1026,7 @@ def run_file(
         )
         print(result.stdout)
 
-        trace_env = os.environ.copy()
+        trace_env = run_env.copy()
         trace_env["TURBOWASM_SPEC_TRACE"] = "1"
         traced = subprocess.run(
             [runner, manifest_path],
@@ -940,7 +1043,7 @@ def run_file(
         )
         for trace_line in trace_lines[-80:]:
             print(trace_line)
-        return 0, 1, 0, 1, None, 0, 0, 1
+        return 0, 1, 0, 1, None, 0, 0, 1, 0, 0
 
     passed, failed, unsupported, total = map(int, match.groups())
     mir_match = MIR_REPLAY_RE.search(result.stdout)
@@ -1073,6 +1176,8 @@ def run_file(
         differential_files,
         differential_commands,
         differential_mismatches,
+        frontend_passed,
+        frontend_failed,
     )
 
 
@@ -1093,7 +1198,9 @@ def load_suite(path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--wast2json", required=True)
+    converter = parser.add_mutually_exclusive_group(required=True)
+    converter.add_argument("--wast2json")
+    converter.add_argument("--wasm-tools")
     parser.add_argument("--runner", required=True)
     parser.add_argument("--compare-runner")
     parser.add_argument(
@@ -1109,13 +1216,32 @@ def main():
         help="Minimum aggregate upstream passes required for success",
     )
     parser.add_argument("--core-dir", required=True)
-    parser.add_argument("--suite", required=True)
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--suite")
+    selection.add_argument("--all-core", action="store_true",
+                           help="Run every .wast recursively; unsupported defaults to zero")
+    parser.add_argument("--maximum-unsupported", type=int,
+                        help="Fail when unsupported commands exceed this limit")
     args = parser.parse_args()
 
-    suite = load_suite(args.suite)
+    if args.minimum_passes < 0:
+        parser.error("minimum passes must be non-negative")
+    if args.maximum_unsupported is not None and args.maximum_unsupported < 0:
+        parser.error("maximum unsupported must be non-negative")
+    if args.wasm_tools and args.wast2json_flag:
+        parser.error("--wast2json-flag requires --wast2json")
+    if args.all_core:
+        root = Path(args.core_dir)
+        suite = sorted(path.relative_to(root).as_posix()
+                       for path in root.rglob("*.wast"))
+        if args.maximum_unsupported is None:
+            args.maximum_unsupported = 0
+    else:
+        suite = load_suite(args.suite)
     if not suite:
         raise SystemExit("empty conformance suite")
 
+    frontend_passed = frontend_failed = 0
     passed = 0
     failed = 0
     unsupported = 0
@@ -1133,7 +1259,7 @@ def main():
         for filename in suite:
             (
                 p, f, u, t, mir,
-                diff_files, diff_commands, diff_mismatches,
+                diff_files, diff_commands, diff_mismatches, text_passed, text_failed,
             ) = run_file(
                 args.wast2json,
                 args.runner,
@@ -1142,7 +1268,10 @@ def main():
                 temp_root,
                 compare_runner=args.compare_runner,
                 wast2json_flags=args.wast2json_flag,
+                wasm_tools=args.wasm_tools,
             )
+            frontend_passed += text_passed
+            frontend_failed += text_failed
             passed += p
             failed += f
             unsupported += u
@@ -1163,6 +1292,10 @@ def main():
         f"unsupported={unsupported} total={total} files={len(suite)}"
     )
 
+    if args.wasm_tools:
+        print(f"TEXT_FRONTEND_CONFORMANCE pass={frontend_passed} fail={frontend_failed} "
+              "provider=wasm-tools (excluded from TurboWasm binary counts)")
+
     if mir_files:
         print(
             f"MIR_REPLAY compiled={mir_compiled} "
@@ -1177,16 +1310,18 @@ def main():
             f"mismatches={differential_mismatches}"
         )
 
-    if args.minimum_passes < 0:
-        print("minimum passes must be non-negative", file=sys.stderr)
-        return 2
+    if (args.maximum_unsupported is not None and
+            unsupported > args.maximum_unsupported):
+        print(f"unsupported commands {unsupported} exceed maximum "
+              f"{args.maximum_unsupported}", file=sys.stderr)
+        return 1
     if passed < args.minimum_passes:
         print(
             f"upstream passes {passed} below minimum {args.minimum_passes}",
             file=sys.stderr,
         )
         return 1
-    return 1 if failed else 0
+    return 1 if failed or frontend_failed else 0
 
 
 if __name__ == "__main__":

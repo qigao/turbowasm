@@ -48,127 +48,6 @@ static unsigned turbowasm_section_rank(uint8_t id) {
     }
 }
 
-static turbowasm_status turbowasm_read_valtypes_semantic(
-    turbowasm_reader *reader,
-    const turbowasm_validation_context *context,
-    uint8_t *values,
-    turbowasm_validation_value_type *semantics,
-    uint32_t count) {
-    uint32_t index;
-
-    if (context == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    for (index = 0u; index < count; ++index) {
-        turbowasm_validation_value_type type;
-        bool generalized = false;
-        turbowasm_status status = turbowasm_validation_read_valtype(
-            reader, &type, &generalized);
-
-        if (status != TURBOWASM_OK)
-            return status;
-        if (type.heap_kind ==
-                TURBOWASM_VALIDATION_HEAP_TYPE_INDEX &&
-            type.type_index >= context->type_count)
-            return TURBOWASM_MALFORMED_MODULE;
-
-        if (values != NULL)
-            values[index] = type.carrier;
-        if (semantics != NULL)
-            semantics[index] = type;
-    }
-    return TURBOWASM_OK;
-}
-
-static turbowasm_status turbowasm_validate_type_section(
-    turbowasm_reader *section,
-    turbowasm_module_summary *summary,
-    turbowasm_validation_context *context) {
-    uint32_t count;
-    uint32_t index;
-
-    if (!turbowasm_reader_uleb32(section, &count))
-        return TURBOWASM_MALFORMED_MODULE;
-    if (!turbowasm_validation_context_allocate_types(context, count))
-        return TURBOWASM_OUT_OF_MEMORY;
-
-    for (index = 0u; index < count; ++index) {
-        uint8_t form;
-        uint8_t *params = NULL;
-        turbowasm_validation_value_type *param_semantics = NULL;
-        uint32_t param_count;
-        uint32_t result_count;
-        turbowasm_validation_func_type *type;
-        turbowasm_status status;
-
-        if (!turbowasm_reader_u8(section, &form))
-            return TURBOWASM_MALFORMED_MODULE;
-        if (form != 0x60u)
-            return TURBOWASM_UNSUPPORTED;
-
-        if (!turbowasm_reader_uleb32(section, &param_count))
-            return TURBOWASM_MALFORMED_MODULE;
-        if (param_count != 0u) {
-            params = (uint8_t *)turbowasm_rt_malloc((size_t)param_count);
-            param_semantics =
-                (turbowasm_validation_value_type *)turbowasm_rt_calloc(
-                    (size_t)param_count, sizeof(*param_semantics));
-            if (params == NULL || param_semantics == NULL) {
-                turbowasm_rt_free(params);
-                turbowasm_rt_free(param_semantics);
-                return TURBOWASM_OUT_OF_MEMORY;
-            }
-        }
-
-        status = turbowasm_read_valtypes_semantic(
-            section, context, params, param_semantics, param_count);
-        if (status != TURBOWASM_OK) {
-            turbowasm_rt_free(params);
-            turbowasm_rt_free(param_semantics);
-            return status;
-        }
-
-        if (!turbowasm_reader_uleb32(section, &result_count)) {
-            turbowasm_rt_free(params);
-            turbowasm_rt_free(param_semantics);
-            return TURBOWASM_MALFORMED_MODULE;
-        }
-
-        if (!turbowasm_validation_context_define_type(
-                context, index, param_count, result_count)) {
-            turbowasm_rt_free(params);
-            turbowasm_rt_free(param_semantics);
-            return TURBOWASM_OUT_OF_MEMORY;
-        }
-
-        type = turbowasm_validation_context_type_mut(context, index);
-        if (type == NULL) {
-            turbowasm_rt_free(params);
-            turbowasm_rt_free(param_semantics);
-            return TURBOWASM_MALFORMED_MODULE;
-        }
-
-        if (param_count != 0u) {
-            memcpy(type->params, params, (size_t)param_count);
-            memcpy(type->param_semantics, param_semantics,
-                   (size_t)param_count * sizeof(*param_semantics));
-        }
-        turbowasm_rt_free(params);
-        turbowasm_rt_free(param_semantics);
-
-        status = turbowasm_read_valtypes_semantic(
-            section, context, type->results, type->result_semantics,
-            result_count);
-        if (status != TURBOWASM_OK)
-            return status;
-    }
-
-    if (turbowasm_reader_remaining(section) != 0u)
-        return TURBOWASM_MALFORMED_MODULE;
-    summary->type_count = count;
-    return TURBOWASM_OK;
-}
-
 static turbowasm_status turbowasm_validate_function_section(
     turbowasm_reader *section,
     turbowasm_module_summary *summary,
@@ -183,7 +62,8 @@ static turbowasm_status turbowasm_validate_function_section(
     for (index = 0u; index < count; ++index) {
         if (!turbowasm_reader_uleb32(section, &type_index))
             return TURBOWASM_MALFORMED_MODULE;
-        if (type_index >= summary->type_count)
+        if (type_index >= summary->type_count ||
+            context->types[type_index].kind != TURBOWASM_TYPE_FUNCTION)
             return TURBOWASM_MALFORMED_MODULE;
         if (!turbowasm_validation_context_append_function(
                 context, type_index, false))
@@ -242,7 +122,7 @@ static turbowasm_status turbowasm_validate_section_payload(
     turbowasm_validation_context *context) {
     switch (id) {
         case TURBOWASM_SECTION_TYPE:
-            return turbowasm_validate_type_section(
+            return turbowasm_validate_composite_types(
                 section, summary, context);
         case TURBOWASM_SECTION_IMPORT:
             return turbowasm_validate_import_section(
@@ -312,13 +192,16 @@ turbowasm_status turbowasm_validate_sections(
             return TURBOWASM_MALFORMED_MODULE;
 
         if (id == TURBOWASM_SECTION_CUSTOM) {
+            status = turbowasm_read_name(&section, NULL);
+            if (status != TURBOWASM_OK)
+                return status;
             ++summary->custom_section_count;
             continue;
         }
 
         rank = turbowasm_section_rank(id);
         if (rank == 0u)
-            return TURBOWASM_UNSUPPORTED;
+            return TURBOWASM_MALFORMED_MODULE;
         if (rank < last_rank)
             return TURBOWASM_MALFORMED_MODULE;
         if ((seen & (UINT32_C(1) << id)) != 0u)

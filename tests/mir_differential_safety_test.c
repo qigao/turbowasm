@@ -506,7 +506,7 @@ static void test_compiled_caller_preserves_memory_trap(void) {
         0x0a, 0x10,
         0x02,
 
-        /* f0: i32.load at 65535 => OOB (MIR-ineligible) */
+        /* f0: i32.load at 65535 => OOB through native memory helper */
         0x09,
         0x00,
         0x41, 0xff, 0xff, 0x03,
@@ -539,7 +539,7 @@ static void test_compiled_caller_preserves_memory_trap(void) {
     assert(impl->jit_functions[1].state ==
            TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[0].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
+           TURBOWASM_JIT_COMPILED);
 
     pair_destroy(&pair);
 }

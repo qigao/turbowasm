@@ -1,6 +1,6 @@
 #include <turbowasm/wasi_host_fs.h>
 
-#include <salts_fs.h>
+#include <cmeta_fs.h>
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -24,13 +24,13 @@ static int join_path(
     size_t out_size,
     const char *base,
     const char *child) {
-    return salts_fs_path_join(out, out_size, base, child);
+    return cmeta_fs_path_join(out, out_size, base, child);
 }
 
 static int write_file(const char *path, const char *text) {
-    salts_fs_buf_t buffer =
-        salts_fs_buf_init((char *)text, strlen(text));
-    return salts_fs_write_file(path, &buffer);
+    cmeta_fs_buf_t buffer =
+        cmeta_fs_buf_init((char *)text, strlen(text));
+    return cmeta_fs_write_file(path, &buffer);
 }
 
 static void cleanup_dir(const char *root) {
@@ -44,11 +44,11 @@ static void cleanup_dir(const char *root) {
         return;
     for (index = 0u; index < sizeof(names) / sizeof(names[0]); ++index) {
         if (join_path(path, sizeof(path), root, names[index]) == 0) {
-            (void)salts_fs_unlink(path);
-            (void)salts_fs_rmdir(path);
+            (void)cmeta_fs_unlink(path);
+            (void)cmeta_fs_rmdir(path);
         }
     }
-    (void)salts_fs_rmdir(root);
+    (void)cmeta_fs_rmdir(root);
 }
 
 static void prepare_paths(host_security_paths *paths) {
@@ -56,7 +56,7 @@ static void prepare_paths(host_security_paths *paths) {
 
     assert(paths != NULL);
     *paths = (host_security_paths){0};
-    assert(salts_fs_get_tmpdir(temp, sizeof(temp)) == 0);
+    assert(cmeta_fs_get_tmpdir(temp, sizeof(temp)) == 0);
     assert(join_path(
         paths->root, sizeof(paths->root),
         temp, "turbowasm_wasi_host_security") == 0);
@@ -69,7 +69,7 @@ static void prepare_paths(host_security_paths *paths) {
 
     cleanup_dir(paths->root);
     cleanup_dir(paths->moved);
-    (void)salts_fs_unlink(paths->outside);
+    (void)cmeta_fs_unlink(paths->outside);
 }
 
 static void test_escape_and_symlink(void) {
@@ -80,7 +80,7 @@ static void test_escape_and_symlink(void) {
     turbowasm_wasi_fs_file root = {0};
     turbowasm_wasi_fs_file file = {0};
     turbowasm_wasi_fs_stat stat = {0};
-    salts_fs_stat_t outside_stat = {0};
+    cmeta_fs_stat_t outside_stat = {0};
     const uint8_t parent_escape[] = {
         '.', '.', '/', 'o', 'u', 't'
     };
@@ -91,11 +91,11 @@ static void test_escape_and_symlink(void) {
     int symlink_result;
 
     prepare_paths(&paths);
-    assert(salts_fs_mkdir(paths.root, 0755) == 0);
+    assert(cmeta_fs_mkdir(paths.root, 0755) == 0);
     assert(write_file(paths.outside, "outside") == 0);
     assert(join_path(
         link_host, sizeof(link_host), paths.root, "escape") == 0);
-    symlink_result = salts_fs_symlink(
+    symlink_result = cmeta_fs_symlink(
         paths.outside, link_host, 0);
 
     config.host_root = paths.root;
@@ -164,7 +164,7 @@ static void test_escape_and_symlink(void) {
             provider.context, root,
             link_path, sizeof(link_path)) ==
             TURBOWASM_WASI_ERRNO_SUCCESS);
-        assert(salts_fs_stat(paths.outside, &outside_stat) == 0);
+        assert(cmeta_fs_stat(paths.outside, &outside_stat) == 0);
     }
 
     assert(provider.close(
@@ -173,9 +173,9 @@ static void test_escape_and_symlink(void) {
     assert(turbowasm_wasi_host_fs_destroy(
         &adapter) == TURBOWASM_OK);
 
-    (void)salts_fs_unlink(link_host);
-    assert(salts_fs_unlink(paths.outside) == 0);
-    assert(salts_fs_rmdir(paths.root) == 0);
+    (void)cmeta_fs_unlink(link_host);
+    assert(cmeta_fs_unlink(paths.outside) == 0);
+    assert(cmeta_fs_rmdir(paths.root) == 0);
 }
 
 static void test_root_identity_survives_path_replacement(void) {
@@ -193,7 +193,7 @@ static void test_root_identity_survives_path_replacement(void) {
     uint32_t read = 0u;
 
     prepare_paths(&paths);
-    assert(salts_fs_mkdir(paths.root, 0755) == 0);
+    assert(cmeta_fs_mkdir(paths.root, 0755) == 0);
     assert(join_path(
         original_path, sizeof(original_path),
         paths.root, "inside") == 0);
@@ -207,8 +207,8 @@ static void test_root_identity_survives_path_replacement(void) {
     assert(turbowasm_wasi_host_fs_provider(
         &adapter, &provider, &root));
 
-    assert(salts_fs_rename(paths.root, paths.moved) == 0);
-    assert(salts_fs_mkdir(paths.root, 0755) == 0);
+    assert(cmeta_fs_rename(paths.root, paths.moved) == 0);
+    assert(cmeta_fs_mkdir(paths.root, 0755) == 0);
     assert(join_path(
         replacement_path, sizeof(replacement_path),
         paths.root, "inside") == 0);
@@ -242,13 +242,13 @@ static void test_root_identity_survives_path_replacement(void) {
     assert(turbowasm_wasi_host_fs_destroy(
         &adapter) == TURBOWASM_OK);
 
-    assert(salts_fs_unlink(replacement_path) == 0);
-    assert(salts_fs_rmdir(paths.root) == 0);
+    assert(cmeta_fs_unlink(replacement_path) == 0);
+    assert(cmeta_fs_rmdir(paths.root) == 0);
     assert(join_path(
         original_path, sizeof(original_path),
         paths.moved, "inside") == 0);
-    assert(salts_fs_unlink(original_path) == 0);
-    assert(salts_fs_rmdir(paths.moved) == 0);
+    assert(cmeta_fs_unlink(original_path) == 0);
+    assert(cmeta_fs_rmdir(paths.moved) == 0);
 }
 
 int main(void) {

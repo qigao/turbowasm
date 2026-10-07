@@ -1,0 +1,14 @@
+# Core 3.0 reference/control regressions; full coverage is --all-core.
+br_on_non_null.wast
+br_on_null.wast
+call_ref.wast
+ref_as_non_null.wast
+return_call_ref.wast
+linking.wast
+f32_bitwise.wast
+f64_bitwise.wast
+unreached-invalid.wast
+utf8-custom-section-id.wast
+type-canon.wast
+type-rec.wast
+type-equivalence.wast

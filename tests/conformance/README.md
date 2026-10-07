@@ -1,192 +1,110 @@
 # TurboWasm WebAssembly spec conformance harness
 
-This directory is test infrastructure only. It is not installed with
-`TurboWasm::Runtime`.
+This directory is test infrastructure and is not installed with `TurboWasm::Runtime`.
 
-## Data flow
+## Core 3.0 qualification
 
-```
-pinned WebAssembly/spec .wast
-        |
-        v
-wast2json (WABT from qigao/vcpkg-cache)
-        |
-        v
-run_core.py
-  JSON -> TWCF1 line manifest
-        |
-        v
-turbowasm_spec_runner
-  persistent modules / instances / linker
-        |
-        +-- pass
-        +-- fail
-        '-- unsupported
+The complete suite is [WebAssembly/spec `wg-3.0`](https://github.com/WebAssembly/spec/tree/9d36019973201a19f9c9ebb0f10828b2fe2374aa),
+commit `9d36019973201a19f9c9ebb0f10828b2fe2374aa`. Its 258 `.wast` files are
+recursively discovered, including GC, SIMD, exception handling and memory64/table64.
+Conversion uses [`wasm-tools` 1.261.0](https://github.com/bytecodealliance/wasm-tools/releases/tag/v1.261.0),
+whose JSON format covers Core 3.0 syntax and permitted relaxed-SIMD result sets.
+
+The qualified Windows interpreter run reports:
+
+```text
+CORE_CONFORMANCE pass=63970 fail=0 unsupported=0 total=63970 files=258
+TEXT_FRONTEND_CONFORMANCE pass=1229 fail=0 provider=wasm-tools (excluded from TurboWasm binary counts)
 ```
 
-The Python layer does not execute WebAssembly. It only converts WABT's JSON
-format into a deliberately small manifest. The C runner is the semantic test
-surface and uses only public TurboWasm APIs.
+`--all-core` defaults to a zero unsupported budget. A failure, unsupported binary
+command, frontend failure, missing/empty suite, failed conversion or failed runner
+makes the gate fail. Frontend syntax rejection is never counted as a TurboWasm
+validation pass. `assert_invalid` text modules are converted into binary and then
+validated by TurboWasm; syntax-only `assert_malformed` text cases are checked by
+wasm-tools and reported separately. All ordinary binary module validation,
+instantiation, linking, execution and trap assertions run through TurboWasm.
 
-## First slice
+The runner supports module definitions/fresh instances, named registration, invoke
+and global-get actions, exact scalar/vector results, permitted NaN classes,
+whole-vector alternatives, reference patterns, and exception/trap assertions.
+A shared explicit GC store roots instances and host arguments. Failed
+instantiations preserve escaped state through a private test hook until teardown.
+These hooks do not expand the installed Runtime ABI.
 
-The initial `core-smoke.txt` suite intentionally covers a small, pinned set
-of upstream core files. The harness currently executes:
+## Reproduce locally
 
-- valid modules and persistent instances;
-- module registration through `turbowasm_linker`;
-- invoke actions;
-- exact scalar i32/i64/f32/f64 results;
-- multi-value exact results;
-- null funcref results;
-- mapped TurboWasm trap kinds;
-- binary assert_invalid / assert_malformed;
-- binary assert_unlinkable / assert_uninstantiable.
+Set `TURBOWASM_CORE3_TOOLS` to the executable and `TURBOWASM_SPEC_ROOT` to the pinned
+checkout. With the usual Salts SDK environment and MSVC developer shell:
 
-Unsupported WAST shapes are reported separately rather than counted as passes.
-Current deliberate unsupported cases include text-only negative modules,
-`get` actions, NaN result patterns, v128 result comparison, externref/exnref,
-and non-null reference literals.
-
-The suite should expand in small reviewable waves. A new upstream family should
-not be added to the gate until its result semantics are represented correctly
-by the harness.
-
-
-## First baseline findings
-
-The first pinned smoke run produced:
-
-```
-pass        1475
-fail           5
-unsupported  332
-total       1812
+```powershell
+cmake --preset win-core3-user
+cmake --build --preset win-core3-user
+ctest --preset win-core3-user --output-on-failure
 ```
 
-Three failures were WABT 1.0.41 conversion gaps on newer typed-reference
-syntax and are now classified as tooling-unsupported. The two remaining
-failures were real Runtime validation gaps in `global.wast`; #141 added
-the narrow extended-const rule for reading a prior immutable local global.
+For AddressSanitizer, use `win-core3-asan-user` for all three commands. Run CTest
+from the MSVC developer shell so the ASan runtime DLL is on `PATH`.
+Instrumented native executables and resumable coroutine stacks use an explicit
+8 MiB budget (`TURBOWASM_SANITIZER_STACK_BYTES`): MSVC's default executable stack
+was exhausted by ASan frames before the interpreter's Wasm call-depth trap.
+The ordinary build keeps its existing stack/depth policy.
+On Windows with the Salts 2.1.0 SDK, the complete ASan run passed 133/133 tests,
+including the Core 3.0 gates, GC lifecycle and optional CNet adapter tests.
+The earlier CNet timeout was a process-launch failure: its CTest `ENVIRONMENT`
+property split Windows `PATH` at semicolons and removed the ASan runtime DLL
+directory. `ENVIRONMENT_MODIFICATION` now prepends SDK paths while preserving
+the launch-time developer-shell environment. The existing adapter test passed
+in 0.14 seconds after the fix; the full regression completed in 231.22 seconds.
+The smaller `turbowasm_conformance_core3_references` test gives fast feedback on
+reference control, recursive types, bit operations and validation. Its success
+does not substitute for the full gate. `test_run_core.py` tests strict failure
+accounting, recursive discovery, integer encodings, alternatives and frontend
+separation without executing Wasm.
 
-After #141, this foundation gate is expected to have zero Runtime failures
-for the current smoke slice while still reporting unsupported coverage
-separately.
+## CI and legacy proposal gates
 
+`.github/workflows/conformance.yml` runs the full `core3` matrix entry on pull
+requests using `ci-core3-user` with ASan. It pins the specification commit and
+wasm-tools release archive SHA-256. Runtime builds still use the shared Salts SDK,
+vcpkg cache and CMake preset setup. The tool is test-only; Runtime gains no parser
+or validation dependency on wasm-tools. Linux CI results require the workflow to
+run; a local Windows pass does not certify other platforms.
 
-## Wave 2
+Existing `core`, `mir`, exception-handling, threads, tail-call, custom-page-sizes,
+memory64, extended-const, multi-memory and relaxed-simd entries retain their pinned
+WABT/proposal inputs. Revisions and selectors are in `proposals.json`; MIR
+comparison checks eligible compiled paths against the interpreter. Threads and
+custom page sizes are separate extensions, not additional Core 3.0 requirements.
+Component Model provenance is checked separately by `verify_component_model.py`.
 
-The next gate enables WABT typed function-reference parsing and adds core
-control/call/integer/memory families:
+```sh
+cmake --preset ci-core3-user
+cmake --build --preset ci-core3-user
+ctest --preset ci-core3-user -R '^turbowasm_conformance_(driver|core3)$'
+```
 
-- `br.wast`, `br_table.wast`, `return.wast`;
-- `call.wast`, `call_indirect.wast`;
-- `i32.wast`, `i64.wast`;
-- `load.wast`, `store.wast`, `memory_grow.wast`.
+CI prepares `SALTS_ROOT`, `VCPKG_ROOT`, `VCPKG_CACHE_REPOSITORY_ROOT`,
+`VCPKG_BINARY_SOURCES`, `VCPKG_OVERLAY_PORTS`, `TURBOWASM_SDK_RID`,
+`TURBOWASM_TRIPLET` and `TURBOWASM_HOST_TRIPLET`. The workflow supplies the pinned
+specification checkout and `TURBOWASM_CORE3_TOOLS` before configuration.
 
-This deliberately does not add `imports.wast` or `linking.wast` yet.
-Those files mix host/provider and lifecycle semantics that remain tracked by
-#122; adding them now would dilute execution-engine failures with known
-composition-layer unsupported coverage.
+## Memory64 native and shared regression
 
-The converter uses only `--enable-function-references`, not
-`--enable-all`, so proposal syntax is enabled narrowly rather than turning
-unrelated proposals into accidental test inputs.
+`memory64_execution_test.c` covers shared memory64 atomic operations, imported
+concurrent increments, wait/notify across growth, artifact restore, 64-bit
+address/offset bounds, bulk memory, and the native helper ABI. The MIR build
+compiles this same suite as `turbowasm_mir_memory64_test`: every native-fixture
+invocation additionally requires `TURBOWASM_JIT_COMPILED`, including trapping
+calls, so interpreter fallback cannot pass the native gate. WAT fixture sources
+and generated C byte arrays are kept together under `tests/fixtures/`.
 
+The `core3-mir` CI entry uses `ci-core3-mir-user` and the pinned Core 3.0
+`memory64/` suite, comparing interpreter and MIR results with zero unsupported
+commands and nonzero native compilation required. Existing Linux/macOS
+`ci-mir-user` jobs execute the native unit tests as well. Shared memories remain
+interpreter-only, independent of their address width.
 
-## Wave 3
-
-The third gate isolates baseline memory semantics:
-
-- `address.wast`
-- `align.wast`
-- `endianness.wast`
-- `memory.wast`
-- `memory_trap.wast`
-- `memory_redundancy.wast`
-- `float_memory.wast`
-
-This wave focuses on address arithmetic, memory bounds, alignment hints,
-little-endian layout, memory declarations/traps, redundant memory operations,
-and scalar float load/store bit preservation.
-
-Large arithmetic suites such as `f32.wast`, `f64.wast` and
-`conversions.wast` remain a separate numeric wave so memory failures are not
-mixed with NaN/result-policy coverage.
-
-`memory.wast` contains a small number of import cases. Those remain subject
-to the existing explicit unsupported accounting; this wave does not broaden
-the host-linking scope tracked by #122.
-
-
-## Wave 4
-
-The fourth gate isolates scalar floating-point and conversion semantics:
-
-- `f32.wast`
-- `f64.wast`
-- `f32_cmp.wast`
-- `f64_cmp.wast`
-- `conversions.wast`
-
-Exact non-NaN f32/f64 results continue to compare raw IEEE-754 bits. Upstream
-`nan:canonical` / `nan:arithmetic` result classes are still reported as
-unsupported by the manifest converter until the harness models permitted NaN
-sets explicitly; they are never counted as passes.
-
-Keeping NaN-policy work explicit lets this wave expose ordinary arithmetic,
-comparison, truncation, reinterpretation and conversion bugs without weakening
-the gate.
-
-
-## Wave 3A
-
-The next gate expands the memory engine before adding reference-heavy table
-families:
-
-- `memory.wast`, `memory_trap.wast`, `memory_redundancy.wast`;
-- `data.wast`;
-- `bulk-memory/memory_copy.wast`;
-- `bulk-memory/memory_fill.wast`;
-- `bulk-memory/memory_init.wast`.
-
-This wave intentionally stops before table/ref suites. Those carry much more
-`externref`, registration and host-linking coverage, so they remain a
-separate Wave 3B. That keeps memory validation/execution failures attributable
-to the memory engine rather than composition-layer unsupported behavior.
-
-
-## Wave 3B
-
-After memory/bulk-memory is clean under ASan, the next gate adds reference and
-table semantics:
-
-- `table.wast`, `table_get.wast`, `table_set.wast`, `table_grow.wast`;
-- `ref.wast`, `ref_null.wast`, `ref_is_null.wast`, `ref_func.wast`;
-- `elem.wast`;
-- `bulk-memory/table_copy.wast`, `table_fill.wast`, `table_init.wast`.
-
-The Runtime currently carries complete cross-instance `funcref` identity, so
-funcref/table failures are treated as real gaps. Non-null `externref` still
-has no public Runtime value carrier and remains explicit unsupported coverage.
-Imports/registers that require host modules not defined by the WAST file also
-remain unsupported rather than being fabricated by the harness.
-
-
-## Qualified proposal gates
-
-Proposal selectors start as manual diagnostics. A proposal graduates into the
-normal pull-request/push gate only after Runtime semantics are implemented.
-
-Tail calls are the first graduated proposal. The qualified gate runs the pinned
-`WebAssembly/tail-call` suites `return_call.wast` and
-`return_call_indirect.wast` and requires:
-
-- zero conformance failures;
-- at least one real upstream pass (so an all-unsupported run cannot be green);
-- no Runtime-originated unsupported command.
-
-Harness-level unsupported WAST shapes remain reported separately; they are not
-silently counted as passes. MIR tail-call lowering is not required for this
-gate: tail-call functions remain per-function interpreter fallback until an
-exact native tail semantic is implemented.
+The local Windows build can execute Runtime/helper regressions, but cannot
+build MIR: the configured `mir-jit` vcpkg port supports Linux, macOS and Android.
+A Windows pass is not evidence that the native MIR gate passed.

@@ -3,7 +3,7 @@
 
 #include <turbowasm/wasi_host_fs.h>
 
-#include <salts_fs.h>
+#include <cmeta_fs.h>
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -27,7 +27,7 @@ static int host_join(
     size_t out_size,
     const char *base,
     const char *child) {
-    return salts_fs_path_join(out, out_size, base, child);
+    return cmeta_fs_path_join(out, out_size, base, child);
 }
 
 static void host_cleanup_root(const char *root_path) {
@@ -41,11 +41,11 @@ static void host_cleanup_root(const char *root_path) {
         return;
     for (index = 0u; index < sizeof(files) / sizeof(files[0]); ++index) {
         if (host_join(path, sizeof(path), root_path, files[index]) == 0)
-            (void)salts_fs_unlink(path);
+            (void)cmeta_fs_unlink(path);
     }
     if (host_join(path, sizeof(path), root_path, "dir") == 0)
-        (void)salts_fs_rmdir(path);
-    (void)salts_fs_rmdir(root_path);
+        (void)cmeta_fs_rmdir(path);
+    (void)cmeta_fs_rmdir(root_path);
 }
 
 static turbowasm_status host_setup(
@@ -60,7 +60,7 @@ static turbowasm_status host_setup(
         return TURBOWASM_INVALID_ARGUMENT;
 
     *backend = (host_test_backend){0};
-    if (salts_fs_get_tmpdir(temp, sizeof(temp)) != 0 ||
+    if (cmeta_fs_get_tmpdir(temp, sizeof(temp)) != 0 ||
         host_join(
             backend->root_path,
             sizeof(backend->root_path),
@@ -69,7 +69,7 @@ static turbowasm_status host_setup(
         return TURBOWASM_INVALID_ARGUMENT;
 
     host_cleanup_root(backend->root_path);
-    if (salts_fs_mkdir(backend->root_path, 0755) != 0)
+    if (cmeta_fs_mkdir(backend->root_path, 0755) != 0)
         return TURBOWASM_INVALID_ARGUMENT;
 
     config.host_root = backend->root_path;

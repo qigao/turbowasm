@@ -4,15 +4,15 @@
 #include "module_internal.h"
 #include "runtime_alloc.h"
 
-#include <salts_coro.h>
+#include <coro.h>
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum {
-    TURBOWASM_RESUMABLE_STACK_SIZE = 512u * 1024u
-};
+#ifndef TURBOWASM_RESUMABLE_STACK_SIZE
+#define TURBOWASM_RESUMABLE_STACK_SIZE (512u * 1024u)
+#endif
 
 typedef struct turbowasm_execution_impl {
     turbowasm_instance_impl *instance;
@@ -37,8 +37,16 @@ typedef struct turbowasm_execution_impl {
     turbowasm_host_wait host_wait;
     bool host_wait_active;
     bool host_wait_completed;
+    bool destroying;
     int host_wait_status;
+    turbowasm_gc_source gc_source;
 } turbowasm_execution_impl;
+
+static void turbowasm_execution_trace(turbowasm_store_impl *store,void *context) {
+    turbowasm_execution_impl *execution=context;
+    turbowasm_gc_mark_values(store,execution->arguments,execution->argument_count);
+    turbowasm_gc_mark_values(store,execution->results,execution->result_count);
+}
 
 static turbowasm_execution_impl *turbowasm_execution_impl_mut(
     turbowasm_execution *execution) {
@@ -65,6 +73,9 @@ static turbowasm_status turbowasm_execution_suspend(
          reason != TURBOWASM_INTERRUPTED))
         return TURBOWASM_INVALID_ARGUMENT;
 
+    if (execution->destroying)
+        return TURBOWASM_INTERRUPTED;
+
     execution->yield_reason =
         reason == TURBOWASM_FUEL_EXHAUSTED
             ? TURBOWASM_YIELD_FUEL
@@ -77,6 +88,8 @@ static turbowasm_status turbowasm_execution_suspend(
         return TURBOWASM_INVALID_ARGUMENT;
     }
 
+    if (execution->destroying)
+        return TURBOWASM_INTERRUPTED;
     execution->yield_reason = TURBOWASM_YIELD_NONE;
     execution->state = TURBOWASM_EXECUTION_RUNNING;
     return TURBOWASM_OK;
@@ -94,6 +107,8 @@ static turbowasm_status turbowasm_execution_host_wait(
     if (execution == NULL || out_wait == NULL || out_status == NULL ||
         execution->host_wait_active)
         return TURBOWASM_INVALID_ARGUMENT;
+    if (execution->destroying)
+        return TURBOWASM_INTERRUPTED;
 
     generation = execution->next_host_wait_generation + 1u;
     if (generation == 0u)
@@ -116,6 +131,10 @@ static turbowasm_status turbowasm_execution_host_wait(
         return TURBOWASM_INVALID_ARGUMENT;
     }
 
+    if (execution->destroying) {
+        execution->host_wait_active = false;
+        return TURBOWASM_INTERRUPTED;
+    }
     if (!execution->host_wait_active ||
         !execution->host_wait_completed) {
         execution->state = TURBOWASM_EXECUTION_FAILED;
@@ -211,6 +230,8 @@ turbowasm_status turbowasm_execution_create(
         return TURBOWASM_INVALID_ARGUMENT;
 
     instance_impl = (turbowasm_instance_impl *)instance->impl;
+    if(instance_impl->store!=NULL && !turbowasm_store_is_owner(instance_impl->store))
+        return TURBOWASM_INVALID_ARGUMENT;
     module = turbowasm_module_impl_get(instance_impl->module);
     if (module == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -220,6 +241,13 @@ turbowasm_status turbowasm_execution_create(
     if (type == NULL || !type->defined ||
         argument_count != type->param_count)
         return TURBOWASM_INVALID_ARGUMENT;
+    if (instance_impl->store != NULL) {
+        size_t index;
+        for (index = 0u; index < argument_count; ++index)
+            if (!turbowasm_value_matches_semantic(instance_impl, &arguments[index],
+                                                  &type->param_semantics[index]))
+                return TURBOWASM_TYPE_MISMATCH;
+    }
 
     if (argument_count > SIZE_MAX / sizeof(*arguments) ||
         type->result_count > SIZE_MAX / sizeof(turbowasm_value))
@@ -275,11 +303,16 @@ turbowasm_status turbowasm_execution_create(
     if (impl->coroutine == NULL)
         goto out_of_memory;
 
+    impl->gc_source=(turbowasm_gc_source){NULL,&impl->control,impl,turbowasm_execution_trace};
+    if(turbowasm_gc_source_add(instance_impl->store,&impl->gc_source)!=TURBOWASM_OK)
+        goto out_of_memory;
+
         execution->impl = impl;
         turbowasm_runtime_scope_leave(scope);
         return TURBOWASM_OK;
 
 out_of_memory:
+        if(impl->coroutine!=NULL) coro_destroy(impl->coroutine);
         turbowasm_rt_free(impl->results);
         turbowasm_rt_free(impl->arguments);
         turbowasm_rt_free(impl);
@@ -295,6 +328,18 @@ void turbowasm_execution_destroy(turbowasm_execution *execution) {
     if (impl == NULL)
         return;
 
+    if (impl->state == TURBOWASM_EXECUTION_YIELDED) {
+        const turbowasm_module_impl *module = turbowasm_module_impl_get(impl->instance->module);
+        turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(&module->config);
+        /* Unwind at the suspended safe point so every interpreter allocation
+         * and root registration follows its ordinary cleanup path. Host waits
+         * return INTERRUPTED; their callbacks must propagate that status. */
+        impl->destroying = true;
+        if (coro_resume(impl->coroutine) != 0 || coro_state(impl->coroutine) != coro_DEAD)
+            abort();
+        turbowasm_runtime_scope_leave(scope);
+    }
+    turbowasm_gc_sources_remove_owner(impl->instance->store,&impl->control);
     if (impl->coroutine != NULL)
         coro_destroy(impl->coroutine);
     turbowasm_rt_free(impl->results);
@@ -310,6 +355,7 @@ turbowasm_status turbowasm_execution_resume(
         turbowasm_execution_impl_mut(execution);
 
     if (impl == NULL ||
+        (impl->instance->store != NULL && !turbowasm_store_is_owner(impl->instance->store)) ||
         (impl->state != TURBOWASM_EXECUTION_READY &&
          impl->state != TURBOWASM_EXECUTION_YIELDED))
         return TURBOWASM_INVALID_ARGUMENT;

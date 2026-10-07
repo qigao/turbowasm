@@ -1,0 +1,40 @@
+(module
+  (memory (export "mem") i64 1 2 shared)
+  (func (export "load") (param i64) (result i64)
+    local.get 0 i64.atomic.load)
+  (func (export "store") (param i64 i64) (result i64)
+    local.get 0 local.get 1 i64.atomic.store
+    local.get 0 i64.atomic.load)
+  (func (export "add") (param i64 i64) (result i64)
+    local.get 0 local.get 1 i64.atomic.rmw.add)
+  (func (export "cmpxchg") (param i64) (result i64)
+    local.get 0 i64.const 42 i64.const 99 i64.atomic.rmw.cmpxchg)
+  (func (export "narrow") (param i64) (result i64)
+    local.get 0 i64.const -1 i64.atomic.store8
+    local.get 0 i64.atomic.load8_u)
+  (func (export "high_offset") (result i64)
+    i64.const 0 i64.atomic.load offset=4294967296)
+  (func (export "overflow") (result i64)
+    i64.const 8 i64.atomic.load offset=18446744073709551608)
+  (func (export "wait32") (param i64) (result i32)
+    local.get 0 i32.const 0 i64.const 0 memory.atomic.wait32)
+  (func (export "wait64") (param i64) (result i32)
+    local.get 0 i64.const 0 i64.const 0 memory.atomic.wait64)
+  (func (export "notify") (param i64) (result i32)
+    local.get 0 i32.const 1 memory.atomic.notify)
+  (func (export "grow") (param i64) (result i64)
+    local.get 0 memory.grow)
+  (func (export "size") (result i64) memory.size)
+  (func (export "wait_blocking") (param i64) (result i32)
+    local.get 0 i32.const 0 i64.const 5000000000 memory.atomic.wait32)
+  (func (export "plain") (result i64)
+    i64.const 16 i64.const 123 i64.store
+    i64.const 16 i64.load)
+  (func (export "bulk") (result i32)
+    i64.const 32 i32.const 42 i64.const 16 memory.fill
+    i64.const 64 i64.const 32 i64.const 16 memory.copy
+    i64.const 64 i32.load)
+  (func (export "simd") (result i32)
+    i64.const 80 v128.const i32x4 -1 0 -1 0 v128.store
+    i64.const 80 v128.load i32x4.bitmask)
+)

@@ -135,7 +135,7 @@ static void compare_i32_success(
     turbowasm_trap interpreted_trap = TURBOWASM_TRAP_NONE;
     turbowasm_trap generated_trap = TURBOWASM_TRAP_NONE;
     turbowasm_jit_invocation_context context;
-    salts_v128 outer_slots[2] = {{{0}}};
+    cmeta_v128 outer_slots[2] = {{{0}}};
     uint8_t before[sizeof(outer_slots)];
     uint8_t after[sizeof(outer_slots)];
 
@@ -208,7 +208,7 @@ static void test_fuel_and_slot_restore(
     turbowasm_trap trap = TURBOWASM_TRAP_UNREACHABLE;
     turbowasm_jit_invocation_context context;
     turbowasm_jit_execution_control execution = {0};
-    salts_v128 outer_slots[1] = {{{0}}};
+    cmeta_v128 outer_slots[1] = {{{0}}};
     uint8_t before[sizeof(outer_slots)];
 
     memset(outer_slots, 0x5a, sizeof(outer_slots));
@@ -261,7 +261,7 @@ static void test_memory_trap_parity(
     turbowasm_trap interpreted_trap = TURBOWASM_TRAP_NONE;
     turbowasm_trap generated_trap = TURBOWASM_TRAP_NONE;
     turbowasm_jit_invocation_context context;
-    salts_v128 outer_slots[1] = {{{0}}};
+    cmeta_v128 outer_slots[1] = {{{0}}};
 
     assert(function != NULL);
     assert(backend->is_function_eligible(

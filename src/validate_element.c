@@ -26,7 +26,7 @@ static turbowasm_status turbowasm_element_read_reftype(
         return TURBOWASM_INVALID_ARGUMENT;
 
     status = turbowasm_validation_read_reftype(
-        reader, out_type, &generalized);
+        reader, context, out_type, &generalized);
     if (status != TURBOWASM_OK)
         return status;
     if (out_type->heap_kind ==
@@ -46,7 +46,7 @@ static turbowasm_status turbowasm_element_read_elemkind(
     if (!turbowasm_reader_u8(reader, &kind))
         return TURBOWASM_MALFORMED_MODULE;
     if (kind != 0x00u)
-        return TURBOWASM_UNSUPPORTED;
+        return TURBOWASM_MALFORMED_MODULE;
 
     *out_type = turbowasm_validation_value_type_legacy(
         TURBOWASM_ELEMENT_FUNCREF);
@@ -57,7 +57,7 @@ static turbowasm_status turbowasm_element_read_elemkind(
 static turbowasm_status turbowasm_element_validate_offset(
     turbowasm_reader *reader,
     turbowasm_validation_context *context,
-    turbowasm_validation_expr_span *out) {
+    turbowasm_validation_expr_span *out,uint32_t table_index) {
     const uint8_t *start;
     size_t size;
     uint8_t type;
@@ -71,7 +71,8 @@ static turbowasm_status turbowasm_element_validate_offset(
         reader, context, &type);
     if (status != TURBOWASM_OK)
         return status;
-    if (type != TURBOWASM_ELEMENT_I32)
+    if (table_index>=context->table_count ||
+        type != (context->tables[table_index].limits.table64?0x7eu:TURBOWASM_ELEMENT_I32))
         return TURBOWASM_MALFORMED_MODULE;
 
     size = (size_t)(reader->cursor - start);
@@ -230,7 +231,7 @@ turbowasm_status turbowasm_validate_element_section(
         if (!turbowasm_reader_uleb32(section, &flags))
             return TURBOWASM_MALFORMED_MODULE;
         if (flags > 7u)
-            return TURBOWASM_UNSUPPORTED;
+            return TURBOWASM_MALFORMED_MODULE;
 
         /*
          * Legacy function-index element segments (flags 0..3) have semantic
@@ -267,7 +268,7 @@ turbowasm_status turbowasm_validate_element_section(
 
         if (active) {
             status = turbowasm_element_validate_offset(
-                section, context, &descriptor.offset);
+                section, context, &descriptor.offset,descriptor.table_index);
             if (status != TURBOWASM_OK)
                 return status;
         }

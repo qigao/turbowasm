@@ -53,8 +53,8 @@ static void test_valid_single_function(void) {
 static void test_repeated_custom_sections(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
-        0x00, 0x01, 0xaa,
-        0x00, 0x02, 0xbb, 0xcc
+        0x00, 0x02, 0x00, 0xaa,
+        0x00, 0x03, 0x00, 0xbb, 0xcc
     };
     turbowasm_module module = {0};
     turbowasm_module_summary summary = {0};
@@ -152,18 +152,18 @@ static void test_truncated_section_payload(void) {
 }
 
 
-static void test_unknown_section_is_unsupported(void) {
+static void test_unknown_section_is_malformed(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
         0x0e, 0x00
     };
     turbowasm_module module = {0};
 
-    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_UNSUPPORTED);
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_MALFORMED_MODULE);
     assert(module.impl == NULL);
 }
 
-static void test_unknown_value_type_is_unsupported(void) {
+static void test_unknown_value_type_is_malformed(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
         0x01, 0x05,
@@ -171,11 +171,23 @@ static void test_unknown_value_type_is_unsupported(void) {
     };
     turbowasm_module module = {0};
 
-    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_UNSUPPORTED);
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_MALFORMED_MODULE);
     assert(module.impl == NULL);
 }
 
+static void test_custom_section_requires_valid_name(void) {
+    static const uint8_t missing[] = { WASM_HEADER, 0x00, 0x00 };
+    static const uint8_t invalid_utf8[] = { WASM_HEADER, 0x00, 0x02, 0x01, 0xff };
+    static const uint8_t valid[] = { WASM_HEADER, 0x00, 0x03, 0x02, 0x00, 0x61 };
+    turbowasm_module module = {0};
+    assert(load(missing, sizeof(missing), &module) == TURBOWASM_MALFORMED_MODULE);
+    assert(load(invalid_utf8, sizeof(invalid_utf8), &module) == TURBOWASM_MALFORMED_MODULE);
+    assert(load(valid, sizeof(valid), &module) == TURBOWASM_OK);
+    turbowasm_module_destroy(&module);
+}
+
 int main(void) {
+    test_custom_section_requires_valid_name();
     test_valid_single_function();
     test_repeated_custom_sections();
     test_duplicate_standard_section();
@@ -185,7 +197,7 @@ int main(void) {
     test_bad_code_count();
     test_code_body_requires_end();
     test_truncated_section_payload();
-    test_unknown_section_is_unsupported();
-    test_unknown_value_type_is_unsupported();
+    test_unknown_section_is_malformed();
+    test_unknown_value_type_is_malformed();
     return 0;
 }

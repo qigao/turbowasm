@@ -3,7 +3,20 @@ project(TurboWasmInstalledConsumer LANGUAGES C CXX)
 
 include(CTest)
 
-find_package(TurboWasm CONFIG REQUIRED)
+foreach(_dependency IN ITEMS Salts TurboWasm)
+  if(_dependency STREQUAL "Salts")
+    set(_root "$ENV{SALTS_ROOT}")
+  else()
+    set(_root "$ENV{TURBOWASM_ROOT}")
+  endif()
+  if(NOT IS_DIRECTORY "${_root}")
+    message(FATAL_ERROR "${_dependency} SDK root is not a directory: ${_root}")
+  endif()
+  unset(${_dependency}_DIR CACHE)
+  unset(${_dependency}_DIR)
+  find_package(${_dependency} CONFIG REQUIRED
+    PATHS "${_root}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+endforeach()
 
 add_executable(turbowasm_installed_consumer main.c)
 target_link_libraries(turbowasm_installed_consumer PRIVATE TurboWasm::Runtime)
@@ -14,6 +27,12 @@ set_target_properties(turbowasm_installed_consumer PROPERTIES
 
 add_test(NAME turbowasm_installed_consumer
          COMMAND turbowasm_installed_consumer)
+
+add_executable(turbowasm_installed_gc_consumer ../../examples/gc.c)
+target_link_libraries(turbowasm_installed_gc_consumer PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_installed_gc_consumer PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_installed_gc_consumer COMMAND turbowasm_installed_gc_consumer)
 
 add_executable(turbowasm_installed_artifact_cpp_consumer
   artifact_cpp_main.cpp)

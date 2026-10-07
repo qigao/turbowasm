@@ -1,18 +1,24 @@
 param(
   [string]$SaltsRid = "",
-  [switch]$WithSaltsUtils
+  [switch]$WithSaltsUtils,
+  [switch]$Local
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-foreach ($name in @("GITHUB_TOKEN", "RUNNER_TEMP", "GITHUB_ENV")) {
+$requiredEnvironment = @("GITHUB_TOKEN")
+if (-not $Local) { $requiredEnvironment += @("RUNNER_TEMP", "GITHUB_ENV") }
+foreach ($name in $requiredEnvironment) {
   $value = [Environment]::GetEnvironmentVariable($name)
   if ([string]::IsNullOrWhiteSpace($value)) {
     throw "$name is required"
   }
 }
 
+if ($Local -and [string]::IsNullOrWhiteSpace($SaltsRid)) {
+  throw "-SaltsRid is required for local restore"
+}
 if ([string]::IsNullOrWhiteSpace($SaltsRid)) {
   switch ($env:RUNNER_OS) {
     "Linux" {
@@ -37,19 +43,13 @@ if ([string]::IsNullOrWhiteSpace($SaltsRid)) {
 if ($env:SALTS_SDK_VERSION) {
   throw "SALTS_SDK_VERSION is forbidden; GitHub Packages dependencies must resolve latest"
 }
-$packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $env:RUNNER_TEMP "qigao-nuget" }
-$config = Join-Path $env:RUNNER_TEMP "qigao-nuget.config"
-$project = Join-Path $env:RUNNER_TEMP "turbowasm-salts-sdk-restore.csproj"
-
-@'
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <packageSources><clear /></packageSources>
-</configuration>
-'@ | Set-Content -LiteralPath $config
-
-dotnet nuget add source "https://nuget.pkg.github.com/qigao/index.json" --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
-if ($LASTEXITCODE -ne 0) { throw "failed to configure GitHub Packages source" }
+$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../.."))
+$restoreRoot = if ($Local) { Join-Path $repositoryRoot "build/native-sdk" } else { $env:RUNNER_TEMP }
+$packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $restoreRoot "qigao-nuget" }
+$packages = [IO.Path]::GetFullPath($packages)
+$config = Join-Path $repositoryRoot "cmake/vcpkg-cache.nuget.config"
+$project = Join-Path $restoreRoot "turbowasm-salts-sdk-restore.csproj"
+New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
 
 $saltsUtilsReference = if ($WithSaltsUtils) {
   '    <PackageReference Include="SaltsUtils.Native" Version="*" />'
@@ -59,7 +59,10 @@ $saltsUtilsReference = if ($WithSaltsUtils) {
 
 @"
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Salts.Native" Version="*" />
 $saltsUtilsReference
@@ -70,7 +73,7 @@ $saltsUtilsReference
 dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate
 if ($LASTEXITCODE -ne 0) { throw "failed to restore latest Salts.Native" }
 
-$assetsPath = Join-Path $env:RUNNER_TEMP "obj/project.assets.json"
+$assetsPath = Join-Path $restoreRoot "obj/project.assets.json"
 if (-not (Test-Path -LiteralPath $assetsPath -PathType Leaf)) {
   throw "missing NuGet restore assets: $assetsPath"
 }
@@ -96,15 +99,14 @@ foreach ($path in @($configPath, $targetsPath, $functionHeader)) {
   }
 }
 
-$targets = Get-Content -LiteralPath $targetsPath -Raw
-foreach ($target in @("Salts::CMeta", "Salts::SIMD", "Salts::CFlow")) {
-  if (-not $targets.Contains($target)) {
-    throw "Salts.Native $saltsVersion does not export $target"
-  }
+$env:SALTS_ROOT = $saltsRoot
+$env:SALTS_VERSION = $saltsVersion
+$env:QIGAO_NUGET_PACKAGES = $packages
+if (-not $Local) {
+  "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
+  "SALTS_VERSION=$saltsVersion" >> $env:GITHUB_ENV
+  "QIGAO_NUGET_PACKAGES=$packages" >> $env:GITHUB_ENV
 }
-
-"SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
-"QIGAO_NUGET_PACKAGES=$packages" >> $env:GITHUB_ENV
 Write-Host "Restored Salts.Native $saltsVersion ($SaltsRid): $saltsRoot"
 
 if ($WithSaltsUtils) {
@@ -129,11 +131,9 @@ if ($WithSaltsUtils) {
     }
   }
 
-  $utilsTargetsText = Get-Content -LiteralPath $utilsTargets -Raw
-  if (-not $utilsTargetsText.Contains("Salts::DataBindProducer")) {
-    throw "SaltsUtils.Native $utilsVersion does not export Salts::DataBindProducer"
+  $env:SALTS_UTILS_ROOT = $utilsRoot
+  if (-not $Local) {
+    "SALTS_UTILS_ROOT=$utilsRoot" >> $env:GITHUB_ENV
   }
-
-  "SALTS_UTILS_ROOT=$utilsRoot" >> $env:GITHUB_ENV
   Write-Host "Restored SaltsUtils.Native $utilsVersion ($SaltsRid): $utilsRoot"
 }

@@ -1,0 +1,7 @@
+{
+  "version": 6,
+  "include": [
+    "../../presets/ConfigurePresets.json",
+    "../../presets/AndroidPresets.json"
+  ]
+}

@@ -4,6 +4,7 @@
 #include <turbowasm/status.h>
 #include <turbowasm/runtime.h>
 #include <turbowasm/value.h>
+#include <turbowasm/store.h>
 #include <turbowasm/module.h>
 #include <turbowasm/link.h>
 #include <turbowasm/instance.h>
