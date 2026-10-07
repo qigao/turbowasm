@@ -3522,7 +3522,7 @@ static turbowasm_status turbowasm_exec_fc(
 static turbowasm_status turbowasm_exec_simd_splat(
     const turbowasm_simd_exec_descriptor *descriptor,
     turbowasm_value_stack *stack) {
-    salts_simd_scalar scalar = {0};
+    cmeta_simd_scalar scalar = {0};
     turbowasm_value input;
     turbowasm_value out = {0};
     turbowasm_status status;
@@ -3570,7 +3570,7 @@ static turbowasm_status turbowasm_exec_simd_splat(
 
     out.kind = TURBOWASM_VALUE_V128;
     out.as.v128.shape = descriptor->result_shape;
-    if (!salts_simd_splat(
+    if (!cmeta_simd_splat(
             descriptor->vector_desc,
             &out.as.v128.bits,
             scalar))
@@ -3605,9 +3605,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_unary(
+            supported = cmeta_simd_unary(
                 descriptor->vector_desc,
-                (salts_simd_unary_op)descriptor->op,
+                (cmeta_simd_unary_op)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits);
             break;
@@ -3619,9 +3619,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_binary(
+            supported = cmeta_simd_binary(
                 descriptor->vector_desc,
-                (salts_simd_binary_op)descriptor->op,
+                (cmeta_simd_binary_op)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits);
@@ -3634,9 +3634,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_compare(
+            supported = cmeta_simd_compare(
                 descriptor->vector_desc,
-                (salts_simd_compare_op)descriptor->op,
+                (cmeta_simd_compare_op)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits);
@@ -3649,9 +3649,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_shift(
+            supported = cmeta_simd_shift(
                 descriptor->vector_desc,
-                (salts_simd_shift_op)descriptor->op,
+                (cmeta_simd_shift_op)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 (uint32_t)count.as.i32);
@@ -3667,7 +3667,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_select(
+            supported = cmeta_simd_select(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
@@ -3682,9 +3682,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_saturating_binary(
+            supported = cmeta_simd_saturating_binary(
                 descriptor->vector_desc,
-                (salts_simd_saturating_op)descriptor->op,
+                (cmeta_simd_saturating_op)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits);
@@ -3694,9 +3694,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_reduce(
+            supported = cmeta_simd_reduce(
                 descriptor->vector_desc,
-                (salts_simd_reduce_op)descriptor->op,
+                (cmeta_simd_reduce_op)descriptor->op,
                 &left.as.v128.bits,
                 &reduced);
             if (supported) {
@@ -3712,7 +3712,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_narrow(
+            supported = cmeta_simd_narrow(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
@@ -3723,9 +3723,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_extend_half(
+            supported = cmeta_simd_extend_half(
                 descriptor->vector_desc,
-                (salts_simd_half)descriptor->op,
+                (cmeta_simd_half)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits);
             break;
@@ -3737,9 +3737,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_extmul_half(
+            supported = cmeta_simd_extmul_half(
                 descriptor->vector_desc,
-                (salts_simd_half)descriptor->op,
+                (cmeta_simd_half)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits);
@@ -3749,7 +3749,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_extadd_pairwise(
+            supported = cmeta_simd_extadd_pairwise(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &left.as.v128.bits);
@@ -3762,7 +3762,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_q15mulr_sat(
+            supported = cmeta_simd_q15mulr_sat(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
@@ -3776,7 +3776,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_dot_pairwise(
+            supported = cmeta_simd_dot_pairwise(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
@@ -3789,11 +3789,11 @@ static turbowasm_status turbowasm_exec_simd_generic(
             if (status != TURBOWASM_OK) return status;
             if (descriptor->source_desc == NULL)
                 return TURBOWASM_UNSUPPORTED;
-            supported = salts_simd_convert(
+            supported = cmeta_simd_convert(
                 descriptor->vector_desc,
                 descriptor->source_desc,
-                (salts_simd_convert_op)descriptor->op,
-                (salts_simd_lane_policy)descriptor->lane_policy,
+                (cmeta_simd_convert_op)descriptor->op,
+                (cmeta_simd_lane_policy)descriptor->lane_policy,
                 &out.as.v128.bits,
                 &left.as.v128.bits);
             break;
@@ -3864,7 +3864,7 @@ static turbowasm_status turbowasm_exec_simd_memory(
     turbowasm_value address;
     turbowasm_value vector_value;
     turbowasm_value out = {0};
-    salts_simd_scalar scalar = {0};
+    cmeta_simd_scalar scalar = {0};
     uint8_t shared_bytes[16] = {0};
     uint8_t *memory;
     turbowasm_status status;
@@ -3932,7 +3932,7 @@ static turbowasm_status turbowasm_exec_simd_memory(
         return status;
 
     if (descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE) {
-        supported = salts_simd_extract_lane(
+        supported = cmeta_simd_extract_lane(
             descriptor->vector_desc,
             &vector_value.as.v128.bits,
             lane, &scalar);
@@ -3978,21 +3978,21 @@ static turbowasm_status turbowasm_exec_simd_memory(
 
     switch (descriptor->kind) {
         case TURBOWASM_SIMD_EXEC_MEMORY_EXTEND:
-            supported = salts_simd_load_extend(
+            supported = cmeta_simd_load_extend(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 memory);
             break;
 
         case TURBOWASM_SIMD_EXEC_MEMORY_SPLAT:
-            supported = salts_simd_load_splat(
+            supported = cmeta_simd_load_splat(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 memory);
             break;
 
         case TURBOWASM_SIMD_EXEC_MEMORY_ZERO:
-            supported = salts_simd_load_zero(
+            supported = cmeta_simd_load_zero(
                 (uint16_t)(descriptor->memory_width * 8u),
                 &out.as.v128.bits,
                 memory);
@@ -4016,7 +4016,7 @@ static turbowasm_status turbowasm_exec_simd_memory(
                     return TURBOWASM_MALFORMED_MODULE;
             }
 
-            supported = salts_simd_replace_lane(
+            supported = cmeta_simd_replace_lane(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &vector_value.as.v128.bits,
@@ -4048,7 +4048,7 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
     turbowasm_value right;
     turbowasm_value scalar_value;
     turbowasm_value out = {0};
-    salts_simd_scalar scalar = {0};
+    cmeta_simd_scalar scalar = {0};
     uint8_t lane;
     turbowasm_status status;
     bool supported;
@@ -4078,7 +4078,7 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
 
         out.kind = TURBOWASM_VALUE_V128;
         out.as.v128.shape = descriptor->result_shape;
-        if (!salts_simd_shuffle_bytes(
+        if (!cmeta_simd_shuffle_bytes(
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits,
@@ -4099,7 +4099,7 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
 
         out.kind = TURBOWASM_VALUE_V128;
         out.as.v128.shape = descriptor->result_shape;
-        if (!salts_simd_swizzle_bytes(
+        if (!cmeta_simd_swizzle_bytes(
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits))
@@ -4119,7 +4119,7 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
         if (status != TURBOWASM_OK)
             return status;
 
-        supported = salts_simd_extract_lane(
+        supported = cmeta_simd_extract_lane(
             descriptor->vector_desc,
             &left.as.v128.bits,
             lane, &scalar);
@@ -4216,7 +4216,7 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
 
     out.kind = TURBOWASM_VALUE_V128;
     out.as.v128.shape = descriptor->result_shape;
-    supported = salts_simd_replace_lane(
+    supported = cmeta_simd_replace_lane(
         descriptor->vector_desc,
         &out.as.v128.bits,
         &left.as.v128.bits,
@@ -4286,7 +4286,7 @@ static turbowasm_status turbowasm_exec_simd(
 
             out.kind = TURBOWASM_VALUE_V128;
             out.as.v128.shape = TURBOWASM_V128_RAW;
-            salts_simd_v128_load(&out.as.v128.bits, source);
+            cmeta_simd_v128_load(&out.as.v128.bits, source);
             return turbowasm_stack_push(stack, out);
         }
 
@@ -4333,7 +4333,7 @@ static turbowasm_status turbowasm_exec_simd(
                     return status;
             }
 
-            salts_simd_v128_store(
+            cmeta_simd_v128_store(
                 destination, &value.as.v128.bits);
 
             if (shared) {
@@ -4360,7 +4360,7 @@ static turbowasm_status turbowasm_exec_simd(
 
             out.kind = TURBOWASM_VALUE_V128;
             out.as.v128.shape = TURBOWASM_V128_RAW;
-            salts_simd_v128_load(
+            cmeta_simd_v128_load(
                 &out.as.v128.bits, bytes.cursor);
             return turbowasm_stack_push(stack, out);
         }
