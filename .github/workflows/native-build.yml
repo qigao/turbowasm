@@ -37,6 +37,16 @@ jobs:
           repository: littlefs-project/littlefs
           path: build/littlefs
           persist-credentials: false
+      - uses: actions/checkout@v4
+        if: runner.os != 'Windows'
+        with:
+          repository: qigao/vcpkg-cache
+          path: build/vcpkg-cache-contract
+          persist-credentials: false
+      - name: Bootstrap the canonical vcpkg tool on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash cmake/ci/prepare-vcpkg-tool.sh build/vcpkg-cache-contract
       - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read

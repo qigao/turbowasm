@@ -184,7 +184,7 @@ static turbowasm_instance_impl *tiered_impl(
     return impl;
 }
 
-static void test_integer_locals_and_fallback(void) {
+static void test_integer_locals_and_wide_arguments(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
 
@@ -222,7 +222,7 @@ static void test_integer_locals_and_fallback(void) {
         0x7c,
         0x0b,
 
-        /* valid Wasm; arity three remains MIR-ineligible */
+        /* Arity three must now compile. */
         0x04,
         0x00,
         0x20, 0x00,
@@ -255,12 +255,12 @@ static void test_integer_locals_and_fallback(void) {
     assert(impl->jit_functions[1].state ==
            TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[2].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
+           TURBOWASM_JIT_COMPILED);
 
     pair_destroy(&pair);
 }
 
-static void test_float_lowering_and_fallback(void) {
+static void test_float_lowering_and_wide_arguments(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
 
@@ -297,7 +297,7 @@ static void test_float_lowering_and_fallback(void) {
         0xa0,
         0x0b,
 
-        /* two f32 params remain MIR-ineligible */
+        /* Two f32 parameters must now compile. */
         0x04,
         0x00,
         0x20, 0x00,
@@ -328,7 +328,7 @@ static void test_float_lowering_and_fallback(void) {
     assert(impl->jit_functions[1].state ==
            TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[2].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
+           TURBOWASM_JIT_COMPILED);
 
     pair_destroy(&pair);
 }
@@ -367,7 +367,7 @@ static void test_direct_calls_and_trap_parity(void) {
         0x6a,
         0x0b,
 
-        /* interpreted-only f32 callee due nop */
+        /* native-eligible f32 callee with nop */
         0x05,
         0x00,
         0x20, 0x00,
@@ -422,7 +422,7 @@ static void test_direct_calls_and_trap_parity(void) {
     assert(impl->jit_functions[0].state ==
            TURBOWASM_JIT_INTERPRET_ONLY);
     assert(impl->jit_functions[2].state ==
-           TURBOWASM_JIT_INTERPRET_ONLY);
+           TURBOWASM_JIT_COMPILED);
     assert(impl->jit_functions[4].state ==
            TURBOWASM_JIT_INTERPRET_ONLY);
 
@@ -756,8 +756,8 @@ static void test_eh_fallback_isolation(void) {
 }
 
 int main(void) {
-    test_integer_locals_and_fallback();
-    test_float_lowering_and_fallback();
+    test_integer_locals_and_wide_arguments();
+    test_float_lowering_and_wide_arguments();
     test_direct_calls_and_trap_parity();
     test_compiled_caller_preserves_state_mutation();
     test_compiled_caller_preserves_memory_trap();

@@ -145,7 +145,7 @@ int main(void) {
         0x6a,
         0x0b,
 
-        /* f2: interpreted-only f32 callee due nop */
+        /* f2: native-eligible f32 callee containing nop. */
         0x05,
         0x00,
         0x20, 0x00,
@@ -197,7 +197,7 @@ int main(void) {
     impl = turbowasm_module_impl_get(&module);
     assert(impl != NULL);
 
-    /* Prove the callees themselves remain interpreter-only. */
+    /* Unsupported division and unreachable callees remain interpreted. */
     callee = turbowasm_validation_context_function(
         &impl->validation, 0u);
     assert(callee != NULL);
@@ -207,7 +207,7 @@ int main(void) {
     callee = turbowasm_validation_context_function(
         &impl->validation, 2u);
     assert(callee != NULL);
-    assert(!backend.is_function_eligible(
+    assert(backend.is_function_eligible(
         backend.context, &impl->validation, 2u, callee));
 
     callee = turbowasm_validation_context_function(

@@ -6132,23 +6132,6 @@ dispatch_again:
             execution, depth);
     }
 
-    {
-        uint32_t memory_index;
-        for (memory_index = 0u;
-             memory_index < module->validation.memory_count;
-             ++memory_index) {
-            if (module->validation.memories[memory_index].memory64) {
-                entry->state = TURBOWASM_JIT_INTERPRET_ONLY;
-                return turbowasm_exec_function(
-                    instance, function_index,
-                    arguments, argument_count,
-                    results, result_capacity,
-                    result_count, trap,
-                    execution, depth);
-            }
-        }
-    }
-
     function = turbowasm_validation_context_function(
         &module->validation, function_index);
     if (function == NULL || function->imported ||

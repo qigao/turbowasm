@@ -101,6 +101,14 @@ jobs:
           ref: ${{ startsWith(matrix.suite, 'core3') && env.WASM_CORE3_COMMIT || env.WASM_SPEC_COMMIT }}
           path: build/wasm-spec
           persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          path: build/vcpkg-cache-contract
+          persist-credentials: false
+      - name: Bootstrap the canonical vcpkg tool
+        shell: bash
+        run: bash cmake/ci/prepare-vcpkg-tool.sh build/vcpkg-cache-contract
       - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read

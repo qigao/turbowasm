@@ -99,7 +99,9 @@ static turbowasm_value invoke_values(uint32_t function, size_t count,
 #ifdef TURBOWASM_TEST_MIR
     if (native_fixture) {
         turbowasm_instance_impl *impl = instance.impl;
-        check_equal(impl->jit_functions[function].state, TURBOWASM_JIT_COMPILED);
+        check(impl->jit_functions[function].state == TURBOWASM_JIT_COMPILED,
+            "function %u must compile; tier state is %d", function,
+            (int)impl->jit_functions[function].state);
         check_not_null(impl->jit_functions[function].compiled.impl);
     }
 #endif
