@@ -22,7 +22,7 @@ enum {
 };
 
 typedef struct turbowasm_memory_waiter {
-    salts_cond_t condition;
+    cmeta_cond_t condition;
     uint64_t address;
     bool active;
     bool notified;
@@ -30,8 +30,8 @@ typedef struct turbowasm_memory_waiter {
 
 typedef struct turbowasm_instance_memory {
     uint8_t *data;
-    salts_rwlock_t access_lock;
-    salts_mutex_t waiter_mutex;
+    cmeta_rwlock_t access_lock;
+    cmeta_mutex_t waiter_mutex;
     turbowasm_memory_waiter *waiters;
     uint32_t waiter_count;
     uint32_t waiter_capacity;
