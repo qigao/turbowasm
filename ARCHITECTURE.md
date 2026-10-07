@@ -718,6 +718,21 @@ actual Core callback/realloc signatures and runtime capabilities belong to
 instantiation. This temporary private gate is removed only with complete async
 task, canonical builtin and lifetime integration, followed by end-to-end tests.
 
+The private decoder also owns async canonical builtin descriptors in the existing
+Runtime-budgeted metadata arrays. Each successful definition consumes one Core
+function index; parsing failure destroys the entire metadata object. Descriptors
+retain type/result references, canonical options and context immediates, without
+allocating handles or executing guest code. The decoder checks endpoint kinds,
+memory/realloc requirements, duplicate options, immediate bounds and a uniform
+component-wide context width. Signature calculation receives the resolved memory
+address width: stream copy results follow that width, while future copy and
+waitable event/control results remain i32. Unit copies without memory use i32
+addresses. task.return reuses the sixteen-carrier flattening rule and requires
+memory for dynamic or indirect results. Instantiation must still resolve Core
+memory/realloc signatures and connect these descriptors to task/endpoint owners.
+Error-context and explicit-thread proposal builtins remain unsupported by this
+decoder. This metadata boundary has no additional threads, callbacks or queues.
+
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and
 terminal-event delivery separately. Subtask start and resolve notifications

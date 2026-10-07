@@ -947,7 +947,8 @@ Ordinary/public loading still rejects async forms. Exec rejects metadata-only
 objects before allocation or Core start execution. These objects borrow their
 input bytes and own their decoded arrays; every failed decode frees its arrays
 and resets the output. The private path does not validate actual Core callback
-signatures or admit async canonical builtins/execution yet.
+signatures or admit async execution yet. Canonical builtin decoding is covered
+by the following increment.
 
 `component_async_binary_test.c` covers the admission gates, nested type aliases,
 memory32/64 options, callee resolution paths, malformed/truncated input, and
@@ -955,3 +956,30 @@ allocation failure at every allocation until successful decoding. Windows ASan
 passed five focused targets in 0.16 seconds and the related 59/59 targets in
 2.61 seconds. A final transitive-borrow rejection case also passed with the whole
 async binary target; production code was unchanged after the broader regression.
+At `2a16bd3`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37675079125)
+passed all five jobs: Windows, Android cross-build, ordinary Linux, Linux MIR
+(188/188 in 2.26 seconds), and macOS arm64 MIR (188/188 in 3.01 seconds).
+
+## Private async canonical builtin decoding
+
+The metadata decoder now retains thirty async builtin forms: task return/cancel,
+subtask cancel/drop, context get/set, thread yield, backpressure inc/dec,
+waitable-set operations and join, and stream/future new/read/write/cancel/drop/
+forward. Each definition consumes one Core function index and retains its type,
+options and immediates. Unknown explicit-thread and error-context proposal
+builtins still return unsupported; ordinary loading and execution remain gated.
+
+Binary tests check every supported signature in memory32 and memory64, packed
+i64 endpoint pairs, memory64 stream results, fixed i32 future/control results,
+context width consistency, typed payload memory, destination realloc for dynamic
+payloads, nested endpoint handle opacity, unit copies without memory, and
+task.return direct/indirect parameters. Invalid kinds/indices, duplicate or
+conflicting options, reserved immediates, truncation at every immediate byte,
+and allocation failures after multiple retained entries exercise cleanup.
+These tests qualify metadata and signatures only; task scheduling, guest builtin
+execution, cancellation acknowledgement and public endpoint lifetime integration
+remain incomplete.
+
+Windows ASan passed five focused targets in 0.16 seconds. After the final context
+width consistency test and decoder adjustment, the related Component/WASI/resume
+regression passed 59/59 targets in 2.55 seconds.

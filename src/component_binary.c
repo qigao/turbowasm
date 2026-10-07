@@ -1278,6 +1278,272 @@ static const turbowasm_component_type *declared_function_type(
     return NULL;
 }
 
+static bool async_endpoint_kind(
+    turbowasm_component_async_builtin_kind kind, bool *future) {
+    if ((kind >= TURBOWASM_COMPONENT_STREAM_NEW && kind <= TURBOWASM_COMPONENT_STREAM_DROP_WRITABLE) ||
+        kind == TURBOWASM_COMPONENT_STREAM_FORWARD) {
+        *future = false;
+        return true;
+    }
+    if ((kind >= TURBOWASM_COMPONENT_FUTURE_NEW && kind <= TURBOWASM_COMPONENT_FUTURE_DROP_WRITABLE) ||
+        kind == TURBOWASM_COMPONENT_FUTURE_FORWARD) {
+        *future = true;
+        return true;
+    }
+    return false;
+}
+
+turbowasm_status turbowasm_component_async_builtin_signature(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_async_builtin *builtin,
+    turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_flat_signature *out) {
+    turbowasm_component_flat_signature signature = {0};
+    turbowasm_component_flat_type pointer;
+    if (graph == NULL || builtin == NULL || out == NULL ||
+        (pointer_type != TURBOWASM_COMPONENT_POINTER_I32 &&
+         pointer_type != TURBOWASM_COMPONENT_POINTER_I64))
+        return TURBOWASM_INVALID_ARGUMENT;
+    pointer = builtin->has_memory && pointer_type == TURBOWASM_COMPONENT_POINTER_I64
+        ? TURBOWASM_COMPONENT_FLAT_I64 : TURBOWASM_COMPONENT_FLAT_I32;
+    switch (builtin->kind) {
+        case TURBOWASM_COMPONENT_TASK_RETURN:
+            return turbowasm_component_canonical_flatten_task_return(
+                graph, builtin->has_result, builtin->result,
+                pointer == TURBOWASM_COMPONENT_FLAT_I64
+                    ? TURBOWASM_COMPONENT_POINTER_I64 : TURBOWASM_COMPONENT_POINTER_I32, out);
+        case TURBOWASM_COMPONENT_TASK_CANCEL:
+        case TURBOWASM_COMPONENT_BACKPRESSURE_INC:
+        case TURBOWASM_COMPONENT_BACKPRESSURE_DEC:
+            break;
+        case TURBOWASM_COMPONENT_CONTEXT_GET:
+        case TURBOWASM_COMPONENT_CONTEXT_SET:
+            if (builtin->context_index >= 2u ||
+                (builtin->context_type != TURBOWASM_COMPONENT_FLAT_I32 &&
+                 builtin->context_type != TURBOWASM_COMPONENT_FLAT_I64))
+                return TURBOWASM_INVALID_ARGUMENT;
+            if (builtin->kind == TURBOWASM_COMPONENT_CONTEXT_GET) {
+                signature.result_count = 1u;
+                signature.results[0] = builtin->context_type;
+            } else {
+                signature.param_count = 1u;
+                signature.params[0] = builtin->context_type;
+            }
+            break;
+        case TURBOWASM_COMPONENT_THREAD_YIELD:
+        case TURBOWASM_COMPONENT_WAITABLE_SET_NEW:
+            signature.result_count = 1u;
+            break;
+        case TURBOWASM_COMPONENT_STREAM_NEW:
+        case TURBOWASM_COMPONENT_FUTURE_NEW:
+            signature.result_count = 1u;
+            signature.results[0] = TURBOWASM_COMPONENT_FLAT_I64;
+            break;
+        case TURBOWASM_COMPONENT_STREAM_READ:
+        case TURBOWASM_COMPONENT_STREAM_WRITE:
+            signature.param_count = 3u;
+            signature.params[1] = signature.params[2] = pointer;
+            signature.result_count = 1u;
+            signature.results[0] = pointer;
+            break;
+        case TURBOWASM_COMPONENT_FUTURE_READ:
+        case TURBOWASM_COMPONENT_FUTURE_WRITE:
+        case TURBOWASM_COMPONENT_WAITABLE_SET_WAIT:
+        case TURBOWASM_COMPONENT_WAITABLE_SET_POLL:
+            signature.param_count = 2u;
+            signature.params[1] = pointer;
+            signature.result_count = 1u;
+            break;
+        case TURBOWASM_COMPONENT_SUBTASK_CANCEL:
+        case TURBOWASM_COMPONENT_STREAM_CANCEL_READ:
+        case TURBOWASM_COMPONENT_STREAM_CANCEL_WRITE:
+        case TURBOWASM_COMPONENT_FUTURE_CANCEL_READ:
+        case TURBOWASM_COMPONENT_FUTURE_CANCEL_WRITE:
+            signature.param_count = signature.result_count = 1u;
+            break;
+        case TURBOWASM_COMPONENT_SUBTASK_DROP:
+        case TURBOWASM_COMPONENT_WAITABLE_SET_DROP:
+        case TURBOWASM_COMPONENT_STREAM_DROP_READABLE:
+        case TURBOWASM_COMPONENT_STREAM_DROP_WRITABLE:
+        case TURBOWASM_COMPONENT_FUTURE_DROP_READABLE:
+        case TURBOWASM_COMPONENT_FUTURE_DROP_WRITABLE:
+            signature.param_count = 1u;
+            break;
+        case TURBOWASM_COMPONENT_WAITABLE_JOIN:
+        case TURBOWASM_COMPONENT_STREAM_FORWARD:
+        case TURBOWASM_COMPONENT_FUTURE_FORWARD:
+            signature.param_count = 2u;
+            break;
+        default:
+            return TURBOWASM_UNSUPPORTED;
+    }
+    *out = signature;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status decode_async_builtin_options(
+    turbowasm_reader *reader, turbowasm_component_async_builtin *builtin,
+    uint32_t core_functions, uint32_t core_memories) {
+    uint32_t count, i;
+    bool encoding_seen = false;
+    if (!turbowasm_reader_uleb32(reader, &count))
+        return TURBOWASM_MALFORMED_MODULE;
+    for (i = 0u; i < count; ++i) {
+        uint8_t option;
+        if (!turbowasm_reader_u8(reader, &option))
+            return TURBOWASM_MALFORMED_MODULE;
+        switch (option) {
+            case 0u: case 1u: case 2u:
+                if (encoding_seen) return TURBOWASM_MALFORMED_MODULE;
+                encoding_seen = true;
+                builtin->string_encoding = (turbowasm_component_string_encoding)option;
+                break;
+            case 3u:
+                if (builtin->has_memory || !turbowasm_reader_uleb32(reader, &builtin->memory_index) ||
+                    builtin->memory_index >= core_memories)
+                    return TURBOWASM_MALFORMED_MODULE;
+                builtin->has_memory = true;
+                break;
+            case 4u:
+                if (builtin->kind == TURBOWASM_COMPONENT_TASK_RETURN || builtin->has_realloc ||
+                    !turbowasm_reader_uleb32(reader, &builtin->realloc_function_index) ||
+                    builtin->realloc_function_index >= core_functions)
+                    return TURBOWASM_MALFORMED_MODULE;
+                builtin->has_realloc = true;
+                break;
+            case 6u:
+                if (builtin->kind == TURBOWASM_COMPONENT_TASK_RETURN || builtin->is_async)
+                    return TURBOWASM_MALFORMED_MODULE;
+                builtin->is_async = true;
+                break;
+            default: /* callback and post-return only belong to lift */
+                return TURBOWASM_MALFORMED_MODULE;
+        }
+    }
+    return builtin->has_realloc && !builtin->has_memory
+        ? TURBOWASM_MALFORMED_MODULE : TURBOWASM_OK;
+}
+
+static turbowasm_status decode_async_builtin(
+    turbowasm_reader *reader, turbowasm_component_binary *component,
+    uint8_t opcode, uint32_t current_types,
+    uint32_t *core_functions, uint32_t core_memories) {
+    turbowasm_component_async_builtin builtin = {0};
+    turbowasm_component_flat_signature signature;
+    turbowasm_status status;
+    uint8_t immediate;
+    bool future;
+    builtin.kind = (turbowasm_component_async_builtin_kind)opcode;
+    builtin.core_function_index = *core_functions;
+    if (async_endpoint_kind(builtin.kind, &future)) {
+        const turbowasm_component_type *type;
+        if (!turbowasm_reader_uleb32(reader, &builtin.type_index) || builtin.type_index >= current_types)
+            return TURBOWASM_MALFORMED_MODULE;
+        type = turbowasm_component_type_graph_get(&component->type_graph, builtin.type_index);
+        if (type == NULL || type->kind != (future ? TURBOWASM_COMPONENT_TYPE_FUTURE : TURBOWASM_COMPONENT_TYPE_STREAM))
+            return TURBOWASM_MALFORMED_MODULE;
+    }
+    switch (builtin.kind) {
+        case TURBOWASM_COMPONENT_TASK_RETURN:
+            if (!turbowasm_reader_u8(reader, &immediate) || immediate > 1u)
+                return TURBOWASM_MALFORMED_MODULE;
+            builtin.has_result = immediate == 0u;
+            if (builtin.has_result) {
+                uint32_t features;
+                status = read_component_type_ref(reader, current_types, &builtin.result);
+                if (status != TURBOWASM_OK) return status;
+                if (!turbowasm_component_transfer_type_features(&component->type_graph, builtin.result, &features))
+                    return TURBOWASM_MALFORMED_MODULE;
+            } else if (!turbowasm_reader_u8(reader, &immediate) || immediate != 0u) {
+                return TURBOWASM_MALFORMED_MODULE;
+            }
+            /* fall through: task.return accepts a restricted option set */
+        case TURBOWASM_COMPONENT_STREAM_READ:
+        case TURBOWASM_COMPONENT_STREAM_WRITE:
+        case TURBOWASM_COMPONENT_FUTURE_READ:
+        case TURBOWASM_COMPONENT_FUTURE_WRITE:
+            status = decode_async_builtin_options(reader, &builtin, *core_functions, core_memories);
+            if (status != TURBOWASM_OK) return status;
+            if (builtin.kind == TURBOWASM_COMPONENT_TASK_RETURN) {
+                uint32_t features = 0u;
+                if (builtin.has_result && !turbowasm_component_transfer_type_features(
+                        &component->type_graph, builtin.result, &features))
+                    return TURBOWASM_MALFORMED_MODULE;
+                status = turbowasm_component_async_builtin_signature(
+                    &component->type_graph, &builtin, TURBOWASM_COMPONENT_POINTER_I32, &signature);
+                if (status != TURBOWASM_OK) return status;
+                if (!builtin.has_memory && ((features & TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY) || signature.params_indirect))
+                    return TURBOWASM_MALFORMED_MODULE;
+            } else {
+                const turbowasm_component_type *type = turbowasm_component_type_graph_get(&component->type_graph, builtin.type_index);
+                if (type->as.async_value.has_payload) {
+                    uint32_t features;
+                    bool reading = builtin.kind == TURBOWASM_COMPONENT_STREAM_READ || builtin.kind == TURBOWASM_COMPONENT_FUTURE_READ;
+                    if (!builtin.has_memory || !turbowasm_component_transfer_type_features(
+                            &component->type_graph, type->as.async_value.payload, &features) ||
+                        (reading && (features & TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY) && !builtin.has_realloc))
+                        return TURBOWASM_MALFORMED_MODULE;
+                }
+            }
+            break;
+        case TURBOWASM_COMPONENT_CONTEXT_GET:
+        case TURBOWASM_COMPONENT_CONTEXT_SET: {
+            uint32_t i;
+            if (!turbowasm_reader_u8(reader, &immediate) || (immediate != 0x7fu && immediate != 0x7eu) ||
+                !turbowasm_reader_uleb32(reader, &builtin.context_index) || builtin.context_index >= 2u)
+                return TURBOWASM_MALFORMED_MODULE;
+            builtin.context_type = immediate == 0x7fu ? TURBOWASM_COMPONENT_FLAT_I32 : TURBOWASM_COMPONENT_FLAT_I64;
+            /* Existing descriptors are the sole source of the component-wide
+             * context width, including definitions in earlier sections. */
+            for (i = component->async_builtin_count; i != 0u; --i) {
+                const turbowasm_component_async_builtin *prior = &component->async_builtins[i - 1u];
+                if (prior->kind == TURBOWASM_COMPONENT_CONTEXT_GET || prior->kind == TURBOWASM_COMPONENT_CONTEXT_SET) {
+                    if (prior->context_type != builtin.context_type)
+                        return TURBOWASM_MALFORMED_MODULE;
+                    /* Earlier definitions already agreed with this one. Each
+                     * intervening non-context entry is visited at most once. */
+                    break;
+                }
+            }
+            break;
+        }
+        case TURBOWASM_COMPONENT_SUBTASK_CANCEL:
+        case TURBOWASM_COMPONENT_STREAM_CANCEL_READ:
+        case TURBOWASM_COMPONENT_STREAM_CANCEL_WRITE:
+        case TURBOWASM_COMPONENT_FUTURE_CANCEL_READ:
+        case TURBOWASM_COMPONENT_FUTURE_CANCEL_WRITE:
+            if (!turbowasm_reader_u8(reader, &immediate) || immediate > 1u)
+                return TURBOWASM_MALFORMED_MODULE;
+            builtin.is_async = immediate != 0u;
+            break;
+        case TURBOWASM_COMPONENT_WAITABLE_SET_WAIT:
+        case TURBOWASM_COMPONENT_WAITABLE_SET_POLL:
+        case TURBOWASM_COMPONENT_THREAD_YIELD:
+            if (!turbowasm_reader_u8(reader, &immediate) || immediate != 0u)
+                return TURBOWASM_MALFORMED_MODULE;
+            if (builtin.kind != TURBOWASM_COMPONENT_THREAD_YIELD) {
+                if (!turbowasm_reader_uleb32(reader, &builtin.memory_index) || builtin.memory_index >= core_memories)
+                    return TURBOWASM_MALFORMED_MODULE;
+                builtin.has_memory = true;
+            }
+            break;
+        default:
+            break;
+    }
+    /* This also rejects unimplemented proposal opcodes, without publishing an
+     * entry or advancing the Core function index space. */
+    status = turbowasm_component_async_builtin_signature(
+        &component->type_graph, &builtin, TURBOWASM_COMPONENT_POINTER_I32, &signature);
+    if (status != TURBOWASM_OK) return status;
+    if (*core_functions == UINT32_MAX || component->async_builtin_count == UINT32_MAX ||
+        !reserve_array((void **)&component->async_builtins, &component->async_builtin_capacity,
+            component->async_builtin_count + 1u, sizeof(*component->async_builtins)))
+        return TURBOWASM_OUT_OF_MEMORY;
+    component->async_builtins[component->async_builtin_count++] = builtin;
+    ++*core_functions;
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status decode_canon_section(
     turbowasm_reader section,
     turbowasm_component_binary *component,
@@ -1532,7 +1798,11 @@ static turbowasm_status decode_canon_section(
                 return TURBOWASM_OUT_OF_MEMORY;
             ++*next_core_function_index;
         } else {
-            return TURBOWASM_UNSUPPORTED;
+            turbowasm_status status;
+            if (!component->async_metadata) return TURBOWASM_UNSUPPORTED;
+            status = decode_async_builtin(&section, component, opcode, current_types,
+                next_core_function_index, current_core_memories);
+            if (status != TURBOWASM_OK) return status;
         }
     }
 
@@ -2612,6 +2882,7 @@ static turbowasm_status binary_load(
         component->canon_lifts != NULL ||
         component->canon_lowers != NULL ||
         component->resource_builtins != NULL ||
+        component->async_builtins != NULL ||
         component->component_instances != NULL ||
         component->component_function_aliases != NULL ||
         component->type_graph.types != NULL ||
@@ -2721,6 +2992,7 @@ fail:
     turbowasm_rt_free(component->canon_lifts);
     turbowasm_rt_free(component->canon_lowers);
     turbowasm_rt_free(component->resource_builtins);
+    turbowasm_rt_free(component->async_builtins);
     turbowasm_rt_free(component->component_instances);
     turbowasm_rt_free(component->component_function_aliases);
     memset(component, 0, sizeof(*component));
@@ -2776,6 +3048,7 @@ void turbowasm_component_binary_destroy(
     turbowasm_rt_free(component->canon_lifts);
     turbowasm_rt_free(component->canon_lowers);
     turbowasm_rt_free(component->resource_builtins);
+    turbowasm_rt_free(component->async_builtins);
     turbowasm_rt_free(component->component_instances);
     turbowasm_rt_free(component->component_function_aliases);
     memset(component, 0, sizeof(*component));

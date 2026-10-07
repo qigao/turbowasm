@@ -116,6 +116,56 @@ typedef struct turbowasm_component_resource_builtin {
     uint32_t resource_type;
 } turbowasm_component_resource_builtin;
 
+/* Private async metadata. Values match the pinned canonical binary opcodes. */
+typedef enum turbowasm_component_async_builtin_kind {
+    TURBOWASM_COMPONENT_TASK_CANCEL = 0x05,
+    TURBOWASM_COMPONENT_SUBTASK_CANCEL = 0x06,
+    TURBOWASM_COMPONENT_TASK_RETURN = 0x09,
+    TURBOWASM_COMPONENT_CONTEXT_GET = 0x0a,
+    TURBOWASM_COMPONENT_CONTEXT_SET = 0x0b,
+    TURBOWASM_COMPONENT_THREAD_YIELD = 0x0c,
+    TURBOWASM_COMPONENT_SUBTASK_DROP = 0x0d,
+    TURBOWASM_COMPONENT_STREAM_NEW = 0x0e,
+    TURBOWASM_COMPONENT_STREAM_READ = 0x0f,
+    TURBOWASM_COMPONENT_STREAM_WRITE = 0x10,
+    TURBOWASM_COMPONENT_STREAM_CANCEL_READ = 0x11,
+    TURBOWASM_COMPONENT_STREAM_CANCEL_WRITE = 0x12,
+    TURBOWASM_COMPONENT_STREAM_DROP_READABLE = 0x13,
+    TURBOWASM_COMPONENT_STREAM_DROP_WRITABLE = 0x14,
+    TURBOWASM_COMPONENT_FUTURE_NEW = 0x15,
+    TURBOWASM_COMPONENT_FUTURE_READ = 0x16,
+    TURBOWASM_COMPONENT_FUTURE_WRITE = 0x17,
+    TURBOWASM_COMPONENT_FUTURE_CANCEL_READ = 0x18,
+    TURBOWASM_COMPONENT_FUTURE_CANCEL_WRITE = 0x19,
+    TURBOWASM_COMPONENT_FUTURE_DROP_READABLE = 0x1a,
+    TURBOWASM_COMPONENT_FUTURE_DROP_WRITABLE = 0x1b,
+    TURBOWASM_COMPONENT_WAITABLE_SET_NEW = 0x1f,
+    TURBOWASM_COMPONENT_WAITABLE_SET_WAIT = 0x20,
+    TURBOWASM_COMPONENT_WAITABLE_SET_POLL = 0x21,
+    TURBOWASM_COMPONENT_WAITABLE_SET_DROP = 0x22,
+    TURBOWASM_COMPONENT_WAITABLE_JOIN = 0x23,
+    TURBOWASM_COMPONENT_BACKPRESSURE_INC = 0x24,
+    TURBOWASM_COMPONENT_BACKPRESSURE_DEC = 0x25,
+    TURBOWASM_COMPONENT_STREAM_FORWARD = 0x2e,
+    TURBOWASM_COMPONENT_FUTURE_FORWARD = 0x2f
+} turbowasm_component_async_builtin_kind;
+
+typedef struct turbowasm_component_async_builtin {
+    uint32_t core_function_index;
+    turbowasm_component_async_builtin_kind kind;
+    uint32_t type_index; /* stream/future operations */
+    bool has_result; /* task.return */
+    turbowasm_component_type_ref result;
+    turbowasm_component_flat_type context_type;
+    uint32_t context_index;
+    bool is_async;
+    bool has_memory;
+    uint32_t memory_index;
+    bool has_realloc;
+    uint32_t realloc_function_index;
+    turbowasm_component_string_encoding string_encoding;
+} turbowasm_component_async_builtin;
+
 typedef enum turbowasm_component_external_kind {
     TURBOWASM_COMPONENT_EXTERN_CORE_MODULE = 0,
     TURBOWASM_COMPONENT_EXTERN_FUNCTION = 1,
@@ -199,6 +249,10 @@ typedef struct turbowasm_component_binary {
     uint32_t resource_builtin_count;
     uint32_t resource_builtin_capacity;
 
+    turbowasm_component_async_builtin *async_builtins;
+    uint32_t async_builtin_count;
+    uint32_t async_builtin_capacity;
+
     uint32_t core_function_count;
 
     turbowasm_component_instance_def *component_instances;
@@ -248,6 +302,16 @@ void turbowasm_component_binary_destroy(
 turbowasm_status turbowasm_component_binary_decode_async_metadata(
     turbowasm_component_binary *component, const uint8_t *bytes, size_t size,
     const turbowasm_runtime_config *config);
+
+/* Calculate a decoded builtin's Core signature. pointer_type is the address
+ * type of its resolved memory (ignored without memory). Borrows the graph and
+ * descriptor, allocates nothing, and leaves output unchanged on failure.
+ * Core memory/realloc resolution and runtime execution are separate gates. */
+turbowasm_status turbowasm_component_async_builtin_signature(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_async_builtin *builtin,
+    turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_flat_signature *out);
 
 const turbowasm_component_section *
 turbowasm_component_binary_section_at(
