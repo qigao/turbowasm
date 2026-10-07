@@ -266,7 +266,48 @@ add GC carriers to host signature declarations.
 
 These results qualify scalar/reference indirect calls and tails through Runtime,
 not full native Core 3.0 execution. Native GC and EH instructions, reference
-globals and remaining reference control, vector call signatures and remaining
-numeric instructions are still gaps. Public resumable execution remains on the
+globals and remaining reference control, and remaining numeric instructions are
+still gaps. Vector call signatures are covered by the increment below.
+Public resumable execution remains on the
 interpreter. Component encoding/post-return/async coverage and broader WASI 0.2
 data paths remain separate work.
+
+## MIR vector call boundary
+
+Implementation `31cb3d0` adds vector parameters, locals and results to the private
+pointer-based MIR entry. Complete vector values travel between call cells and
+invocation-owned slots, preserving all 128 bits and shape metadata. Slot allocation
+uses Runtime's allocator and quota; nested invocation saves/restores the parent
+frame, and self-tail dispatch resets non-parameter vector locals.
+
+The first implementation passed Windows ASan's complete 143/143 suite in 210.31
+seconds, including both Core 3.0 gates. Its
+[native CI run](https://github.com/qigao/turbowasm/actions/runs/37627735445)
+passed all five jobs, including Linux and macOS MIR execution. Test-only follow-up
+`23c578b` extends `vector_calls_test.c` to seven cases. The MIR variant requires
+compiled callers and imported providers; it covers direct/indirect/reference
+calls and tail forms, host collection/re-entry, interpreted targets, mixed tuples,
+16-vector results, local snapshots, control merges, native-only managed locals,
+imported functions/tables, fuel/traps and every call allocation failure.
+
+The [follow-up CI run](https://github.com/qigao/turbowasm/actions/runs/37628363469)
+also passed all five jobs at `23c578b`:
+
+- Linux MIR: 160/160 tests, 1.36 seconds.
+- macOS arm64 MIR: 160/160 tests, 2.36 seconds.
+- Windows qualification: 141/141 tests; installed package: 16/16.
+- Linux qualification: 142/142 tests; installed package: 17/17.
+- Android arm64: cross-build and installed consumer build; no device execution.
+
+Local follow-up validation passed four related ASan tests in 4.43 seconds and the
+final native-local GC scenario in the vector suite in 0.08 seconds. Reproduce with
+the configured Windows ASan user preset:
+
+```powershell
+cmake --build --preset win-core3-asan-user
+ctest --preset win-core3-asan-user -R "vector_calls|jit_simd_helper|reference_native|indirect_native" --output-on-failure
+```
+
+This qualifies the helper-backed vector call boundary. It does not add a MIR
+vector register ABI, the remaining SIMD instructions, native GC/EH instructions,
+or resumable native execution.
