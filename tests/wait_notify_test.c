@@ -174,9 +174,9 @@ static uint32_t waiter_count_get(
     uint32_t count;
 
     assert(memory != NULL);
-    salts_mutex_lock(&memory->waiter_mutex);
+    cmeta_mutex_lock(&memory->waiter_mutex);
     count = memory->waiter_count;
-    salts_mutex_unlock(&memory->waiter_mutex);
+    cmeta_mutex_unlock(&memory->waiter_mutex);
     return count;
 }
 
@@ -188,7 +188,7 @@ static void wait_for_waiter_count(
     for (iteration = 0u; iteration < 100000u; ++iteration) {
         if (waiter_count_get(memory) == expected)
             return;
-        salts_thread_yield();
+        cmeta_thread_yield();
     }
     assert(waiter_count_get(memory) == expected);
 }
@@ -199,8 +199,8 @@ static void test_notify_count_and_spurious_signal(void) {
     turbowasm_instance_memory *memory;
     direct_wait_context first = {0};
     direct_wait_context second = {0};
-    salts_thread_t first_thread = NULL;
-    salts_thread_t second_thread = NULL;
+    cmeta_thread_t first_thread = NULL;
+    cmeta_thread_t second_thread = NULL;
     uint32_t woken = 0u;
     turbowasm_trap trap = TURBOWASM_TRAP_NONE;
     uint32_t index;
@@ -216,11 +216,11 @@ static void test_notify_count_and_spurious_signal(void) {
 
     first.instance = instance_impl(&instance);
     second.instance = instance_impl(&instance);
-    assert(salts_thread_create(
+    assert(cmeta_thread_create(
                &first_thread,
                direct_wait_thread,
                &first) == 0);
-    assert(salts_thread_create(
+    assert(cmeta_thread_create(
                &second_thread,
                direct_wait_thread,
                &second) == 0);
@@ -231,18 +231,18 @@ static void test_notify_count_and_spurious_signal(void) {
      * Deliberately signal one condition without setting notified. The waiter
      * may wake internally, but must loop and remain registered.
      */
-    salts_mutex_lock(&memory->waiter_mutex);
+    cmeta_mutex_lock(&memory->waiter_mutex);
     for (index = 0u; index < memory->waiter_capacity; ++index) {
         if (memory->waiters[index].active) {
-            salts_cond_signal(
+            cmeta_cond_signal(
                 &memory->waiters[index].condition);
             signaled = true;
             break;
         }
     }
-    salts_mutex_unlock(&memory->waiter_mutex);
+    cmeta_mutex_unlock(&memory->waiter_mutex);
     assert(signaled);
-    salts_sleep_ms(2u);
+    cmeta_sleep_ms(2u);
     assert(waiter_count_get(memory) == 2u);
 
     assert(turbowasm_instance_memory_notify(
@@ -258,8 +258,8 @@ static void test_notify_count_and_spurious_signal(void) {
                &woken, &trap) == TURBOWASM_OK);
     assert(woken == 1u);
 
-    assert(salts_thread_join(&first_thread) == 0);
-    assert(salts_thread_join(&second_thread) == 0);
+    assert(cmeta_thread_join(&first_thread) == 0);
+    assert(cmeta_thread_join(&second_thread) == 0);
 
     assert(first.status == TURBOWASM_OK);
     assert(second.status == TURBOWASM_OK);
@@ -288,14 +288,14 @@ static void test_waiter_capacity_trap(void) {
                &instance, &module) == TURBOWASM_OK);
     memory = memory0(&instance);
 
-    salts_mutex_lock(&memory->waiter_mutex);
+    cmeta_mutex_lock(&memory->waiter_mutex);
     for (index = 0u; index < memory->waiter_capacity; ++index) {
         memory->waiters[index].active = true;
         memory->waiters[index].notified = false;
         memory->waiters[index].address = 0u;
     }
     memory->waiter_count = memory->waiter_capacity;
-    salts_mutex_unlock(&memory->waiter_mutex);
+    cmeta_mutex_unlock(&memory->waiter_mutex);
 
     assert(turbowasm_instance_memory_wait(
                instance_impl(&instance),
@@ -307,14 +307,14 @@ static void test_waiter_capacity_trap(void) {
                turbowasm_trap_string(trap),
                "too_many_waiters") == 0);
 
-    salts_mutex_lock(&memory->waiter_mutex);
+    cmeta_mutex_lock(&memory->waiter_mutex);
     for (index = 0u; index < memory->waiter_capacity; ++index) {
         memory->waiters[index].active = false;
         memory->waiters[index].notified = false;
         memory->waiters[index].address = 0u;
     }
     memory->waiter_count = 0u;
-    salts_mutex_unlock(&memory->waiter_mutex);
+    cmeta_mutex_unlock(&memory->waiter_mutex);
 
     /*
      * Capacity exhaustion must not poison the registry. Once slots are
@@ -434,7 +434,7 @@ static void test_linked_wait_notify_after_linker_destroy(void) {
     turbowasm_instance notifier = {0};
     turbowasm_linker linker = {0};
     invoke_wait_context wait_context = {0};
-    salts_thread_t wait_thread = NULL;
+    cmeta_thread_t wait_thread = NULL;
     turbowasm_status notify_status;
     turbowasm_trap notify_trap = TURBOWASM_TRAP_NONE;
     int32_t notify_result;
@@ -474,7 +474,7 @@ static void test_linked_wait_notify_after_linker_destroy(void) {
 
     provider_memory = memory0(&provider);
     wait_context.instance = &waiter;
-    assert(salts_thread_create(
+    assert(cmeta_thread_create(
                &wait_thread,
                invoke_wait_thread,
                &wait_context) == 0);
@@ -489,7 +489,7 @@ static void test_linked_wait_notify_after_linker_destroy(void) {
     assert(notify_trap == TURBOWASM_TRAP_NONE);
     assert(notify_result == 1);
 
-    assert(salts_thread_join(&wait_thread) == 0);
+    assert(cmeta_thread_join(&wait_thread) == 0);
     assert(wait_context.status == TURBOWASM_OK);
     assert(wait_context.trap == TURBOWASM_TRAP_NONE);
     assert(wait_context.result == 0);
