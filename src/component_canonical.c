@@ -741,38 +741,19 @@ static turbowasm_status append_flat_type(
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_component_canonical_flatten_function(
+static turbowasm_status flatten_parameters(
     const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_id function_type,
+    const turbowasm_component_type_ref *params, uint32_t param_count,
     turbowasm_component_pointer_type pointer_type,
-    turbowasm_component_canonical_context context,
+    uint32_t max_flat_params,
     turbowasm_component_flat_signature *out) {
-    const turbowasm_component_type *function;
     uint64_t raw_param_count = 0u;
     uint32_t i;
     turbowasm_component_flat_type_list flat;
     turbowasm_status status;
-
-    if (graph == NULL || out == NULL ||
-        !pointer_type_valid(pointer_type) ||
-        (context != TURBOWASM_COMPONENT_CANONICAL_LIFT &&
-         context != TURBOWASM_COMPONENT_CANONICAL_LOWER))
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    function = turbowasm_component_type_graph_get(
-        graph, function_type);
-    if (function == NULL ||
-        function->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    memset(out, 0, sizeof(*out));
-
-    for (i = 0u; i < function->as.function.param_count; ++i) {
+    for (i = 0u; i < param_count; ++i) {
         status = turbowasm_component_canonical_flatten_type(
-            graph,
-            function->as.function.params[i],
-            pointer_type,
-            &flat);
+            graph, params[i], pointer_type, &flat);
         if (status != TURBOWASM_OK)
             return status;
         raw_param_count += flat.count;
@@ -780,20 +761,14 @@ turbowasm_status turbowasm_component_canonical_flatten_function(
             return TURBOWASM_UNSUPPORTED;
     }
 
-    if (raw_param_count >
-        TURBOWASM_COMPONENT_MAX_FLAT_PARAMS) {
+    if (raw_param_count > max_flat_params) {
         out->params[0] = pointer_flat_type(pointer_type);
         out->param_count = 1u;
         out->params_indirect = true;
     } else {
-        for (i = 0u;
-             i < function->as.function.param_count;
-             ++i) {
+        for (i = 0u; i < param_count; ++i) {
             status = turbowasm_component_canonical_flatten_type(
-                graph,
-                function->as.function.params[i],
-                pointer_type,
-                &flat);
+                graph, params[i], pointer_type, &flat);
             if (status != TURBOWASM_OK)
                 return status;
             status = append_flat_type(
@@ -806,39 +781,94 @@ turbowasm_status turbowasm_component_canonical_flatten_function(
         }
     }
 
-    if (!function->as.function.has_result)
-        return TURBOWASM_OK;
-
-    status = turbowasm_component_canonical_flatten_type(
-        graph,
-        function->as.function.result,
-        pointer_type,
-        &flat);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    if (flat.count <= TURBOWASM_COMPONENT_MAX_FLAT_RESULTS) {
-        out->results[0] = flat.types[0];
-        out->result_count = flat.count;
-        return TURBOWASM_OK;
-    }
-
-    out->results_indirect = true;
-    if (context == TURBOWASM_COMPONENT_CANONICAL_LIFT) {
-        out->results[0] = pointer_flat_type(pointer_type);
-        out->result_count = 1u;
-    } else {
-        if (out->param_count >=
-            TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS)
-            return TURBOWASM_UNSUPPORTED;
-        out->params[out->param_count++] =
-            pointer_flat_type(pointer_type);
-        out->result_count = 0u;
-    }
-
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_component_canonical_flatten_function_abi(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_canonical_context context,
+    turbowasm_component_canonical_abi abi,
+    turbowasm_component_flat_signature *out) {
+    const turbowasm_component_type *function;
+    turbowasm_component_flat_signature signature = {0};
+    turbowasm_component_flat_type_list result = {0};
+    turbowasm_status status;
+    uint32_t max_params;
+    if (graph == NULL || out == NULL || !pointer_type_valid(pointer_type) ||
+        (context != TURBOWASM_COMPONENT_CANONICAL_LIFT && context != TURBOWASM_COMPONENT_CANONICAL_LOWER) ||
+        (abi != TURBOWASM_COMPONENT_ABI_SYNC && abi != TURBOWASM_COMPONENT_ABI_ASYNC &&
+         abi != TURBOWASM_COMPONENT_ABI_ASYNC_CALLBACK) ||
+        (abi == TURBOWASM_COMPONENT_ABI_ASYNC_CALLBACK && context != TURBOWASM_COMPONENT_CANONICAL_LIFT))
+        return TURBOWASM_INVALID_ARGUMENT;
+    function = turbowasm_component_type_graph_get(graph, function_type);
+    if (function == NULL || function->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
+        (function->as.function.param_count != 0u && function->as.function.params == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+    max_params = abi != TURBOWASM_COMPONENT_ABI_SYNC && context == TURBOWASM_COMPONENT_CANONICAL_LOWER
+        ? TURBOWASM_COMPONENT_MAX_FLAT_ASYNC_PARAMS : TURBOWASM_COMPONENT_MAX_FLAT_PARAMS;
+    status = flatten_parameters(graph, function->as.function.params, function->as.function.param_count,
+        pointer_type, max_params, &signature);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (function->as.function.has_result) {
+        status = turbowasm_component_canonical_flatten_type(graph, function->as.function.result, pointer_type, &result);
+        if (status != TURBOWASM_OK) return status;
+    }
+    if (abi != TURBOWASM_COMPONENT_ABI_SYNC) {
+        if (context == TURBOWASM_COMPONENT_CANONICAL_LOWER) {
+            if (result.count != 0u) {
+                signature.params[signature.param_count++] = pointer_flat_type(pointer_type);
+                signature.results_indirect = true;
+            }
+            signature.results[0] = TURBOWASM_COMPONENT_FLAT_I32;
+            signature.result_count = 1u;
+        } else if (abi == TURBOWASM_COMPONENT_ABI_ASYNC_CALLBACK) {
+            signature.results[0] = TURBOWASM_COMPONENT_FLAT_I32;
+            signature.result_count = 1u;
+        }
+    } else if (result.count <= TURBOWASM_COMPONENT_MAX_FLAT_RESULTS) {
+        signature.results[0] = result.types[0];
+        signature.result_count = result.count;
+    } else {
+        signature.results_indirect = true;
+        if (context == TURBOWASM_COMPONENT_CANONICAL_LIFT) {
+            signature.results[0] = pointer_flat_type(pointer_type);
+            signature.result_count = 1u;
+        } else {
+            if (signature.param_count >= TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS)
+                return TURBOWASM_UNSUPPORTED;
+            signature.params[signature.param_count++] = pointer_flat_type(pointer_type);
+        }
+    }
+    *out = signature;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_canonical_flatten_function(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_canonical_context context,
+    turbowasm_component_flat_signature *out) {
+    return turbowasm_component_canonical_flatten_function_abi(graph, function_type, pointer_type,
+        context, TURBOWASM_COMPONENT_ABI_SYNC, out);
+}
+
+turbowasm_status turbowasm_component_canonical_flatten_task_return(
+    const turbowasm_component_type_graph *graph, bool has_result,
+    turbowasm_component_type_ref result, turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_flat_signature *out) {
+    turbowasm_component_flat_signature signature = {0};
+    turbowasm_status status;
+    if (graph == NULL || out == NULL || !pointer_type_valid(pointer_type))
+        return TURBOWASM_INVALID_ARGUMENT;
+    status = flatten_parameters(graph, &result, has_result ? 1u : 0u,
+        pointer_type, TURBOWASM_COMPONENT_MAX_FLAT_PARAMS, &signature);
+    if (status == TURBOWASM_OK) *out = signature;
+    return status;
+}
 
 static bool unicode_scalar_valid(uint32_t value) {
     return value <= UINT32_C(0x10ffff) &&

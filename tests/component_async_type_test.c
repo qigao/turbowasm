@@ -1,5 +1,6 @@
-#include "component_type_graph.h"
+#include "component_canonical.h"
 #include <tinytest.h>
+#include <string.h>
 
 static turbowasm_component_type_graph graph;
 static turbowasm_component_type_graph other_graph;
@@ -52,6 +53,125 @@ spec("private Component future and stream types") {
     after_each() {
         turbowasm_component_type_graph_destroy(&graph);
         turbowasm_component_type_graph_destroy(&other_graph);
+    }
+
+    it("calculates async lift and lower signatures at both flat parameter limits") {
+        static const uint32_t counts[] = {0u, 4u, 5u, 16u, 17u};
+        static const turbowasm_component_type_kind kinds[] = {
+            TURBOWASM_COMPONENT_TYPE_U32, TURBOWASM_COMPONENT_TYPE_U64,
+            TURBOWASM_COMPONENT_TYPE_F32, TURBOWASM_COMPONENT_TYPE_F64
+        };
+        static const turbowasm_component_flat_type flat[] = {
+            TURBOWASM_COMPONENT_FLAT_I32, TURBOWASM_COMPONENT_FLAT_I64,
+            TURBOWASM_COMPONENT_FLAT_F32, TURBOWASM_COMPONENT_FLAT_F64
+        };
+        turbowasm_component_type_ref params[17];
+        unsigned width, result, size, mode, i;
+        for (i = 0u; i < 17u; ++i) params[i] = scalar(kinds[i % 4u]);
+        for (width = 0u; width < 2u; ++width)
+            for (result = 0u; result < 3u; ++result)
+                for (size = 0u; size < sizeof(counts) / sizeof(counts[0]); ++size) {
+                    uint32_t count = counts[size];
+                    turbowasm_component_pointer_type pointer = width ? TURBOWASM_COMPONENT_POINTER_I64 : TURBOWASM_COMPONENT_POINTER_I32;
+                    turbowasm_component_flat_type address = width ? TURBOWASM_COMPONENT_FLAT_I64 : TURBOWASM_COMPONENT_FLAT_I32;
+                    turbowasm_component_flat_signature signature;
+                    check_true(turbowasm_component_type_graph_allocate(&graph, 1u));
+                    check_true(turbowasm_component_type_graph_define_function(&graph, 0u, params, count,
+                        result != 0u, scalar(result == 2u ? TURBOWASM_COMPONENT_TYPE_STRING : TURBOWASM_COMPONENT_TYPE_U32)));
+                    check_equal(turbowasm_component_canonical_flatten_function_abi(&graph, 0u, pointer,
+                        TURBOWASM_COMPONENT_CANONICAL_LOWER, TURBOWASM_COMPONENT_ABI_ASYNC, &signature), TURBOWASM_OK);
+                    check_equal(signature.param_count, (count > 4u ? 1u : count) + (result != 0u));
+                    check_equal(signature.params_indirect, count > 4u);
+                    check_equal(signature.results_indirect, result != 0u);
+                    if (count > 4u) check_equal(signature.params[0], address);
+                    else for (i = 0u; i < count; ++i) check_equal(signature.params[i], flat[i % 4u]);
+                    if (result != 0u) check_equal(signature.params[signature.param_count - 1u], address);
+                    check_equal(signature.result_count, 1u); check_equal(signature.results[0], TURBOWASM_COMPONENT_FLAT_I32);
+                    for (mode = 0u; mode < 2u; ++mode) {
+                        check_equal(turbowasm_component_canonical_flatten_function_abi(&graph, 0u, pointer,
+                            TURBOWASM_COMPONENT_CANONICAL_LIFT,
+                            mode ? TURBOWASM_COMPONENT_ABI_ASYNC_CALLBACK : TURBOWASM_COMPONENT_ABI_ASYNC,
+                            &signature), TURBOWASM_OK);
+                        check_equal(signature.param_count, count > 16u ? 1u : count);
+                        check_equal(signature.params_indirect, count > 16u); check_false(signature.results_indirect);
+                        if (count > 16u) check_equal(signature.params[0], address);
+                        else for (i = 0u; i < count; ++i) check_equal(signature.params[i], flat[i % 4u]);
+                        check_equal(signature.result_count, mode);
+                        if (mode) check_equal(signature.results[0], TURBOWASM_COMPONENT_FLAT_I32);
+                    }
+                    turbowasm_component_type_graph_destroy(&graph);
+                }
+    }
+
+    it("passes task return payloads directly through sixteen carriers and indirectly above it") {
+        turbowasm_component_type_ref elements[20];
+        turbowasm_component_flat_signature signature;
+        unsigned width, count, i;
+        for (i = 0u; i < 20u; ++i) elements[i] = scalar(TURBOWASM_COMPONENT_TYPE_U64);
+        for (width = 0u; width < 2u; ++width)
+            for (count = 1u; count <= 20u; ++count) {
+                turbowasm_component_pointer_type pointer = width ? TURBOWASM_COMPONENT_POINTER_I64 : TURBOWASM_COMPONENT_POINTER_I32;
+                check_true(turbowasm_component_type_graph_allocate(&graph, 1u));
+                check_true(turbowasm_component_type_graph_define_tuple(&graph, 0u, elements, count));
+                check_equal(turbowasm_component_canonical_flatten_task_return(&graph, true,
+                    indexed(0u), pointer, &signature), TURBOWASM_OK);
+                check_equal(signature.param_count, count > 16u ? 1u : count);
+                check_equal(signature.params_indirect, count > 16u); check_false(signature.results_indirect);
+                check_equal(signature.result_count, 0u);
+                if (count > 16u) check_equal(signature.params[0],
+                    width ? TURBOWASM_COMPONENT_FLAT_I64 : TURBOWASM_COMPONENT_FLAT_I32);
+                else for (i = 0u; i < count; ++i) check_equal(signature.params[i], TURBOWASM_COMPONENT_FLAT_I64);
+                check_equal(turbowasm_component_canonical_flatten_task_return(&graph, false,
+                    indexed(UINT32_MAX), pointer, &signature), TURBOWASM_OK);
+                check_equal(signature.param_count, 0u); check_equal(signature.result_count, 0u);
+                check_false(signature.params_indirect);
+                turbowasm_component_type_graph_destroy(&graph);
+            }
+    }
+
+    it("flattens nested endpoint task results as handles without flattening their payloads") {
+        turbowasm_component_flat_signature signature;
+        turbowasm_component_type_ref fields[2] = {indexed(0u), indexed(1u)};
+        check_true(turbowasm_component_type_graph_allocate(&graph, 4u));
+        check_true(turbowasm_component_type_graph_define_async_value(&graph, 0u,
+            TURBOWASM_COMPONENT_TYPE_FUTURE, true, scalar(TURBOWASM_COMPONENT_TYPE_STRING)));
+        check_true(turbowasm_component_type_graph_define_async_value(&graph, 1u,
+            TURBOWASM_COMPONENT_TYPE_STREAM, true, indexed(0u)));
+        check_true(turbowasm_component_type_graph_define_tuple(&graph, 2u, fields, 2u));
+        check_true(turbowasm_component_type_graph_define_function(&graph, 3u, fields, 2u, true, indexed(2u)));
+        check_equal(turbowasm_component_canonical_flatten_function_abi(&graph, 3u, TURBOWASM_COMPONENT_POINTER_I64,
+            TURBOWASM_COMPONENT_CANONICAL_LOWER, TURBOWASM_COMPONENT_ABI_ASYNC, &signature), TURBOWASM_OK);
+        check_equal(signature.param_count, 3u); check_equal(signature.params[0], TURBOWASM_COMPONENT_FLAT_I32);
+        check_equal(signature.params[1], TURBOWASM_COMPONENT_FLAT_I32); check_equal(signature.params[2], TURBOWASM_COMPONENT_FLAT_I64);
+        check_equal(turbowasm_component_canonical_flatten_task_return(&graph, true, indexed(2u),
+            TURBOWASM_COMPONENT_POINTER_I64, &signature), TURBOWASM_OK);
+        check_equal(signature.param_count, 2u); check_equal(signature.params[0], TURBOWASM_COMPONENT_FLAT_I32);
+        check_equal(signature.params[1], TURBOWASM_COMPONENT_FLAT_I32); check_false(signature.params_indirect);
+    }
+
+    it("preserves signature outputs on invalid modes and late malformed types") {
+        turbowasm_component_flat_signature signature, original;
+        turbowasm_component_type_ref params[2] = {scalar(TURBOWASM_COMPONENT_TYPE_U32), indexed(1u)};
+        check_true(turbowasm_component_type_graph_allocate(&graph, 1u));
+        check_true(turbowasm_component_type_graph_define_function(&graph, 0u, params, 2u, false, indexed(UINT32_MAX)));
+        memset(&signature, 0xa5, sizeof(signature)); memcpy(&original, &signature, sizeof(signature));
+        check_equal(turbowasm_component_canonical_flatten_function_abi(&graph, 0u, TURBOWASM_COMPONENT_POINTER_I32,
+            TURBOWASM_COMPONENT_CANONICAL_LOWER, TURBOWASM_COMPONENT_ABI_ASYNC_CALLBACK, &signature), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(&signature, &original, sizeof(signature));
+        check_equal(turbowasm_component_canonical_flatten_function_abi(&graph, 0u, TURBOWASM_COMPONENT_POINTER_I32,
+            TURBOWASM_COMPONENT_CANONICAL_LIFT, (turbowasm_component_canonical_abi)99, &signature), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(&signature, &original, sizeof(signature));
+        check_not_equal(turbowasm_component_canonical_flatten_function_abi(&graph, 0u, TURBOWASM_COMPONENT_POINTER_I32,
+            TURBOWASM_COMPONENT_CANONICAL_LIFT, TURBOWASM_COMPONENT_ABI_ASYNC, &signature), TURBOWASM_OK);
+        check_equal(&signature, &original, sizeof(signature));
+        graph.types[0].as.function.param_count = 1u;
+        graph.types[0].as.function.has_result = true; graph.types[0].as.function.result = indexed(1u);
+        check_not_equal(turbowasm_component_canonical_flatten_function(&graph, 0u, TURBOWASM_COMPONENT_POINTER_I32,
+            TURBOWASM_COMPONENT_CANONICAL_LOWER, &signature), TURBOWASM_OK);
+        check_equal(&signature, &original, sizeof(signature));
+        check_not_equal(turbowasm_component_canonical_flatten_task_return(&graph, true, indexed(1u),
+            TURBOWASM_COMPONENT_POINTER_I32, &signature), TURBOWASM_OK);
+        check_equal(&signature, &original, sizeof(signature));
     }
 
     it("represents unit endpoints without a payload reference") {

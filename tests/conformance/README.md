@@ -903,3 +903,27 @@ then passed with all three focused targets in 0.10 seconds: endpoint 28 cases /
 1155 assertions, codec 14 / 630, and buffer 13 / 948. Production code was unchanged
 after the broader regression. Canonical guest bindings, scheduling, and public
 host task/lifetime APIs remain unqualified and are not enabled by this primitive.
+At `e9afd8f`, the [native run](https://github.com/qigao/turbowasm/actions/runs/37672985127)
+passed Windows, Android cross-build, Linux MIR (187/187 in 1.22 seconds), and
+macOS arm64 MIR (187/187 in 3.09 seconds). Ordinary Linux was still running when
+these results were recorded.
+
+## Private async canonical signatures
+
+Canonical signature calculation now supports synchronous, stackful async and
+callback async modes. Async lowers use the four-carrier direct parameter limit,
+an address for payload results, and an i32 subtask return word. Async lifts retain
+the sixteen-carrier parameter limit and return either no Core values or one i32
+callback word. Separate task.return signatures carry up to sixteen payload
+carriers directly and use one address above that limit. Only addresses change
+width under memory64. Existing synchronous adapters use the same implementation
+in synchronous mode, and signature outputs remain unchanged on failure.
+
+The async type suite covers both memory widths, mixed integer/float carriers,
+4/5 and 16/17 parameter boundaries, unit/scalar/string results, callback and
+stackful lifts, task.return tuples through twenty carriers, nested endpoint
+results, invalid modes and malformed late references. Windows ASan passed five
+focused targets in 0.25 seconds and the related 58/58 targets in 2.72 seconds.
+These tests qualify private signature calculation and synchronous regression;
+they do not qualify async function decoding, canonical option validation, task
+scheduling, or public async execution.

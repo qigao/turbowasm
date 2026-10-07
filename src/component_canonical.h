@@ -11,6 +11,7 @@
 
 enum {
     TURBOWASM_COMPONENT_MAX_FLAT_PARAMS = 16u,
+    TURBOWASM_COMPONENT_MAX_FLAT_ASYNC_PARAMS = 4u,
     TURBOWASM_COMPONENT_MAX_FLAT_RESULTS = 1u,
     TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS = 17u
 };
@@ -31,6 +32,12 @@ typedef enum turbowasm_component_canonical_context {
     TURBOWASM_COMPONENT_CANONICAL_LIFT = 0,
     TURBOWASM_COMPONENT_CANONICAL_LOWER
 } turbowasm_component_canonical_context;
+
+typedef enum turbowasm_component_canonical_abi {
+    TURBOWASM_COMPONENT_ABI_SYNC = 0,
+    TURBOWASM_COMPONENT_ABI_ASYNC,
+    TURBOWASM_COMPONENT_ABI_ASYNC_CALLBACK
+} turbowasm_component_canonical_abi;
 
 typedef struct turbowasm_component_layout {
     uint64_t alignment;
@@ -237,6 +244,29 @@ turbowasm_status turbowasm_component_canonical_flatten_function(
     turbowasm_component_type_id function_type,
     turbowasm_component_pointer_type pointer_type,
     turbowasm_component_canonical_context context,
+    turbowasm_component_flat_signature *out);
+
+/* Private signature calculation over validated immutable types; this does not
+ * admit async binaries or validate canonical options/function async typing.
+ * Callback mode is lift-only. Async lifts return no payload carriers (callback
+ * lifts return one i32 control word); task.return carries the payload separately.
+ * Async lowers return one i32 subtask word and append a result address whenever
+ * a payload is present. results_indirect describes that address, not task.return.
+ * All signature helpers preserve output on failure. */
+turbowasm_status turbowasm_component_canonical_flatten_function_abi(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_canonical_context context,
+    turbowasm_component_canonical_abi abi,
+    turbowasm_component_flat_signature *out);
+
+/* task.return has no Core results and receives up to 16 flat payload carriers,
+ * or one address beyond that limit. Unit return ignores the type reference. */
+turbowasm_status turbowasm_component_canonical_flatten_task_return(
+    const turbowasm_component_type_graph *graph, bool has_result,
+    turbowasm_component_type_ref result,
+    turbowasm_component_pointer_type pointer_type,
     turbowasm_component_flat_signature *out);
 
 /*

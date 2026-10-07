@@ -693,6 +693,18 @@ cleanup under interpreted and Linux/macOS MIR execution. WASI 0.2 streams remain
 their existing resource interfaces; Component streams do not silently replace
 those contracts.
 
+Private canonical signature calculation distinguishes synchronous, stackful async,
+and callback async ABIs. Async lowers permit four direct parameter carriers,
+append a result-memory address for any non-unit result, and return an i32 subtask
+word. Async lifts retain the sixteen-parameter limit, returning either no Core
+values or one i32 callback control word. Their actual payload is passed separately
+to task.return, with sixteen direct carriers or one memory address above
+that limit. Memory64 changes address carriers but never endpoint/subtask/control
+words. The existing synchronous adapter uses the same calculation in sync mode.
+Signature outputs are published only on success. This calculation does not admit
+async function types or canonical options; decoding, option validation, tasks and
+execution remain separate integration gates.
+
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and
 terminal-event delivery separately. Subtask start and resolve notifications
