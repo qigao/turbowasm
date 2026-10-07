@@ -109,6 +109,7 @@ typedef struct turbowasm_component_exec_canon_lower_context {
     turbowasm_component_name function_name;
     const turbowasm_component_type_graph *graph;
     turbowasm_component_type_id function_type;
+    uint32_t local_adapter_index;
 
     turbowasm_component_flat_signature flat_signature;
     turbowasm_host_function_type host_type;

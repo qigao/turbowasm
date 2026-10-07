@@ -106,9 +106,11 @@ destruction traps or the suspended call is cancelled.
 Guest realloc reached during canonical lowering shares that control too; failed
 or cancelled result conversion restores the leave gate without publishing a
 partial host result.
-This does not complete the Component Model: local-function canonical lowering,
+Local-function canonical lowering shares these adapters and resource ownership
+rules, including aliases, Core start calls, nested composite values and string
+conversion across memory32/memory64. Lowering of large or indirect parameter tuples,
 the full async/future/stream surface and broader WASI 0.2 interfaces remain work
-in progress.
+in progress; the Component Model is not yet complete.
 
 MIR admits the complete helper-backed SIMD instruction set, including shuffle,
 lane extraction/replacement, extending/splat/zero loads and lane loads/stores.

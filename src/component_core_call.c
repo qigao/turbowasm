@@ -171,6 +171,7 @@ static turbowasm_status lift_owned_result(
     memset(out, 0, sizeof(*out));
     out->kind = TURBOWASM_COMPONENT_TYPE_OWN;
     out->as.resource_rep = rep;
+    out->resource_identity = identity;
     return TURBOWASM_OK;
 }
 
@@ -962,7 +963,11 @@ static turbowasm_status component_post_return(
     }
     if (adapter->may_leave != NULL)
         *adapter->may_leave = false;
-    if (control != NULL)
+    if (adapter->host_call != NULL)
+        status = turbowasm_instance_invoke_from_host(adapter->host_call,
+            adapter->post_return_instance, adapter->post_return_function_index,
+            results, count, NULL, 0u, &returned, trap);
+    else if (control != NULL)
         status = turbowasm_instance_invoke_internal(
             adapter->post_return_instance->impl, adapter->post_return_function_index,
             results, count, NULL, 0u, &returned, trap, control);
@@ -1113,15 +1118,19 @@ turbowasm_status turbowasm_component_core_call_invoke(
 
     if (adapter->admission_commit != NULL)
         adapter->admission_commit(adapter->admission_context);
-    status = turbowasm_instance_invoke(
-        adapter->instance,
-        adapter->function_index,
-        core_args,
-        core_arg_count,
-        core_results,
-        adapter->flat_signature.result_count,
-        &core_result_count,
-        trap);
+    if (adapter->host_call != NULL)
+        status = turbowasm_instance_invoke_from_host(adapter->host_call,
+            adapter->instance, adapter->function_index, core_args, core_arg_count,
+            core_results, adapter->flat_signature.result_count, &core_result_count, trap);
+    else
+        status = turbowasm_instance_invoke(adapter->instance,
+            adapter->function_index, core_args, core_arg_count, core_results,
+            adapter->flat_signature.result_count, &core_result_count, trap);
+    if (status == TURBOWASM_EXCEPTION) {
+        ((turbowasm_instance_impl *)adapter->instance->impl)->pending_exception = NULL;
+        *trap = TURBOWASM_TRAP_UNREACHABLE;
+        status = TURBOWASM_TRAPPED;
+    }
 
     if (status != TURBOWASM_OK) {
         /*

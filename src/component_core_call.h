@@ -42,6 +42,8 @@ typedef struct turbowasm_component_core_call_adapter {
     uint32_t post_return_function_index;
     /* Shared with the owning exec's canon-lower boundary. */
     bool *may_leave;
+    /* Non-NULL only in an invocation-local adapter copy. */
+    turbowasm_host_call *host_call;
 
     turbowasm_component_canonical_memory memory;
     turbowasm_component_flat_signature flat_signature;

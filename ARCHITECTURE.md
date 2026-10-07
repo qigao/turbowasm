@@ -691,6 +691,36 @@ rollback operation for them. Realloc called directly while preparing an ordinary
 host entry retains that entry's existing synchronous semantics. Tests cover
 memory32/memory64, suspension, cancellation, trap/exception conversion and depth.
 
+## Local canonical lowering
+
+Local canonical lowering binds a Component function index to the same lift
+adapter used by host calls. Function/alias maps are built from binary metadata
+before Core instantiation; adapters are admitted on first use once their earlier
+Core providers exist, including consumer start functions, and all remaining
+adapters are admitted before the exec is published. There is no second mutable
+function registry. Each nested invocation copies the adapter and memory options
+onto its coroutine frame, borrowing the original host call for its Core body,
+realloc and post-return. No public ABI or new execution owner is introduced.
+
+Local resource arguments lift through the exec's canonical table: own removes
+the caller handle, while borrow lends the existing handle until return or unwind.
+The callee receives ownership only after all argument lowering succeeds. Local
+owned results carry a private release obligation until all caller-side result
+lowering succeeds; newly created result handles are staged and removed if a
+later field fails. Commit transfers them to the caller's table exactly once.
+Destructors on rollback follow the same borrowed execution control. Existing
+resource quotas, canonical nesting/size limits and Runtime depth/fuel limits
+bound storage and work. Core failures consume already admitted own arguments;
+unpublished result owners are destroyed, never replayed. Imported-provider
+adapters retain their existing conversion contract.
+
+Duplicating a local interpreter or routing through synthetic external imports
+would create competing type/ownership state. Reusing lift admission and the
+canonical table keeps the source of truth unchanged. Validation covers aliases,
+start functions, scalar/composite/string values, memory32/64, own/borrow movement,
+allocation failure, post-return, cancellation and native re-entry. Rollback is
+to reject local canonical lowering before instance publication.
+
 ## Canonical string encodings
 
 The [pinned Canonical ABI](https://github.com/WebAssembly/component-model/blob/a25fc0b372dd21f07f0242c46e98bd0f1ea0c0e1/design/mvp/CanonicalABI.md#storing)

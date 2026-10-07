@@ -653,3 +653,23 @@ validation. Windows ASan passed the focused test and the related 50/50 tests in
 the changes are private Component call contexts and error propagation. Native
 MIR qualification remains pending while GitHub rejects branch pushes with an
 Internal Server Error. Local-function canonical lowering remains separate work.
+
+## Local canonical lowering
+
+Local canon lower now reuses lift adapters, including local export/instance
+aliases and calls from a Core start function. Invocation-local copies retain
+the original execution control for the body, realloc and post-return. Own
+arguments transfer at callee admission; borrow loans last through unwind. Owned
+result handles remain staged until every result field has lowered successfully.
+
+`component_local_lower_test.c` has eleven cases covering start/alias binding,
+memory64 UTF-8 to memory32 UTF-16 conversion, local own/borrow movement, nested
+post-return fuel suspension/cancellation, resource loans across suspension,
+string allocation failures, owned-result cleanup failure, borrow cancellation,
+composite-result rollback and early/lazy initialization allocation failures.
+Its WAT fixture passes wasm-tools 1.261.0 validation. Windows ASan passed the
+related 51/51 tests in 2.59 seconds; the final initialization-failure extension
+passed with all eleven cases and 48,391 assertions. Native variants check that
+the suspended local body and post-return functions are compiled; their CI
+qualification is still pending. Large/indirect canonical parameter tuples,
+complete async/future/stream and broader WASI 0.2 remain separate work.
