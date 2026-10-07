@@ -153,4 +153,4 @@ jobs:
           if [[ "$CONFORMANCE_SUITE" != core3* ]]; then
             ctest --preset "$CONFORMANCE_PRESET" -R '^turbowasm_conformance_harness$'
           fi
-          ctest --preset "$CONFORMANCE_PRESET" -R "^turbowasm_conformance_${CONFORMANCE_SUITE}$"
+          ctest --preset "$CONFORMANCE_PRESET" --verbose -R "^turbowasm_conformance_${CONFORMANCE_SUITE}$"
