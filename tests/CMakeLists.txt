@@ -1956,6 +1956,11 @@ target_include_directories(turbowasm_memory64_execution_test PRIVATE "${PROJECT_
 target_link_libraries(turbowasm_memory64_execution_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
 add_test(NAME turbowasm_memory64_execution_test COMMAND turbowasm_memory64_execution_test)
 
+add_executable(turbowasm_scalar_tail_calls_test scalar_tail_calls_test.c)
+target_include_directories(turbowasm_scalar_tail_calls_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_scalar_tail_calls_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_scalar_tail_calls_test COMMAND turbowasm_scalar_tail_calls_test)
+
 add_executable(turbowasm_scalar_results_test scalar_results_test.c)
 target_include_directories(turbowasm_scalar_results_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(turbowasm_scalar_results_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
@@ -1967,6 +1972,12 @@ target_link_libraries(turbowasm_atomic_lowering_test PRIVATE TurboWasm::Runtime 
 add_test(NAME turbowasm_atomic_lowering_test COMMAND turbowasm_atomic_lowering_test)
 
 if(TURBOWASM_ENABLE_MIR_JIT)
+  add_executable(turbowasm_mir_scalar_tail_calls_test scalar_tail_calls_test.c)
+  target_include_directories(turbowasm_mir_scalar_tail_calls_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_scalar_tail_calls_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_scalar_tail_calls_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_scalar_tail_calls_test COMMAND turbowasm_mir_scalar_tail_calls_test)
+
   add_executable(turbowasm_mir_scalar_results_test scalar_results_test.c)
   target_include_directories(turbowasm_mir_scalar_results_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
   target_compile_definitions(turbowasm_mir_scalar_results_test PRIVATE TURBOWASM_TEST_MIR=1)

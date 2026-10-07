@@ -136,7 +136,7 @@ values. Trap/status handling remains at the invocation boundary.
 
 This removes the private native entry's arity and mixed-scalar argument limits
 without changing the installed API or its data layout. General scalar direct
-calls use the scratch protocol below; non-self tail calls remain separately limited.
+calls and tail transfers use the scratch protocols below.
 The alternative of generating every C signature combination scales
 exponentially with arity and does not solve mixed types or future reference
 carriers. The array boundary adds scalar loads at function entry. Regression
@@ -198,6 +198,35 @@ existing small straight-line specializations. No public API or wire format
 changes. Tests must require compiled callers, exercise nested mixed and empty
 tuples, compare fuel/trap behavior, and verify allocation failure and cleanup.
 Rollback removes general-call admission, emission and scratch allocation together.
+
+### MIR scalar tail-transfer ownership
+
+Following the [Core tail-call execution rule](https://webassembly.github.io/spec/core/exec/instructions.html#exec-return-call),
+scalar `return_call` marshals a validated argument tuple before returning from
+generated code. The Runtime dispatcher owns the pending tuple until the next
+callee completes or replaces it. Two values fit in the existing inline storage;
+larger tuples reuse the Runtime value-stack allocator, with checked size arithmetic,
+uint32 signature bounds and the configured allocation quota. Capacity is bounded
+by the largest validated parameter tuple encountered in this module (rounded by
+the existing reserve policy), independent of tail-chain length. The pending count
+is published only after type checks, reservation and copying succeed. Allocation
+failure returns OUT_OF_MEMORY without publishing a transfer or result.
+
+The single-threaded dispatcher frees retained storage on every exit, including
+interpreter/host execution, trap, fuel exhaustion and interruption. Nested ordinary
+calls own separate dispatch storage. MIR call scratch may be released immediately
+after the copy; no borrowed pointer into it survives. Inputs must remain valid for
+the copy and cannot span a reserve operation that invalidates their own storage.
+Only scalar signatures are admitted by this lowering; it adds no GC ownership
+contract. Self-tail loops continue to replace locals directly.
+
+Dispatch repeats at the same logical depth after generated frames unwind. Result
+capacity and ordered result types remain those of the original invocation; zero
+and multiple results require no native return-register convention. This avoids
+recursive C calls and platform-specific tail ABIs without changing installed APIs
+or serialized formats. Tests cover long mixed-arity chains, interpreted and host
+targets, empty/mixed results, allocation cleanup and checkpoint parity. Rollback
+must remove general-tail admission, emission and dispatcher storage together.
 
 ## Component host values and resource ownership (approved design)
 

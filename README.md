@@ -55,9 +55,10 @@ existing SIMD memory subset through Runtime helpers. Shared memory32/memory64
 also use these helpers, including atomic load/store, RMW, compare-exchange,
 fence and interruptible wait/notify. The private scalar entry
 accepts mixed scalar parameters, more than two arguments, and zero or multiple
-scalar results. Direct calls support the same scalar tuples through Runtime,
-including interpreted callees and host imports. Instruction admission and
-non-self tail-call limits still apply. Each instance/backend retains one execution owner,
+scalar results. Direct calls and direct tail calls support the same scalar tuples
+through Runtime, including interpreted callees and host imports. Tail dispatch
+reuses the logical call depth. Instruction admission still excludes reference/vector
+call signatures and indirect tail calls. Each instance/backend retains one execution owner,
 while distinct instances can import the same shared backing. Native MIR
 memory64 verification passed the Linux and macOS MIR test profiles; see the
 [qualification record](tests/conformance/README.md). The Windows MIR dependency

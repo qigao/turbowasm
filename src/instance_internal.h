@@ -18,7 +18,7 @@
 
 enum {
     TURBOWASM_WASM_PAGE_SIZE = 65536u,
-    TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT = 2u,
+    TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS = 2u,
     TURBOWASM_MEMORY_WAITER_CAPACITY = 64u
 };
 
@@ -232,7 +232,10 @@ typedef struct turbowasm_jit_invocation_context {
     uint32_t tail_function_index;
     size_t tail_argument_count;
     turbowasm_value
-        tail_arguments[TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT];
+        tail_arguments[TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS];
+
+    /* Larger pending tuples belong to the enclosing Runtime dispatcher. */
+    struct turbowasm_value_stack *tail_storage;
 
     /* Invocation-local v128 temporary frame used by helper-backed JIT
      * lowering. Nested compiled calls save/replace/restore this frame. */

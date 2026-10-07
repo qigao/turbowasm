@@ -226,6 +226,9 @@ bool turbowasm_value_matches_semantic(
                 &module->validation, type->type_index));
 }
 
+static bool turbowasm_stack_reserve(
+    turbowasm_value_stack *stack, uint32_t required);
+
 turbowasm_status turbowasm_jit_request_tail_call(
     turbowasm_jit_invocation_context *context,
     uint32_t function_index,
@@ -241,8 +244,7 @@ turbowasm_status turbowasm_jit_request_tail_call(
     context->tail_call_pending = false;
     context->tail_argument_count = 0u;
 
-    if (argument_count > TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT ||
-        (argument_count != 0u && arguments == NULL)) {
+    if (argument_count != 0u && arguments == NULL) {
         context->call_status = TURBOWASM_UNSUPPORTED;
         context->call_trap = TURBOWASM_TRAP_NONE;
         return TURBOWASM_UNSUPPORTED;
@@ -271,7 +273,24 @@ turbowasm_status turbowasm_jit_request_tail_call(
             context->call_trap = TURBOWASM_TRAP_NONE;
             return TURBOWASM_TYPE_MISMATCH;
         }
-        context->tail_arguments[index] = arguments[index];
+    }
+
+    if (argument_count > TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS) {
+        if (context->tail_storage == NULL) {
+            context->call_status = TURBOWASM_INVALID_ARGUMENT;
+            context->call_trap = TURBOWASM_TRAP_NONE;
+            return context->call_status;
+        }
+        if (!turbowasm_stack_reserve(context->tail_storage, type->param_count)) {
+            context->call_status = TURBOWASM_OUT_OF_MEMORY;
+            context->call_trap = TURBOWASM_TRAP_NONE;
+            return context->call_status;
+        }
+        memmove(context->tail_storage->values, arguments,
+            argument_count * sizeof(*arguments));
+    } else if (argument_count != 0u) {
+        memmove(context->tail_arguments, arguments,
+            argument_count * sizeof(*arguments));
     }
 
     context->tail_function_index = function_index;
@@ -6075,7 +6094,8 @@ static turbowasm_status turbowasm_dispatch_function(
     const turbowasm_module_impl *module;
     const turbowasm_validation_function *function;
     turbowasm_jit_function_state *entry;
-    turbowasm_value tail_arguments[TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT];
+    turbowasm_value tail_arguments[TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS];
+    turbowasm_value_stack tail_storage = {0};
     turbowasm_status status;
 
     if (instance == NULL)
@@ -6087,12 +6107,7 @@ dispatch_again:
         function_index >= instance->jit_function_count ||
         (execution != NULL &&
          !instance->jit_backend.supports_execution_control)) {
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
+        goto interpret;
     }
 
     entry = &instance->jit_functions[function_index];
@@ -6101,35 +6116,20 @@ dispatch_again:
         goto invoke_compiled;
 
     if (entry->state == TURBOWASM_JIT_INTERPRET_ONLY) {
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
+        goto interpret;
     }
 
     if (entry->call_count != UINT32_MAX)
         ++entry->call_count;
 
     if (entry->call_count < instance->jit_hot_threshold) {
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
+        goto interpret;
     }
 
     module = turbowasm_module_impl_get(instance->module);
     if (module == NULL) {
         entry->state = TURBOWASM_JIT_INTERPRET_ONLY;
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
+        goto interpret;
     }
 
     function = turbowasm_validation_context_function(
@@ -6141,12 +6141,7 @@ dispatch_again:
             function_index,
             function)) {
         entry->state = TURBOWASM_JIT_INTERPRET_ONLY;
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
+        goto interpret;
     }
 
     if (turbowasm_jit_artifact_try_restore(
@@ -6170,12 +6165,7 @@ dispatch_again:
                 &entry->compiled);
         }
         entry->state = TURBOWASM_JIT_INTERPRET_ONLY;
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
+        goto interpret;
     }
 
     entry->state = TURBOWASM_JIT_COMPILED;
@@ -6189,6 +6179,7 @@ invoke_compiled:
             TURBOWASM_OK, TURBOWASM_TRAP_NONE
         };
 
+        context.tail_storage = &tail_storage;
         status = instance->jit_backend.invoke(
             &entry->compiled,
             &context,
@@ -6197,13 +6188,15 @@ invoke_compiled:
             result_count, trap);
         if (status != TURBOWASM_OK ||
             !context.tail_call_pending)
-            return status;
+            goto done;
 
-        if (context.tail_argument_count >
-                TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT)
-            return TURBOWASM_UNSUPPORTED;
-
-        if (context.tail_argument_count != 0u) {
+        if (context.tail_argument_count > TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS) {
+            if (context.tail_argument_count > tail_storage.capacity) {
+                status = TURBOWASM_INVALID_ARGUMENT;
+                goto done;
+            }
+            arguments = tail_storage.values;
+        } else if (context.tail_argument_count != 0u) {
             memcpy(
                 tail_arguments,
                 context.tail_arguments,
@@ -6228,6 +6221,14 @@ invoke_compiled:
          */
         goto dispatch_again;
     }
+
+interpret:
+    status = turbowasm_exec_function(instance, function_index,
+        arguments, argument_count, results, result_capacity,
+        result_count, trap, execution, depth);
+done:
+    turbowasm_rt_free(tail_storage.values);
+    return status;
 }
 
 turbowasm_status turbowasm_jit_instance_attach_backend_with_cache(
