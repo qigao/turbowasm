@@ -834,6 +834,19 @@ Core invocations need no control object. Result conversion can suspend in guest
 realloc just like parameter conversion; private destruction must unwind this
 resolve frame before abandoning the caller, while rejecting active reentry.
 
+Endpoint builtin bindings use the existing typed pair/copy engine. A task domain
+owns a bounded list of pairs created by stream/future.new; its table quota also
+bounds retained pair storage after readable ends move to another instance. Closed
+pairs are reclaimed on domain collection, and domain destruction rejects any
+still-live or transferred end. Each endpoint embeds one stable guest buffer
+descriptor, matching the existing one-operation invariant. Async calls retain
+this descriptor until event delivery; they do not retain a builtin stack frame.
+Synchronous copies pin the endpoint before conversion callbacks can reenter, then
+wait on the task's retained Core stack. Unwind cancels and delivers the private
+copy before releasing its memory borrow; destruction is rejected if a peer is inside
+conversion. Canonical resource/endpoint transactions and guest realloc contexts
+remain borrowed from the binding and must outlive all pending operations.
+
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and
 terminal-event delivery separately. Subtask start and resolve notifications

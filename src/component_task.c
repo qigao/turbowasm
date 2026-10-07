@@ -1,5 +1,6 @@
 #include "component_task.h"
 #include "component_subtask.h"
+#include "component_endpoint_builtin.h"
 #include "execution_internal.h"
 #include "module_internal.h"
 #include "instance_internal.h"
@@ -51,6 +52,8 @@ turbowasm_status turbowasm_component_task_domain_destroy(turbowasm_component_tas
     if (domain == NULL) return TURBOWASM_INVALID_ARGUMENT;
     if (domain->count != 0u || domain->active != NULL || domain->exclusive != NULL)
         return TURBOWASM_TRAPPED;
+    turbowasm_component_endpoint_domain_collect(domain);
+    if (domain->pairs != NULL) return TURBOWASM_TRAPPED;
     while (domain->sets != NULL) {
         turbowasm_status status = turbowasm_component_task_set_drop(domain, domain->sets->set.handle);
         if (status != TURBOWASM_OK) return status;
@@ -277,9 +280,12 @@ static turbowasm_status resume_active(turbowasm_component_task *task,
         turbowasm_host_wait wait;
         bool ready = task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_YIELD;
         if (!ready) {
-            status = task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_SUBTASK
-                ? turbowasm_component_subtask_cancel_ready(task->domain->table, task->builtin_wait_set, &ready)
-                : turbowasm_component_waitable_set_ready(task->domain->table, task->builtin_wait_set, &ready);
+            if (task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_ENDPOINT) {
+                bool can_unwind;
+                status = turbowasm_component_endpoint_builtin_ready(task->domain, task->builtin_wait_set, &ready, &can_unwind);
+            } else status = task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_SUBTASK
+                    ? turbowasm_component_subtask_cancel_ready(task->domain->table, task->builtin_wait_set, &ready)
+                    : turbowasm_component_waitable_set_ready(task->domain->table, task->builtin_wait_set, &ready);
             if (status != TURBOWASM_OK) return finish(task, status);
         }
         if (!ready) return TURBOWASM_YIELDED;
@@ -494,6 +500,11 @@ turbowasm_status turbowasm_component_task_destroy(turbowasm_component_task *task
     if (domain == NULL) return TURBOWASM_OK;
     if (domain->active != NULL || task->destroying ||
         (task->resolving && task->state != TURBOWASM_EXECUTION_YIELDED)) return TURBOWASM_TRAPPED;
+    if (task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_ENDPOINT) {
+        bool ready, can_unwind;
+        status = turbowasm_component_endpoint_builtin_ready(domain, task->builtin_wait_set, &ready, &can_unwind);
+        if (status != TURBOWASM_OK || !can_unwind) return status != TURBOWASM_OK ? status : TURBOWASM_TRAPPED;
+    }
     /* Result lowering may be suspended in guest realloc. Unwind its retained
      * resolve frame before detaching the caller; active reentry remains barred. */
     domain->active = task; task->destroying = true;

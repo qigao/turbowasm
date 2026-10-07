@@ -9,6 +9,7 @@ static turbowasm_status release_buffer(void *context) {
         endpoint->operation->leased = false;
     endpoint->operation = NULL;
     endpoint->available = NULL;
+    memset(&endpoint->guest_buffer, 0, sizeof(endpoint->guest_buffer));
     return endpoint->failure;
 }
 
@@ -121,8 +122,8 @@ static turbowasm_status transfer_buffers(turbowasm_component_endpoint *reader,
     return status;
 }
 
-turbowasm_status turbowasm_component_endpoint_submit(
-    turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer) {
+static turbowasm_status submit(
+    turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer, bool pinned) {
     turbowasm_component_endpoint *peer;
     turbowasm_component_buffer *other;
     turbowasm_component_endpoint_state next_self, next_peer = {0};
@@ -131,7 +132,7 @@ turbowasm_status turbowasm_component_endpoint_submit(
     bool self_available = false, other_finished = false;
     if (endpoint != NULL && endpoint->failure != TURBOWASM_OK) return endpoint->failure;
     if (!live(endpoint) || endpoint->operation != NULL ||
-        endpoint->waitable.delivering || endpoint->waitable.sync_waiter ||
+        endpoint->waitable.delivering || (endpoint->waitable.sync_waiter && !pinned) ||
         endpoint->waitable.state.endpoint.phase != TURBOWASM_COMPONENT_ENDPOINT_IDLE)
         return TURBOWASM_INVALID_ARGUMENT;
     status = validate_buffer(endpoint, buffer);
@@ -224,6 +225,42 @@ turbowasm_status turbowasm_component_endpoint_cancel(turbowasm_component_endpoin
         return TURBOWASM_TRAPPED;
     endpoint->available = NULL;
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_endpoint_submit(
+    turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer) {
+    return submit(endpoint, buffer, false);
+}
+
+turbowasm_status turbowasm_component_endpoint_submit_guest(
+    turbowasm_component_endpoint *endpoint, const turbowasm_component_buffer *buffer, bool synchronous) {
+    turbowasm_status status;
+    if (!live(endpoint) || buffer == NULL || buffer->kind != TURBOWASM_COMPONENT_BUFFER_GUEST ||
+        endpoint->operation != NULL || endpoint->guest_buffer.leased) return TURBOWASM_INVALID_ARGUMENT;
+    if (synchronous) {
+        status = turbowasm_component_waitable_wait_begin(endpoint->waitable.table, endpoint->waitable.handle);
+        if (status != TURBOWASM_OK) return status;
+    }
+    endpoint->guest_buffer = *buffer;
+    status = submit(endpoint, &endpoint->guest_buffer, synchronous);
+    if (status != TURBOWASM_OK) {
+        memset(&endpoint->guest_buffer, 0, sizeof(endpoint->guest_buffer));
+        if (synchronous) (void)turbowasm_component_waitable_wait_cancel(endpoint->waitable.table, endpoint->waitable.handle);
+    }
+    return status;
+}
+
+turbowasm_component_endpoint *turbowasm_component_endpoint_get(
+    turbowasm_component_resource_table *table, turbowasm_component_resource_handle handle,
+    turbowasm_component_handle_kind kind) {
+    turbowasm_component_waitable *waitable;
+    turbowasm_component_endpoint *endpoint;
+    if (kind < TURBOWASM_COMPONENT_HANDLE_STREAM_READ || kind > TURBOWASM_COMPONENT_HANDLE_FUTURE_WRITE) return NULL;
+    waitable = turbowasm_component_handle_object(table, handle, kind);
+    if (waitable == NULL || waitable->release_pending != release_buffer || waitable->release_context == NULL ||
+        waitable->table != table || waitable->handle != handle) return NULL;
+    endpoint = waitable->release_context;
+    return &endpoint->waitable == waitable && live(endpoint) && endpoint_kind(endpoint) == kind ? endpoint : NULL;
 }
 
 static bool movable_idle(const turbowasm_component_endpoint *endpoint) {

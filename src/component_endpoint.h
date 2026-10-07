@@ -14,6 +14,7 @@ typedef struct turbowasm_component_endpoint {
     turbowasm_component_type_ref payload;
     turbowasm_component_buffer *available;
     turbowasm_component_buffer *operation;
+    turbowasm_component_buffer guest_buffer;
     turbowasm_status failure;
     bool has_payload;
     bool readable;
@@ -44,6 +45,15 @@ turbowasm_status turbowasm_component_endpoint_pair_open(
  * release buffer borrows; the failed pair can close but cannot copy or move. */
 turbowasm_status turbowasm_component_endpoint_submit(
     turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer);
+/* Own the descriptor (not guest memory/contexts) until event delivery. A sync
+ * submission pins before conversion; the caller must wait_end/cancel its pin.
+ * Failure before admission preserves the endpoint and consumes no buffer. */
+turbowasm_status turbowasm_component_endpoint_submit_guest(
+    turbowasm_component_endpoint *endpoint, const turbowasm_component_buffer *buffer, bool synchronous);
+/* Validate the registered object's provenance before interpreting it as an end. */
+turbowasm_component_endpoint *turbowasm_component_endpoint_get(
+    turbowasm_component_resource_table *table, turbowasm_component_resource_handle handle,
+    turbowasm_component_handle_kind kind);
 turbowasm_status turbowasm_component_endpoint_take(
     turbowasm_component_endpoint *endpoint, turbowasm_component_event *out_event);
 /* Internal owner transitions for readable ends. Only IDLE, unjoined ends with

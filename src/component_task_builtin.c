@@ -1,5 +1,6 @@
 #include "component_task_builtin.h"
 #include "component_subtask.h"
+#include "component_endpoint_builtin.h"
 #include "instance_internal.h"
 #include <string.h>
 
@@ -30,8 +31,17 @@ turbowasm_status turbowasm_component_task_builtin_bind(turbowasm_component_task_
         case TURBOWASM_COMPONENT_WAITABLE_SET_POLL: case TURBOWASM_COMPONENT_WAITABLE_JOIN:
         case TURBOWASM_COMPONENT_SUBTASK_CANCEL: case TURBOWASM_COMPONENT_SUBTASK_DROP:
             break;
-        default:
-            return TURBOWASM_UNSUPPORTED;
+        default: {
+            bool future;
+            const turbowasm_component_type *type = turbowasm_component_type_graph_get(graph, definition->type_index);
+            if (!turbowasm_component_endpoint_builtin_kind(definition->kind, &future)) return TURBOWASM_UNSUPPORTED;
+            if (type == NULL || type->kind != (future ? TURBOWASM_COMPONENT_TYPE_FUTURE : TURBOWASM_COMPONENT_TYPE_STREAM))
+                return TURBOWASM_TYPE_MISMATCH;
+            if ((definition->kind == TURBOWASM_COMPONENT_STREAM_READ || definition->kind == TURBOWASM_COMPONENT_STREAM_WRITE ||
+                 definition->kind == TURBOWASM_COMPONENT_FUTURE_READ || definition->kind == TURBOWASM_COMPONENT_FUTURE_WRITE) &&
+                type->as.async_value.has_payload && !definition->has_memory) return TURBOWASM_INVALID_ARGUMENT;
+            break;
+        }
     }
     if (definition->has_memory) {
         turbowasm_memory_desc desc;
@@ -57,7 +67,7 @@ turbowasm_status turbowasm_component_task_builtin_bind(turbowasm_component_task_
     return TURBOWASM_OK;
 }
 
-static turbowasm_status suspend_builtin(turbowasm_component_task *task, turbowasm_host_call *call,
+turbowasm_status turbowasm_component_task_builtin_suspend(turbowasm_component_task *task, turbowasm_host_call *call,
     int kind, turbowasm_component_resource_handle set) {
     turbowasm_host_wait wait = {0};
     int completion;
@@ -87,7 +97,7 @@ static turbowasm_status set_event(turbowasm_component_task_builtin *binding, tur
     for (;;) {
         status = turbowasm_component_waitable_set_poll(binding->domain->table, set, &event);
         if (status != TURBOWASM_OK || !waiting || event.code != TURBOWASM_COMPONENT_EVENT_NONE) break;
-        status = suspend_builtin(binding->domain->active, call, TURBOWASM_COMPONENT_TASK_WAIT_SET, set);
+        status = turbowasm_component_task_builtin_suspend(binding->domain->active, call, TURBOWASM_COMPONENT_TASK_WAIT_SET, set);
         if (status != TURBOWASM_OK) break;
     }
     if (waiting) {
@@ -126,7 +136,7 @@ static turbowasm_status cancel_subtask(turbowasm_component_task_builtin *binding
             phase = UINT32_MAX;
             break;
         }
-        status = suspend_builtin(binding->domain->active, call, TURBOWASM_COMPONENT_TASK_WAIT_SUBTASK, handle);
+        status = turbowasm_component_task_builtin_suspend(binding->domain->active, call, TURBOWASM_COMPONENT_TASK_WAIT_SUBTASK, handle);
         if (status != TURBOWASM_OK) {
             cleanup = turbowasm_component_waitable_wait_cancel(binding->domain->table, handle);
             (void)cleanup; /* preserve the wait/unwind failure */
@@ -198,9 +208,9 @@ turbowasm_status turbowasm_component_task_builtin_invoke(void *context, turbowas
         case TURBOWASM_COMPONENT_WAITABLE_SET_POLL:
             status = set_event(binding, call, arguments, &result); break;
         case TURBOWASM_COMPONENT_THREAD_YIELD:
-            status = suspend_builtin(task, call, TURBOWASM_COMPONENT_TASK_WAIT_YIELD, 0); break;
+            status = turbowasm_component_task_builtin_suspend(task, call, TURBOWASM_COMPONENT_TASK_WAIT_YIELD, 0); break;
         default:
-            return TURBOWASM_UNSUPPORTED;
+            status = turbowasm_component_endpoint_builtin_invoke(binding, call, arguments, &result); break;
     }
     if (status != TURBOWASM_OK) {
         if (status == TURBOWASM_TRAPPED) *trap = TURBOWASM_TRAP_UNREACHABLE;

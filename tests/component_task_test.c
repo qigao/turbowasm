@@ -1302,12 +1302,12 @@ spec("private async Component Core task execution") {
         compiled("cancel-fuel"); compiled("builtin-subcancel-async");
     }
 
-    it("rejects unsupported families and invalid resolved bindings before publishing a host signature") {
+    it("rejects invalid endpoint types and resolved bindings before publishing a host signature") {
         turbowasm_component_task_builtin binding = {0};
         turbowasm_component_async_builtin definition = {0};
         turbowasm_component_canonical_memory memory = {0};
         definition.kind = TURBOWASM_COMPONENT_FUTURE_NEW;
-        check_equal(turbowasm_component_task_builtin_bind(&binding, &domain, &graph, &definition, NULL), TURBOWASM_UNSUPPORTED);
+        check_equal(turbowasm_component_task_builtin_bind(&binding, &domain, &graph, &definition, NULL), TURBOWASM_TYPE_MISMATCH);
         check_null(binding.domain);
         definition = builtin_binary.async_builtins[14];
         memory.instance = &instance; memory.memory_index = 1;

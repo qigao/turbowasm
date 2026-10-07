@@ -14,6 +14,8 @@ typedef struct turbowasm_component_task_domain {
     bool *may_leave;
     turbowasm_component_task *active, *exclusive;
     struct turbowasm_component_task_owned_set *sets;
+    struct turbowasm_component_task_owned_pair *pairs;
+    uint32_t pair_count;
     uint32_t count, limit, backpressure;
 } turbowasm_component_task_domain;
 
@@ -75,7 +77,8 @@ struct turbowasm_component_task {
     turbowasm_component_resource_handle waiting_set;
     /* Builtin host-wait continuation, separate from callback WAIT. */
     enum { TURBOWASM_COMPONENT_TASK_WAIT_NONE, TURBOWASM_COMPONENT_TASK_WAIT_YIELD,
-           TURBOWASM_COMPONENT_TASK_WAIT_SET, TURBOWASM_COMPONENT_TASK_WAIT_SUBTASK } builtin_wait;
+           TURBOWASM_COMPONENT_TASK_WAIT_SET, TURBOWASM_COMPONENT_TASK_WAIT_SUBTASK,
+           TURBOWASM_COMPONENT_TASK_WAIT_ENDPOINT } builtin_wait;
     turbowasm_component_resource_handle builtin_wait_set;
     uint64_t context_storage[2];
     bool between_callbacks, cancellation_requested, cancellation_delivered;

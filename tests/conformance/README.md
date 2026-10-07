@@ -1152,8 +1152,43 @@ failure sweep. MIR targets use the same suite with compiled-entry assertions.
 
 Windows ASan passed 22 call cases with 1903 assertions and the existing 50 task
 cases with 5988 assertions. The related Component/WASI/resumable/host-wait/memory/
-link/fuel/interrupt regression passed 77/77 targets in 3.18 seconds. Native MIR
-verification of this increment is pending. This is still a private invocation
+link/fuel/interrupt regression passed 77/77 targets in 3.18 seconds. At `5ee8469`,
+the [native run](https://github.com/qigao/turbowasm/actions/runs/37691360677) passed
+Windows, Android, ordinary Linux and macOS arm64 MIR. macOS passed 192/192 in
+3.28 seconds, including the compiled async call target in 0.02 seconds. Linux MIR
+is still pending in dependency setup. This is still a private invocation
 boundary: automatic binary binding, per-instance call ownership, endpoint builtin
 dispatch and retained public async handles remain incomplete. Public async
 admission remains closed until those integration requirements are verified.
+
+## Endpoint Core builtin binding
+
+The private task binding now dispatches stream/future new, read/write,
+cancel-read/write, drop-readable/writable and forward through the existing typed
+endpoint engine. New pairs have domain-owned stable storage bounded independently
+of local handle occupancy, so moving readable ends cannot bypass the capacity
+limit. Domain teardown rejects live transferred ends. Fully closed pairs are
+collected without invalidating their surviving peers.
+
+Each endpoint retains one guest buffer descriptor through event/error delivery.
+Synchronous copy pins before conversion callbacks, suspends on a retained Core
+host wait, and resumes only when its own event is ready. Destruction cancels the
+local copy and delivers its terminal event before releasing the memory borrow;
+it rejects destruction while a peer is converting that buffer. Async operations
+return BLOCKED with the descriptor retained independently of the initiating task.
+Resource and endpoint payloads use the shared buffer codec transaction hooks.
+
+The Core fixture covers packed handles, both memory widths, sync and async
+stream/future copies, cancellation, future completion/drop rules, forwarding,
+waitable-set delivery, payload/kind/range admission, forged waitables, domain
+capacity after handle transfer, allocator failures and half-pair rollback. Host
+string rendezvous checks retained realloc options, copy failures and reentrant
+event/destruction exclusion. Unit payloads ignore pointer values as specified.
+Windows ASan passed 16 builtin cases with 2977 assertions; the related
+Component/WASI/resumable/host-wait/memory/link/fuel/interrupt regression passed
+78/78 targets in 3.35 seconds. Native MIR verification of this increment is pending.
+
+These bindings remain private. Automatic Component binary instantiation, public
+async task/endpoint owners and per-instance retained callback contexts are still
+required before enabling public async admission. The broader Component/WASI
+completion goal is not established by this primitive-level qualification.
