@@ -125,10 +125,42 @@ and bounds traps. The memory64 suite additionally checks concurrent increments,
 wait/notify across growth, fence, wait interruption cleanup and fuel before an
 atomic side effect. The separate
 [Core 3.0 memory64 differential gate](https://github.com/qigao/turbowasm/actions/runs/37601580290)
-also passed. These results do not qualify the unimplemented native GC/table64,
-full exception, reference/vector call boundaries or general
-non-self tail-call paths.
+also passed. This memory64 gate does not qualify native GC/table64, full
+exception or reference/vector call boundaries. General direct scalar tail paths
+have a separate qualification below.
 
 The local Windows build can execute Runtime/helper regressions, but cannot
 build MIR: the configured `mir-jit` vcpkg port supports Linux, macOS and Android.
 A Windows pass is not evidence that the native MIR gate passed.
+
+## General scalar tail-call qualification
+
+At revision `f2d885e`, [native CI](https://github.com/qigao/turbowasm/actions/runs/37614909873)
+passed all five jobs. Linux MIR passed 152/152 tests in 0.42 seconds and macOS
+arm64 MIR passed 152/152 in 1.55 seconds. Windows qualification passed 137/137
+plus 16/16 installed-package tests; Linux qualification passed 138/138 plus
+17/17 installed-package tests. Android passed cross-compilation and the existing
+installed-consumer builds; no Android runtime execution is claimed.
+
+`scalar_tail_calls_test.c` requires compiled callers and both sides of a 4096-step
+mutual tail chain with alternating 4/21 scalar parameters. It checks mixed result
+bits, empty result tuples, zero-argument targets, interpreter targets, host
+re-entry, traps, every Runtime allocation failure in a growing chain, and fuel
+boundaries against the interpreter. The same suite uses a test backend on
+platforms without MIR to verify dispatcher ownership and constant logical depth.
+The structured-tail tiering regression now requires compilation as well.
+
+The Runtime implementation at `825ca7b` passed the Windows ASan profile: 139/139
+CTest entries in 252.81 seconds, including both Core 3.0 gates. An initial launch
+without the MSVC developer environment failed to load runtime DLLs and was
+stopped; the successful run used `VsDevCmd.bat` plus both SDK roots. The fixture
+and native-expectation follow-up at `f2d885e` passed the local tail-call target
+again. It replaces the fixture's unsupported MIR `i32.eqz` with an equivalent
+supported `if`; it does not add `i32.eqz` lowering or weaken native admission
+assertions.
+
+This qualifies direct scalar tail transfers, including non-self and imported
+calls, with arbitrary validated scalar tuple arity. It does not qualify indirect
+tail calls, reference/vector signatures, the remaining scalar opcode set, native
+GC/table64 or full exception lowering. Component Model async/future/stream and
+broader WASI 0.2 coverage remain separate work.
