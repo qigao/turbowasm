@@ -164,3 +164,28 @@ calls, with arbitrary validated scalar tuple arity. It does not qualify indirect
 tail calls, reference/vector signatures, the remaining scalar opcode set, native
 GC/table64 or full exception lowering. Component Model async/future/stream and
 broader WASI 0.2 coverage remain separate work.
+
+## Native table storage qualification
+
+At revision `32e8de1`, [native CI](https://github.com/qigao/turbowasm/actions/runs/37616984551)
+passed all five jobs. Linux MIR passed 154/154 tests in 0.49 seconds and macOS
+arm64 MIR passed 154/154 in 1.44 seconds. Windows qualification passed 138/138
+plus 16/16 installed-package tests; Linux qualification passed 139/139 plus
+17/17 installed-package tests. Android cross-compilation and installed-consumer
+builds passed; this is not an Android runtime result. The local Windows ASan
+selection passed 16/16 adjacent tests in 1.04 seconds.
+
+`table_storage_test.c` covers table.size, table.init, table.copy and elem.drop
+on table32/table64. Native builds require compiled callers. The eight cases check
+current size after growth, both overlap directions, mixed address widths,
+indices/lengths above 32 bits and signed i64 boundaries, empty ranges, consumed
+element segments, imported backing and original funcref owners, fuel before
+mutations, helper error propagation, and every Runtime table.init allocation
+failure. Expected status, trap, scalar result, all table entries and segment drop
+state are compared against the interpreter. Fixture binaries were generated and
+validated with the pinned wasm-tools 1.261.0.
+
+These tests qualify this table storage subset. They do not qualify native
+reference-value frames, table.get/set/grow/fill, indirect calls or GC instruction
+lowering; those remain explicit gaps. The existing full interpreter Core 3.0 gate
+is separate from this native subset qualification.
