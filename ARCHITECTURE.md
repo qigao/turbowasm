@@ -725,7 +725,12 @@ host I/O through retained root/callback owners, with shutdown requests and close
 public carriers. Windows ASan passes 73 task cases (8,545 assertions) and 95 host
 owner cases (65,152 assertions); related Component/WASI/Runtime regression passes
 88/88 in 8.79 s. The existing MIR variants require actual compiled Core entries
-and callbacks; native qualification is recorded separately after CI completes.
+and callbacks. Commit `70293a3` passes all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37752379838)
+with restored Salts 3.0.0: Linux MIR 213/213 in 1.88 s, macOS MIR 213/213 in
+4.09 s, and Windows 172 main tests in 3.20 s plus 16 installed-package tests in
+0.20 s. This qualifies task/host-owner wait authentication, including real
+compiled callback suspension; full public async admission remains gated.
 
 The private endpoint argument adapter now separates preparation, admission and
 guest publication. Preparation allocates an authentic canonical owner record,
