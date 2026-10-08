@@ -17,6 +17,16 @@ typedef struct turbowasm_component_public_impl {
 typedef void (*turbowasm_component_instance_owner_release_fn)(
     void *context);
 
+/* Intrusive, non-owning registration in already bounded host owner storage.
+ * Shutdown requests cancellation without taking or freeing the host carrier. */
+typedef struct turbowasm_component_host_registration {
+    struct turbowasm_component_host_registration *next;
+    struct turbowasm_component_host_registration **previous;
+    void *context;
+    bool (*busy)(const void *context);
+    turbowasm_status (*cancel)(void *context);
+} turbowasm_component_host_registration;
+
 typedef struct turbowasm_component_instance_public_impl {
     turbowasm_component_public_impl *component;
     turbowasm_component_exec exec;
@@ -24,6 +34,9 @@ typedef struct turbowasm_component_instance_public_impl {
     turbowasm_component_host_resource *resources;
     uint32_t resource_count;
     uint32_t host_transfer_count, host_transfer_limit;
+    turbowasm_component_host_registration *host_owners;
+    uint32_t host_activity;
+    bool admission_closed, shutdown_driving;
 
     /*
      * Optional capability owner retained by a specialized public instance
@@ -50,6 +63,23 @@ void turbowasm_component_public_impl_release(
 
 bool turbowasm_component_instance_public_impl_retain(turbowasm_component_instance_public_impl *impl);
 void turbowasm_component_instance_public_impl_release(turbowasm_component_instance_public_impl *impl);
+
+bool turbowasm_component_host_activity_enter(turbowasm_component_instance_public_impl *instance, bool admission);
+void turbowasm_component_host_activity_leave(turbowasm_component_instance_public_impl *instance);
+void turbowasm_component_host_register(turbowasm_component_instance_public_impl *instance,
+    turbowasm_component_host_registration *registration, void *context,
+    bool (*busy)(const void *), turbowasm_status (*cancel)(void *));
+void turbowasm_component_host_unregister(turbowasm_component_host_registration *registration);
+/* Private first shutdown transition, owner-thread only. Rejects active callbacks
+ * and half-built admissions unchanged. Otherwise closes new host admission and
+ * idempotently requests cancellation of registered tasks/transfers. OK means
+ * cancellation was requested, not that owners, events or guest handles drained.
+ * Existing owners retain their carriers and continue progress/delivery/cleanup.
+ * An error after admission closes keeps it closed; retry requests cancellation
+ * again without repeating an already acknowledged request. Public async stays
+ * gated until drain, options and host-value integration are complete. */
+turbowasm_status turbowasm_component_instance_request_shutdown_private(
+    turbowasm_component_instance_public_impl *instance);
 
 /* Private retained loader for async host-boundary integration and its tests. */
 turbowasm_status turbowasm_component_load_async_private(turbowasm_component *component,

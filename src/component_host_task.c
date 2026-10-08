@@ -11,8 +11,25 @@ typedef struct component_host_task_impl {
     turbowasm_component_task task;
     turbowasm_component_exec_resource_codec resources;
     turbowasm_component_exec_realloc_context realloc;
+    turbowasm_component_host_registration registration;
     bool result_loaded, delivered, driving;
 } component_host_task_impl;
+
+static bool shutdown_busy(const void *context) {
+    const component_host_task_impl *impl = context;
+    return impl->driving;
+}
+static turbowasm_status shutdown_cancel(void *context) {
+    component_host_task_impl *impl = context;
+    turbowasm_status status;
+    if (impl->task.state >= TURBOWASM_EXECUTION_COMPLETED || impl->task.cancellation_requested ||
+        impl->task.phase == TURBOWASM_COMPONENT_TASK_RETURNED || impl->task.phase == TURBOWASM_COMPONENT_TASK_CANCELLED)
+        return TURBOWASM_OK;
+    impl->driving = true;
+    status = turbowasm_component_task_request_cancel(&impl->task);
+    impl->driving = false;
+    return status;
+}
 
 static turbowasm_status rollback_parameters(component_host_task_impl *impl, turbowasm_status status) {
     turbowasm_status cleanup = turbowasm_component_exec_resource_codec_rollback(&impl->resources);
@@ -89,6 +106,7 @@ turbowasm_status turbowasm_component_host_task_create(turbowasm_component_host_t
     turbowasm_runtime_scope scope;
     turbowasm_status status;
     if (owner == NULL || owner->impl != NULL || instance == NULL || !instance->exec.initialized ||
+        instance->admission_closed || instance->shutdown_driving ||
         (name.size != 0u && name.bytes == NULL) || (count != 0u && arguments == NULL) ||
         budget == NULL || budget->limit == 0u || budget->limit == SIZE_MAX || budget->used > budget->limit)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -99,6 +117,9 @@ turbowasm_status turbowasm_component_host_task_create(turbowasm_component_host_t
     if (instance->exec.task_domain.count >= instance->exec.task_domain.limit ||
         sizeof(*impl) > budget->limit - budget->used) return TURBOWASM_OUT_OF_MEMORY;
     if (!turbowasm_component_instance_public_impl_retain(instance)) return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_component_host_activity_enter(instance, true)) {
+        turbowasm_component_instance_public_impl_release(instance); return TURBOWASM_INVALID_ARGUMENT;
+    }
     budget->used += sizeof(*impl);
     scope = turbowasm_runtime_scope_enter(&instance->exec.binary->config);
     impl = turbowasm_rt_calloc(1u, sizeof(*impl));
@@ -122,7 +143,9 @@ turbowasm_status turbowasm_component_host_task_create(turbowasm_component_host_t
     status = turbowasm_component_host_arguments_commit(&impl->arguments);
     if (status != TURBOWASM_OK) goto fail;
     owner->impl = impl;
+    turbowasm_component_host_register(instance, &impl->registration, impl, shutdown_busy, shutdown_cancel);
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(instance);
     return TURBOWASM_OK;
 fail:
     if (impl != NULL) {
@@ -132,6 +155,7 @@ fail:
     }
     budget->used -= sizeof(*impl);
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(instance);
     turbowasm_component_instance_public_impl_release(instance);
     return status;
 }
@@ -145,7 +169,7 @@ turbowasm_status turbowasm_component_host_task_resume(turbowasm_component_host_t
     const turbowasm_execution_options *options) {
     component_host_task_impl *impl = owner != NULL ? owner->impl : NULL;
     turbowasm_status status;
-    if (impl == NULL || impl->driving) return TURBOWASM_INVALID_ARGUMENT;
+    if (impl == NULL || impl->driving || impl->instance->shutdown_driving) return TURBOWASM_INVALID_ARGUMENT;
     impl->driving = true;
     status = turbowasm_component_task_resume(&impl->task, options);
     impl->driving = false;
@@ -154,8 +178,12 @@ turbowasm_status turbowasm_component_host_task_resume(turbowasm_component_host_t
 
 turbowasm_status turbowasm_component_host_task_request_cancel(turbowasm_component_host_task *owner) {
     component_host_task_impl *impl = owner != NULL ? owner->impl : NULL;
-    if (impl == NULL || impl->driving) return TURBOWASM_INVALID_ARGUMENT;
-    return turbowasm_component_task_request_cancel(&impl->task);
+    turbowasm_status status;
+    if (impl == NULL || impl->driving || impl->instance->shutdown_driving) return TURBOWASM_INVALID_ARGUMENT;
+    impl->driving = true;
+    status = turbowasm_component_task_request_cancel(&impl->task);
+    impl->driving = false;
+    return status;
 }
 
 turbowasm_status turbowasm_component_host_task_take_result(turbowasm_component_host_task *owner,
@@ -163,7 +191,7 @@ turbowasm_status turbowasm_component_host_task_take_result(turbowasm_component_h
     component_host_task_impl *impl = owner != NULL ? owner->impl : NULL;
     const turbowasm_component_type *type;
     turbowasm_status status;
-    if (impl == NULL || impl->driving || impl->delivered || count == NULL ||
+    if (impl == NULL || impl->driving || impl->instance->shutdown_driving || impl->delivered || count == NULL ||
         (out != NULL && (int)out->kind != 0)) return TURBOWASM_INVALID_ARGUMENT;
     if (impl->task.state < TURBOWASM_EXECUTION_COMPLETED) return TURBOWASM_YIELDED;
     if (impl->task.status != TURBOWASM_OK) return impl->task.status;
@@ -197,16 +225,22 @@ turbowasm_status turbowasm_component_host_task_destroy(turbowasm_component_host_
     if (owner == NULL) return TURBOWASM_INVALID_ARGUMENT;
     impl = owner->impl;
     if (impl == NULL) return TURBOWASM_OK;
-    if (impl->driving || impl->task.state < TURBOWASM_EXECUTION_COMPLETED) return TURBOWASM_INVALID_ARGUMENT;
+    if (impl->driving || impl->instance->shutdown_driving || impl->task.state < TURBOWASM_EXECUTION_COMPLETED)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_component_host_activity_enter(impl->instance, false)) return TURBOWASM_INVALID_ARGUMENT;
     impl->driving = true;
     status = impl->task.status;
     cleanup = turbowasm_component_task_destroy(&impl->task);
-    if (impl->task.domain != NULL) { impl->driving = false; return cleanup; }
+    if (impl->task.domain != NULL) {
+        impl->driving = false; turbowasm_component_host_activity_leave(impl->instance); return cleanup;
+    }
     if (status == TURBOWASM_OK) status = cleanup;
     cleanup = rollback_parameters(impl, TURBOWASM_OK);
     if (status == TURBOWASM_OK) status = cleanup;
     cleanup = turbowasm_component_host_arguments_destroy(&impl->arguments);
-    if (impl->arguments.impl != NULL) { impl->driving = false; return cleanup; }
+    if (impl->arguments.impl != NULL) {
+        impl->driving = false; turbowasm_component_host_activity_leave(impl->instance); return cleanup;
+    }
     if (status == TURBOWASM_OK) status = cleanup;
     cleanup = turbowasm_component_host_result_destroy(&impl->result);
     if (status == TURBOWASM_OK) status = cleanup;
@@ -214,7 +248,9 @@ turbowasm_status turbowasm_component_host_task_destroy(turbowasm_component_host_
     if (status == TURBOWASM_OK) status = cleanup;
     instance = impl->instance;
     impl->budget->used -= sizeof(*impl); owner->impl = NULL;
+    turbowasm_component_host_unregister(&impl->registration);
     turbowasm_rt_free(impl);
+    turbowasm_component_host_activity_leave(instance);
     turbowasm_component_instance_public_impl_release(instance);
     return status;
 }

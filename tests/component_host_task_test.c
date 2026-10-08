@@ -31,6 +31,7 @@ static turbowasm_component_host_transfer transfers[OWNER_COUNT];
 static turbowasm_component_value transfer_inputs[OWNER_COUNT];
 static bool reenter_transfer_on_allocate;
 static const turbowasm_component_endpoint *copy_reentry_end;
+static bool shutdown_on_allocate;
 
 static uint32_t endpoint_type(turbowasm_component_instance_public_impl *owner, bool future) {
     const turbowasm_component_type_graph *graph = &owner->exec.binary->type_graph;
@@ -84,6 +85,12 @@ static void close_pair(unsigned index) {
 
 static void *allocate(void *context, size_t size) {
     void *p; (void)context;
+    if (shutdown_on_allocate) {
+        bool closed = impl->admission_closed;
+        shutdown_on_allocate = false;
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(impl->admission_closed, closed);
+    }
     if (reenter_transfer_on_allocate && transfers[0].impl != NULL &&
         (copy_reentry_end == NULL || copy_reentry_end->waitable.delivering)) {
         turbowasm_component_host_transfer_state state = {.progress = 99u};
@@ -91,6 +98,8 @@ static void *allocate(void *context, size_t size) {
         uint32_t count = 99u;
         reenter_transfer_on_allocate = false;
         copy_reentry_end = NULL;
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_INVALID_ARGUMENT);
+        check_false(impl->admission_closed);
         check_equal(turbowasm_component_host_transfer_state_get(&transfers[0], &state), TURBOWASM_INVALID_ARGUMENT);
         check_equal(state.progress, 99u);
         check_null(turbowasm_component_host_transfer_values(&transfers[0], &count)); check_equal(count, 99u);
@@ -188,6 +197,8 @@ static bool reenter(void *context) {
     turbowasm_component_host_value value = {0};
     bool cancellation = view->cancellation_requested;
     ++*calls;
+    check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_INVALID_ARGUMENT);
+    check_false(impl->admission_closed);
     check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_INVALID_ARGUMENT);
     check_equal(turbowasm_component_host_task_request_cancel(&owners[0]), TURBOWASM_INVALID_ARGUMENT);
     check_equal(turbowasm_component_host_task_take_result(&owners[0], &value, &count), TURBOWASM_INVALID_ARGUMENT);
@@ -283,6 +294,7 @@ spec("Retained Component host task owners") {
         turbowasm_component_exec_async_limits limits = {2u, 16u};
         memset(&allocations, 0, sizeof(allocations)); budget = (turbowasm_component_host_budget){BYTE_LIMIT, 0u};
         close_on_allocate = false;
+        shutdown_on_allocate = false;
         reenter_transfer_on_allocate = false;
         copy_reentry_end = NULL;
         turbowasm_runtime_config_init(&config);
@@ -295,6 +307,7 @@ spec("Retained Component host task owners") {
     after_each() {
         unsigned i;
         allocations.fail_at = 0u;
+        shutdown_on_allocate = false;
         reenter_transfer_on_allocate = false;
         copy_reentry_end = NULL;
         for (i = 0u; i < OWNER_COUNT; ++i) {
@@ -354,6 +367,10 @@ spec("Retained Component host task owners") {
         turbowasm_component_instance_destroy(&destination);
         (void)turbowasm_component_host_value_destroy(&resource);
         (void)turbowasm_component_host_value_destroy(&output);
+        if (instance.impl != NULL) {
+            check_equal(impl->host_activity, 0u);
+            check_null(impl->host_owners);
+        }
         turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
         check_equal(budget.used, (size_t)0); check_equal(allocations.live, (size_t)0); impl = NULL;
     }
@@ -364,6 +381,165 @@ spec("Retained Component host task owners") {
         check_null(ordinary.impl);
         check_equal(turbowasm_component_instance_create(&sync, &component), TURBOWASM_UNSUPPORTED);
         check_null(sync.impl);
+    }
+    it("closes admission without consuming new move inputs or changing call outputs") {
+        turbowasm_component_host_arguments arguments = {0};
+        turbowasm_component_call call = {0};
+        const turbowasm_component_task_binding *binding;
+        turbowasm_component_host_value value = {.kind = TURBOWASM_COMPONENT_HOST_U32, .as.u32 = 99u};
+        turbowasm_trap trap = TURBOWASM_TRAP_UNREACHABLE;
+        size_t count = 99u, used, attempts;
+        void *owned;
+        make(42); owned = resource.as.own;
+        check_equal(turbowasm_component_exec_async_export(&impl->exec, name("consume").bytes, 7u, &binding), TURBOWASM_OK);
+        used = budget.used; attempts = allocations.attempts;
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_true(impl->admission_closed);
+        check_equal(create(0u, "consume", &resource, 1u, true), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_arguments_prepare(&arguments, impl, binding->graph, binding->function_type,
+            &resource, 1u, true, true, &budget), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_instance_invoke(&instance, name("drops"), NULL, 0u, &value, 1u, &count, &trap),
+            TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_call_create(&call, &instance, name("drops"), NULL, 0u), TURBOWASM_INVALID_ARGUMENT);
+        check_true(resource.as.own == owned); check_null(arguments.impl); check_null(call.impl);
+        check_equal(value.as.u32, 99u); check_equal(count, (size_t)99); check_equal(trap, TURBOWASM_TRAP_UNREACHABLE);
+        check_equal(budget.used, used); check_equal(allocations.attempts, attempts);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_value_destroy(&resource), TURBOWASM_OK);
+    }
+    it("requests cancellation of every initial host root without freeing its carrier") {
+        size_t used;
+        void *first, *second;
+        check_equal(create(0u, "answer", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(create(1u, "unit", NULL, 0u, false), TURBOWASM_OK);
+        first = owners[0].impl; second = owners[1].impl; used = budget.used;
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_true(owners[0].impl == first); check_true(owners[1].impl == second); check_equal(budget.used, used);
+        check_equal(turbowasm_component_host_task_view(&owners[0])->phase, TURBOWASM_COMPONENT_TASK_CANCELLED);
+        check_equal(turbowasm_component_host_task_view(&owners[1])->phase, TURBOWASM_COMPONENT_TASK_CANCELLED);
+        check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_destroy(&owners[1]), TURBOWASM_OK);
+        check_null(impl->host_owners); check_equal(budget.used, (size_t)0);
+    }
+    it("delivers an already completed task result while admission remains closed") {
+        check_equal(create(0u, "answer", NULL, 0u, false), TURBOWASM_OK); finish(0u);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_false(turbowasm_component_host_task_view(&owners[0])->cancellation_requested);
+        shutdown_on_allocate = true;
+        take(0u, 42u); check_false(shutdown_on_allocate);
+        check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_OK);
+        check_null(impl->host_owners); check_equal(impl->host_activity, 0u);
+    }
+    it("requires real guest acknowledgement of cancellation at a noncancellable yield") {
+        check_equal(create(0u, "yield", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_true(turbowasm_component_host_task_view(&owners[0])->cancellation_requested);
+        check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_view(&owners[0])->phase, TURBOWASM_COMPONENT_TASK_RETURNED);
+        take(0u, 43u); compiled(0u);
+    }
+    it("drives the existing callback to acknowledge shutdown cancellation") {
+        check_equal(create(0u, "callback", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        finish(0u);
+        check_equal(turbowasm_component_host_task_view(&owners[0])->phase, TURBOWASM_COMPONENT_TASK_CANCELLED);
+    }
+    it("preserves a resolved task across fuel suspension and retains its later primary trap") {
+        turbowasm_execution_options options = {.has_fuel_limit = true, .fuel = 1u};
+        const turbowasm_component_task *view;
+        unsigned turns;
+        check_equal(create(0u, "trap-after-return", NULL, 0u, false), TURBOWASM_OK);
+        view = turbowasm_component_host_task_view(&owners[0]);
+        for (turns = 0u; turns < 64u && view->phase != TURBOWASM_COMPONENT_TASK_RETURNED; ++turns)
+            check_equal(turbowasm_component_host_task_resume(&owners[0], &options), TURBOWASM_YIELDED);
+        check_equal(view->phase, TURBOWASM_COMPONENT_TASK_RETURNED); check_equal(view->state, TURBOWASM_EXECUTION_YIELDED);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_false(view->cancellation_requested);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_TRAPPED); compiled(0u);
+        check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_TRAPPED);
+        check_null(owners[0].impl); check_null(impl->host_owners);
+    }
+    it("allows an admitted synchronous call to resume and deliver while new calls are closed") {
+        turbowasm_component_call call = {0};
+        check_equal(turbowasm_component_call_create(&call, &instance, name("drops"), NULL, 0u), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_call_resume(&call, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_call_take_result(&call, &output), TURBOWASM_OK);
+        check_equal(output.kind, TURBOWASM_COMPONENT_HOST_U32); check_equal(output.as.u32, 0u);
+        turbowasm_component_call_destroy(&call); check_null(call.impl); check_equal(impl->host_activity, 0u);
+    }
+    it("cancels a partial transfer without consuming its acknowledgement or unsent cells") {
+        turbowasm_component_event event;
+        turbowasm_component_host_transfer_state state;
+        const turbowasm_component_value *values;
+        uint32_t i, count;
+        size_t used;
+        transfer_pair(endpoint_type(impl, false));
+        for (i = 0u; i < OWNER_COUNT; ++i)
+            transfer_inputs[i] = (turbowasm_component_value){.kind = TURBOWASM_COMPONENT_TYPE_U32, .as.u32 = 40u + i};
+        check_equal(turbowasm_component_host_transfer_write_move(&transfers[1], &host_ends[1], transfer_inputs,
+            OWNER_COUNT, &budget, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_transfer_read(&transfers[0], &host_ends[0], 1u, 0u, &budget, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_transfer_poll(&transfers[0], &event), TURBOWASM_OK);
+        used = budget.used;
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(budget.used, used);
+        check_equal(turbowasm_component_host_transfer_state_get(&transfers[1], &state), TURBOWASM_OK);
+        check_false(state.terminal); check_equal(state.progress, 1u);
+        check_equal(turbowasm_component_host_transfer_destroy(&transfers[1]), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_host_transfer_poll(&transfers[1], &event), TURBOWASM_OK);
+        check_equal(event.payload, 18u);
+        values = turbowasm_component_host_transfer_values(&transfers[1], &count);
+        check_equal(count, 2u); check_equal(values[0].as.u32, 41u); check_equal(values[1].as.u32, 42u);
+        check_equal(turbowasm_component_host_transfer_take_endpoint(&transfers[0], &host_ends[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_transfer_take_endpoint(&transfers[1], &host_ends[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_transfer_read(&transfers[2], &host_ends[0], 1u, 0u, &budget, NULL),
+            TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_endpoint_submit(&host_ends[0], &write_buffer, NULL), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_transfer_destroy(&transfers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_transfer_destroy(&transfers[1]), TURBOWASM_OK);
+    }
+    it("cancels an endpoint operation while keeping the caller buffer leased until event delivery") {
+        turbowasm_component_event event;
+        transfer_pair(endpoint_type(impl, false)); write_buffer.length = 1u; write_buffer.values = &payload;
+        check_equal(turbowasm_component_host_endpoint_submit(&host_ends[0], &write_buffer, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_true(write_buffer.leased);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[0]), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_host_endpoint_take(&host_ends[0], &event), TURBOWASM_OK);
+        check_equal(event.payload, 2u); check_false(write_buffer.leased);
+    }
+    it("allows retained canonical endpoint ownership to move after shutdown admission closes") {
+        transfer_pair(endpoint_type(impl, false));
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_into_value(&host_ends[0], &endpoint_value), TURBOWASM_OK);
+        shutdown_on_allocate = true;
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[0], impl, &endpoint_value, &budget), TURBOWASM_OK);
+        check_false(shutdown_on_allocate); check_equal((int)endpoint_value.kind, 0);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+    }
+    it("rejects shutdown from owner admission allocators and restores activity after allocation failure") {
+        size_t baseline = budget.used;
+        shutdown_on_allocate = true;
+        allocations.fail_at = allocations.attempts + 1u;
+        check_equal(create(0u, "answer", NULL, 0u, false), TURBOWASM_OUT_OF_MEMORY);
+        allocations.fail_at = 0u;
+        check_false(shutdown_on_allocate); check_false(impl->admission_closed);
+        check_equal(budget.used, baseline); check_equal(impl->host_activity, 0u); check_null(impl->host_owners);
+        shutdown_on_allocate = true;
+        transfer_pair(endpoint_type(impl, false)); check_false(shutdown_on_allocate);
+        shutdown_on_allocate = true;
+        check_equal(turbowasm_component_host_transfer_read(&transfers[0], &host_ends[0], 1u, 0u, &budget, NULL), TURBOWASM_OK);
+        check_false(shutdown_on_allocate); check_false(impl->admission_closed); check_equal(impl->host_activity, 0u);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
     }
     it("moves scalar stream and future operations into retained transfers in either admission order") {
         unsigned future, read_first;

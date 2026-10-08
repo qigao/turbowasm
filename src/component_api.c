@@ -715,7 +715,8 @@ turbowasm_status turbowasm_component_host_arguments_prepare(
     turbowasm_status status;
     size_t bytes = sizeof(*impl), i, available;
     if (owner == NULL || owner->impl != NULL || instance == NULL ||
-        instance->component == NULL || !instance->exec.initialized ||
+        instance->component == NULL || !instance->exec.initialized || instance->admission_closed ||
+        instance->shutdown_driving ||
         budget == NULL || budget->limit == 0u || budget->limit == SIZE_MAX ||
         budget->used > budget->limit || (count != 0u && arguments == NULL))
         return TURBOWASM_INVALID_ARGUMENT;
@@ -731,12 +732,16 @@ turbowasm_status turbowasm_component_host_arguments_prepare(
         status = argument_storage_size(&arguments[i], 0u, &bytes, available, async_resources);
     if (status != TURBOWASM_OK) return status;
     if (!component_instance_retain(instance)) return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_component_host_activity_enter(instance, true)) {
+        component_instance_release(instance); return TURBOWASM_INVALID_ARGUMENT;
+    }
     budget->used += bytes;
     scope = turbowasm_runtime_scope_enter(&instance->component->binary.config);
     impl = turbowasm_rt_calloc(1u, sizeof(*impl));
     if (impl == NULL) {
         budget->used -= bytes;
         turbowasm_runtime_scope_leave(scope);
+        turbowasm_component_host_activity_leave(instance);
         component_instance_release(instance);
         return TURBOWASM_OUT_OF_MEMORY;
     }
@@ -760,10 +765,12 @@ turbowasm_status turbowasm_component_host_arguments_prepare(
     turbowasm_runtime_scope_leave(scope);
     if (status != TURBOWASM_OK) {
         turbowasm_component_host_arguments failed = {impl};
+        turbowasm_component_host_activity_leave(instance);
         (void)turbowasm_component_host_arguments_destroy(&failed);
         return status;
     }
     owner->impl = impl;
+    turbowasm_component_host_activity_leave(instance);
     return TURBOWASM_OK;
 }
 
@@ -805,6 +812,7 @@ turbowasm_status turbowasm_component_host_arguments_destroy(
             return TURBOWASM_INVALID_ARGUMENT;
     }
     instance = impl->admission.instance;
+    if (!turbowasm_component_host_activity_enter(instance, false)) return TURBOWASM_INVALID_ARGUMENT;
     owner->impl = NULL;
     scope = turbowasm_runtime_scope_enter(&instance->component->binary.config);
     if (impl->values != NULL) {
@@ -819,6 +827,7 @@ turbowasm_status turbowasm_component_host_arguments_destroy(
     impl->budget->used -= impl->bytes;
     turbowasm_rt_free(impl);
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(instance);
     component_instance_release(instance);
     return status;
 }
@@ -1056,6 +1065,7 @@ typedef struct component_host_result_impl {
     turbowasm_component_host_budget *budget;
     size_t bytes;
     turbowasm_component_host_value value;
+    bool driving;
 } component_host_result_impl;
 
 static turbowasm_status result_storage_size(turbowasm_component_instance_public_impl *instance,
@@ -1139,6 +1149,7 @@ turbowasm_status turbowasm_component_host_result_prepare(
     uint32_t resources = 0u;
     turbowasm_status status;
     if (owner == NULL || owner->impl != NULL || instance == NULL || !instance->exec.initialized ||
+        instance->shutdown_driving ||
         instance->exec.task_domain.table == NULL || graph == NULL || source == NULL ||
         budget == NULL || budget->limit == 0u || budget->limit == SIZE_MAX || budget->used > budget->limit)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -1149,37 +1160,48 @@ turbowasm_status turbowasm_component_host_result_prepare(
     status = turbowasm_component_canonical_validate_value(graph, type, source);
     if (status != TURBOWASM_OK) return status;
     if (!component_instance_retain(instance)) return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_component_host_activity_enter(instance, false)) {
+        component_instance_release(instance); return TURBOWASM_INVALID_ARGUMENT;
+    }
     budget->used += bytes;
     scope = turbowasm_runtime_scope_enter(&instance->exec.binary->config);
     impl = turbowasm_rt_calloc(1u, sizeof(*impl));
     if (impl == NULL) {
         budget->used -= bytes; turbowasm_runtime_scope_leave(scope);
+        turbowasm_component_host_activity_leave(instance);
         component_instance_release(instance); return TURBOWASM_OUT_OF_MEMORY;
     }
     status = convert_result(source, &impl->value, 0u, &build);
     if (status != TURBOWASM_OK) {
         discard_staged_result(&impl->value); turbowasm_rt_free(impl);
         budget->used -= bytes;
-        turbowasm_runtime_scope_leave(scope); component_instance_release(instance); return status;
+        turbowasm_runtime_scope_leave(scope); turbowasm_component_host_activity_leave(instance);
+        component_instance_release(instance); return status;
     }
     commit_staged_result(source, &impl->value);
     impl->instance = instance; impl->budget = budget; impl->bytes = bytes;
     owner->impl = impl;
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(instance);
     return TURBOWASM_OK;
 }
 
 static void host_result_forget(turbowasm_component_host_result *owner) {
     component_host_result_impl *impl = owner->impl;
     turbowasm_component_instance_public_impl *instance = impl->instance;
+    /* The caller holds activity through unpublication and allocator callbacks. */
     impl->budget->used -= impl->bytes;
-    owner->impl = NULL; turbowasm_rt_free(impl); component_instance_release(instance);
+    owner->impl = NULL; turbowasm_rt_free(impl);
+    turbowasm_component_host_activity_leave(instance); component_instance_release(instance);
 }
 
 turbowasm_status turbowasm_component_host_result_take(
     turbowasm_component_host_result *owner, turbowasm_component_host_value *out) {
     component_host_result_impl *impl = owner != NULL ? owner->impl : NULL;
-    if (impl == NULL || out == NULL || (int)out->kind != 0) return TURBOWASM_INVALID_ARGUMENT;
+    if (impl == NULL || impl->driving || impl->instance->shutdown_driving ||
+        out == NULL || (int)out->kind != 0) return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_component_host_activity_enter(impl->instance, false)) return TURBOWASM_INVALID_ARGUMENT;
+    impl->driving = true;
     *out = impl->value; host_result_forget(owner);
     return TURBOWASM_OK;
 }
@@ -1190,8 +1212,13 @@ turbowasm_status turbowasm_component_host_result_destroy(turbowasm_component_hos
     if (owner == NULL) return TURBOWASM_INVALID_ARGUMENT;
     impl = owner->impl;
     if (impl == NULL) return TURBOWASM_OK;
+    if (impl->driving || !turbowasm_component_host_activity_enter(impl->instance, false))
+        return TURBOWASM_INVALID_ARGUMENT;
+    impl->driving = true;
     status = turbowasm_component_host_value_destroy(&impl->value);
+    impl->driving = false;
     if ((int)impl->value.kind == 0) host_result_forget(owner);
+    else turbowasm_component_host_activity_leave(impl->instance);
     return status;
 }
 
@@ -1567,7 +1594,7 @@ static turbowasm_status component_instance_invoke(
         return TURBOWASM_INVALID_ARGUMENT;
 
     impl = turbowasm_component_instance_public_impl_get(instance);
-    if (impl == NULL || impl->component == NULL)
+    if (impl == NULL || impl->component == NULL || impl->admission_closed || impl->shutdown_driving)
         return TURBOWASM_INVALID_ARGUMENT;
 
     if (!public_export_result_type(
@@ -1584,6 +1611,9 @@ static turbowasm_status component_instance_invoke(
 
     if (!component_instance_retain(impl))
         return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_component_host_activity_enter(impl, true)) {
+        component_instance_release(impl); return TURBOWASM_INVALID_ARGUMENT;
+    }
     scope = turbowasm_runtime_scope_enter(
         &impl->component->binary.config);
 
@@ -1624,6 +1654,7 @@ done:
     turbowasm_component_host_value_destroy(&public_result);
     admission_destroy(&admission);
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(impl);
     component_instance_release(impl);
     return status;
 }
@@ -1694,7 +1725,8 @@ static turbowasm_status component_call_create(
 
     instance_impl =
         turbowasm_component_instance_public_impl_get(instance);
-    if (instance_impl == NULL || instance_impl->component == NULL)
+    if (instance_impl == NULL || instance_impl->component == NULL ||
+        instance_impl->admission_closed || instance_impl->shutdown_driving)
         return TURBOWASM_INVALID_ARGUMENT;
 
     if (!public_export_result_type(
@@ -1703,6 +1735,9 @@ static turbowasm_status component_call_create(
 
     if (!component_instance_retain(instance_impl))
         return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_component_host_activity_enter(instance_impl, true)) {
+        component_instance_release(instance_impl); return TURBOWASM_INVALID_ARGUMENT;
+    }
     scope = turbowasm_runtime_scope_enter(
         &instance_impl->component->binary.config);
 
@@ -1748,6 +1783,7 @@ done:
         turbowasm_rt_free(call_impl);
     }
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(instance_impl);
     if (status != TURBOWASM_OK)
         component_instance_release(instance_impl);
     return status;
@@ -1777,6 +1813,7 @@ void turbowasm_component_call_destroy(
     if (impl == NULL)
         return;
     instance = impl->instance;
+    if (!turbowasm_component_host_activity_enter(instance, false)) return;
     call->impl = NULL;
     scope = turbowasm_runtime_scope_enter(
         &instance->component->binary.config);
@@ -1784,6 +1821,7 @@ void turbowasm_component_call_destroy(
     admission_destroy(&impl->admission);
     turbowasm_rt_free(impl);
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(instance);
     component_instance_release(instance);
 }
 
@@ -1799,12 +1837,14 @@ turbowasm_status turbowasm_component_call_resume(
     state = turbowasm_component_exec_call_state_get(&impl->call);
     if (state != TURBOWASM_EXECUTION_READY && state != TURBOWASM_EXECUTION_YIELDED)
         return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_component_host_activity_enter(impl->instance, false)) return TURBOWASM_INVALID_ARGUMENT;
     scope = turbowasm_runtime_scope_enter(&impl->instance->component->binary.config);
     admission_start(&impl->admission);
     status = turbowasm_component_exec_call_resume(&impl->call, options);
     if (status != TURBOWASM_YIELDED)
         admission_destroy(&impl->admission);
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(impl->instance);
     return status;
 }
 
@@ -1902,10 +1942,14 @@ turbowasm_status turbowasm_component_call_take_result(
             &impl->call) != 1u)
         return TURBOWASM_INVALID_ARGUMENT;
 
+    if (!turbowasm_component_host_activity_enter(impl->instance, false)) return TURBOWASM_INVALID_ARGUMENT;
+
     status = turbowasm_component_exec_call_take_result(
         &impl->call, &internal_result);
-    if (status != TURBOWASM_OK)
+    if (status != TURBOWASM_OK) {
+        turbowasm_component_host_activity_leave(impl->instance);
         return status;
+    }
 
     /* A repeated take must not erase an already-owned caller result. */
     memset(out_result, 0, sizeof(*out_result));
@@ -1921,5 +1965,6 @@ turbowasm_status turbowasm_component_call_take_result(
         turbowasm_component_host_value_destroy(
             out_result);
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(impl->instance);
     return status;
 }

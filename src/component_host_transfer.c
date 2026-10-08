@@ -16,6 +16,7 @@ typedef struct component_host_transfer_impl {
     size_t bytes, payload_capacity, payload_used;
     turbowasm_status status;
     turbowasm_component_event event;
+    turbowasm_component_host_registration registration;
     bool readable, terminal, driving;
 } component_host_transfer_impl;
 
@@ -23,7 +24,18 @@ static bool transfer_driving(const component_host_transfer_impl *impl) {
     const component_host_endpoint_impl *body = impl->endpoint.impl;
     /* A peer may drive the copy on a retained guest stack while this owner is
      * otherwise idle. Its allocator/finalizers must not reenter the transfer. */
-    return impl->driving || (body != NULL && (body->driving || body->endpoint->waitable.delivering));
+    return impl->driving || impl->instance->shutdown_driving ||
+        (body != NULL && (body->driving || body->endpoint->waitable.delivering || body->endpoint->waitable.sync_waiter));
+}
+
+static bool shutdown_busy(const void *context) { return transfer_driving(context); }
+static turbowasm_status shutdown_cancel(void *context) {
+    component_host_transfer_impl *impl = context;
+    component_host_endpoint_impl *body = impl->endpoint.impl;
+    if (impl->terminal || body == NULL ||
+        body->endpoint->waitable.state.endpoint.phase != TURBOWASM_COMPONENT_ENDPOINT_COPYING)
+        return TURBOWASM_OK;
+    return turbowasm_component_endpoint_cancel(body->endpoint);
 }
 
 static turbowasm_status size_add(size_t *bytes, size_t count, size_t stride, size_t limit) {
@@ -115,6 +127,7 @@ static turbowasm_status start_transfer(turbowasm_component_host_transfer *owner,
         budget == NULL || budget->limit == 0u || budget->limit == SIZE_MAX || budget->used > budget->limit ||
         capacity == SIZE_MAX || count > TURBOWASM_COMPONENT_COPY_MAX_LENGTH) return TURBOWASM_INVALID_ARGUMENT;
     end = body->endpoint; instance = body->instance;
+    if (instance->admission_closed || instance->shutdown_driving) return TURBOWASM_INVALID_ARGUMENT;
     if (end->readable != readable || end->closed || end->value_owner != NULL || end->lower_scope != NULL ||
         end->operation != NULL || end->waitable.delivering || end->waitable.sync_waiter ||
         end->waitable.set_handle != 0u || end->waitable.state.endpoint.phase != TURBOWASM_COMPONENT_ENDPOINT_IDLE ||
@@ -143,6 +156,10 @@ static turbowasm_status start_transfer(turbowasm_component_host_transfer *owner,
     if (!turbowasm_component_instance_public_impl_retain(instance)) {
         body->driving = false; origin_release(origin); return TURBOWASM_INVALID_ARGUMENT;
     }
+    if (!turbowasm_component_host_activity_enter(instance, true)) {
+        body->driving = false; origin_release(origin);
+        turbowasm_component_instance_public_impl_release(instance); return TURBOWASM_INVALID_ARGUMENT;
+    }
     ++instance->host_transfer_count; budget->used += bytes;
     scope = turbowasm_runtime_scope_enter(&instance->exec.binary->config);
     impl = turbowasm_rt_calloc(1u, sizeof(*impl));
@@ -166,8 +183,11 @@ static turbowasm_status start_transfer(turbowasm_component_host_transfer *owner,
     status = turbowasm_component_endpoint_submit_from_task(end, &impl->buffer, driver);
     if (status != TURBOWASM_OK) goto fail;
     impl->endpoint.impl = body; source->impl = NULL;
+    turbowasm_component_host_unregister(&body->registration);
+    turbowasm_component_host_register(instance, &impl->registration, impl, shutdown_busy, shutdown_cancel);
     impl->driving = body->driving = false;
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(instance);
     return TURBOWASM_OK;
 fail:
     if (cells_moved) {
@@ -178,6 +198,7 @@ fail:
     turbowasm_rt_free(impl);
     budget->used -= bytes; --instance->host_transfer_count;
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(instance);
     body->driving = false;
     origin_release(origin);
     turbowasm_component_instance_public_impl_release(instance);
@@ -243,6 +264,7 @@ turbowasm_status turbowasm_component_host_transfer_take_endpoint(turbowasm_compo
         impl->endpoint.impl == NULL) return TURBOWASM_INVALID_ARGUMENT;
     if (!impl->terminal) return TURBOWASM_TRAPPED;
     *out = impl->endpoint; impl->endpoint.impl = NULL;
+    turbowasm_component_host_endpoint_register(out->impl);
     return TURBOWASM_OK;
 }
 turbowasm_status turbowasm_component_host_transfer_destroy(turbowasm_component_host_transfer *owner) {
@@ -258,12 +280,14 @@ turbowasm_status turbowasm_component_host_transfer_destroy(turbowasm_component_h
     if (impl == NULL) return TURBOWASM_OK;
     if (transfer_driving(impl)) return TURBOWASM_INVALID_ARGUMENT;
     if (!impl->terminal) return TURBOWASM_TRAPPED;
+    if (!turbowasm_component_host_activity_enter(impl->instance, false)) return TURBOWASM_INVALID_ARGUMENT;
     impl->driving = true;
     instance = impl->instance; origin = impl->origin; origin_release = impl->origin_release;
     scope = turbowasm_runtime_scope_enter(&instance->exec.binary->config);
     cleanup = turbowasm_component_host_endpoint_destroy(&impl->endpoint);
     if (cleanup != TURBOWASM_OK) {
-        impl->driving = false; turbowasm_runtime_scope_leave(scope); return cleanup;
+        impl->driving = false; turbowasm_runtime_scope_leave(scope);
+        turbowasm_component_host_activity_leave(instance); return cleanup;
     }
     status = impl->status;
     if (impl->buffer.values != NULL) {
@@ -274,8 +298,10 @@ turbowasm_status turbowasm_component_host_transfer_destroy(turbowasm_component_h
     }
     turbowasm_rt_free(impl->buffer.values);
     impl->budget->used -= impl->bytes; --instance->host_transfer_count;
+    turbowasm_component_host_unregister(&impl->registration);
     owner->impl = NULL; turbowasm_rt_free(impl);
     turbowasm_runtime_scope_leave(scope);
+    turbowasm_component_host_activity_leave(instance);
     origin_release(origin);
     turbowasm_component_instance_public_impl_release(instance);
     return status;

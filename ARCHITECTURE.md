@@ -949,6 +949,35 @@ Linux MIR 209/209 in 1.81 s and macOS MIR 209/209 in 2.74 s, including compiled
 guest string writers for both memory widths and foreign Core readers of owned
 host transfers.
 
+The private shutdown-request transition now closes new host admission before
+requesting cancellation. Already bounded task, endpoint and transfer bodies
+embed non-owning intrusive registrations in their receiving instance; moving an
+endpoint into a transfer replaces its registration, and taking it back restores
+the endpoint registration. No extra queue, allocation or ownership authority is
+introduced. All operations remain on the instance owner thread. An activity
+counter covers half-built admissions, result allocation and cleanup callbacks;
+live owner/Runtime guards also exclude shutdown from retained Core execution or
+peer-driven copying. A rejected reentrant request leaves admission unchanged.
+The finite cancellation walk excludes owner mutation and skips completed or
+resolved tasks, previous cancellation requests and endpoints outside copying.
+It neither delivers host events nor frees carriers, buffers, results or loans.
+The same owner must drive task/IO progress, poll acknowledgements and explicitly
+release storage. New tasks, pairs, transfers and synchronous calls are rejected
+before consuming inputs, allocating or changing result outputs. Existing calls,
+terminal result allocation and retained endpoint ownership moves remain usable
+after admission closes. A successful request proves only this first transition;
+local guest-handle drain, completion auditing, retained public result/options
+integration and the public shutdown operation remain pending.
+Formal host-owner cases qualify unchanged move inputs and output cells after
+admission closes, repeated cancellation of multiple roots, partial transfer
+acknowledgements and unsent tails, caller-buffer leases, endpoint registration
+across moves, allocator/peer/Core reentry rejection and failed-admission activity
+rollback. Callback tasks acknowledge cancellation through their actual callback;
+noncancellable yields continue to a real return. A fuel-suspended resolved task
+keeps its eventual primary Core trap, and existing synchronous calls and terminal
+results remain deliverable. Windows ASan passes 65 cases and 42,696 assertions;
+the related Component/WASI/Runtime regression passes 86/86 in 8.44 s.
+
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
 an existing Core instance for its allocator/store and caller memory; it constructs
