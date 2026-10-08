@@ -898,7 +898,10 @@ allocator reentry closing the public handles, allocation/reference exhaustion,
 failed ownership extraction under a lender, borrow release and committed lower
 record cleanup. The resource suite passes 56 cases and 63,262 assertions on
 Windows ASan; the related Component/WASI/Runtime regression passes 86/86 in
-9.58 s. Native MIR qualification is recorded after the dedicated CI run.
+9.58 s. Commit `b789a98` passes all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37728726163):
+Linux MIR 209/209 in 2.36 s and macOS MIR 209/209 in 3.50 s, including actual
+compiled resource destruction after both public handles close.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
