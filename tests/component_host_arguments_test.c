@@ -273,7 +273,7 @@ spec("Deferred Component host argument ownership") {
         check_equal(drops(), 1u);
     }
     it("holds borrow loans after canonical publication until owner delivery") {
-        host_value borrowed;
+        host_value borrowed = {0};
         make(0u, 42);
         check_equal(turbowasm_component_host_value_borrow(&resources[0], &borrowed), TURBOWASM_OK);
         check_equal(prepare(0u, 1u, "borrow", &borrowed, 1u, false), TURBOWASM_OK);
