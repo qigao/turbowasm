@@ -1258,6 +1258,14 @@ Windows 172/172 plus 16 installed tests, Linux MIR 213/213 in 3.30 s and macOS
 MIR 213/213 in 3.67 s. Android builds the full configured graph and installed
 consumers without a host execution claim. This qualifies the installed host
 surface; nested providers and WASI-specific async constructors remain separate.
+Commit `407bb4e` also passes all five
+[native CI profiles](https://github.com/qigao/turbowasm/actions/runs/37765881571),
+including the synchronous-result quota fix: Windows 172/172 in 2.58 s plus
+16 installed tests in 0.14 s, Linux MIR 213/213 in 3.31 s and macOS MIR 213/213
+in 3.98 s. Local Windows ASan passes 172 regular tests and both pinned Core 3
+conformance suites; installed consumers pass 16/16. The final focused suites
+pass 107 host-task, 26 options/adapter, 58 argument/result and 11 shutdown-wait
+cases, covering exact synchronous composite byte limits and detached storage.
 Post-admission copy failures are
 reported by the accepted transfer, preserving its received prefix and unsent tail.
 
@@ -1272,6 +1280,13 @@ guest destructor fuel/I/O suspension and outstanding host results. Qualify the
 same behavior under interpreted execution, Windows ASan and Linux/macOS MIR,
 then run existing installed C/C++ consumer tests against the actual new public
 surface. Green private-owner tests alone do not open the loader gate.
+
+### Internal adapters and qualification history
+
+The following notes record the individual private integration stages and their
+named qualification commits. Earlier closed-gate statements refer to those
+stages; the current installed host boundary and remaining provider/WASI scope
+are described in the public interface section above.
 
 The private instance-options path separates task, canonical-handle, transfer and
 host-byte limits. Defaults are 64 tasks, 4,096 canonical handles, 64 retained

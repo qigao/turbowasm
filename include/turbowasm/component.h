@@ -283,7 +283,7 @@ turbowasm_status turbowasm_component_host_value_borrow(
     turbowasm_component_host_value *out_borrow);
 
 /*
- * Destroy a value returned by turbowasm_component_instance_invoke().
+ * Destroy a value returned by invocation, call/task delivery, or a transfer.
  * Do not call this on caller-owned input values. Recursively releases storage
  * and clears the value. NULL and already-cleared values succeed.
  * An active loan or busy owner returns INVALID_ARGUMENT without mutation.
