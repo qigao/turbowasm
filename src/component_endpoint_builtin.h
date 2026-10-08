@@ -15,6 +15,10 @@ turbowasm_status turbowasm_component_endpoint_domain_pair_open(
     struct turbowasm_component_endpoint **reader, struct turbowasm_component_endpoint **writer);
 /* True only for a still-retained end in this module's stable pair storage. */
 bool turbowasm_component_endpoint_domain_pair_retained(const struct turbowasm_component_endpoint *endpoint);
+/* Independent creation-owner reference for values/views that outlive both ends.
+ * Empty outputs are published only after retain succeeds. */
+turbowasm_status turbowasm_component_endpoint_domain_pair_acquire(
+    const struct turbowasm_component_endpoint *endpoint, void **owner, void (**release)(void *));
 
 bool turbowasm_component_endpoint_builtin_kind(turbowasm_component_async_builtin_kind kind, bool *future);
 turbowasm_status turbowasm_component_endpoint_builtin_invoke(turbowasm_component_task_builtin *binding,

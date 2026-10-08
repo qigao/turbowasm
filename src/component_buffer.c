@@ -113,6 +113,10 @@ static turbowasm_status copy_values(turbowasm_component_buffer *source,
             if (status == TURBOWASM_OK) status = release;
         }
     } else {
+        if (destination->receive != NULL) {
+            status = destination->receive(destination->receive_context, batch, count);
+            if (status != TURBOWASM_OK) goto cleanup;
+        }
         for (i = 0u; i < count; ++i) {
             destination->values[destination->progress + i] = batch[i];
             memset(&batch[i], 0, sizeof(batch[i]));

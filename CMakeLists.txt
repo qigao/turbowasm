@@ -119,6 +119,7 @@ if(TURBOWASM_ENABLE_COMPONENT)
   add_library(turbowasm_component
     src/component_api.c
     src/component_host_task.c
+    src/component_host_transfer.c
     src/component_host_endpoint.c)
   add_library(TurboWasm::Component ALIAS turbowasm_component)
   set_target_properties(turbowasm_component PROPERTIES

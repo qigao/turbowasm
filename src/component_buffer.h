@@ -25,6 +25,12 @@ typedef turbowasm_status (*turbowasm_component_buffer_begin_copy_fn)(void *conte
     struct turbowasm_component_task *driver);
 typedef void (*turbowasm_component_buffer_end_copy_fn)(void *context);
 
+/* Optional host destination admission. The batch is validated/lifted but not
+ * yet moved. Failure must preserve the destination and its reservation. This
+ * callback cannot suspend and runs with both endpoints guarded. */
+typedef turbowasm_status (*turbowasm_component_buffer_receive_fn)(void *context,
+    const turbowasm_component_value *values, uint32_t count);
+
 /* Caller-owned stable storage, lent from endpoint submit through event/error
  * delivery. Host values are uniquely owned and read destinations start empty.
  * Guest memory uses checked offsets; instances, graphs and callback contexts
@@ -36,6 +42,8 @@ typedef struct turbowasm_component_buffer {
     uint32_t progress;
     bool leased;
     turbowasm_component_buffer_kind kind;
+    turbowasm_component_buffer_receive_fn receive;
+    void *receive_context;
     struct {
         const turbowasm_component_type_graph *graph;
         turbowasm_component_type_ref type;

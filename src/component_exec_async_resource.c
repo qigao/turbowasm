@@ -197,6 +197,13 @@ bool turbowasm_component_exec_resource_value_owned(
             : owner->rep.kind == TURBOWASM_VALUE_I64 && value->as.resource_rep.as.i64 == owner->rep.as.i64);
 }
 
+bool turbowasm_component_exec_resource_value_retained(const turbowasm_component_value *value) {
+    const turbowasm_component_async_resource_owner *owner;
+    if (value == NULL || value->release != release_resource || value->release_context == NULL) return false;
+    owner = value->release_context;
+    return owner->instance_release != NULL && turbowasm_component_exec_resource_value_owned(owner->exec, value);
+}
+
 void turbowasm_component_exec_resource_value_disown(turbowasm_component_value *value) {
     turbowasm_component_async_resource_owner *owner = value->release_context;
     owner->committed = true;

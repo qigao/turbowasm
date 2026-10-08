@@ -1,13 +1,6 @@
-#include "component_api_internal.h"
+#include "component_host_endpoint_internal.h"
 #include "component_endpoint_builtin.h"
 #include "runtime_alloc.h"
-
-typedef struct component_host_endpoint_impl {
-    turbowasm_component_instance_public_impl *instance;
-    turbowasm_component_host_budget *budget;
-    turbowasm_component_endpoint *endpoint;
-    bool driving;
-} component_host_endpoint_impl;
 
 static bool valid_budget(const turbowasm_component_host_budget *budget) {
     return budget != NULL && budget->limit != 0u && budget->limit != SIZE_MAX && budget->used <= budget->limit;

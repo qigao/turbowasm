@@ -1380,6 +1380,7 @@ static turbowasm_status component_instance_create(
 
     impl->ref_count = 1u;
     if (limits != NULL) {
+        impl->host_transfer_limit = limits->handles;
         impl->exec.task_domain.pair_owner = impl;
         impl->exec.task_domain.pair_retain = pair_instance_retain;
         impl->exec.task_domain.pair_release = pair_instance_release;

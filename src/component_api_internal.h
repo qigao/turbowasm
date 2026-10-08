@@ -23,6 +23,7 @@ typedef struct turbowasm_component_instance_public_impl {
     uint32_t ref_count;
     turbowasm_component_host_resource *resources;
     uint32_t resource_count;
+    uint32_t host_transfer_count, host_transfer_limit;
 
     /*
      * Optional capability owner retained by a specialized public instance
@@ -171,5 +172,42 @@ turbowasm_status turbowasm_component_host_endpoint_from_value(
 /* Busy/reentrant destruction rejects without mutation. Idle close returns the
  * byte reservation and instance reference. Empty owner destruction succeeds. */
 turbowasm_status turbowasm_component_host_endpoint_destroy(turbowasm_component_host_endpoint *owner);
+
+typedef struct turbowasm_component_host_transfer { void *impl; } turbowasm_component_host_transfer;
+typedef struct turbowasm_component_host_transfer_state {
+    uint32_t length, progress;
+    turbowasm_status status;
+    bool readable, terminal;
+    turbowasm_component_event event;
+} turbowasm_component_host_transfer_state;
+/* Private canonical storage boundary, owner-thread only. Inputs are exclusively
+ * borrowed through admission, including callbacks. Write trees are unique,
+ * Runtime-owned, with fresh retained resource/endpoint leaves and no borrows.
+ * Success moves endpoint and write cells; failure preserves both. Read capacity
+ * counts retained payload bytes beyond the separately charged root cells.
+ * Budget/source binary bytes outlive the transfer; limits are finite. */
+turbowasm_status turbowasm_component_host_transfer_read(turbowasm_component_host_transfer *owner,
+    turbowasm_component_host_endpoint *endpoint, uint32_t count, size_t payload_capacity,
+    turbowasm_component_host_budget *budget, turbowasm_component_task *driver);
+turbowasm_status turbowasm_component_host_transfer_write_move(turbowasm_component_host_transfer *owner,
+    turbowasm_component_host_endpoint *endpoint, turbowasm_component_value *values, uint32_t count,
+    turbowasm_component_host_budget *budget, turbowasm_component_task *driver);
+/* Delivers the endpoint event once. Error delivery returns the primary error,
+ * releases the buffer borrow and preserves event output. YIELDED is pending. */
+turbowasm_status turbowasm_component_host_transfer_poll(turbowasm_component_host_transfer *owner,
+    turbowasm_component_event *event);
+turbowasm_status turbowasm_component_host_transfer_cancel(turbowasm_component_host_transfer *owner);
+turbowasm_status turbowasm_component_host_transfer_state_get(const turbowasm_component_host_transfer *owner,
+    turbowasm_component_host_transfer_state *out);
+/* Terminal-only borrowed canonical cells: read gives received cells; write gives
+ * its untransferred tail. Never move/destroy/mutate through this view. It stays
+ * charged and valid until destruction. No partial public result API is exposed. */
+const turbowasm_component_value *turbowasm_component_host_transfer_values(
+    const turbowasm_component_host_transfer *owner, uint32_t *count);
+turbowasm_status turbowasm_component_host_transfer_take_endpoint(turbowasm_component_host_transfer *owner,
+    turbowasm_component_host_endpoint *out);
+/* Live/reentrant destruction preserves ownership. Terminal destruction cleans
+ * every cell even after a destructor error; primary copy failure takes priority. */
+turbowasm_status turbowasm_component_host_transfer_destroy(turbowasm_component_host_transfer *owner);
 
 #endif /* TURBOWASM_COMPONENT_API_INTERNAL_H */

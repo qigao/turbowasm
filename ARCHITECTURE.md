@@ -903,6 +903,47 @@ Windows ASan; the related Component/WASI/Runtime regression passes 86/86 in
 Linux MIR 209/209 in 2.36 s and macOS MIR 209/209 in 3.50 s, including actual
 compiled resource destruction after both public handles close.
 
+The private transfer boundary owns one host endpoint and stable canonical
+cells, on the existing instance owner thread. Canonical write inputs are already
+unique Runtime-owned trees; successful admission moves them and the endpoint,
+while failed admission restores both without cleanup of caller-owned values.
+The public host-value snapshot/move bridge is a separate remaining integration
+step. A transfer retains the receiving instance and its endpoint's creation
+instance independently of the endpoint body, preserving the original type graph
+after both ends close or a returned endpoint owner is destroyed. It
+reserves its body, cells and payload bytes before allocation. Read admission
+reserves an explicit finite payload capacity. A host receive hook checks the
+entire rendezvous batch against that capacity before moving any destination
+cells. Existing Runtime budgets govern guest lift/copy scratch separately.
+Fresh resource and nested endpoint leaves retain their own release authorities;
+borrow leaves and values without retained provenance cannot enter this boundary.
+The instance's finite transfer count is initially bounded by its async handle
+limit, with a separate field for the approved public async options integration.
+Endpoint/source/output cells are exclusively borrowed during admission, including
+allocator callbacks. The endpoint moves into the stable transfer only after
+allocation succeeds; reentry is rejected throughout allocation and copying.
+The existing endpoint engine remains the progress and event fact source. Poll
+releases the buffer borrow on either success or a copy error and records terminal
+status exactly once. Cancellation does not release storage until poll delivers
+its acknowledgement. After terminal delivery, the endpoint can move back to an
+empty host owner; borrowed result/unsent-value views remain valid until transfer
+destruction. Destruction releases every retained cell, returning the first
+cleanup failure unless a primary copy error already exists. Live destruction
+preserves the entire transfer. Public result publication, shutdown and ordinary
+host-value conversion remain gated until their full contracts are integrated.
+Formal host-owner cases cover both admission orders for streams/futures, unit
+and zero-length transfers, cumulative partial progress, cancellation before
+destruction, string/own/nested-future batches, whole-batch and cumulative byte
+quota failures, finite transfer count, every allocation rollback, exact byte
+capacity, invalid provenance and reentry from a peer's guest lift. Real guest
+string writers exercise memory32/memory64 across fuel-suspended realloc, and
+compiled foreign readers consume transfer-owned host writes. Independent
+creation/receiving graph retention survives returning and closing the endpoint
+and both public instances. Windows ASan passes 54 cases and 35,658 assertions;
+related Component/WASI/Runtime regression passes 86/86 in 8.48 s. This qualifies
+the private canonical storage boundary; public host snapshots/result publication,
+explicit public options and shutdown remain required.
+
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
 an existing Core instance for its allocator/store and caller memory; it constructs

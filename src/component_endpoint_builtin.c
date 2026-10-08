@@ -7,6 +7,7 @@ typedef struct turbowasm_component_task_owned_pair {
     turbowasm_component_endpoint reader, writer;
     struct turbowasm_component_task_owned_pair *next;
     void *owner;
+    bool (*retain)(void *owner);
     void (*release)(void *owner);
     bool retained;
 } turbowasm_component_task_owned_pair;
@@ -27,6 +28,17 @@ bool turbowasm_component_endpoint_domain_pair_retained(const turbowasm_component
     if (endpoint == NULL || endpoint->closed_notify != pair_closed || endpoint->closed_context == NULL) return false;
     pair = endpoint->closed_context;
     return (endpoint == &pair->reader || endpoint == &pair->writer) && pair->retained;
+}
+
+turbowasm_status turbowasm_component_endpoint_domain_pair_acquire(
+    const turbowasm_component_endpoint *endpoint, void **owner, void (**release)(void *)) {
+    const turbowasm_component_task_owned_pair *pair;
+    if (owner == NULL || release == NULL || *owner != NULL || *release != NULL ||
+        !turbowasm_component_endpoint_domain_pair_retained(endpoint)) return TURBOWASM_INVALID_ARGUMENT;
+    pair = endpoint->closed_context;
+    if (pair->retain == NULL || !pair->retain(pair->owner)) return TURBOWASM_INVALID_ARGUMENT;
+    *owner = pair->owner; *release = pair->release;
+    return TURBOWASM_OK;
 }
 
 bool turbowasm_component_endpoint_builtin_kind(turbowasm_component_async_builtin_kind kind, bool *future) {
@@ -76,6 +88,7 @@ turbowasm_status turbowasm_component_endpoint_domain_pair_open(
         guest_handles ? domain->table : NULL, guest_handles ? domain->table : NULL, &pair->reader, &pair->writer);
     if (status != TURBOWASM_OK) { turbowasm_rt_free(pair); goto fail; }
     pair->retained = retained; pair->owner = domain->pair_owner; pair->release = domain->pair_release;
+    pair->retain = domain->pair_retain;
     if (retained) {
         pair->reader.closed_notify = pair->writer.closed_notify = pair_closed;
         pair->reader.closed_context = pair->writer.closed_context = pair;
