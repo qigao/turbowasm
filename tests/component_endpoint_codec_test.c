@@ -46,9 +46,9 @@ static void finish_move(void *context, bool transferred) {
         check_null(codec.lower_head);
         check_equal(move_begins, 2u);
         for (i = 0u; i < 2u; ++i) {
-            check_equal(reader[i].waitable.table, &table);
-            check_equal(turbowasm_component_endpoint_get(&table, reader[i].waitable.handle,
-                TURBOWASM_COMPONENT_HANDLE_STREAM_READ), &reader[i]);
+            check_equal((const void *)reader[i].waitable.table, (const void *)&table);
+            check_equal((const void *)turbowasm_component_endpoint_get(&table, reader[i].waitable.handle,
+                TURBOWASM_COMPONENT_HANDLE_STREAM_READ), (const void *)&reader[i]);
             check_equal(turbowasm_component_value_destroy(&values[i]), TURBOWASM_OK);
         }
     }
@@ -225,7 +225,7 @@ spec("Canonical endpoint handle ownership") {
         check_equal(turbowasm_component_value_destroy(&values[0]), TURBOWASM_OK);
         check_equal(move_finishes, 1u); check_equal(move_transfers, 0u);
         check_false(reader[0].closed); check_null(reader[0].value_owner);
-        check_equal(reader[0].peer, &writer[0]); check_equal(table.live_count, 0u);
+        check_equal((const void *)reader[0].peer, (const void *)&writer[0]); check_equal(table.live_count, 0u);
         check_equal(turbowasm_component_endpoint_into_value(&reader[0], &values[0]), TURBOWASM_OK);
     }
 
@@ -236,7 +236,7 @@ spec("Canonical endpoint handle ownership") {
             NULL, finish_move, &move_finishes), TURBOWASM_OK);
         move_admitted = true;
         check_equal(turbowasm_component_endpoint_take_value(&values[0], &taken), TURBOWASM_OK);
-        check_equal(taken, &reader[0]); check_false(reader[0].closed); check_null(reader[0].value_owner);
+        check_equal((const void *)taken, (const void *)&reader[0]); check_false(reader[0].closed); check_null(reader[0].value_owner);
         check_equal(move_finishes, 1u); check_equal(move_transfers, 1u);
         check_equal(turbowasm_component_value_destroy(&values[0]), TURBOWASM_OK);
         check_equal(move_finishes, 1u);
