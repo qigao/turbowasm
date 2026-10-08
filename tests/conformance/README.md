@@ -1423,7 +1423,10 @@ subsequent frame collection and an allocation-failure sweep. Task tests cover
 atomic scope clearing, counter overflow, pinned-child retry and retention of the
 incoming caller while a borrowed handle remains lent. Async-call tests cover the
 dependency quota before publication. Related regression passed 84/84 targets in
-8.03 seconds. Native MIR qualification for this borrow extension is pending.
+8.03 seconds. At `67a6ceb`, Linux x64 MIR passed 205/205 targets in 2.82 seconds
+and macOS arm64 MIR passed 205/205 in 3.15 seconds, including the compiled
+resource-import suite in 0.12/0.10 seconds. All five jobs passed in the
+[native run](https://github.com/qigao/turbowasm/actions/runs/37710876080).
 
 Async host capability callbacks, cross-instance payload conversion,
 nested Component instantiation, public task/endpoint owners, synchronous
