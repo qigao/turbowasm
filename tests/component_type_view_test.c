@@ -80,9 +80,9 @@ spec("generative Component instance resource types") {
         check_false(turbowasm_component_value_type_equal(&source.type_graph, indexed(1u), a, indexed(1u)));
         check_null(source.type_graph.types[0].as.resource.instance_key);
         check_null(source.type_graph.types[2].as.instance->type_graph.types[0].as.resource.instance_key);
-        check_not_equal(a->types[2].as.instance, source.type_graph.types[2].as.instance);
-        check_equal(a->types[2].as.instance->exports, source.type_graph.types[2].as.instance->exports);
-        check_equal(a->types[3].as.record.fields, source.type_graph.types[3].as.record.fields);
+        check_not_equal((const void *)a->types[2].as.instance, (const void *)source.type_graph.types[2].as.instance);
+        check_equal((const void *)a->types[2].as.instance->exports, (const void *)source.type_graph.types[2].as.instance->exports);
+        check_equal((const void *)a->types[3].as.record.fields, (const void *)source.type_graph.types[3].as.record.fields);
         turbowasm_component_type_view_destroy(views[0]); views[0] = NULL;
         check_true(turbowasm_component_type_graph_validate(&source.type_graph));
         check_true(turbowasm_component_type_graph_validate(b));
