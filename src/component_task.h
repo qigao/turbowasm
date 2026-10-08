@@ -6,6 +6,7 @@
 #include <turbowasm/execution.h>
 
 typedef struct turbowasm_component_task turbowasm_component_task;
+enum { TURBOWASM_COMPONENT_TASK_MAX_DEPENDENCY_DEPTH = 256u };
 
 /* Owner-thread-only domain. Live caller-owned stable tasks are bounded by limit;
  * no worker or queue is created. The table and may_leave flag outlive the domain. */
@@ -77,6 +78,8 @@ struct turbowasm_component_task {
     turbowasm_component_task_phase phase;
     turbowasm_component_value result;
     uint32_t borrowed_handles;
+    struct turbowasm_component_subtask *children;
+    uint32_t dependency_depth;
     turbowasm_component_resource_handle waiting_set;
     /* Builtin host-wait continuation, separate from callback WAIT. */
     enum { TURBOWASM_COMPONENT_TASK_WAIT_NONE, TURBOWASM_COMPONENT_TASK_WAIT_YIELD,
@@ -142,7 +145,9 @@ turbowasm_status turbowasm_component_task_take_result(turbowasm_component_task *
     turbowasm_component_value *out);
 /* Reject running/reentrant destruction, except an already exited empty sibling
  * that requires no cleanup callbacks. Unwind Core first, release set pin and
- * result, unregister the task. Primary cleanup error is returned after teardown. */
+ * result, unregister the task. Borrowing tasks first abort dependent children;
+ * blocked cleanup retains the task and caller loans for a later retry. Primary
+ * cleanup error is returned after successful teardown. */
 turbowasm_status turbowasm_component_task_destroy(turbowasm_component_task *task);
 
 #endif

@@ -250,13 +250,14 @@ turbowasm_status turbowasm_component_exec_resource_release(
 
 /* Private staged async integration. Explicit nonzero bounded quotas; borrows
  * binary/source bytes. Local resource/endpoint values use invocation- or
- * buffer-owned transactions; imported resource identities and borrowing remain gated.
+ * buffer-owned transactions; imported resources bind defining-instance identities
+ * and foreign borrows belong to the receiving task's explicit scope.
  * No public Component loader calls this entry. */
 turbowasm_status turbowasm_component_exec_init_async(
     turbowasm_component_exec *exec, const turbowasm_component_binary *binary,
     const turbowasm_component_exec_async_limits *limits);
 /* Same retained private entry, with synchronous capabilities and/or async
- * instance targets. Imported resource-bearing async signatures remain gated. */
+ * instance targets, including resource-bearing signatures with resolved identities. */
 turbowasm_status turbowasm_component_exec_init_async_with_import_sets(
     turbowasm_component_exec *exec, const turbowasm_component_binary *binary,
     const turbowasm_component_exec_async_limits *limits,

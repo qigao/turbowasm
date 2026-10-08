@@ -333,6 +333,25 @@ spec("async canonical lower to lift calls") {
         check_equal(get_u32(128), 42u); check_equal(returns, 1u);
         check_equal(tables[0].live_count, 0u); check_null(call.arguments); compiled(1, "scalar");
     }
+    it("bounds dependency ancestry before publishing a callee task") {
+        turbowasm_component_task_binding b = {0};
+        turbowasm_value args[] = {integer(false, 42), integer(false, 128)};
+        setup_binding(0, "scalar", 0, 0);
+        b.graph = &graphs[0]; b.function_type = 5; b.instance = &instances[0]; b.function_index = function_index("nested");
+        b.memory = binding.caller_memory;
+        check_equal(turbowasm_component_task_create(&parent, &domains[0], &b), TURBOWASM_OK);
+        parent.dependency_depth = TURBOWASM_COMPONENT_TASK_MAX_DEPENDENCY_DEPTH;
+        domains[0].active = &parent;
+        check_equal(turbowasm_component_async_call_create(&call, &binding, args, 2u), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(domains[1].count, 0u); check_null(parent.children); check_null(call.binding.callee_domain);
+        --parent.dependency_depth;
+        check_equal(turbowasm_component_async_call_create(&call, &binding, args, 2u), TURBOWASM_OK);
+        check_equal(call.task.dependency_depth, (uint32_t)TURBOWASM_COMPONENT_TASK_MAX_DEPENDENCY_DEPTH);
+        check_true(parent.children == &call.subtask);
+        domains[0].active = NULL;
+        check_equal(turbowasm_component_async_call_destroy(&call), TURBOWASM_OK);
+        check_null(parent.children);
+    }
     it("independently applies the four and sixteen flat parameter limits across memory widths") {
         unsigned source, target, kind, i;
         for (source = 0; source < 2; ++source) for (target = 0; target < 2; ++target) for (kind = 1; kind < 3; ++kind) {

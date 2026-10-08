@@ -34,6 +34,8 @@ typedef struct turbowasm_component_resource_entry {
     turbowasm_value rep;
     uint32_t generation;
     uint32_t lend_count;
+    /* Stable task counter, borrowed until this non-owned handle is removed. */
+    uint32_t *borrow_scope;
     bool occupied;
     bool retired;
     bool owned;
@@ -77,6 +79,13 @@ turbowasm_status turbowasm_component_handle_remove(
 turbowasm_status turbowasm_component_resource_publish(
     turbowasm_component_resource_table *table, turbowasm_component_resource_handle handle,
     void *reservation, uint64_t resource_identity, turbowasm_value rep);
+turbowasm_status turbowasm_component_resource_publish_borrowed(
+    turbowasm_component_resource_table *table, turbowasm_component_resource_handle handle,
+    void *reservation, uint64_t resource_identity, turbowasm_value rep, uint32_t *borrow_scope);
+/* Preflight all scope handles before removal. Active lends reject unchanged;
+ * successful cleanup never invokes a destructor and clears each counter claim. */
+turbowasm_status turbowasm_component_resource_scope_clear(
+    turbowasm_component_resource_table *table, uint32_t *borrow_scope);
 
 typedef turbowasm_status (*turbowasm_component_resource_destructor_fn)(
     void *context,

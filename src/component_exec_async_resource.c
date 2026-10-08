@@ -128,7 +128,6 @@ static const turbowasm_component_type *instance_resource(turbowasm_component_exe
     identity = turbowasm_component_exec_resource_identity(codec->exec, resource->as.resource.identity);
     if (identity == NULL || identity->runtime != resource->as.resource.instance_key ||
         (resource->as.resource.identity_alias && identity->provider == NULL)) return NULL;
-    if (type->kind == TURBOWASM_COMPONENT_TYPE_BORROW && identity->provider != NULL) return NULL;
     *out_type = type;
     return resource;
 }
@@ -180,12 +179,17 @@ static turbowasm_status lower_resource(void *context, const turbowasm_component_
         value->resource_identity != owner->identity || owner->committed || owner->lower_scope != NULL)
         return TURBOWASM_TYPE_MISMATCH;
     if (owner->borrowed) {
+        const turbowasm_component_resource_identity *identity =
+            turbowasm_component_exec_resource_identity(codec->exec, resource->as.resource.identity);
         /* Canonical lower_borrow into the defining instance passes the rep;
          * only the source lender remains pinned, with no callee borrow handle. */
-        if (owner->exec != codec->exec || owner->rep.kind != TURBOWASM_VALUE_I32)
-            return TURBOWASM_TYPE_MISMATCH;
-        *out = (uint32_t)owner->rep.as.i32;
-        return TURBOWASM_OK;
+        if (identity->provider == NULL) {
+            if (owner->rep.kind != TURBOWASM_VALUE_I32) return TURBOWASM_TYPE_MISMATCH;
+            *out = (uint32_t)owner->rep.as.i32;
+            return TURBOWASM_OK;
+        }
+        if (codec->borrow_scope == NULL || codec->borrow_scope->domain != &codec->exec->task_domain ||
+            codec->borrow_scope->destroying) return TURBOWASM_TRAPPED;
     }
     status = turbowasm_component_handle_insert(&codec->exec->resource_table,
         TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION, owner, &owner->reserved);
@@ -204,12 +208,20 @@ void turbowasm_component_exec_resource_codec_bind(turbowasm_component_exec_resou
 
 turbowasm_status turbowasm_component_exec_resource_codec_preflight(const turbowasm_component_exec_resource_codec *codec) {
     const turbowasm_component_async_resource_owner *owner;
+    uint32_t borrows = 0u;
     if (codec == NULL || codec->exec == NULL) return TURBOWASM_INVALID_ARGUMENT;
-    for (owner = codec->lower_head; owner != NULL; owner = owner->lower_next)
-        if (owner->lower_scope != codec || owner->borrowed || owner->committed || owner->reserved_identity == 0u ||
+    for (owner = codec->lower_head; owner != NULL; owner = owner->lower_next) {
+        if (owner->lower_scope != codec || owner->committed || owner->reserved_identity == 0u ||
             (owner->rep.kind != TURBOWASM_VALUE_I32 && owner->rep.kind != TURBOWASM_VALUE_I64) ||
             turbowasm_component_handle_object(&codec->exec->resource_table, owner->reserved,
                 TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION) != owner) return TURBOWASM_TRAPPED;
+        if (owner->borrowed) {
+            if (codec->borrow_scope == NULL || codec->borrow_scope->domain != &codec->exec->task_domain ||
+                codec->borrow_scope->destroying) return TURBOWASM_TRAPPED;
+            if (borrows == UINT32_MAX - codec->borrow_scope->borrowed_handles) return TURBOWASM_OUT_OF_MEMORY;
+            ++borrows;
+        }
+    }
     return TURBOWASM_OK;
 }
 
@@ -218,8 +230,11 @@ turbowasm_status turbowasm_component_exec_resource_codec_commit(turbowasm_compon
     if (status != TURBOWASM_OK) return status;
     while (codec->lower_head != NULL) {
         turbowasm_component_async_resource_owner *owner = codec->lower_head;
-        status = turbowasm_component_resource_publish(&codec->exec->resource_table,
-            owner->reserved, owner, owner->reserved_identity, owner->rep);
+        status = owner->borrowed
+            ? turbowasm_component_resource_publish_borrowed(&codec->exec->resource_table,
+                owner->reserved, owner, owner->reserved_identity, owner->rep, &codec->borrow_scope->borrowed_handles)
+            : turbowasm_component_resource_publish(&codec->exec->resource_table,
+                owner->reserved, owner, owner->reserved_identity, owner->rep);
         if (status != TURBOWASM_OK) return status;
         codec->lower_head = owner->lower_next;
         owner->lower_scope = NULL; owner->lower_next = NULL; owner->reserved = 0u; owner->committed = true;

@@ -865,8 +865,8 @@ Component during that invocation. An auxiliary owner excludes other tasks in
 the domain across suspension until context restoration. No transient host-call
 pointer is retained.
 This stage admits same-domain task/endpoint execution and local async lowering;
-the private import extension below adds retained cross-instance calls. Imported
-resource borrowing remains gated until its loan owners are integrated. Local resource/endpoint call transactions
+the private import extension below adds retained cross-instance calls and
+task-scoped resource borrowing. Local resource/endpoint call transactions
 are described below. The private entry
 does not change public loading or host API admission.
 
@@ -913,8 +913,8 @@ These records keep the exec alive. Own lifting consumes the source handle; borro
 lifting acquires a lender that is released only at terminal subtask delivery or
 failure teardown. Lowering a borrow back into its defining instance passes the
 representation directly, as required by the canonical ABI, so no synthetic callee
-borrow handle is created. Imported/cross-instance borrowing requires separate
-task-bound handle accounting and is not admitted by this local codec.
+borrow handle is created. Imported/cross-instance borrowing uses the task-bound
+handle accounting described below.
 
 Each conversion direction owns an intrusive reservation list. Own destinations
 initially occupy private reservation slots, inaccessible to resource.rep/drop or
@@ -948,7 +948,7 @@ on the same builtin never share a mutable reservation list. The context keeps it
 exec alive until release, and finalization performs only non-suspending rollback
 and storage release. Host endpoints can exchange local resource/endpoint values;
 same-Component nonnumeric guest-to-guest copies retain their specified trap.
-Cross-instance resource import identity and progress are separate integration work.
+Cross-instance resource identity and borrow cleanup extend these transactions below.
 
 Private async instance imports reuse the existing unambiguous capability router.
 An optional resolver selects an already initialized provider exec and async lift;
@@ -956,10 +956,9 @@ instantiation validates the complete signature and retains the provider until th
 consumer is destroyed. Call frames stay on the consumer's bounded progress list,
 while the callee task counts against the provider's task quota. Drivers explicitly
 poll each exec with outgoing calls; no recursive scheduler or worker is introduced.
-Resources, including resource leaves inside nested endpoint payloads, remain
-rejected at this boundary until imported nominal identities and
-borrowed-handle accounting are connected. Other supported canonical values use
-the existing per-direction transaction codecs.
+Resource leaves require bound instance identities. Borrow parameters use callee
+task scopes; results and endpoint payloads reject borrows. Supported canonical
+values use the existing per-direction transaction codecs.
 
 Result realloc needs the callee's retained execution control while entering the
 consumer's memory and builtin context. Each call therefore owns a copy of the
@@ -969,7 +968,7 @@ whose fresh slots are restored on success or unwind. The consumer's may_leave
 guard prevents ordinary canonical reentry during realloc. Abort first unwinds
 exported caller tasks, then their outgoing calls; provider teardown refuses live
 import bindings and inbound tasks. Public async admission remains closed while
-host ownership, imported resources and general synchronous interop are completed.
+host ownership and general synchronous interop are completed.
 
 Private async resource identity is generative per exec. A decoded binary's
 numeric resource IDs describe declaration/alias relationships, not runtime type
@@ -1022,12 +1021,29 @@ task/context guards when the caller finishes or unwinds. Host value destruction
 uses the active source task's control when one exists; quiescent host cleanup keeps
 its existing non-suspending behavior.
 
-This private admission stage permits owned resource transfers only. Borrowed
-resource parameters across instance imports remain rejected until callee borrow
-handles, transitive lending and forced-abort scope retirement are connected;
-existing same-instance borrowing is unchanged. Public async admission stays
-closed. Rollback can close imported resource admission and discard all instance
-views without migrating decoded data or changing the synchronous public ABI.
+Imported borrow parameters use the existing resource table and task counter.
+Lower into the defining instance passes the representation; lower into another
+instance reserves a non-owned handle, then publishes it with the callee task's
+stable borrow-counter address. Drop decrements that counter without a destructor.
+The source handle stays lent through terminal event delivery, including transitive
+borrowing. Results and endpoint payloads continue to reject borrow types.
+
+Unreleased subtasks form intrusive child lists on their calling tasks. These are
+borrow-lifetime dependencies, not a second execution queue: the existing exec
+registry remains the progress/frame owner. Terminal delivery unlinks the child.
+Failure/destruction unwinds Core and its wait pins first; a task with borrowed
+handles then aborts dependent children before clearing its own borrow handles and
+detaching its caller. A blocked child keeps the parent task/caller and counters
+alive for a later teardown retry. Tasks without borrowed handles detach remaining
+children under the existing independent-continuation contract. Private dependency
+depth is bounded to 256; admission beyond that bound returns OUT_OF_MEMORY before
+publishing a task. Together with task/table quotas this bounds cleanup recursion,
+storage and handle counters. This introduces no workers or concurrent mutation.
+
+Public async admission stays closed while the remaining host ownership and
+payload integration is completed. Rollback can close imported resource admission
+and discard all instance views without migrating decoded data or changing the
+synchronous public ABI.
 
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and

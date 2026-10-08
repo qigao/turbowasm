@@ -235,6 +235,20 @@ turbowasm_status turbowasm_component_resource_publish(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_component_resource_publish_borrowed(
+    turbowasm_component_resource_table *table, turbowasm_component_resource_handle handle,
+    void *reservation, uint64_t resource_identity, turbowasm_value rep, uint32_t *borrow_scope) {
+    turbowasm_status status;
+    turbowasm_component_resource_entry *entry;
+    if (borrow_scope == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    if (*borrow_scope == UINT32_MAX) return TURBOWASM_OUT_OF_MEMORY;
+    status = turbowasm_component_resource_publish(table, handle, reservation, resource_identity, rep);
+    if (status != TURBOWASM_OK) return status;
+    entry = entry_get(table, handle);
+    entry->owned = false; entry->borrow_scope = borrow_scope; ++*borrow_scope;
+    return TURBOWASM_OK;
+}
+
 void *turbowasm_component_handle_object(
     const turbowasm_component_resource_table *table,
     turbowasm_component_resource_handle handle,
@@ -343,6 +357,9 @@ static void resource_entry_remove(
     if (table == NULL || entry == NULL)
         return;
 
+    if (entry->borrow_scope != NULL) --*entry->borrow_scope;
+    entry->borrow_scope = NULL;
+
     entry->occupied = false;
     entry->kind = TURBOWASM_COMPONENT_HANDLE_RESOURCE;
     entry->object = NULL;
@@ -359,6 +376,24 @@ static void resource_entry_remove(
     } else {
         ++entry->generation;
     }
+}
+
+turbowasm_status turbowasm_component_resource_scope_clear(
+    turbowasm_component_resource_table *table, uint32_t *borrow_scope) {
+    uint32_t i, count = 0u;
+    if (table == NULL || borrow_scope == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    for (i = 0u; i < table->capacity; ++i) {
+        const turbowasm_component_resource_entry *entry = &table->entries[i];
+        if (!entry->occupied || entry->borrow_scope != borrow_scope) continue;
+        if (entry->kind != TURBOWASM_COMPONENT_HANDLE_RESOURCE || entry->owned || entry->lend_count != 0u)
+            return TURBOWASM_TRAPPED;
+        ++count;
+    }
+    if (count > *borrow_scope) return TURBOWASM_TRAPPED;
+    for (i = 0u; i < table->capacity; ++i)
+        if (table->entries[i].occupied && table->entries[i].borrow_scope == borrow_scope)
+            resource_entry_remove(table, &table->entries[i]);
+    return TURBOWASM_OK;
 }
 
 turbowasm_status turbowasm_component_handle_remove(
@@ -418,6 +453,7 @@ turbowasm_status turbowasm_component_resource_drop(
         entry->resource_identity != expected_resource_identity ||
         entry->lend_count != 0u)
         return TURBOWASM_TRAPPED;
+    if (entry->borrow_scope != NULL && *entry->borrow_scope == 0u) return TURBOWASM_TRAPPED;
 
     rep = entry->rep;
     owned = entry->owned;

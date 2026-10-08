@@ -5,8 +5,10 @@
 struct turbowasm_component_exec;
 struct turbowasm_component_async_resource_owner;
 struct turbowasm_component_resource_identity;
+struct turbowasm_component_task;
 typedef struct turbowasm_component_exec_resource_codec {
     struct turbowasm_component_exec *exec;
+    struct turbowasm_component_task *borrow_scope;
     struct turbowasm_component_async_resource_owner *lower_head;
 } turbowasm_component_exec_resource_codec;
 

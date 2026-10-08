@@ -141,6 +141,7 @@ static turbowasm_component_exec_async_call *pop(turbowasm_component_exec *exec) 
 static bool retireable(const turbowasm_component_exec *exec,
     const turbowasm_component_exec_async_call *frame) {
     const turbowasm_component_async_call *call = &frame->call;
+    if (call->task.domain == NULL && call->subtask.table == NULL) return true;
     if (call->subtask.waitable.sync_waiter || call->subtask.waitable.delivering) return false;
     if (frame->failure != TURBOWASM_OK && !call->subtask.published && exec->task_domain.active == NULL)
         return true;
@@ -208,6 +209,7 @@ turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_h
     }
     status = turbowasm_component_async_call_create(&frame->call, &binding, arguments, argument_count);
     if (status != TURBOWASM_OK) { turbowasm_rt_free(frame); return status; }
+    frame->parameters.resources.borrow_scope = &frame->call.task;
     append(exec, frame); ++exec->async_call_count;
     status = turbowasm_component_async_call_start(&frame->call, caller, NULL, &word);
     if (status != TURBOWASM_OK) {

@@ -1,4 +1,5 @@
 #include "component_exec.h"
+#include "component_subtask.h"
 #include "runtime_alloc.h"
 #include "instance_internal.h"
 #include <tinytest.h>
@@ -19,6 +20,7 @@ static turbowasm_runtime_scope scope;
 static size_t live, allowance;
 static bool other_resource_provider;
 static bool failing_resource;
+static const char *borrow_override;
 static const turbowasm_component_exec_async_limits limits = {8u, 32u};
 
 static void *allocate(void *context, size_t size) {
@@ -40,6 +42,7 @@ static turbowasm_status target(void *context, turbowasm_component_name instance,
     turbowasm_component_exec **provider, uint32_t *adapter) {
     const turbowasm_component_task_binding *binding = NULL;
     const char *override = failing_resource && name_is(function, "resource-result") ? "resource-result-trap" : NULL;
+    if (context == &execs[1] && name_is(function, "resource-borrow-child")) override = borrow_override;
     turbowasm_status status; (void)graph; (void)type;
     if (!name_is(instance, "provider")) return TURBOWASM_TYPE_MISMATCH;
     *provider = context;
@@ -171,10 +174,11 @@ static void suspend_destructor(void) {
     check_not_null(execs[0].task_domain.auxiliary);
 }
 
-spec("owned resource imports between async Component instances") {
+spec("resource imports between async Component instances") {
     before_each() {
         turbowasm_component_exec_imports set;
         live = 0u; allowance = SIZE_MAX; other_resource_provider = false; failing_resource = false;
+        borrow_override = NULL;
         turbowasm_runtime_config_init(&config); config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
         scope = turbowasm_runtime_scope_enter(&config);
         check_equal(turbowasm_component_binary_decode_async_metadata(&binaries[0], component_async_lower_bytes,
@@ -201,11 +205,66 @@ spec("owned resource imports between async Component instances") {
             }
         }
         check_true(checked);
-        check_equal(execs[0].async_import_owners, 4u);
+        check_equal(execs[0].async_import_owners, 5u);
         check_equal(turbowasm_component_exec_destroy(&execs[0]), TURBOWASM_TRAPPED);
         number(1u, "roundtrip", 42u, NULL); check_equal(destructions(), 1u);
         compiled(0u, "resource-result"); compiled(0u, "resource-own-child");
         compiled_destructor();
+    }
+    it("borrows an imported owner back into its defining instance") {
+        number(1u, "borrow-roundtrip", 42u, NULL);
+        check_equal(destructions(), 1u); compiled(0u, "resource-borrow-child");
+    }
+    it("drops a foreign task borrow only after its transitive loan is delivered") {
+        turbowasm_component_exec_imports set = imports(1u);
+        check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[2], &binaries[1], &limits, &set, 1u), TURBOWASM_OK);
+        attach(2u); create(2u, "borrow-roundtrip");
+        check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_YIELDED);
+        check_not_null(root.children); check_equal(root.children->task_owner->borrowed_handles, 1u);
+        check_not_null(root.children->task_owner->children);
+        check_equal(drive(NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_take_result(&root, &value), TURBOWASM_OK);
+        check_equal(value.as.u32, 42u); check_equal(destructions(), 1u);
+        compiled(2u, "borrow-roundtrip"); compiled(1u, "resource-borrow-child"); compiled(0u, "resource-borrow-child");
+    }
+    it("preserves borrow scopes across shared fuel suspension") {
+        turbowasm_component_exec_imports set = imports(1u);
+        turbowasm_execution_options options = {0}; options.has_fuel_limit = true; options.fuel = 4u;
+        check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[2], &binaries[1], &limits, &set, 1u), TURBOWASM_OK);
+        attach(2u); number(2u, "borrow-roundtrip", 42u, &options); check_equal(destructions(), 1u);
+    }
+    it("rejects dropping an owner with an outstanding cross-instance borrow") {
+        create(1u, "borrow-drop-live"); check_equal(drive(NULL), TURBOWASM_TRAPPED);
+        check_equal(destructions(), 0u); cleanup(); check_equal(destructions(), 1u);
+        check_equal(execs[1].async_resource_owners, 0u);
+    }
+    it("unwinds a trapped borrowing relay before releasing its caller loan") {
+        unsigned mode;
+        for (mode = 0u; mode < 2u; ++mode) {
+            turbowasm_component_exec_imports set = imports(1u);
+            borrow_override = mode == 0u ? "borrow-return-live" : "borrow-abort";
+            check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[2], &binaries[1], &limits, &set, 1u), TURBOWASM_OK);
+            attach(2u); create(2u, "borrow-roundtrip"); check_equal(drive(NULL), TURBOWASM_TRAPPED);
+            cleanup(); check_equal(destructions(), mode + 1u);
+            check_equal(execs[0].async_resource_owners, 0u); check_equal(execs[1].async_resource_owners, 0u);
+            check_equal(execs[2].async_resource_owners, 0u);
+            check_equal(turbowasm_component_exec_destroy(&execs[2]), TURBOWASM_OK);
+        }
+    }
+    it("aborts a suspended transitive borrow without leaving task counters or lenders alive") {
+        turbowasm_component_exec_imports set = imports(1u);
+        uint32_t pending;
+        check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[2], &binaries[1], &limits, &set, 1u), TURBOWASM_OK);
+        attach(2u); create(2u, "borrow-roundtrip");
+        check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_YIELDED);
+        check_not_null(root.children); check_equal(root.children->task_owner->borrowed_handles, 1u);
+        check_equal(turbowasm_component_task_destroy(&root), TURBOWASM_OK);
+        check_equal(turbowasm_component_exec_async_abort(&execs[2], TURBOWASM_INTERRUPTED), TURBOWASM_OK);
+        check_equal(turbowasm_component_exec_async_poll(&execs[1], 8u, NULL, &pending), TURBOWASM_OK);
+        check_equal(pending, 0u);
+        cleanup(); check_equal(destructions(), 1u);
+        check_equal(execs[0].task_domain.count, 0u); check_equal(execs[1].task_domain.count, 0u);
+        check_equal(execs[2].task_domain.count, 0u);
     }
     it("retains both instances while the host owns an imported result") {
         create(1u, "resource-result"); check_equal(drive(NULL), TURBOWASM_OK);
@@ -224,14 +283,14 @@ spec("owned resource imports between async Component instances") {
     it("retains transitive providers and returns resources through an importing instance") {
         turbowasm_component_exec_imports set = imports(1u);
         check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[2], &binaries[1], &limits, &set, 1u), TURBOWASM_OK);
-        attach(2u); check_equal(execs[1].async_import_owners, 4u);
+        attach(2u); check_equal(execs[1].async_import_owners, 5u);
         number(2u, "roundtrip", 42u, NULL); check_equal(destructions(), 1u);
         compiled(1u, "resource-result"); compiled(1u, "resource-own-child");
     }
     it("rejects ambiguous resource resolvers without retaining a provider") {
         turbowasm_component_exec_imports sets[2] = {imports(0u), imports(0u)};
         check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[2], &binaries[1], &limits, sets, 2u), TURBOWASM_TYPE_MISMATCH);
-        check_null(execs[2].binary); check_equal(execs[0].async_import_owners, 4u);
+        check_null(execs[2].binary); check_equal(execs[0].async_import_owners, 5u);
     }
     it("rejects a function provider whose resource belongs to another instance of the same binary") {
         turbowasm_component_exec_imports set = imports(0u);
@@ -299,12 +358,12 @@ spec("owned resource imports between async Component instances") {
             status = turbowasm_component_exec_init_async_with_import_sets(&execs[2], &binaries[1], &limits, &set, 1u);
             allowance = SIZE_MAX;
             if (status == TURBOWASM_OK) {
-                check_equal(execs[0].async_import_owners, 8u);
+                check_equal(execs[0].async_import_owners, 10u);
                 check_equal(turbowasm_component_exec_destroy(&execs[2]), TURBOWASM_OK);
-                check_equal(execs[0].async_import_owners, 4u); check_equal(live, baseline); break;
+                check_equal(execs[0].async_import_owners, 5u); check_equal(live, baseline); break;
             }
             check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_null(execs[2].binary);
-            check_equal(execs[0].async_import_owners, 4u); check_equal(live, baseline);
+            check_equal(execs[0].async_import_owners, 5u); check_equal(live, baseline);
         }
         check_greater(budget, 0u); check_less(budget, 2048u);
     }
@@ -323,6 +382,27 @@ spec("owned resource imports between async Component instances") {
             check_true(destructions() - before <= 1u);
             if (status == TURBOWASM_OK) check_equal(destructions() - before, 1u);
             if (status == TURBOWASM_OK) break;
+        }
+        check_greater(budget, 0u); check_less(budget, 1024u);
+    }
+    it("rolls back every allocation failure in a transitive borrow call") {
+        turbowasm_component_exec_imports set = imports(1u);
+        size_t baseline, budget;
+        check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[2], &binaries[1], &limits, &set, 1u), TURBOWASM_OK);
+        attach(2u); number(2u, "borrow-roundtrip", 42u, NULL); baseline = live;
+        for (budget = 0u; budget < 1024u; ++budget) {
+            turbowasm_status status; uint32_t before = destructions(); unsigned i;
+            create(2u, "borrow-roundtrip"); allowance = budget; status = drive(NULL); allowance = SIZE_MAX;
+            if (status == TURBOWASM_OK) {
+                check_equal(turbowasm_component_task_take_result(&root, &value), TURBOWASM_OK);
+                check_equal(value.as.u32, 42u);
+            } else check_equal(status, TURBOWASM_OUT_OF_MEMORY);
+            cleanup(); check_equal(live, baseline);
+            for (i = 0u; i < 3u; ++i) {
+                check_equal(execs[i].async_resource_owners, 0u); check_equal(execs[i].task_domain.count, 0u);
+            }
+            check_true(destructions() - before <= 1u);
+            if (status == TURBOWASM_OK) { check_equal(destructions() - before, 1u); break; }
         }
         check_greater(budget, 0u); check_less(budget, 1024u);
     }

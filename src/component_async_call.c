@@ -198,10 +198,21 @@ turbowasm_status turbowasm_component_async_call_create(turbowasm_component_async
     call->binding = *binding; call->caller_signature = signature; call->argument_count = source->as.function.param_count;
     if (argument_count != 0) memcpy(call->raw, arguments, argument_count * sizeof(*arguments));
     if (source->as.function.has_result) call->result_address = pointer_value(&binding->caller_memory, &arguments[argument_count - 1]);
+    if (binding->caller_domain->active != NULL && binding->caller_domain->active->destroying) {
+        memset(call, 0, sizeof(*call));
+        return TURBOWASM_TRAPPED;
+    }
+    if (binding->caller_domain->active != NULL &&
+        binding->caller_domain->active->dependency_depth >= TURBOWASM_COMPONENT_TASK_MAX_DEPENDENCY_DEPTH) {
+        memset(call, 0, sizeof(*call));
+        return TURBOWASM_OUT_OF_MEMORY;
+    }
     callee = binding->callee; callee.prepare = prepare_arguments; callee.prepare_context = call;
     status = turbowasm_component_subtask_create(&call->subtask, binding->caller_domain->table, &call->task,
         binding->callee_domain, &callee, lower_result, release_arguments, call);
     if (status != TURBOWASM_OK) memset(call, 0, sizeof(*call));
+    else if (binding->caller_domain->active != NULL)
+        turbowasm_component_subtask_attach(&call->subtask, binding->caller_domain->active);
     return status;
 }
 
@@ -222,9 +233,9 @@ turbowasm_status turbowasm_component_async_call_destroy(turbowasm_component_asyn
     turbowasm_status status, cleanup;
     if (call == NULL) return TURBOWASM_INVALID_ARGUMENT;
     if (call->binding.callee_domain == NULL) return TURBOWASM_OK;
-    if (call->subtask.waitable.sync_waiter || call->subtask.waitable.delivering ||
+    if (call->subtask.table != NULL && (call->subtask.waitable.sync_waiter || call->subtask.waitable.delivering ||
         (call->subtask.waitable.failure == TURBOWASM_OK && call->subtask.callee == NULL &&
-         !call->subtask.waitable.state.subtask.resolve_delivered)) return TURBOWASM_TRAPPED;
+         !call->subtask.waitable.state.subtask.resolve_delivered))) return TURBOWASM_TRAPPED;
     status = turbowasm_component_task_destroy(&call->task);
     if (call->task.domain != NULL) return status;
     cleanup = turbowasm_component_subtask_destroy(&call->subtask);

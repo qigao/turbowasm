@@ -180,6 +180,23 @@ static turbowasm_status release_wait(turbowasm_component_task *task) {
     return status;
 }
 
+/* Core and wait pins must already be unwound. A failed dependency keeps the
+ * task/caller alive: its counter address cannot be reclaimed while lent. */
+static bool clear_borrow_scope(turbowasm_component_task *task, turbowasm_status *cleanup) {
+    turbowasm_component_task *saved_active;
+    turbowasm_status status;
+    if (task->borrowed_handles == 0u) return true;
+    saved_active = task->domain->active;
+    task->domain->active = NULL;
+    status = turbowasm_component_subtask_abort_children(task);
+    task->domain->active = saved_active;
+    if (*cleanup == TURBOWASM_OK) *cleanup = status;
+    if (task->children != NULL) return false;
+    status = turbowasm_component_resource_scope_clear(task->domain->table, &task->borrowed_handles);
+    if (*cleanup == TURBOWASM_OK) *cleanup = status;
+    return status == TURBOWASM_OK;
+}
+
 static turbowasm_status finish(turbowasm_component_task *task, turbowasm_status status) {
     turbowasm_status cleanup = release_wait(task);
     if (status == TURBOWASM_OK) status = cleanup;
@@ -191,7 +208,7 @@ static turbowasm_status finish(turbowasm_component_task *task, turbowasm_status 
          * retained Core callback before allowing that boundary to detach. */
         task->destroying = true;
         turbowasm_execution_destroy(&task->core);
-        abandon_caller(task, status);
+        if (clear_borrow_scope(task, &cleanup)) abandon_caller(task, status);
         task->destroying = false;
     }
     task->state = status == TURBOWASM_OK ? TURBOWASM_EXECUTION_COMPLETED
@@ -522,6 +539,7 @@ turbowasm_status turbowasm_component_task_destroy(turbowasm_component_task *task
         task->borrowed_handles == 0u && task->waiting_set == 0u &&
         task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_NONE && !task->destroying && !task->resolving &&
         domain->exclusive != task && domain->auxiliary != task) {
+        turbowasm_component_subtask_detach_children(task);
         --domain->count;
         memset(task, 0, sizeof(*task));
         return TURBOWASM_OK;
@@ -537,11 +555,17 @@ turbowasm_status turbowasm_component_task_destroy(turbowasm_component_task *task
      * resolve frame before detaching the caller; active reentry remains barred. */
     domain->active = task; task->destroying = true;
     turbowasm_execution_destroy(&task->core);
-    abandon_caller(task, task->status != TURBOWASM_OK ? task->status : TURBOWASM_INTERRUPTED);
     status = release_wait(task);
+    if (!clear_borrow_scope(task, &status)) {
+        task->destroying = false; domain->active = NULL;
+        task->state = TURBOWASM_EXECUTION_FAILED; task->status = TURBOWASM_INTERRUPTED;
+        return status != TURBOWASM_OK ? status : TURBOWASM_TRAPPED;
+    }
+    abandon_caller(task, task->status != TURBOWASM_OK ? task->status : TURBOWASM_INTERRUPTED);
     result_status = turbowasm_component_value_destroy(&task->result);
     if (status == TURBOWASM_OK) status = result_status;
     if (domain->exclusive == task) domain->exclusive = NULL;
+    turbowasm_component_subtask_detach_children(task);
     domain->active = NULL;
     --domain->count;
     memset(task, 0, sizeof(*task));

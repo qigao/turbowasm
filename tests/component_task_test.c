@@ -431,6 +431,87 @@ spec("private async Component Core task execution") {
         turbowasm_runtime_scope_leave(scope); check_equal(live, 0u);
     }
 
+    it("publishes scoped borrow handles atomically and rejects counter overflow") {
+        uint32_t handle, other, counter = UINT32_MAX, second = 0u;
+        turbowasm_value rep = {.kind = TURBOWASM_VALUE_I32};
+        void *reservation = &counter;
+        check_equal(turbowasm_component_handle_insert(&table, TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION,
+            reservation, &handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_resource_publish_borrowed(&table, handle, reservation, 123u, rep, &counter),
+            TURBOWASM_OUT_OF_MEMORY);
+        check_equal(turbowasm_component_handle_kind_get(&table, handle), TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION);
+        counter = 0u;
+        check_equal(turbowasm_component_resource_publish_borrowed(&table, handle, reservation, 123u, rep, &counter), TURBOWASM_OK);
+        check_equal(counter, 1u);
+        check_equal(turbowasm_component_handle_insert(&table, TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION,
+            &second, &other), TURBOWASM_OK);
+        check_equal(turbowasm_component_resource_publish_borrowed(&table, other, &second, 123u, rep, &second), TURBOWASM_OK);
+        check_equal(turbowasm_component_resource_drop(&table, handle, 123u, NULL, NULL), TURBOWASM_OK);
+        check_equal(counter, 0u); check_equal(second, 1u);
+        check_equal(turbowasm_component_resource_scope_clear(&table, &second), TURBOWASM_OK);
+        check_equal(second, 0u); check_equal(table.live_count, 0u);
+    }
+
+    it("preflights every scoped handle before clearing any borrowed entry") {
+        uint32_t handles[2], counter = 0u, i;
+        turbowasm_value rep = {.kind = TURBOWASM_VALUE_I32};
+        for (i = 0u; i < 2u; ++i) {
+            check_equal(turbowasm_component_handle_insert(&table, TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION,
+                &counter, &handles[i]), TURBOWASM_OK);
+            check_equal(turbowasm_component_resource_publish_borrowed(&table, handles[i], &counter, 123u, rep, &counter), TURBOWASM_OK);
+        }
+        check_equal(turbowasm_component_resource_lend_acquire(&table, handles[1], 123u), TURBOWASM_OK);
+        check_equal(turbowasm_component_resource_scope_clear(&table, &counter), TURBOWASM_TRAPPED);
+        check_equal(counter, 2u); check_equal(table.live_count, 2u);
+        check_equal(turbowasm_component_resource_rep(&table, handles[0], 123u, &rep), TURBOWASM_OK);
+        check_equal(turbowasm_component_resource_lend_release(&table, handles[1], 123u), TURBOWASM_OK);
+        check_equal(turbowasm_component_resource_scope_clear(&table, &counter), TURBOWASM_OK);
+        check_equal(counter, 0u); check_equal(table.live_count, 0u);
+    }
+
+    it("retains a borrowing parent until a pinned child can be unwound") {
+        uint32_t handle;
+        turbowasm_value rep = {.kind = TURBOWASM_VALUE_I32};
+        create_subtask("entry", "callback", false); create(1u, "stackful", NULL, false);
+        turbowasm_component_subtask_attach(&subtask, &tasks[1]);
+        check_equal(tasks[0].dependency_depth, 1u);
+        check_equal(turbowasm_component_handle_insert(&table, TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION,
+            &tasks[1], &handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_resource_publish_borrowed(&table, handle, &tasks[1], 123u, rep,
+            &tasks[1].borrowed_handles), TURBOWASM_OK);
+        /* The child's parameter adapter borrows this parent's scoped handle. */
+        check_equal(turbowasm_component_resource_drop(&table, lender, 123u, NULL, NULL), TURBOWASM_OK);
+        lender = handle;
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        (void)publish_subtask();
+        check_equal(turbowasm_component_waitable_wait_begin(&table, subtask.waitable.handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_destroy(&tasks[1]), TURBOWASM_TRAPPED);
+        check_not_null(tasks[1].domain); check_not_null(tasks[1].children);
+        check_equal(tasks[1].borrowed_handles, 1u); check_equal(loans, 1u); check_equal(released, 0u);
+        check_equal(turbowasm_component_waitable_wait_cancel(&table, subtask.waitable.handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_destroy(&tasks[1]), TURBOWASM_OK);
+        check_null(tasks[0].domain); check_null(tasks[1].domain); check_null(subtask.table);
+        check_equal(loans, 0u); check_equal(released, 1u); check_equal(table.live_count, 0u);
+    }
+    it("keeps incoming caller loans attached when a scoped borrow is still lent") {
+        uint32_t handle;
+        turbowasm_value rep = {.kind = TURBOWASM_VALUE_I32};
+        create_subtask("entry", "callback", false);
+        check_equal(turbowasm_component_handle_insert(&table, TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION,
+            &tasks[0], &handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_resource_publish_borrowed(&table, handle, &tasks[0], 123u, rep,
+            &tasks[0].borrowed_handles), TURBOWASM_OK);
+        check_equal(turbowasm_component_resource_lend_acquire(&table, handle, 123u), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_TRAPPED);
+        check_not_null(tasks[0].domain); check_true(subtask.callee == &tasks[0]);
+        check_equal(tasks[0].borrowed_handles, 1u); check_equal(released, 0u);
+        check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_resource_lend_release(&table, handle, 123u), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        check_null(subtask.callee); check_null(tasks[0].domain);
+        check_equal(turbowasm_component_subtask_destroy(&subtask), TURBOWASM_OK); check_equal(released, 1u);
+    }
+
     it("runs stackful Core and lifts task.return independently of the Core result signature") {
         create(0, "stackful", NULL, false);
         check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);

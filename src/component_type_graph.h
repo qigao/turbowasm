@@ -195,8 +195,9 @@ bool turbowasm_component_transfer_type_features(
  * transfer features alone describe the carrier and intentionally omit payloads. */
 bool turbowasm_component_value_type_resource_free(
     const turbowasm_component_type_graph *graph, turbowasm_component_type_ref ref);
-/* Private import admission: resource leaves require instantiated keys and own.
- * Borrow admission stays closed until imported callee borrow scopes exist. */
+/* Private parameter admission: resource leaves require instantiated keys.
+ * Borrow leaves are allowed in parameters, never inside endpoint payloads.
+ * Function validation separately excludes borrow results. */
 bool turbowasm_component_value_type_async_importable(
     const turbowasm_component_type_graph *graph, turbowasm_component_type_ref ref);
 

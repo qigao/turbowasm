@@ -1002,6 +1002,8 @@ static bool value_type_features(
     if (type->kind == TURBOWASM_COMPONENT_TYPE_FUTURE ||
         type->kind == TURBOWASM_COMPONENT_TYPE_STREAM) {
         uint32_t payload_features = 0u;
+        if (imported && type->as.async_value.has_payload &&
+            type_ref_contains_borrow(graph, type->as.async_value.payload, depth + 1u)) return false;
         *features |= TURBOWASM_COMPONENT_VALUE_ENDPOINTS;
         /* The payload must be valid, but transferring the endpoint only moves
          * its handle; it does not encode the endpoint's future elements. */
@@ -1019,7 +1021,7 @@ static bool value_type_features(
         if (imported) {
             const turbowasm_component_type *resource =
                 turbowasm_component_resource_definition(graph, type->as.handle.resource_type);
-            return type->kind == TURBOWASM_COMPONENT_TYPE_OWN && resource != NULL &&
+            return resource != NULL &&
                 resource->as.resource.instance_key != NULL;
         }
         return true;

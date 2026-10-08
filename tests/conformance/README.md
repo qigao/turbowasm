@@ -1393,7 +1393,7 @@ different declaration IDs. Imported destruction follows the provider chain and
 shares the guest caller's fuel/interruption control and trap destination. A
 foreign destructor's temporary synchronous context blocks sibling task entry
 without marking the provider as executing between resumes. Public async entry
-points and imported borrow scopes remain closed.
+points remain closed.
 
 The new `component_async_resource_import.wat` fixture passes wasm-tools 1.261.0
 validation and exercises the existing resource provider through real canonical
@@ -1408,6 +1408,23 @@ targets in 2.73 seconds and macOS arm64 MIR passed 205/205 in 3.12 seconds,
 including the compiled resource-import suite in 0.07/0.05 seconds. All five jobs
 passed in the [native run](https://github.com/qigao/turbowasm/actions/runs/37708969643).
 
-Async host capability callbacks, cross-instance resource borrowing and payload
-conversion, nested Component instantiation, public task/endpoint owners, synchronous
+Private imported borrow parameters now use task-scoped non-owning handles outside
+their defining instance. Terminal delivery retains transitive source loans;
+failure teardown unwinds child calls before clearing a parent's borrowed handles.
+Pinned children or still-lent handles keep the task and caller boundary alive for
+a later cleanup retry. Child dependencies have a 256-level admission bound and
+share the existing exec-owned call frames. Results and endpoint payloads still
+reject borrow leaves.
+
+The extended fixture validates with wasm-tools 1.261.0. Windows ASan passed
+20 resource-import cases with 4,844 assertions, including direct/three-instance
+borrows, fuel suspension, premature drop/return traps, forced transitive unwind,
+subsequent frame collection and an allocation-failure sweep. Task tests cover
+atomic scope clearing, counter overflow, pinned-child retry and retention of the
+incoming caller while a borrowed handle remains lent. Async-call tests cover the
+dependency quota before publication. Related regression passed 84/84 targets in
+8.03 seconds. Native MIR qualification for this borrow extension is pending.
+
+Async host capability callbacks, cross-instance payload conversion,
+nested Component instantiation, public task/endpoint owners, synchronous
 destructor-to-async lowering and the broader Component/WASI gaps remain open.

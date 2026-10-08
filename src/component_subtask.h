@@ -17,6 +17,8 @@ typedef struct turbowasm_component_subtask {
     turbowasm_component_waitable waitable;
     turbowasm_component_resource_table *table;
     turbowasm_component_task *callee;
+    turbowasm_component_task *task_owner, *parent;
+    struct turbowasm_component_subtask *next_child;
     turbowasm_component_task_prepare_fn prepare;
     void *prepare_context;
     turbowasm_component_subtask_lower_fn lower;
@@ -24,6 +26,11 @@ typedef struct turbowasm_component_subtask {
     void *context;
     bool published, released;
 } turbowasm_component_subtask;
+
+/* Caller-lifetime dependencies; exec retains frame/progress ownership. */
+void turbowasm_component_subtask_attach(turbowasm_component_subtask *subtask, turbowasm_component_task *parent);
+void turbowasm_component_subtask_detach_children(turbowasm_component_task *parent);
+turbowasm_status turbowasm_component_subtask_abort_children(turbowasm_component_task *parent);
 
 /* Creates the callee task and installs the caller boundary atomically. Binding
  * must not already have caller hooks. Empty subtask/task remain empty on failure.

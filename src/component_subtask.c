@@ -5,10 +5,47 @@ static bool resolved(const turbowasm_component_subtask *subtask) {
     return subtask->waitable.state.subtask.phase >= TURBOWASM_COMPONENT_SUBTASK_RETURNED;
 }
 
+static void detach(turbowasm_component_subtask *subtask) {
+    turbowasm_component_subtask **link;
+    if (subtask->parent == NULL) return;
+    link = &subtask->parent->children;
+    while (*link != NULL && *link != subtask) link = &(*link)->next_child;
+    if (*link == subtask) *link = subtask->next_child;
+    subtask->parent = NULL; subtask->next_child = NULL;
+}
+
+void turbowasm_component_subtask_attach(turbowasm_component_subtask *subtask, turbowasm_component_task *parent) {
+    subtask->parent = parent; subtask->next_child = parent->children;
+    parent->children = subtask;
+    subtask->task_owner->dependency_depth = parent->dependency_depth + 1u;
+}
+
+void turbowasm_component_subtask_detach_children(turbowasm_component_task *parent) {
+    while (parent->children != NULL) detach(parent->children);
+}
+
+turbowasm_status turbowasm_component_subtask_abort_children(turbowasm_component_task *parent) {
+    turbowasm_status status = TURBOWASM_OK;
+    while (parent->children != NULL) {
+        turbowasm_component_subtask *child = parent->children;
+        turbowasm_status cleanup;
+        if (child->waitable.sync_waiter || child->waitable.delivering) return TURBOWASM_TRAPPED;
+        if (child->waitable.failure == TURBOWASM_OK) child->waitable.failure = TURBOWASM_INTERRUPTED;
+        cleanup = turbowasm_component_task_destroy(child->task_owner);
+        if (status == TURBOWASM_OK) status = cleanup;
+        if (child->task_owner->domain != NULL) return cleanup != TURBOWASM_OK ? cleanup : TURBOWASM_TRAPPED;
+        cleanup = turbowasm_component_subtask_destroy(child);
+        if (status == TURBOWASM_OK) status = cleanup;
+        if (child->table != NULL) return cleanup != TURBOWASM_OK ? cleanup : TURBOWASM_TRAPPED;
+    }
+    return status;
+}
+
 static turbowasm_status release_loans(void *context) {
     turbowasm_component_subtask *subtask = context;
     turbowasm_status status = TURBOWASM_OK;
     if (subtask->released) return TURBOWASM_TRAPPED;
+    detach(subtask);
     subtask->released = true;
     if (subtask->release != NULL) status = subtask->release(subtask->context);
     if (status != TURBOWASM_OK) subtask->waitable.failure = status;
@@ -91,6 +128,7 @@ turbowasm_status turbowasm_component_subtask_create(turbowasm_component_subtask 
     if (status != TURBOWASM_OK) return status;
     memset(subtask, 0, sizeof(*subtask));
     subtask->table = caller_table; subtask->callee = callee;
+    subtask->task_owner = callee;
     subtask->prepare = binding->prepare; subtask->prepare_context = binding->prepare_context;
     subtask->lower = lower; subtask->release = release; subtask->context = context;
     subtask->waitable.release_pending = release_loans; subtask->waitable.release_context = subtask;
