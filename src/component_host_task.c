@@ -115,6 +115,7 @@ turbowasm_status turbowasm_component_host_task_create(turbowasm_component_host_t
     status = export_supported(binding);
     if (status != TURBOWASM_OK) return status;
     if (instance->exec.task_domain.count >= instance->exec.task_domain.limit ||
+        instance->exec.task_domain.next_task_generation == UINT64_MAX ||
         sizeof(*impl) > budget->limit - budget->used) return TURBOWASM_OUT_OF_MEMORY;
     if (!turbowasm_component_instance_public_impl_retain(instance)) return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_component_host_activity_enter(instance, true)) {
@@ -163,6 +164,20 @@ fail:
 const turbowasm_component_task *turbowasm_component_host_task_view(const turbowasm_component_host_task *owner) {
     const component_host_task_impl *impl = owner != NULL ? owner->impl : NULL;
     return impl != NULL ? &impl->task : NULL;
+}
+
+bool turbowasm_component_host_task_pending_host_wait(const turbowasm_component_host_task *owner,
+    turbowasm_component_task_host_wait *out) {
+    const component_host_task_impl *impl = owner != NULL ? owner->impl : NULL;
+    return impl != NULL && !impl->driving && !impl->instance->shutdown_driving &&
+        turbowasm_component_task_pending_host_wait(&impl->task, out);
+}
+
+turbowasm_status turbowasm_component_host_task_complete_host_wait(turbowasm_component_host_task *owner,
+    turbowasm_component_task_host_wait ticket, int completion) {
+    component_host_task_impl *impl = owner != NULL ? owner->impl : NULL;
+    if (impl == NULL || impl->driving || impl->instance->shutdown_driving) return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_component_task_complete_host_wait(&impl->task, ticket, completion);
 }
 
 turbowasm_status turbowasm_component_host_task_resume(turbowasm_component_host_task *owner,

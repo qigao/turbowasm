@@ -3,6 +3,7 @@
 #include "component_endpoint_builtin.h"
 #include "runtime_alloc.h"
 #include "fixtures/component_host_tasks.h"
+#include "fixtures/component_host_task_wait.h"
 #include "fixtures/component_shutdown_core_free.h"
 #ifdef TURBOWASM_TEST_MIR
 #include "jit/mir_backend.h"
@@ -36,6 +37,8 @@ static bool shutdown_on_allocate;
 static bool shutdown_on_free;
 static bool endpoint_move_admitted;
 static bool endpoint_admit_on_allocate;
+static unsigned io_submitted, io_completed;
+static bool io_fixture;
 
 static uint32_t endpoint_type(turbowasm_component_instance_public_impl *owner, bool future) {
     const turbowasm_component_type_graph *graph = &owner->exec.binary->type_graph;
@@ -174,6 +177,58 @@ static void compiled(unsigned owner) {
     (void)owner;
 #endif
 }
+static bool io_can_bind(void *context, turbowasm_component_name instance_name,
+    turbowasm_component_name function_name, const turbowasm_component_type_graph *graph, uint32_t type) {
+    (void)context; (void)instance_name; (void)graph; (void)type;
+    return function_name.size == 4u && memcmp(function_name.bytes, "wait", 4u) == 0;
+}
+static turbowasm_status io_wait(void *context, turbowasm_host_call *call,
+    turbowasm_component_name instance_name, turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph, uint32_t type,
+    const turbowasm_component_value *arguments, size_t count,
+    turbowasm_component_value *result, turbowasm_trap *trap) {
+    turbowasm_host_wait raw = {0};
+    turbowasm_component_task_host_wait ticket = {0};
+    turbowasm_status status;
+    int completion;
+    unsigned i;
+    (void)context; (void)instance_name; (void)function_name; (void)graph;
+    (void)type; (void)arguments; (void)result;
+    check_equal(count, (size_t)0); check_true(turbowasm_host_call_can_wait(call));
+    for (i = 0u; i < OWNER_COUNT; ++i) {
+        ticket.core_generation = 99u;
+        check_false(turbowasm_component_host_task_pending_host_wait(&owners[i], &ticket));
+        check_equal(ticket.core_generation, (uint64_t)99u);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[i], ticket, 7), TURBOWASM_INVALID_ARGUMENT);
+    }
+    ++io_submitted;
+    status = turbowasm_host_call_wait(call, 123u, &raw, &completion);
+    if (status != TURBOWASM_OK) return status;
+    check_equal(completion, 7); ++io_completed; *trap = TURBOWASM_TRAP_NONE;
+    return TURBOWASM_OK;
+}
+static void use_io_fixture(void) {
+    turbowasm_runtime_config config;
+    turbowasm_component_exec_async_limits limits = {2u, 16u};
+    turbowasm_component_exec_imports imports = {0};
+    turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
+    check_equal(allocations.live, (size_t)0);
+    turbowasm_runtime_config_init(&config);
+    config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
+    imports.can_bind = io_can_bind; imports.invoke = io_wait;
+    check_equal(turbowasm_component_load_async_private(&component, component_host_task_wait_bytes,
+        sizeof(component_host_task_wait_bytes), &config), TURBOWASM_OK);
+    check_equal(turbowasm_component_instance_create_async_with_import_sets_private(&instance,
+        &component, &limits, &imports, 1u), TURBOWASM_OK);
+    impl = turbowasm_component_instance_public_impl_get(&instance); attach();
+    io_fixture = true;
+}
+static turbowasm_component_task_host_wait io_pending(unsigned owner) {
+    turbowasm_component_task_host_wait ticket = {0};
+    check_true(turbowasm_component_host_task_pending_host_wait(&owners[owner], &ticket));
+    check_equal(ticket.wait.operation_token, (uintptr_t)123u);
+    return ticket;
+}
 static uint32_t drops(void) {
     turbowasm_component_host_value value = {0};
     turbowasm_trap trap;
@@ -272,12 +327,17 @@ static bool reenter(void *context) {
     void *owner = owners[0].impl;
     const turbowasm_component_task *view = turbowasm_component_host_task_view(&owners[0]);
     turbowasm_component_host_value value = {0};
+    turbowasm_component_task_host_wait ticket = {0};
+    ticket.core_generation = 99u;
     bool cancellation = view->cancellation_requested;
     ++*calls;
     check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_INVALID_ARGUMENT);
     check_false(impl->admission_closed);
     check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_INVALID_ARGUMENT);
     check_equal(turbowasm_component_host_task_request_cancel(&owners[0]), TURBOWASM_INVALID_ARGUMENT);
+    check_false(turbowasm_component_host_task_pending_host_wait(&owners[0], &ticket));
+    check_equal(ticket.core_generation, (uint64_t)99u);
+    check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], ticket, 7), TURBOWASM_INVALID_ARGUMENT);
     check_equal(turbowasm_component_host_task_take_result(&owners[0], &value, &count), TURBOWASM_INVALID_ARGUMENT);
     check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_INVALID_ARGUMENT);
     check_equal(create(0u, "answer", NULL, 0u, false), TURBOWASM_INVALID_ARGUMENT);
@@ -375,6 +435,8 @@ spec("Retained Component host task owners") {
         shutdown_on_free = false;
         endpoint_move_admitted = false;
         endpoint_admit_on_allocate = false;
+        io_submitted = io_completed = 0u;
+        io_fixture = false;
         reenter_transfer_on_allocate = false;
         copy_reentry_end = NULL;
         turbowasm_runtime_config_init(&config);
@@ -394,6 +456,17 @@ spec("Retained Component host task owners") {
         copy_reentry_end = NULL;
         for (i = 0u; i < OWNER_COUNT; ++i) {
             const turbowasm_component_task *view = turbowasm_component_host_task_view(&owners[i]);
+            if (io_fixture && view != NULL) {
+                unsigned turn;
+                /* This fixture owns its deterministic I/O. Finish its two waits
+                 * before freeing owners; interruption cannot acknowledge I/O. */
+                for (turn = 0u; turn < 6u && view->state < TURBOWASM_EXECUTION_COMPLETED; ++turn) {
+                    turbowasm_component_task_host_wait ticket;
+                    if (turbowasm_component_host_task_pending_host_wait(&owners[i], &ticket))
+                        (void)turbowasm_component_host_task_complete_host_wait(&owners[i], ticket, 7);
+                    (void)turbowasm_component_host_task_resume(&owners[i], NULL);
+                }
+            }
             if (view != NULL && view->state < TURBOWASM_EXECUTION_COMPLETED) {
                 turbowasm_execution_options options = {.should_interrupt = interrupt};
                 while (view->domain->backpressure != 0u)
@@ -464,6 +537,84 @@ spec("Retained Component host task owners") {
         check_null(ordinary.impl);
         check_equal(turbowasm_component_instance_create(&sync, &component), TURBOWASM_UNSUPPORTED);
         check_null(sync.impl);
+    }
+    it("authenticates real imported I/O across the retained root and callback executions") {
+        turbowasm_component_task_host_wait entry, callback;
+        use_io_fixture(); check_equal(create(0u, "callback-root", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        entry = io_pending(0u);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], entry, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], entry, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        callback = entry;
+        check_false(turbowasm_component_host_task_pending_host_wait(&owners[0], &callback));
+        check_equal(callback.core_generation, entry.core_generation);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        callback = io_pending(0u);
+        check_equal(callback.wait.generation, entry.wait.generation);
+        check_equal(callback.wait.operation_token, entry.wait.operation_token);
+        check_greater(callback.core_generation, entry.core_generation);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], entry, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        check_equal(io_submitted, 2u); check_equal(io_completed, 1u);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], callback, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_OK);
+        compiled(0u); take(0u, 42u); check_equal(io_completed, 2u);
+        check_false(turbowasm_component_host_task_pending_host_wait(&owners[0], &callback));
+    }
+    it("rejects sibling host I/O tickets and old owners after root storage is reused") {
+        turbowasm_component_task_host_wait first, other, reused;
+        use_io_fixture(); check_equal(create(0u, "stackful-root", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(create(1u, "stackful-root", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_host_task_resume(&owners[1], NULL), TURBOWASM_YIELDED);
+        first = io_pending(0u); other = io_pending(1u);
+        check_equal(first.wait.generation, other.wait.generation);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[1], first, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], other, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], first, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        reused = io_pending(0u);
+        check_equal(reused.core_generation, first.core_generation); check_greater(reused.wait.generation, first.wait.generation);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], first, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], reused, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_OK);
+        check_equal(create(0u, "stackful-root", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        reused = io_pending(0u); check_greater(reused.task_generation, first.task_generation);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], first, 7), TURBOWASM_INVALID_ARGUMENT);
+        /* Teardown completes the deterministic I/O owned by this fixture. */
+    }
+    it("leaves admitted I/O completable after shutdown closes admission and requests cancellation") {
+        turbowasm_component_task_host_wait first, second;
+        use_io_fixture(); check_equal(create(0u, "stackful-root", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        first = io_pending(0u);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_true(turbowasm_component_host_task_view(&owners[0])->cancellation_requested);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        check_equal(io_completed, 0u);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], first, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        second = io_pending(0u);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], second, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_OK);
+        compiled(0u); take(0u, 42u); check_equal(io_completed, 2u);
+    }
+    it("keeps task I/O and its tickets alive after both public instance and loader carriers close") {
+        turbowasm_component_task_host_wait ticket;
+        use_io_fixture(); check_equal(create(0u, "stackful-root", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        ticket = io_pending(0u);
+        turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
+        check_null(instance.impl); check_null(component.impl);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], ticket, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        ticket = io_pending(0u);
+        check_equal(turbowasm_component_host_task_complete_host_wait(&owners[0], ticket, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_OK);
+        compiled(0u); take(0u, 42u);
     }
     it("closes admission without consuming new move inputs or changing call outputs") {
         turbowasm_component_host_arguments arguments = {0};
@@ -1861,6 +2012,16 @@ spec("Retained Component host task owners") {
         check_equal(turbowasm_component_host_task_resume(&owners[0], NULL), TURBOWASM_TRAPPED); compiled(0u);
         check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_TRAPPED);
         check_equal(drops(), 1u); check_equal(impl->exec.async_resource_owners, 0u);
+    }
+    it("rejects exhausted host task identities before allocating or consuming own inputs") {
+        size_t attempts, used;
+        void *source;
+        make(42); attempts = allocations.attempts; used = budget.used; source = resource.as.own;
+        impl->exec.task_domain.next_task_generation = UINT64_MAX;
+        check_equal(create(0u, "consume", &resource, 1u, true), TURBOWASM_OUT_OF_MEMORY);
+        check_null(owners[0].impl); check_equal(allocations.attempts, attempts); check_equal(budget.used, used);
+        check_equal(resource.kind, TURBOWASM_COMPONENT_HOST_OWN);
+        check_equal((const void *)resource.as.own, source); check_equal(impl->exec.task_domain.count, 0u);
     }
     it("preserves own inputs on task quota and invalid signature rejection") {
         size_t used;

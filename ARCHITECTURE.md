@@ -701,6 +701,32 @@ Linux MIR 213/213 in 3.22 s and macOS MIR 213/213 in 2.88 s, including both
 interpreted and compiled instance-options suites. This qualifies private quota
 ownership and constructor retention; the public async host boundary remains gated.
 
+Task host-wait tickets borrow the stable task and its live instance domain. They
+carry both the domain-assigned task generation and the generation of the current
+Core execution, in addition to Runtime's host-wait token. Each callback creates
+a new Core execution, whose Runtime wait generations may repeat; task storage
+may also be reused after destruction. Neither repetition authenticates an old
+completion. Domain task generations and per-task Core generations never wrap;
+exhaustion fails before task admission or consuming a callback event/cancellation.
+Tickets are valid only during the lifetime of their instance domain and must not
+be carried across destruction/reinitialization of that domain. They do not retain
+owners or allocate storage. Query and completion run on the instance owner
+thread, execute no guest code, preserve outputs on failure, and reject reentry,
+foreign tasks and Component builtin waits. Only the task driver completes builtin
+waits. External host I/O retains its existing completion/cancellation authority;
+requesting Component cancellation does not acknowledge or complete that I/O.
+This private adapter is part of public async integration, whose loader gate stays
+closed until host values, endpoint/transfer ownership and public APIs are joined.
+Formal `component_task_test` cases exercise entry-to-callback and repeated-callback
+Runtime token collisions, sibling tasks, reused task storage, repeated waits in
+one execution, duplicate completion, reentry, builtin isolation and nonwrapping
+admission/callback exhaustion. `component_host_task_test` adds real imported
+host I/O through retained root/callback owners, with shutdown requests and closed
+public carriers. Windows ASan passes 73 task cases (8,545 assertions) and 95 host
+owner cases (65,152 assertions); related Component/WASI/Runtime regression passes
+88/88 in 8.79 s. The existing MIR variants require actual compiled Core entries
+and callbacks; native qualification is recorded separately after CI completes.
+
 The private endpoint argument adapter now separates preparation, admission and
 guest publication. Preparation allocates an authentic canonical owner record,
 freezes the source host body and holds an instance activity. The enclosing

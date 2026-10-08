@@ -1,0 +1,25 @@
+;; Root/callback executions reuse the same imported I/O token. Their retained
+;; host owner must authenticate the Component execution, not only the Core wait.
+(component
+  (type $host (instance (export "wait" (func))))
+  (import "host" (instance $host (type $host)))
+  (alias export $host "wait" (func $wait))
+  (core func $wait (canon lower (func $wait)))
+  (core func $return (canon task.return (result u32)))
+  (core instance $h (export "wait" (func $wait)) (export "return" (func $return)))
+  (core module $m
+    (import "h" "wait" (func $wait))
+    (import "h" "return" (func $return (param i32)))
+    (func (export "entry") (result i32) call $wait i32.const 1)
+    (func (export "callback") (param i32 i32 i32) (result i32)
+      call $wait i32.const 42 call $return i32.const 0)
+    (func (export "stackful") call $wait call $wait i32.const 42 call $return))
+  (core instance $m (instantiate $m (with "h" (instance $h))))
+  (alias core export $m "entry" (core func $entry))
+  (alias core export $m "callback" (core func $callback))
+  (alias core export $m "stackful" (core func $stackful))
+  (type $number (func async (result u32)))
+  (func $callback-root (type $number) (canon lift (core func $entry) async (callback $callback)))
+  (func $stackful-root (type $number) (canon lift (core func $stackful) async))
+  (export "callback-root" (func $callback-root))
+  (export "stackful-root" (func $stackful-root)))

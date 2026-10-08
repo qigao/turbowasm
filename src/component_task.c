@@ -147,8 +147,10 @@ turbowasm_status turbowasm_component_task_create(turbowasm_component_task *task,
     if ((binding->resolve == NULL) != (binding->abandon == NULL))
         return TURBOWASM_INVALID_ARGUMENT;
     if (domain->count == domain->limit) return TURBOWASM_OUT_OF_MEMORY;
+    if (domain->next_task_generation == UINT64_MAX) return TURBOWASM_OUT_OF_MEMORY;
     memset(task, 0, sizeof(*task));
     task->domain = domain; task->binding = *binding; task->signature = signature;
+    task->generation = ++domain->next_task_generation;
     ++domain->count;
     return TURBOWASM_OK;
 }
@@ -262,6 +264,7 @@ static turbowasm_status start_core(turbowasm_component_task *task) {
     turbowasm_value arguments[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS] = {0};
     turbowasm_status status;
     uint32_t i;
+    if (task->core_generation == UINT64_MAX) return TURBOWASM_OUT_OF_MEMORY;
     /* Reserve numeric carrier storage before touching any caller values. The
      * preparation hook executes on the same coroutine as realloc and entry. */
     for (i = 0u; i < task->signature.param_count; ++i)
@@ -271,8 +274,10 @@ static turbowasm_status start_core(turbowasm_component_task *task) {
         ? turbowasm_execution_create_host_entry(&task->core, task->core_instance, run_host_entry, task)
         : turbowasm_execution_create(&task->core, task->core_instance,
             task->binding.function_index, arguments, task->signature.param_count);
-    if (status == TURBOWASM_OK)
+    if (status == TURBOWASM_OK) {
+        ++task->core_generation;
         status = turbowasm_execution_set_prepare(&task->core, prepare_core, task);
+    }
     return status;
 }
 
@@ -281,6 +286,9 @@ static turbowasm_status start_callback(turbowasm_component_task *task) {
     turbowasm_value arguments[3] = {0};
     turbowasm_status status;
     if (task->domain->exclusive != NULL) return TURBOWASM_YIELDED;
+    /* Check before cancellation delivery/event polling: an exhausted identity
+     * must not consume a notification that no execution can receive. */
+    if (task->core_generation == UINT64_MAX) return TURBOWASM_OUT_OF_MEMORY;
     if (turbowasm_component_task_deliver_cancel(task->domain)) {
         event.code = TURBOWASM_COMPONENT_EVENT_TASK_CANCELLED;
     } else if (task->waiting_set != 0u) {
@@ -299,6 +307,7 @@ static turbowasm_status start_callback(turbowasm_component_task *task) {
         task->binding.callback_index, arguments, 3u);
     if (status == TURBOWASM_OK) {
         task->between_callbacks = false;
+        ++task->core_generation;
         task->domain->exclusive = task;
     }
     return status;
@@ -416,6 +425,33 @@ turbowasm_status turbowasm_component_task_resume_from_host(turbowasm_component_t
     if (caller == NULL || caller->impl == NULL || task == NULL ||
         (task->phase != TURBOWASM_COMPONENT_TASK_INITIAL && !task->between_callbacks)) return TURBOWASM_INVALID_ARGUMENT;
     return resume_task(task, NULL, parent);
+}
+
+static bool external_host_wait_accessible(const turbowasm_component_task *task) {
+    return task != NULL && task->domain != NULL &&
+        task->domain->active == NULL &&
+        (task->domain->auxiliary == NULL || task->domain->auxiliary == task) &&
+        task->state == TURBOWASM_EXECUTION_YIELDED && !task->between_callbacks &&
+        !task->destroying && !task->resolving &&
+        task->builtin_wait == TURBOWASM_COMPONENT_TASK_WAIT_NONE;
+}
+
+bool turbowasm_component_task_pending_host_wait(const turbowasm_component_task *task,
+    turbowasm_component_task_host_wait *out) {
+    turbowasm_host_wait wait;
+    if (out == NULL || !external_host_wait_accessible(task) ||
+        !turbowasm_execution_pending_host_wait(&task->core, &wait)) return false;
+    *out = (turbowasm_component_task_host_wait){task->domain, task,
+        task->generation, task->core_generation, wait};
+    return true;
+}
+
+turbowasm_status turbowasm_component_task_complete_host_wait(turbowasm_component_task *task,
+    turbowasm_component_task_host_wait ticket, int completion) {
+    if (!external_host_wait_accessible(task) || ticket.domain != task->domain ||
+        ticket.task != task || ticket.task_generation != task->generation ||
+        ticket.core_generation != task->core_generation) return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_execution_complete_host_wait(&task->core, ticket.wait, completion);
 }
 
 turbowasm_status turbowasm_component_task_request_cancel(turbowasm_component_task *task) {

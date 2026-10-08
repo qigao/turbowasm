@@ -216,9 +216,16 @@ turbowasm_status turbowasm_component_host_task_create(turbowasm_component_host_t
 turbowasm_status turbowasm_component_host_task_resume(turbowasm_component_host_task *owner,
     const turbowasm_execution_options *options);
 turbowasm_status turbowasm_component_host_task_request_cancel(turbowasm_component_host_task *owner);
-/* Borrowed runtime view for state/host-wait progress, never for direct mutation
+/* Borrowed runtime view for state inspection, never for direct mutation
  * or destruction of the task. Invalidated when the owner is destroyed. */
 const turbowasm_component_task *turbowasm_component_host_task_view(const turbowasm_component_host_task *owner);
+/* Authenticated external I/O access; no allocation, guest execution or ownership
+ * change. Tickets borrow the owner and instance domain. Reentrant/shutdown
+ * drivers reject access; output is unchanged when no external wait is pending. */
+bool turbowasm_component_host_task_pending_host_wait(const turbowasm_component_host_task *owner,
+    turbowasm_component_task_host_wait *out);
+turbowasm_status turbowasm_component_host_task_complete_host_wait(turbowasm_component_host_task *owner,
+    turbowasm_component_task_host_wait ticket, int completion);
 /* Complete Core exit is required. Allocation/byte failure keeps the result for
  * retry. Result/count outputs are changed only on successful delivery. */
 turbowasm_status turbowasm_component_host_task_take_result(turbowasm_component_host_task *owner,

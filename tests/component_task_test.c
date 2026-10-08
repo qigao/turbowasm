@@ -35,6 +35,8 @@ static turbowasm_runtime_config config;
 static turbowasm_runtime_scope scope;
 static size_t live, allowance;
 static bool may_leave, ignore_cancel, callback_exit_only, wait_in_entry, request_in_entry;
+static bool wait_in_callback, check_wait_reentry;
+static turbowasm_component_task_host_wait reentry_ticket;
 static bool mismatch_return, mismatched_encoding;
 static bool deliver_on_wait;
 static unsigned composite_return;
@@ -54,7 +56,7 @@ static bool prepare_interrupt;
 static bool prepare_wrong_kind, prepare_wrong_count;
 typedef enum host_task_operation {
     HOST_TASK_RETURN, HOST_TASK_WAIT, HOST_TASK_CANCEL, HOST_TASK_RETURN_WAIT,
-    HOST_TASK_NESTED, HOST_TASK_RAW_YIELD, HOST_TASK_NO_RETURN
+    HOST_TASK_NESTED, HOST_TASK_RAW_YIELD, HOST_TASK_NO_RETURN, HOST_TASK_WAIT_TWICE
 } host_task_operation;
 static struct {
     host_task_operation operation;
@@ -118,6 +120,13 @@ static turbowasm_status wait_now(turbowasm_host_call *call) {
     turbowasm_host_wait wait = {0};
     int completion;
     turbowasm_status status;
+    if (check_wait_reentry) {
+        turbowasm_component_task_host_wait untouched = reentry_ticket;
+        check_false(turbowasm_component_task_pending_host_wait(domain.active, &untouched));
+        check_equal(untouched.task_generation, reentry_ticket.task_generation);
+        check_equal(turbowasm_component_task_complete_host_wait(domain.active, reentry_ticket, 7),
+            TURBOWASM_INVALID_ARGUMENT);
+    }
     ++wait_started;
     status = turbowasm_host_call_wait(call, 123u, &wait, &completion);
     if (status == TURBOWASM_INTERRUPTED) ++wait_interrupted;
@@ -157,6 +166,7 @@ static turbowasm_status host(void *context, turbowasm_host_call *call,
         out[0].kind = TURBOWASM_VALUE_I32; out[0].as.i32 = (int32_t)entry_word; *out_count = 1;
     } else if (operation == 1u) {
         ++callbacks; check_equal(count, 3u);
+        if (wait_in_callback) { status = wait_now(call); if (status != TURBOWASM_OK) return status; }
         last_event.code = (turbowasm_component_event_code)args[0].as.i32;
         last_event.handle = (uint32_t)args[1].as.i32; last_event.payload = (uint32_t)args[2].as.i32;
         if (check_cancel_pin) {
@@ -204,9 +214,9 @@ static void register_set(void) {
     entry_word = (set.handle << 4u) | 2u;
 }
 static void complete_wait(unsigned index) {
-    turbowasm_host_wait wait;
-    check_true(turbowasm_execution_pending_host_wait(&tasks[index].core, &wait));
-    check_equal(turbowasm_execution_complete_host_wait(&tasks[index].core, wait, 7), TURBOWASM_OK);
+    turbowasm_component_task_host_wait wait;
+    check_true(turbowasm_component_task_pending_host_wait(&tasks[index], &wait));
+    check_equal(turbowasm_component_task_complete_host_wait(&tasks[index], wait, 7), TURBOWASM_OK);
 }
 
 static turbowasm_status subtask_prepare(void *context, turbowasm_component_task *task,
@@ -360,8 +370,10 @@ static turbowasm_status host_task_entry(void *context, turbowasm_component_task 
         status = turbowasm_instance_invoke_from_host(call, &instance,
             function_index(host_task.core_entry), arguments, 4, &output, 1, &count, &task->trap);
         if (status == TURBOWASM_OK) { check_equal(count, 1u); check_equal(output.as.i32, 256); }
-    } else if (host_task.operation == HOST_TASK_WAIT || host_task.operation == HOST_TASK_CANCEL)
+    } else if (host_task.operation == HOST_TASK_WAIT || host_task.operation == HOST_TASK_CANCEL ||
+        host_task.operation == HOST_TASK_WAIT_TWICE)
         status = wait_now(call);
+    if (status == TURBOWASM_OK && host_task.operation == HOST_TASK_WAIT_TWICE) status = wait_now(call);
     if (status == TURBOWASM_OK && host_task.operation == HOST_TASK_CANCEL)
         status = turbowasm_component_task_cancel(task->domain);
     else if (status == TURBOWASM_OK && host_task.operation != HOST_TASK_NO_RETURN) {
@@ -401,6 +413,8 @@ spec("private async Component Core task execution") {
         turbowasm_runtime_config_init(&config); config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
         scope = turbowasm_runtime_scope_enter(&config);
         may_leave = true; ignore_cancel = callback_exit_only = wait_in_entry = request_in_entry = false;
+        wait_in_callback = check_wait_reentry = false;
+        memset(&reentry_ticket, 0, sizeof(reentry_ticket));
         mismatch_return = mismatched_encoding = false;
         deliver_on_wait = false;
         composite_return = 0;
@@ -514,6 +528,164 @@ spec("private async Component Core task execution") {
         check_equal(turbowasm_execution_complete_host_wait(&tasks[0].core, wait, 7), TURBOWASM_OK);
         check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
         check_equal(tasks[0].result.as.u32, 42u); check_equal(prepared, 1u); check_equal(host_task.exited, 1u);
+    }
+
+    it("rejects old entry and callback tickets even when Core wait tokens repeat") {
+        turbowasm_component_task_host_wait entry, first, second;
+        wait_in_entry = wait_in_callback = check_wait_reentry = true;
+        callback_exit_only = true; callback_word = 1u;
+        create(0, "entry", "callback", false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_true(turbowasm_component_task_pending_host_wait(&tasks[0], &entry));
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], entry, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], entry, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        first = entry;
+        check_false(turbowasm_component_task_pending_host_wait(&tasks[0], &first));
+        check_equal(first.core_generation, entry.core_generation);
+        reentry_ticket = entry;
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_true(turbowasm_component_task_pending_host_wait(&tasks[0], &first));
+        check_equal(first.wait.generation, entry.wait.generation);
+        check_equal(first.wait.operation_token, entry.wait.operation_token);
+        check_greater(first.core_generation, entry.core_generation);
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], entry, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(callbacks, 1u); check_equal(wait_resumed, 1u);
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], first, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        reentry_ticket = first;
+        callback_exit_only = false; callback_word = 0u;
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_true(turbowasm_component_task_pending_host_wait(&tasks[0], &second));
+        check_equal(second.wait.generation, first.wait.generation);
+        check_equal(second.wait.operation_token, first.wait.operation_token);
+        check_greater(second.core_generation, first.core_generation);
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], first, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], second, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(tasks[0].result.as.u32, 42u); check_equal(wait_resumed, 3u);
+        check_false(turbowasm_component_task_pending_host_wait(&tasks[0], &second));
+        compiled("entry"); compiled("callback");
+    }
+
+    it("rejects foreign task and reused task storage tickets with identical Core waits") {
+        turbowasm_component_task_host_wait first, other, reused, wrong;
+        create(0, "wait-return", NULL, false); create(1, "wait-return", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_YIELDED);
+        check_true(turbowasm_component_task_pending_host_wait(&tasks[0], &first));
+        check_true(turbowasm_component_task_pending_host_wait(&tasks[1], &other));
+        check_equal(other.wait.generation, first.wait.generation);
+        check_equal(other.wait.operation_token, first.wait.operation_token);
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[1], first, 7), TURBOWASM_INVALID_ARGUMENT);
+        wrong = first; wrong.domain = &caller_domain;
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], wrong, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], first, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        create(0, "wait-return", NULL, false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_true(turbowasm_component_task_pending_host_wait(&tasks[0], &reused));
+        check_equal((const void *)reused.task, (const void *)first.task);
+        check_equal(reused.core_generation, first.core_generation);
+        check_equal(reused.wait.generation, first.wait.generation);
+        check_greater(reused.task_generation, first.task_generation);
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], first, 7), TURBOWASM_INVALID_ARGUMENT);
+        complete_wait(0); complete_wait(1);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[1], NULL), TURBOWASM_OK);
+        compiled("wait-return");
+    }
+
+    it("preserves Runtime wait authentication for repeated I/O within one Core execution") {
+        turbowasm_component_task_host_wait first, second;
+        host_task.operation = HOST_TASK_WAIT_TWICE; create_host_task();
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_true(turbowasm_component_task_pending_host_wait(&tasks[0], &first));
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], first, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_true(turbowasm_component_task_pending_host_wait(&tasks[0], &second));
+        check_equal(second.core_generation, first.core_generation);
+        check_greater(second.wait.generation, first.wait.generation);
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], first, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], second, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(host_task.started, 1u); check_equal(host_task.exited, 1u); check_equal(wait_resumed, 2u);
+    }
+
+    it("keeps builtin continuations private and preserves failed ticket query outputs") {
+        turbowasm_component_task_host_wait ticket = {0}, forged;
+        turbowasm_host_wait raw;
+        ticket.core_generation = 99u;
+        check_false(turbowasm_component_task_pending_host_wait(NULL, &ticket));
+        create(0, "builtin-yield", NULL, false);
+        check_false(turbowasm_component_task_pending_host_wait(&tasks[0], &ticket));
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_true(turbowasm_execution_pending_host_wait(&tasks[0].core, &raw));
+        check_false(turbowasm_component_task_pending_host_wait(&tasks[0], &ticket));
+        check_equal(ticket.core_generation, (uint64_t)99u);
+        forged = (turbowasm_component_task_host_wait){&domain, &tasks[0],
+            tasks[0].generation, tasks[0].core_generation, raw};
+        check_equal(turbowasm_component_task_complete_host_wait(&tasks[0], forged, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_false(turbowasm_component_task_pending_host_wait(&tasks[0], &ticket));
+        check_equal(ticket.core_generation, (uint64_t)99u); compiled("builtin-yield");
+    }
+
+    it("rejects exhausted task identities without admitting a task or preparing arguments") {
+        turbowasm_component_task_binding b = binding("entry", "callback", false);
+        domain.next_task_generation = UINT64_MAX - 1u;
+        create(0, "stackful", NULL, false);
+        check_equal(tasks[0].generation, UINT64_MAX);
+        check_equal(turbowasm_component_task_create(&tasks[1], &domain, &b), TURBOWASM_OUT_OF_MEMORY);
+        check_null(tasks[1].domain); check_equal(domain.count, 1u); check_equal(prepared, 0u);
+        check_equal(domain.next_task_generation, UINT64_MAX);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+    }
+
+    it("rejects exhausted callback identities before consuming pending events or cancellation") {
+        turbowasm_component_event event;
+        register_set(); create(0, "entry", "callback", false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_true(turbowasm_component_subtask_start(&item.state.subtask));
+        check_equal(turbowasm_component_task_request_cancel(&tasks[0]), TURBOWASM_OK);
+        tasks[0].core_generation = UINT64_MAX;
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OUT_OF_MEMORY);
+        check_false(tasks[0].cancellation_delivered); check_equal(callbacks, 0u);
+        check_equal(tasks[0].core_generation, UINT64_MAX);
+        check_equal(set.wait_count, 0u);
+        check_equal(turbowasm_component_waitable_set_poll(&table, set.handle, &event), TURBOWASM_OK);
+        check_equal(event.code, TURBOWASM_COMPONENT_EVENT_SUBTASK); check_equal(event.handle, item.handle);
+        check_equal(event.payload, TURBOWASM_COMPONENT_SUBTASK_STARTED);
+    }
+
+    it("leaves a ready event queued when callback identity exhaustion prevents delivery") {
+        turbowasm_component_event event;
+        register_set(); create(0, "entry", "callback", false);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_true(turbowasm_component_subtask_start(&item.state.subtask));
+        tasks[0].core_generation = UINT64_MAX;
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(callbacks, 0u); check_equal(set.wait_count, 0u);
+        check_equal(turbowasm_component_waitable_set_poll(&table, set.handle, &event), TURBOWASM_OK);
+        check_equal(event.code, TURBOWASM_COMPONENT_EVENT_SUBTASK); check_equal(event.handle, item.handle);
+        check_equal(event.payload, TURBOWASM_COMPONENT_SUBTASK_STARTED);
+    }
+
+    it("does not allocate or enter guest code when the initial Core identity is exhausted") {
+        size_t before = live;
+        create(0, "entry", "callback", false); tasks[0].core_generation = UINT64_MAX;
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OUT_OF_MEMORY);
+        check_null(tasks[0].core.impl); check_equal(prepared, 0u); check_equal(entered, 0u);
+        check_equal(live, before); check_null(domain.exclusive);
+    }
+
+    it("keeps the Core generation unchanged when execution allocation fails") {
+        create(0, "entry", "callback", false); allowance = 0u;
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(tasks[0].core_generation, (uint64_t)0u);
+        check_equal(prepared, 0u); check_equal(entered, 0u); check_null(tasks[0].core.impl);
     }
 
     it("cancels host admission without invoking or preparing the callback") {

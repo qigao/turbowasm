@@ -21,6 +21,9 @@ typedef struct turbowasm_component_task_domain {
     uint32_t pair_count;
     uint32_t count, limit, backpressure;
     uint32_t synchronous_depth;
+    /* Unique ticket identities throughout this live domain, including reused
+     * task storage. Exhaustion rejects new admission. */
+    uint64_t next_task_generation;
     /* Optional creation-instance keepalive for domain-owned pairs and fresh
      * lifted resource values. Bind once, before admission, with both hooks or
      * neither. Pairs retain until both ends close; lifted resources retain until
@@ -91,6 +94,7 @@ struct turbowasm_component_task {
     turbowasm_component_flat_signature signature;
     turbowasm_execution core;
     turbowasm_instance *core_instance;
+    uint64_t generation, core_generation;
     turbowasm_execution_state state;
     turbowasm_status status;
     turbowasm_trap trap;
@@ -143,6 +147,22 @@ turbowasm_status turbowasm_component_task_resume(turbowasm_component_task *task,
  * call must be resumed by its driver; this entry rejects such continuations. */
 turbowasm_status turbowasm_component_task_resume_from_host(turbowasm_component_task *task,
     const turbowasm_host_call *caller);
+typedef struct turbowasm_component_task_host_wait {
+    const turbowasm_component_task_domain *domain;
+    const turbowasm_component_task *task;
+    uint64_t task_generation, core_generation;
+    turbowasm_host_wait wait;
+} turbowasm_component_task_host_wait;
+/* Owner-thread-only external I/O ticket, borrowing the stable task/live domain.
+ * Never carry a ticket across domain destruction/reinitialization. Core wait
+ * tokens alone do not identify a task or callback execution. Query preserves
+ * out on failure; completion runs no guest code and rejects stale/foreign,
+ * duplicate and builtin waits. Reentrant access during domain execution fails. */
+bool turbowasm_component_task_pending_host_wait(const turbowasm_component_task *task,
+    turbowasm_component_task_host_wait *out);
+turbowasm_status turbowasm_component_task_complete_host_wait(turbowasm_component_task *task,
+    turbowasm_component_task_host_wait ticket, int completion);
+
 turbowasm_status turbowasm_component_task_request_cancel(turbowasm_component_task *task);
 /* Called at a canonical cancellable wait point in the active task. */
 bool turbowasm_component_task_deliver_cancel(turbowasm_component_task_domain *domain);
