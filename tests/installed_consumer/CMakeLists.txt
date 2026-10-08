@@ -289,6 +289,27 @@ if(TARGET TurboWasm::WASI)
            COMMAND turbowasm_installed_wasi_consumer)
 endif()
 
+if(TARGET TurboWasm::WASI)
+  add_executable(turbowasm_installed_wasi_preview1_sockets_consumer ../wasi_preview1_sockets_test.c)
+  target_link_libraries(turbowasm_installed_wasi_preview1_sockets_consumer PRIVATE TurboWasm::WASI Salts::TinyTest)
+  set_target_properties(turbowasm_installed_wasi_preview1_sockets_consumer PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi_preview1_sockets_consumer COMMAND turbowasm_installed_wasi_preview1_sockets_consumer)
+  if(TARGET TurboWasm::WASICNet)
+    add_executable(turbowasm_installed_wasi_preview1_cnet_consumer ../wasi_preview1_cnet_test.c)
+    target_link_libraries(turbowasm_installed_wasi_preview1_cnet_consumer PRIVATE TurboWasm::WASICNet Salts::TinyTest)
+    set_target_properties(turbowasm_installed_wasi_preview1_cnet_consumer PROPERTIES
+      C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    add_test(NAME turbowasm_installed_wasi_preview1_cnet_consumer COMMAND turbowasm_installed_wasi_preview1_cnet_consumer)
+    set_tests_properties(turbowasm_installed_wasi_preview1_cnet_consumer PROPERTIES TIMEOUT 30)
+    add_executable(turbowasm_installed_wasi_preview1_cnet_cpp_consumer wasi_preview1_cnet_cpp_main.cpp)
+    target_link_libraries(turbowasm_installed_wasi_preview1_cnet_cpp_consumer PRIVATE TurboWasm::WASICNet)
+    set_target_properties(turbowasm_installed_wasi_preview1_cnet_cpp_consumer PROPERTIES
+      CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    add_test(NAME turbowasm_installed_wasi_preview1_cnet_cpp_consumer COMMAND turbowasm_installed_wasi_preview1_cnet_cpp_consumer)
+  endif()
+endif()
+
 if(TARGET TurboWasm::WASIThreads)
   add_executable(turbowasm_installed_wasi_threads_consumer
     wasi_threads_main.c)

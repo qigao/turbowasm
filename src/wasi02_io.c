@@ -49,6 +49,7 @@ typedef struct io_impl {
     bool published;
     bool factory_running;
     uint32_t bindings;
+    uint32_t facades;
     bool dirty;
     turbowasm_wasi02_io_config config;
     turbowasm_runtime_config runtime;
@@ -368,6 +369,34 @@ static void stream_drop(io_impl *p, turbowasm_value rep, unsigned kind) {
 }
 static void input_drop(void *p, turbowasm_value r) { stream_drop(p, r, 1); }
 static void output_drop(void *p, turbowasm_value r) { stream_drop(p, r, 2); }
+
+/* Atomic host-only transfer out of this domain. Preflight is repeated at commit
+ * on the owner thread. Removing domain tokens prevents stale copies from using
+ * a stream which now belongs to Preview1; native close ownership is transferred,
+ * so this intentionally does not call the provider's input/output drop. */
+bool turbowasm_wasi02_io_detach_pair_private(turbowasm_wasi02_io *io,
+    turbowasm_value input, turbowasm_value output, void *context,
+    turbowasm_value native_rep, bool commit) {
+    io_impl *p=impl_of(io);
+    if (!p || p->busy || p->facades) return false;
+    io_stream *in=stream_of(p, input, TURBOWASM_WASI02_IO_INPUT);
+    io_stream *out=stream_of(p, output, TURBOWASM_WASI02_IO_OUTPUT);
+    if (!in || !out || in->ops.context != context || out->ops.context != context ||
+        rep_token(in->rep) != rep_token(native_rep) || rep_token(out->rep) != rep_token(native_rep)) return false;
+    /* Source owner plus its stream; no poll/error/wait aliases. */
+    if (p->sources[in->source].refs != 2 || p->sources[out->source].refs != 2) return false;
+    if (commit) {
+        uint32_t a=in->source, b=out->source;
+        memset(in, 0, sizeof(*in)); memset(out, 0, sizeof(*out));
+        source_release(p, a); source_release(p, b);
+    }
+    return true;
+}
+bool turbowasm_wasi02_io_source_exclusive_private(turbowasm_wasi02_io *io,
+    turbowasm_wasi02_io_source source) {
+    io_impl *p=impl_of(io); io_source *s=source_of(p,source);
+    return p && !p->busy && !p->facades && s && !s->closed && s->refs==1;
+}
 static turbowasm_status error_debug(void *context, turbowasm_value rep, turbowasm_wasi02_string_view *out) {
     io_impl *p = context; uint32_t i; turbowasm_status status = TURBOWASM_TRAPPED;
     if (!out || !enter(p)) return TURBOWASM_INVALID_ARGUMENT;
@@ -427,6 +456,9 @@ bool turbowasm_wasi02_io_retain_private(turbowasm_wasi02_io *io) {
 void turbowasm_wasi02_io_release_private(void *context) {
     io_impl *p = context; --p->bindings;
 }
+static void io_facade_release(void *context) {
+    io_impl *p=context; --p->facades; turbowasm_wasi02_io_release_private(context);
+}
 void *turbowasm_wasi02_io_context_private(turbowasm_wasi02_io *io) { return impl_of(io); }
 extern turbowasm_status turbowasm_wasi02_set_wait_cleanup(turbowasm_wasi02 *, void (*)(void *, uintptr_t), void *, void (*)(void *));
 turbowasm_status turbowasm_wasi02_io_wasi02_init(turbowasm_wasi02_io *io, turbowasm_wasi02 *wasi,
@@ -442,10 +474,11 @@ turbowasm_status turbowasm_wasi02_io_wasi02_init(turbowasm_wasi02_io *io, turbow
         !config->pollable_capacity || !config->stream_resource_capacity) return TURBOWASM_INVALID_ARGUMENT;
     copy = *config; status = turbowasm_wasi02_io_providers(io, &copy.streams, &copy.poll);
     if (status != TURBOWASM_OK) return status;
-    if (!turbowasm_wasi02_io_retain_private(io)) return TURBOWASM_INVALID_ARGUMENT;
+    if (p->facades == UINT32_MAX || !turbowasm_wasi02_io_retain_private(io)) return TURBOWASM_INVALID_ARGUMENT;
     status = turbowasm_wasi02_init(wasi, &copy, runtime);
     if (status != TURBOWASM_OK) { turbowasm_wasi02_io_release_private(p); return status; }
-    status = turbowasm_wasi02_set_wait_cleanup(wasi, turbowasm_wasi02_io_wait_done, p, turbowasm_wasi02_io_release_private);
-    if (status != TURBOWASM_OK) { (void)turbowasm_wasi02_destroy(wasi); turbowasm_wasi02_io_release_private(p); }
+    ++p->facades;
+    status = turbowasm_wasi02_set_wait_cleanup(wasi, turbowasm_wasi02_io_wait_done, p, io_facade_release);
+    if (status != TURBOWASM_OK) { (void)turbowasm_wasi02_destroy(wasi); io_facade_release(p); }
     return status;
 }

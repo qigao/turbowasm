@@ -223,6 +223,81 @@ have completed successfully and its SDK source commit must match the run;
 an unfinished Windows job does not block those platforms. The CI summary
 records the omission, and this run does not qualify Windows.
 
+## WASI Preview1 sockets and polling
+
+`TurboWasm::WASI` implements `sock_accept`, `sock_recv`, `sock_send`,
+`sock_shutdown`, `fd_fdstat_get`, `fd_fdstat_set_flags`,
+`fd_fdstat_set_rights` and `poll_oneoff` in `wasi_snapshot_preview1`.
+The existing file descriptor table also routes socket `fd_read`, `fd_write`
+and `fd_close`. These are memory32 Preview1 imports; native socket creation,
+bind, connect and DNS remain explicit host capabilities.
+
+Include `<turbowasm/wasi_sockets.h>` and opt in with
+`turbowasm_wasi_preview1_init_v2`. The old initializer remains available.
+The table is borrowed and must outlive WASI and every consumer instance.
+
+```c
+turbowasm_wasi_preview1_config_v2 config;
+turbowasm_wasi_preview1_config_v2_init(&config);
+config.base.filesystem = &filesystem; /* already initialized common fd table */
+config.base.allow_fd_read = config.base.allow_fd_write = true;
+config.allow_sockets = config.allow_poll = true;
+/* Check status; clock subscriptions require a separate base.allow_clock grant
+ * and base.clock_time provider. Defaults do not grant either capability. */
+turbowasm_status status = turbowasm_wasi_preview1_init_v2(&wasi, &config);
+```
+
+Defaults bound simultaneous waits to 64, subscriptions per poll to 64,
+bytes per socket call to 65536 and all staged call storage to 4 MiB.
+Capacity exhaustion returns `AGAIN` (waits), `NOMEM` (staging), `MFILE`
+(descriptors), or `MSGSIZE` (per-call bytes). The facade never blocks its
+owner thread. Use `turbowasm_execution_resume`; after progressing providers,
+call `turbowasm_wasi_preview1_advance` to complete readiness waits and resume
+the execution. One-shot invocation returns `AGAIN` when it would need to wait.
+`next_timeout` reports the next timer delay in nanoseconds, or `UINT64_MAX`.
+
+`TurboWasm::WASICNet` composes the existing CNet owner with Preview1; it adds
+no worker or backend observation loop. Include `<turbowasm/wasi_cnet.h>`,
+create host TCP/UDP carriers through the existing CNet providers, then move
+them using `turbowasm_wasi_cnet_listener_move`, `tcp_move` or `udp_move`.
+The CNet adapter must have no published facade bindings or stream/poll/error
+aliases during transfer. TCP moves its socket/input/output together; UDP
+requires an associated peer and moves its socket/datagram pair together.
+Moves zero carriers only on success and invalidate old stream-domain tokens.
+
+Obtain operations with `turbowasm_wasi_cnet_descriptor_ops`, then admit the
+owned file using `turbowasm_wasi_fs_bind_socket_move` with its socket type,
+explicit rights and optional `TURBOWASM_WASI_FDFLAG_NONBLOCK`. If fd admission
+fails, the file remains host-owned; retry or close it through `ops.file.close`.
+A successful bind transfers close ownership to the common table.
+All APIs run on the same owner thread. The host observes the existing native
+backend once, routes every completion to CNet, progresses CNet and its IO
+domain, then advances Preview1. Files and sockets share fd allocation and
+can use different copied providers.
+
+Receive supports `PEEK` and `WAITALL`; UDP retains one packet boundary and
+reports `DATA_TRUNCATED`, including empty messages. TCP PEEK|WAITALL reserves
+another `receive_bytes` from the CNet payload budget at admission and accepts
+at most `receive_bytes` per peek. Ordinary WAITALL uses bounded facade staging.
+Only one active operation per descriptor and direction is admitted (`BUSY` on
+conflict). Rights can only decrease; accept uses the listener's current
+inheriting rights, restricted to stream capabilities.
+
+Closing a descriptor invalidates its guest identity immediately after provider
+close succeeds. Advance Preview1 to wake its waiters; leases prevent old calls
+from accessing a new fd with the same number. Execution destruction unwinds
+waits and releases staging. `shutdown_request` wakes calls with `INTR`;
+`shutdown_poll` confirms they have unwound. Destroy consumer instances before
+`destroy_checked`, close remaining fds and drain CNet's actual native terminals
+before destroying its owner, IO domain and backend.
+
+The executable tests in `tests/wasi_preview1_sockets_test.c` and
+`tests/wasi_preview1_cnet_test.c` use the checked-in Core fixture
+`tests/fixtures/wasi_preview1_sockets.wat`; the native test executes real IPv4
+and IPv6 TCP/UDP. The installed package runs the same public-API tests plus a
+C++ consumer. MIR profiles attach a native backend to the fixture and verify
+that executed import wrappers compile.
+
 ## Native WASI 0.2 UDP and DNS
 
 Include `<turbowasm/wasi02_network.h>` for the complete provider-neutral

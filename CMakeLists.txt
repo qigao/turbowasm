@@ -524,6 +524,14 @@ if(TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND)
   target_link_libraries(turbowasm_wasi02_cnet PUBLIC TurboWasm::WASI02IO Salts::CNet)
 endif()
 
+if(TARGET turbowasm_wasi AND TARGET turbowasm_wasi02_cnet)
+  add_library(turbowasm_wasi_cnet INTERFACE)
+  add_library(TurboWasm::WASICNet ALIAS turbowasm_wasi_cnet)
+  set_target_properties(turbowasm_wasi_cnet PROPERTIES EXPORT_NAME WASICNet)
+  target_link_libraries(turbowasm_wasi_cnet INTERFACE TurboWasm::WASI TurboWasm::WASI02CNet)
+  install(TARGETS turbowasm_wasi_cnet EXPORT TurboWasmTargets)
+endif()
+
 if(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN)
   if(NOT TURBOWASM_ENABLE_WASI_ADAPTER)
     message(FATAL_ERROR

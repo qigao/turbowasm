@@ -18,6 +18,7 @@ typedef struct tw_udp_pair {
 typedef struct tw_udp_packet { size_t size; turbowasm_wasi02_ip_socket_address peer; } tw_udp_packet;
 struct tw_udp {
     bool active, live, bound, binding, stopping, terminal, receive_pending, associated;
+    bool p1_live, p1_read_closed, p1_write_closed;
     uint64_t token;
     uint32_t refs;
     tw_cnet_impl *owner;
@@ -26,6 +27,7 @@ struct tw_udp {
     turbowasm_wasi02_io_source source;
     tw_udp_pair *pair;
     uint8_t *bytes;
+    uint8_t *p1_scratch;
     tw_udp_packet *packets;
     size_t head, count, sends;
     int send_error, receive_error;
@@ -118,7 +120,7 @@ static void udp_receive(void *ctx, cnet_datagram *d, const cnet_datagram_peer *p
     cnet_stream_endpoint endpoint = CNET_STREAM_ENDPOINT_INIT;
     turbowasm_wasi02_ip_socket_address address; (void)peer;
     u->receive_pending = false;
-    if (u->stopping || !u->pair || !u->pair->live[0]) return;
+    if (u->stopping || u->p1_read_closed || !u->pair || !u->pair->live[0]) return;
     if (cnet_datagram_received_endpoint(d, &endpoint) != SALTS_OK || !endpoint_to_wasi(&endpoint, &address)) {
         u->receive_error = SALTS_EPROTO; udp_changed(u); return;
     }
@@ -444,7 +446,7 @@ static int cnet_network_advance(tw_cnet_impl *p) {
             if (stopped) { u->terminal = true; u->receive_pending = false; }
         } else if (!u->terminal) {
             rc = cnet_datagram_advance_external(&u->datagram,&events);
-            if (rc == SALTS_OK && u->bound && u->pair && u->pair->live[0] && n->config.allow_udp_receive &&
+            if (rc == SALTS_OK && u->bound && u->pair && u->pair->live[0] && !u->p1_read_closed && n->config.allow_udp_receive &&
                 !u->receive_error && !u->receive_pending && u->count < n->config.receive_datagrams) {
                 rc = cnet_datagram_receive(&u->datagram,1);
                 if (rc == SALTS_OK) u->receive_pending = true;
@@ -455,6 +457,7 @@ static int cnet_network_advance(tw_cnet_impl *p) {
         udp_changed(u);
         if (u->terminal && !u->refs) {
             rc = cnet_datagram_destroy(&u->datagram); if (rc != SALTS_OK) return rc;
+            turbowasm_rt_free(u->p1_scratch);
             uint8_t *bytes = u->bytes; tw_udp_packet *packets = u->packets;
             memset(u,0,sizeof(*u)); u->bytes = bytes; u->packets = packets;
         }
@@ -491,7 +494,7 @@ static int cnet_network_destroy(tw_cnet_impl *p) {
     if (cnet_network_active(p)) return SALTS_EBUSY;
     if (n->lookup.impl) { int rc = cnet_name_lookup_close(&n->lookup); if (rc != SALTS_OK) return rc;
         rc = cnet_name_lookup_destroy(&n->lookup); if (rc != SALTS_OK) return rc; }
-    for (uint32_t i = 0; i < n->config.udp_capacity; ++i) { turbowasm_rt_free(n->udp[i].bytes); turbowasm_rt_free(n->udp[i].packets); }
+    for (uint32_t i = 0; i < n->config.udp_capacity; ++i) { turbowasm_rt_free(n->udp[i].bytes); turbowasm_rt_free(n->udp[i].packets); turbowasm_rt_free(n->udp[i].p1_scratch); }
     turbowasm_rt_free(n->udp); turbowasm_rt_free(n->pairs); turbowasm_rt_free(n->dns); turbowasm_rt_free(n);
     p->network = NULL; return SALTS_OK;
 }

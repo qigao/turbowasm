@@ -1,5 +1,5 @@
 #include <turbowasm/wasi.h>
-#include <turbowasm/wasi_fs.h>
+#include "wasi_fs_private.h"
 
 #include "wasi_preview1_adapter_plan.h"
 
@@ -15,6 +15,7 @@ typedef struct turbowasm_wasi_string_list {
 } turbowasm_wasi_string_list;
 
 typedef struct turbowasm_wasi_preview1_impl {
+    struct tw_p1_async *async;
     bool allow_args;
     bool allow_environ;
     bool allow_clock;
@@ -268,6 +269,74 @@ static const cmeta_function_desc turbowasm_wasi_meta_path_open =
         turbowasm_wasi_meta_path_open_params,
         CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
 
+static const cmeta_param_desc turbowasm_wasi_meta_sock_accept_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(flags),
+    TURBOWASM_WASI_META_PARAM32(accepted_fd)
+};
+static const cmeta_function_desc turbowasm_wasi_meta_sock_accept =
+    TURBOWASM_WASI_META_FUNCTION("sock_accept", &cmeta_type_uint32,
+        turbowasm_wasi_meta_sock_accept_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_param_desc turbowasm_wasi_meta_sock_recv_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(ri_data),
+    TURBOWASM_WASI_META_PARAM32(ri_data_len),
+    TURBOWASM_WASI_META_PARAM32(ri_flags),
+    TURBOWASM_WASI_META_PARAM32(ro_datalen),
+    TURBOWASM_WASI_META_PARAM32(ro_flags)
+};
+static const cmeta_function_desc turbowasm_wasi_meta_sock_recv =
+    TURBOWASM_WASI_META_FUNCTION("sock_recv", &cmeta_type_uint32,
+        turbowasm_wasi_meta_sock_recv_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_param_desc turbowasm_wasi_meta_sock_send_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(si_data),
+    TURBOWASM_WASI_META_PARAM32(si_data_len),
+    TURBOWASM_WASI_META_PARAM32(si_flags),
+    TURBOWASM_WASI_META_PARAM32(so_datalen)
+};
+static const cmeta_function_desc turbowasm_wasi_meta_sock_send =
+    TURBOWASM_WASI_META_FUNCTION("sock_send", &cmeta_type_uint32,
+        turbowasm_wasi_meta_sock_send_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_param_desc turbowasm_wasi_meta_sock_shutdown_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(how)
+};
+static const cmeta_function_desc turbowasm_wasi_meta_sock_shutdown =
+    TURBOWASM_WASI_META_FUNCTION("sock_shutdown", &cmeta_type_uint32,
+        turbowasm_wasi_meta_sock_shutdown_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_param_desc turbowasm_wasi_meta_fd_fdstat_get_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(stat)
+};
+static const cmeta_function_desc turbowasm_wasi_meta_fd_fdstat_get =
+    TURBOWASM_WASI_META_FUNCTION("fd_fdstat_get", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_fdstat_get_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_param_desc turbowasm_wasi_meta_fd_fdstat_set_flags_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM32(flags)
+};
+static const cmeta_function_desc turbowasm_wasi_meta_fd_fdstat_set_flags =
+    TURBOWASM_WASI_META_FUNCTION("fd_fdstat_set_flags", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_fdstat_set_flags_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_param_desc turbowasm_wasi_meta_fd_fdstat_set_rights_params[] = {
+    TURBOWASM_WASI_META_PARAM32(fd),
+    TURBOWASM_WASI_META_PARAM64(rights_base),
+    TURBOWASM_WASI_META_PARAM64(rights_inheriting)
+};
+static const cmeta_function_desc turbowasm_wasi_meta_fd_fdstat_set_rights =
+    TURBOWASM_WASI_META_FUNCTION("fd_fdstat_set_rights", &cmeta_type_uint32,
+        turbowasm_wasi_meta_fd_fdstat_set_rights_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+static const cmeta_param_desc turbowasm_wasi_meta_poll_oneoff_params[] = {
+    TURBOWASM_WASI_META_PARAM32(subscriptions),
+    TURBOWASM_WASI_META_PARAM32(events),
+    TURBOWASM_WASI_META_PARAM32(count),
+    TURBOWASM_WASI_META_PARAM32(nevents)
+};
+static const cmeta_function_desc turbowasm_wasi_meta_poll_oneoff =
+    TURBOWASM_WASI_META_FUNCTION("poll_oneoff", &cmeta_type_uint32,
+        turbowasm_wasi_meta_poll_oneoff_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+
 static const cmeta_function_desc *const turbowasm_wasi_preview1_manifest[] = {
     &turbowasm_wasi_meta_args_sizes_get,
     &turbowasm_wasi_meta_args_get,
@@ -289,7 +358,15 @@ static const cmeta_function_desc *const turbowasm_wasi_preview1_manifest[] = {
     &turbowasm_wasi_meta_fd_tell,
     &turbowasm_wasi_meta_fd_filestat_get,
     &turbowasm_wasi_meta_path_filestat_get,
-    &turbowasm_wasi_meta_path_open
+    &turbowasm_wasi_meta_path_open,
+    &turbowasm_wasi_meta_sock_accept,
+    &turbowasm_wasi_meta_sock_recv,
+    &turbowasm_wasi_meta_sock_send,
+    &turbowasm_wasi_meta_sock_shutdown,
+    &turbowasm_wasi_meta_fd_fdstat_get,
+    &turbowasm_wasi_meta_fd_fdstat_set_flags,
+    &turbowasm_wasi_meta_fd_fdstat_set_rights,
+    &turbowasm_wasi_meta_poll_oneoff
 };
 
 #undef TURBOWASM_WASI_META_FUNCTION
@@ -759,6 +836,8 @@ static uint32_t turbowasm_wasi_collect_iovecs(
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
+#include "wasi_preview1_sockets.inc"
+
 static turbowasm_status turbowasm_wasi_fd_write(
     void *context,
     turbowasm_host_call *call,
@@ -775,10 +854,11 @@ static turbowasm_status turbowasm_wasi_fd_write(
     uint64_t capacity = 0u;
     uint32_t written = 0u;
     uint32_t error;
+    bool table_fd = false;
 
     if (impl == NULL || !impl->allow_fd_write ||
         (impl->fd_write == NULL &&
-         impl->fd_write_async == NULL) ||
+         impl->fd_write_async == NULL && impl->async == NULL) ||
         call == NULL || arguments == NULL ||
         argument_count != 4u ||
         arguments[0].kind != TURBOWASM_VALUE_I32 ||
@@ -786,6 +866,17 @@ static turbowasm_status turbowasm_wasi_fd_write(
         arguments[2].kind != TURBOWASM_VALUE_I32 ||
         arguments[3].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
+
+    if (impl->async) {
+        turbowasm_wasi_fs_descriptor_info info = {0};
+        if (turbowasm_wasi_fs_descriptor_info_get(impl->filesystem, (uint32_t)arguments[0].as.i32, &info)) {
+            table_fd = true;
+            if (tw_wasi_fd_is_socket(impl->filesystem, (uint32_t)arguments[0].as.i32)) return tw_p1_socket_io(impl, call, arguments, false, false,
+                results, result_capacity, result_count, trap);
+        }
+        if (!table_fd && !impl->fd_write && !impl->fd_write_async)
+            return turbowasm_wasi_return_errno(results, result_capacity, result_count, trap, TURBOWASM_WASI_ERRNO_BADF);
+    }
 
     error = turbowasm_wasi_memory_span(
         call, (uint32_t)arguments[3].as.i32,
@@ -802,7 +893,10 @@ static turbowasm_status turbowasm_wasi_fd_write(
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        if (impl->fd_write_async != NULL) {
+        if (table_fd) {
+            error=turbowasm_wasi_fs_fd_write(impl->filesystem, (uint32_t)arguments[0].as.i32,
+                buffers, (uint32_t)arguments[2].as.i32, &written);
+        } else if (impl->fd_write_async != NULL) {
             error = impl->fd_write_async(
                 impl->fd_write_context,
                 call,
@@ -847,10 +941,11 @@ static turbowasm_status turbowasm_wasi_fd_read(
     uint64_t capacity = 0u;
     uint32_t read_count = 0u;
     uint32_t error;
+    bool table_fd = false;
 
     if (impl == NULL || !impl->allow_fd_read ||
         (impl->fd_read == NULL &&
-         impl->fd_read_async == NULL) ||
+         impl->fd_read_async == NULL && impl->async == NULL) ||
         call == NULL || arguments == NULL ||
         argument_count != 4u ||
         arguments[0].kind != TURBOWASM_VALUE_I32 ||
@@ -858,6 +953,17 @@ static turbowasm_status turbowasm_wasi_fd_read(
         arguments[2].kind != TURBOWASM_VALUE_I32 ||
         arguments[3].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
+
+    if (impl->async) {
+        turbowasm_wasi_fs_descriptor_info info = {0};
+        if (turbowasm_wasi_fs_descriptor_info_get(impl->filesystem, (uint32_t)arguments[0].as.i32, &info)) {
+            table_fd = true;
+            if (tw_wasi_fd_is_socket(impl->filesystem, (uint32_t)arguments[0].as.i32)) return tw_p1_socket_io(impl, call, arguments, true, false,
+                results, result_capacity, result_count, trap);
+        }
+        if (!table_fd && !impl->fd_read && !impl->fd_read_async)
+            return turbowasm_wasi_return_errno(results, result_capacity, result_count, trap, TURBOWASM_WASI_ERRNO_BADF);
+    }
 
     error = turbowasm_wasi_memory_span(
         call, (uint32_t)arguments[3].as.i32,
@@ -874,7 +980,10 @@ static turbowasm_status turbowasm_wasi_fd_read(
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        if (impl->fd_read_async != NULL) {
+        if (table_fd) {
+            error=turbowasm_wasi_fs_fd_read(impl->filesystem, (uint32_t)arguments[0].as.i32,
+                buffers, (uint32_t)arguments[2].as.i32, &read_count);
+        } else if (impl->fd_read_async != NULL) {
             error = impl->fd_read_async(
                 impl->fd_read_context,
                 call,
@@ -1164,7 +1273,7 @@ static turbowasm_status turbowasm_wasi_fd_close(
     uint32_t error;
 
     (void)call;
-    if (impl == NULL || !impl->allow_filesystem ||
+    if (impl == NULL || (!impl->allow_filesystem && !impl->async) ||
         impl->filesystem == NULL ||
         arguments == NULL || argument_count != 1u ||
         arguments[0].kind != TURBOWASM_VALUE_I32)
@@ -1629,18 +1738,53 @@ fail:
     return status;
 }
 
-void turbowasm_wasi_preview1_destroy(
-    turbowasm_wasi_preview1 *wasi) {
-    turbowasm_wasi_preview1_impl *impl;
-
-    if (wasi == NULL || wasi->impl == NULL)
-        return;
-
-    impl = (turbowasm_wasi_preview1_impl *)wasi->impl;
+turbowasm_status turbowasm_wasi_preview1_destroy_checked(turbowasm_wasi_preview1 *wasi) {
+    if (!wasi) return TURBOWASM_INVALID_ARGUMENT;
+    if (!wasi->impl) return TURBOWASM_OK;
+    turbowasm_wasi_preview1_impl *impl = wasi->impl;
+    if (impl->async && (impl->async->active || impl->async->used)) return TURBOWASM_INVALID_ARGUMENT;
+    if (impl->async) { free(impl->async->waits); free(impl->async); }
     turbowasm_wasi_string_list_destroy(&impl->environment);
     turbowasm_wasi_string_list_destroy(&impl->args);
-    free(impl);
-    wasi->impl = NULL;
+    free(impl); wasi->impl = NULL; return TURBOWASM_OK;
+}
+void turbowasm_wasi_preview1_destroy(turbowasm_wasi_preview1 *wasi) {
+    (void)turbowasm_wasi_preview1_destroy_checked(wasi);
+}
+
+void turbowasm_wasi_preview1_config_v2_init(turbowasm_wasi_preview1_config_v2 *c) {
+    if (!c) return;
+    *c = (turbowasm_wasi_preview1_config_v2){0};
+    c->size=sizeof(*c); c->api_version=2;
+    c->wait_capacity=64; c->subscription_capacity=64;
+    c->io_bytes=65536; c->pending_bytes=4u*1024u*1024u;
+}
+turbowasm_status turbowasm_wasi_preview1_init_v2(turbowasm_wasi_preview1 *wasi,
+    const turbowasm_wasi_preview1_config_v2 *c) {
+    if (!c || c->size != sizeof(*c) || c->api_version != 2 || !c->base.filesystem ||
+        !c->base.filesystem->impl || !c->wait_capacity || c->wait_capacity > SIZE_MAX/sizeof(tw_p1_wait) ||
+        !c->subscription_capacity || c->subscription_capacity > UINT32_MAX/48u ||
+        c->subscription_capacity > SIZE_MAX/sizeof(tw_p1_subscription) ||
+        !c->io_bytes || c->io_bytes > UINT32_MAX || !c->pending_bytes) return TURBOWASM_INVALID_ARGUMENT;
+    struct tw_p1_async *a=calloc(1, sizeof(*a));
+    if (!a) return TURBOWASM_OUT_OF_MEMORY;
+    a->waits=calloc(c->wait_capacity, sizeof(*a->waits));
+    if (!a->waits) { free(a); return TURBOWASM_OUT_OF_MEMORY; }
+    turbowasm_wasi_preview1_config base=c->base;
+    /* Table dispatch is the default for v2; explicit legacy callbacks keep
+     * serving fds which were not admitted to the common table. */
+    if (base.allow_fd_read && !base.fd_read && !base.fd_read_async) {
+        base.fd_read=turbowasm_wasi_fs_fd_read; base.fd_read_context=base.filesystem;
+    }
+    if (base.allow_fd_write && !base.fd_write && !base.fd_write_async) {
+        base.fd_write=turbowasm_wasi_fs_fd_write; base.fd_write_context=base.filesystem;
+    }
+    turbowasm_status status=turbowasm_wasi_preview1_init(wasi, &base);
+    if (status != TURBOWASM_OK) { free(a->waits); free(a); return status; }
+    a->sockets=c->allow_sockets; a->poll=c->allow_poll; a->capacity=c->wait_capacity;
+    a->subscriptions=c->subscription_capacity; a->io_bytes=c->io_bytes; a->budget=c->pending_bytes;
+    ((turbowasm_wasi_preview1_impl *)wasi->impl)->async=a;
+    return TURBOWASM_OK;
 }
 
 size_t turbowasm_wasi_preview1_function_count(void) {
@@ -1824,10 +1968,22 @@ turbowasm_status turbowasm_wasi_preview1_define(
             turbowasm_wasi_proc_exit);
     }
 
+    if (impl->allow_filesystem || impl->async) {
+        TURBOWASM_WASI_DEFINE(&turbowasm_wasi_meta_fd_close, turbowasm_wasi_fd_close);
+    }
+    if (impl->async) {
+        TURBOWASM_WASI_DEFINE(&turbowasm_wasi_meta_fd_fdstat_get, tw_p1_fd_fdstat_get);
+        TURBOWASM_WASI_DEFINE(&turbowasm_wasi_meta_fd_fdstat_set_flags, tw_p1_fd_fdstat_set_flags);
+        TURBOWASM_WASI_DEFINE(&turbowasm_wasi_meta_fd_fdstat_set_rights, tw_p1_fd_fdstat_set_rights);
+        if (impl->async->sockets) {
+            TURBOWASM_WASI_DEFINE(&turbowasm_wasi_meta_sock_accept, tw_p1_sock_accept);
+            TURBOWASM_WASI_DEFINE(&turbowasm_wasi_meta_sock_recv, tw_p1_sock_recv);
+            TURBOWASM_WASI_DEFINE(&turbowasm_wasi_meta_sock_send, tw_p1_sock_send);
+            TURBOWASM_WASI_DEFINE(&turbowasm_wasi_meta_sock_shutdown, tw_p1_sock_shutdown);
+        }
+        if (impl->async->poll) TURBOWASM_WASI_DEFINE(&turbowasm_wasi_meta_poll_oneoff, tw_p1_poll_oneoff);
+    }
     if (impl->allow_filesystem) {
-        TURBOWASM_WASI_DEFINE(
-            &turbowasm_wasi_meta_fd_close,
-            turbowasm_wasi_fd_close);
         TURBOWASM_WASI_DEFINE(
             &turbowasm_wasi_meta_fd_prestat_get,
             turbowasm_wasi_fd_prestat_get);

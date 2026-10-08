@@ -1,5 +1,6 @@
 #include "wasi02_cnet.h"
 #include "runtime_alloc.h"
+#include <turbowasm/wasi_cnet.h>
 
 #include <salts/error_codes.h>
 
@@ -36,6 +37,8 @@ typedef struct tw_cnet_slot {
     tw_cnet_impl *owner;
     uint32_t refs;
     bool socket_live, connection_live, connected, terminal, closing;
+    bool p1_live;
+    size_t rx_capacity, p1_peek_target;
     bool listener_attached, close_requested;
     bool eof_enabled;
     bool rx_pending, rx_closed, tx_busy, tx_closed, flushing;
@@ -65,6 +68,7 @@ struct tw_cnet_impl {
     uint64_t network_token;
     size_t default_listen_backlog;
     bool external, busy, stopping, stopped;
+    bool p1_accept;
     turbowasm_wasi02_cnet_config config;
     turbowasm_runtime_config runtime;
     turbowasm_wasi02_io *io;
@@ -925,9 +929,14 @@ static void native_state(void *context, cnet_connection connection, cnet_connect
 }
 static void native_receive(void *context, cnet_connection connection, const cnet_receive_view *view) {
     tw_cnet_slot *s = context; (void)connection; s->rx_pending = false;
-    if (!view || view->kind != CNET_MESSAGE_BYTES || view->size > s->owner->config.receive_bytes || s->rx_size != 0 ||
+    if (!view || view->kind != CNET_MESSAGE_BYTES || view->size > s->owner->config.receive_bytes ||
+        (s->rx_size != 0 && !(s->p1_live && s->p1_peek_target)) ||
+        view->size > s->rx_capacity-s->rx_size ||
         (view->size != 0 && view->data == NULL)) { s->terminal_status = SALTS_EPROTO; s->closing = true; }
-    else if (!s->rx_closed && view->size != 0) { memcpy(s->rx, view->data, view->size); s->rx_offset = 0; s->rx_size = view->size; }
+    else if (!s->rx_closed && view->size != 0) {
+        if (s->rx_size && s->rx_offset) memmove(s->rx, s->rx+s->rx_offset, s->rx_size);
+        memcpy(s->rx+s->rx_size, view->data, view->size); s->rx_offset=0; s->rx_size+=view->size;
+    }
     else if (view->size == 0) s->rx_closed = true;
     native_changed(s);
 }
@@ -1042,11 +1051,13 @@ static void native_drop_pending(tw_cnet_slot *s) {
 static turbowasm_status native_prepare_streams(tw_cnet_slot *s) {
     tw_cnet_impl *p = s->owner; turbowasm_runtime_scope scope; uint8_t *tx = NULL;
     turbowasm_wasi02_stream_provider ops = {0}; turbowasm_value rep = {0}; turbowasm_status status;
-    size_t bytes = p->config.receive_bytes + p->config.send_bytes;
+    if (p->p1_accept && p->config.receive_bytes > (SIZE_MAX-p->config.send_bytes)/2) return TURBOWASM_OUT_OF_MEMORY;
+    s->rx_capacity = p->config.receive_bytes * (p->p1_accept ? 2u : 1u);
+    size_t bytes = s->rx_capacity + p->config.send_bytes;
     if (s->payload_charge || bytes > p->config.payload_bytes - p->payload_used) return TURBOWASM_OUT_OF_MEMORY;
     p->payload_used += bytes; s->payload_charge = bytes;
     scope = turbowasm_runtime_scope_enter(&p->runtime);
-    s->rx = turbowasm_rt_malloc(p->config.receive_bytes); tx = turbowasm_rt_malloc(p->config.send_bytes);
+    s->rx = turbowasm_rt_malloc(s->rx_capacity); tx = turbowasm_rt_malloc(p->config.send_bytes);
     if (tx) s->tx = mem_wrap_external(tx, p->config.send_bytes, tx_storage_free, NULL);
     if (tx && !s->tx) turbowasm_rt_free(tx);
     turbowasm_runtime_scope_leave(scope);
@@ -1271,6 +1282,7 @@ turbowasm_status turbowasm_wasi02_cnet_init_external(turbowasm_wasi02_cnet *adap
 }
 
 #include "wasi02_cnet_network.inc"
+#include "wasi_cnet.inc"
 
 static void native_cleanup_error(tw_cnet_impl *p, int rc) {
     if (rc != SALTS_OK && rc != SALTS_EALREADY && rc != SALTS_EBUSY && p->cleanup_error == SALTS_OK)
@@ -1309,7 +1321,8 @@ turbowasm_status turbowasm_wasi02_cnet_advance(turbowasm_wasi02_cnet *adapter, s
                     if (rc == SALTS_OK) s->shutdown_pending = 0;
                     else if (rc != SALTS_ENOBUFS && rc != SALTS_EBUSY) native_cleanup_error(p, rc);
                 }
-                if (s->connected && s->eof_enabled && !s->rx_closed && !s->rx_pending && !s->rx_size) {
+                if (s->connected && s->eof_enabled && !s->rx_closed && !s->rx_pending &&
+                    (!s->rx_size || (s->p1_live && s->p1_peek_target > s->rx_size && s->rx_size < p->config.receive_bytes))) {
                     rc = cnet_receive(&p->client, s->connection, 1);
                     if (rc == SALTS_OK) s->rx_pending = true;
                     else if (rc != SALTS_ENOBUFS && rc != SALTS_EBUSY) { s->terminal_status = rc; s->closing = true; }

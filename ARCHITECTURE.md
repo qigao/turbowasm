@@ -3434,10 +3434,10 @@ References: [WASI UDP 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0
 [WASI name lookup 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/ip-name-lookup.wit).
 
 
-## Preview1 socket descriptors and async polling (proposed)
+## Preview1 socket descriptors and async polling
 
 This is a separate admission gate after the implemented WASI 0.2 TCP/UDP/DNS
-backend. It requires approval before declaring new public APIs. The existing
+backend. The user authorized implementation of this public boundary. The existing
 Preview1 configuration, initializer, imports and filesystem provider contracts
 remain supported. No socket API is advertised until the complete gate passes.
 
@@ -3450,11 +3450,11 @@ and [the type definitions](https://github.com/WebAssembly/WASI/blob/fae981bae148
 The original `snapshot-01` tag lacks the later `sock_accept` addition and is
 therefore insufficient as this gate's ABI source.
 
-`wasi.h` and `wasi_preview1.c` currently supply capability-gated fd reads/writes
-and filesystem imports, but no socket imports, fdstat operations or
-`poll_oneoff`. `wasi_fs.c` already owns a bounded descriptor table, guest fd
-assignment, provider identities, generations and rights. Its provider bundle is
-currently global to the filesystem. `wasi_native_io.h` explicitly excludes UDP
+Before this gate, `wasi.h` and `wasi_preview1.c` supplied capability-gated fd
+reads/writes and filesystem imports without socket imports, fdstat operations
+or `poll_oneoff`. `wasi_fs.c` already owns a bounded descriptor table, guest fd
+assignment, provider identities, generations and rights. Its provider bundle was
+previously global to the filesystem. `wasi_native_io.h` explicitly excludes UDP
 because one scalar I/O request cannot preserve a vectored datagram. The
 implemented `wasi02_cnet.c` owns bounded TCP/UDP payloads, listener admission,
 transport termination and reusable readiness; its TCP receive operation
@@ -3539,7 +3539,7 @@ as required by the existing linker contract.
 
 ### CNet reuse and dependency direction
 
-Expose a Preview1 operation factory and explicit move helpers from the existing
+The implementation exposes a Preview1 operation factory and explicit move helpers from the existing
 CNet adapter through `wasi_cnet.h`. The helpers move an owned listener, TCP
 socket/input/output triple, or associated UDP socket/datagram pair into a
 Preview1 provider identity. They validate origin, kind and quiescence before
@@ -3623,3 +3623,35 @@ build/install qualification with Windows CI omitted by the user's current
 instruction; local Windows ASAN remains available. Rollback disables the new
 v2 socket/poll capability and optional composition target while retaining the
 old Preview1 API and completed WASI 0.2 socket gates.
+
+### Preview1 implementation and qualification boundary
+
+The standard imports are implemented in `src/wasi_preview1_sockets.inc`, with
+one canonical CMeta manifest in `src/wasi_preview1.c`. `wasi_fs.c` owns copied
+per-descriptor providers, rights, flags, reservations, claims and retained
+identities. `wasi_cnet.inc` projects the existing TCP/UDP owners without linking
+back to the WASI facade. `TurboWasm::WASICNet` is an installed composition target.
+The versioned facade opts in; legacy initializers and metadata ordinals remain
+stable. The implementation intentionally covers the socket/poll admission
+specified above, not the entire Preview1 filesystem/process import surface.
+
+Transfer preflight rejects published facade bindings and source aliases. TCP
+stream transfer removes the old IO-domain tokens atomically without dropping
+native stream ownership. TCP move and accepted-child preparation reserve twice
+the configured receive buffer; PEEK|WAITALL is bounded to `receive_bytes` so a
+whole next CNet receive chunk fits while preserving existing bytes. UDP move
+reserves one `datagram_bytes` scratch buffer for vectored send; native sends
+retain their own bounded copied payloads. Failure preserves input carriers.
+Cancellation ends direction claims and peek demand, while transport requests
+retain their existing CNet terminal lifecycle. Providers borrow context through
+all identities and leases; native adapter destruction rejects retained slots.
+
+The owner explicitly advances readiness after transport progress and schedules
+clock deadlines using the nanosecond `next_timeout` query. No new transport
+observation loop or Runtime cancellation callback is introduced. A suspended
+Runtime frame unwinds through host-wait's INTERRUPTED return; the adapter frees
+its bounded staging and propagates that status. A copied poll list retains each
+subscription separately, including duplicates. Accepted children use current
+inheriting rights at publication, allowing safe rights reduction during waits.
+
+Local ASAN and non-Windows CI results are recorded after execution below.
