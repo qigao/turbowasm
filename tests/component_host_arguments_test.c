@@ -70,6 +70,7 @@ static void attach(unsigned instance) {
     uint32_t i;
     for (i = 0u; i < exec->core_instance_count; ++i) {
         turbowasm_jit_backend backend = {0};
+        if (exec->core_instances[i].impl == NULL) continue;
         check_equal(turbowasm_mir_backend_create(&backend), TURBOWASM_OK);
         check_equal(turbowasm_jit_instance_attach_backend(exec->core_instances[i].impl, &backend, 1u), TURBOWASM_OK);
     }
