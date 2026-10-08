@@ -3420,5 +3420,15 @@ shared pollables. Full Preview1 socket coverage and Preview3 remain independent
 work. Rollback removes v2 admission without changing existing TCP callers or
 persisted guest data.
 
+At revision `15730ef`, [native socket CI](https://github.com/qigao/turbowasm/actions/runs/37807592953)
+used Salts prerequisite revision `9cf0af75` from
+[SDK preparation](https://github.com/qigao/salts/actions/runs/37805023643).
+Linux passed 177 runtime tests and 21 installed-package tests; Linux MIR and
+macOS MIR each reported 217 tests with no failures, including the native UDP/DNS
+and memory32/memory64 Component fixtures. Android completed the runtime and
+installed-consumer builds. Windows CI was explicitly omitted; the latest local
+Windows ASAN runtime/conformance regression passed 178 tests. This qualifies
+the new socket backend with the prerequisite SDK, not the published Salts SDK.
+
 References: [WASI UDP 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/udp.wit),
 [WASI name lookup 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/ip-name-lookup.wit).
