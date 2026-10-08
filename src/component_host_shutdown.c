@@ -68,6 +68,40 @@ typedef struct turbowasm_component_shutdown_drain {
     bool entered;
 } turbowasm_component_shutdown_drain;
 
+static const turbowasm_component_task *suspended_cleanup(
+    const turbowasm_component_instance_public_impl *instance) {
+    if (instance == NULL || !instance->admission_closed || !instance->exec.initialized ||
+        instance->shutdown_complete || instance->shutdown_driving || instance->host_activity != 0u ||
+        instance->exec.task_domain.active != NULL || instance->shutdown == NULL ||
+        instance->shutdown->task.state != TURBOWASM_EXECUTION_YIELDED ||
+        instance->shutdown->task.builtin_wait != TURBOWASM_COMPONENT_TASK_WAIT_NONE)
+        return NULL;
+    return &instance->shutdown->task;
+}
+
+turbowasm_yield_reason turbowasm_component_instance_shutdown_yield_reason_private(
+    const turbowasm_component_instance_public_impl *instance) {
+    const turbowasm_component_task *task = suspended_cleanup(instance);
+    return task != NULL ? turbowasm_execution_yield_reason_get(&task->core) : TURBOWASM_YIELD_NONE;
+}
+
+bool turbowasm_component_instance_shutdown_pending_host_wait_private(
+    const turbowasm_component_instance_public_impl *instance, turbowasm_component_shutdown_wait *out) {
+    const turbowasm_component_task *task = suspended_cleanup(instance);
+    turbowasm_host_wait wait;
+    if (task == NULL || out == NULL || !turbowasm_execution_pending_host_wait(&task->core, &wait)) return false;
+    out->instance = instance; out->shutdown_generation = instance->shutdown_generation; out->wait = wait;
+    return true;
+}
+
+turbowasm_status turbowasm_component_instance_shutdown_complete_host_wait_private(
+    turbowasm_component_instance_public_impl *instance, turbowasm_component_shutdown_wait wait, int status) {
+    if (suspended_cleanup(instance) == NULL || wait.instance != instance ||
+        wait.shutdown_generation == 0u || wait.shutdown_generation != instance->shutdown_generation)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_execution_complete_host_wait(&instance->shutdown->task.core, wait.wait, status);
+}
+
 static void cleanup_status(turbowasm_component_instance_public_impl *instance, turbowasm_status status) {
     if (instance->shutdown_status == TURBOWASM_OK) instance->shutdown_status = status;
 }
@@ -185,6 +219,7 @@ static turbowasm_status create_drain(turbowasm_component_instance_public_impl *i
     turbowasm_component_shutdown_drain *drain;
     turbowasm_component_task_binding binding = {0};
     turbowasm_status status;
+    if (instance->shutdown_generation == UINT64_MAX) return TURBOWASM_TRAPPED;
     if (!turbowasm_component_instance_public_impl_retain(instance)) return TURBOWASM_INVALID_ARGUMENT;
     drain = turbowasm_rt_calloc(1u, sizeof(*drain));
     if (drain == NULL) {
@@ -199,6 +234,7 @@ static turbowasm_status create_drain(turbowasm_component_instance_public_impl *i
     if (status != TURBOWASM_OK) {
         turbowasm_rt_free(drain); turbowasm_component_instance_public_impl_release(instance); return status;
     }
+    ++instance->shutdown_generation;
     instance->shutdown = drain;
     return TURBOWASM_OK;
 }

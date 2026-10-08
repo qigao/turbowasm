@@ -1367,14 +1367,15 @@ void turbowasm_component_destroy(
 static turbowasm_status component_instance_create(
     turbowasm_component_instance *instance,
     const turbowasm_component *component,
-    const turbowasm_component_exec_async_limits *limits) {
+    const turbowasm_component_exec_async_limits *limits,
+    const turbowasm_component_exec_imports *imports, size_t import_count) {
     turbowasm_component_public_impl *component_state;
     turbowasm_component_instance_public_impl *impl;
     turbowasm_runtime_scope scope;
     turbowasm_status status;
 
     if (instance == NULL || component == NULL ||
-        instance->impl != NULL)
+        instance->impl != NULL || (import_count != 0u && imports == NULL))
         return TURBOWASM_INVALID_ARGUMENT;
 
     component_state = turbowasm_component_public_impl_get(component);
@@ -1400,7 +1401,8 @@ static turbowasm_status component_instance_create(
     impl->component = component_state;
 
     status = limits != NULL
-        ? turbowasm_component_exec_init_async(&impl->exec, &component_state->binary, limits)
+        ? turbowasm_component_exec_init_async_with_import_sets(&impl->exec,
+              &component_state->binary, limits, imports, import_count)
         : turbowasm_component_exec_init(&impl->exec, &component_state->binary);
     if (status != TURBOWASM_OK) {
         scope = turbowasm_runtime_scope_enter(
@@ -1434,14 +1436,22 @@ turbowasm_status turbowasm_component_load_async_private(turbowasm_component *com
 
 turbowasm_status turbowasm_component_instance_create(
     turbowasm_component_instance *instance, const turbowasm_component *component) {
-    return component_instance_create(instance, component, NULL);
+    return component_instance_create(instance, component, NULL, NULL, 0u);
 }
 
 turbowasm_status turbowasm_component_instance_create_async_private(
     turbowasm_component_instance *instance, const turbowasm_component *component,
     const turbowasm_component_exec_async_limits *limits) {
     if (limits == NULL) return TURBOWASM_INVALID_ARGUMENT;
-    return component_instance_create(instance, component, limits);
+    return component_instance_create(instance, component, limits, NULL, 0u);
+}
+
+turbowasm_status turbowasm_component_instance_create_async_with_import_sets_private(
+    turbowasm_component_instance *instance, const turbowasm_component *component,
+    const turbowasm_component_exec_async_limits *limits,
+    const turbowasm_component_exec_imports *imports, size_t import_count) {
+    if (limits == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    return component_instance_create(instance, component, limits, imports, import_count);
 }
 
 static bool component_instance_retain(

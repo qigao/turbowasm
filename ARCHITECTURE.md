@@ -1014,6 +1014,24 @@ owner is freed merely to make completion succeed. Destroying a requested but
 incomplete private instance preserves its public carrier so that the caller can
 still drive and audit completion. This remains a private
 boundary until public options and value/endpoint integration are complete.
+Shutdown host-wait integration uses the existing imported synchronous capability
+route inside the retained cleanup task. Import descriptors are copied by exec;
+their callback context remains borrowed through instance destruction. Only the
+instance owner thread may query or complete a suspended cleanup wait. Callbacks,
+allocator reentry and active progress reject these operations unchanged. Wait
+completion records the adapter's status without resuming guest code, reopening
+admission or releasing the cleanup driver. The next poll supplies a fresh fuel
+and interruption budget and continues the original destructor stack.
+
+The private wait ticket identifies both its borrowed instance and cleanup-pass
+generation, in addition to Runtime's execution-local wait generation/token.
+Each successfully created cleanup driver advances the instance's pass counter;
+counter exhaustion traps before consuming a handle. This rejects foreign-instance
+and prior-pass completion even if the adapter reuses a token and a new Runtime
+execution restarts its wait generation. Within a pass, Runtime remains the sole
+authority for stale, mismatched and repeated wait completion. Failed queries
+preserve outputs, and completion never allocates. The caller retains its instance
+carrier throughout shutdown; tickets do not independently retain storage.
 Formal drain cases cover retained guest destructors across fuel and cooperative
 interruption, sibling cleanup after a trap, every cleanup-driver startup
 allocation failure, callback/allocator reentry, outstanding lends and borrowed
@@ -1022,8 +1040,14 @@ owners, foreign creation pairs and Core-free resource definitions. Actual guest
 string writes for memory32 and memory64 leave codec leases after the calling
 task exits; shutdown cancels, acknowledges and releases both leases before
 completion. Windows ASan passes 81 cases and 55,422 assertions; the related
-Component/WASI/Runtime regression passes 86/86 in 20.20 s. Imported host-wait
-destructors and nested Component provider integration remain unqualified.
+Component/WASI/Runtime regression passes 86/86 in 20.20 s. The formal
+`component_shutdown_host_wait_test` extends this with real imported destructor
+waits, no replay while incomplete, allocation-free completion, fresh fuel and
+cooperative interruption, callback/allocator reentry, post-wait traps with sibling
+cleanup, matching Runtime tokens on foreign instances and later cleanup passes,
+pass-counter exhaustion and every retained-import constructor allocation failure.
+Windows ASan passes 10 cases and 9,142 assertions, and the related regression
+passes 87/87 in 8.71 s. Nested Component provider integration remains unqualified.
 Commit `8bac9a9` passes all five
 [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37737071175):
 Linux MIR 209/209 in 2.55 s and macOS MIR 209/209 in 4.02 s, including compiled

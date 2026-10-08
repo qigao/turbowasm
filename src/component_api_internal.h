@@ -38,6 +38,7 @@ typedef struct turbowasm_component_instance_public_impl {
     uint32_t host_activity;
     bool admission_closed, shutdown_driving;
     struct turbowasm_component_shutdown_drain *shutdown;
+    uint64_t shutdown_generation;
     turbowasm_status shutdown_status;
     bool shutdown_complete;
 
@@ -95,6 +96,24 @@ turbowasm_status turbowasm_component_instance_request_shutdown_private(
 turbowasm_status turbowasm_component_instance_poll_shutdown_private(
     turbowasm_component_instance_public_impl *instance, const turbowasm_execution_options *options);
 
+/* Borrowed owner-thread ticket; instance must remain alive through shutdown.
+ * Runtime owns wait generation/token; shutdown_generation identifies the pass. */
+typedef struct turbowasm_component_shutdown_wait {
+    const turbowasm_component_instance_public_impl *instance;
+    uint64_t shutdown_generation;
+    turbowasm_host_wait wait;
+} turbowasm_component_shutdown_wait;
+
+/* Reject callback/progress reentry. Query failure preserves output. Completion
+ * only records status, runs no guest code and allocates nothing; poll resumes.
+ * Foreign, stale-pass and duplicate completions fail unchanged. */
+turbowasm_yield_reason turbowasm_component_instance_shutdown_yield_reason_private(
+    const turbowasm_component_instance_public_impl *instance);
+bool turbowasm_component_instance_shutdown_pending_host_wait_private(
+    const turbowasm_component_instance_public_impl *instance, turbowasm_component_shutdown_wait *out);
+turbowasm_status turbowasm_component_instance_shutdown_complete_host_wait_private(
+    turbowasm_component_instance_public_impl *instance, turbowasm_component_shutdown_wait wait, int status);
+
 /* Private retained loader for async host-boundary integration and its tests. */
 turbowasm_status turbowasm_component_load_async_private(turbowasm_component *component,
     const uint8_t *bytes, size_t size, const turbowasm_runtime_config *config);
@@ -104,6 +123,12 @@ turbowasm_status turbowasm_component_load_async_private(turbowasm_component *com
 turbowasm_status turbowasm_component_instance_create_async_private(
     turbowasm_component_instance *instance, const turbowasm_component *component,
     const turbowasm_component_exec_async_limits *limits);
+/* Same retained construction, with copied import descriptors. Callback contexts
+ * are borrowed until instance destruction, including pending cleanup waits. */
+turbowasm_status turbowasm_component_instance_create_async_with_import_sets_private(
+    turbowasm_component_instance *instance, const turbowasm_component *component,
+    const turbowasm_component_exec_async_limits *limits,
+    const turbowasm_component_exec_imports *imports, size_t import_count);
 
 /* Owner-thread budget, shared by deferred host admissions. The budget must
  * outlive every reservation; limits are finite and immutable while in use. */
