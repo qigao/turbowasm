@@ -399,6 +399,7 @@ turbowasm_status turbowasm_component_endpoint_close(turbowasm_component_endpoint
         peer->available = NULL;
         peer->waitable.state.endpoint = peer_state;
     }
+    if (endpoint->closed_notify != NULL) endpoint->closed_notify(endpoint->closed_context);
     return TURBOWASM_OK;
 }
 
@@ -477,7 +478,11 @@ turbowasm_status turbowasm_component_endpoint_forward_from_task(
     reader->peer = writer; writer->peer = reader;
     if (count != 0u) {
         status = transfer_buffers(reader, writer, count, driver);
-        if (status != TURBOWASM_OK) return status;
+        if (status != TURBOWASM_OK) {
+            if (source->closed_notify != NULL) source->closed_notify(source->closed_context);
+            if (destination->closed_notify != NULL) destination->closed_notify(destination->closed_context);
+            return status;
+        }
     }
     if (rendezvous) {
         reader->waitable.state.endpoint = next_read;
@@ -488,6 +493,8 @@ turbowasm_status turbowasm_component_endpoint_forward_from_task(
         } else if (write_remaining == 0u) writer->available = NULL;
         else reader->available = NULL;
     }
+    if (source->closed_notify != NULL) source->closed_notify(source->closed_context);
+    if (destination->closed_notify != NULL) destination->closed_notify(destination->closed_context);
     return TURBOWASM_OK;
 }
 

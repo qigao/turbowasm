@@ -24,6 +24,11 @@ typedef struct turbowasm_component_endpoint {
     turbowasm_component_endpoint_codec *lower_scope;
     struct turbowasm_component_endpoint *lower_next;
     turbowasm_component_resource_handle lower_handle;
+    /* Stable pair owner notification after close/forward commits. It may release
+     * the creation instance and invalidate both closed ends. No endpoint access
+     * follows notification; caller-owned pairs leave this NULL. */
+    void (*closed_notify)(void *context);
+    void *closed_context;
 } turbowasm_component_endpoint;
 
 /* Private pair owners are zero-initialized, caller-owned and stable until both
@@ -85,6 +90,8 @@ turbowasm_status turbowasm_component_endpoint_take_value(
 /* Host value-array copies acknowledge cancellation immediately, retaining the
  * borrow until event delivery. This does not cancel an external I/O request. */
 turbowasm_status turbowasm_component_endpoint_cancel(turbowasm_component_endpoint *endpoint);
+/* Successful close can invalidate closed domain-owned endpoints when it returns
+ * the final creation-instance keepalive. Retain the instance for further access. */
 turbowasm_status turbowasm_component_endpoint_close(turbowasm_component_endpoint *endpoint);
 
 /* Consume idle, unjoined source-readable and destination-writable ends of the

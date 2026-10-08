@@ -21,6 +21,13 @@ typedef struct turbowasm_component_task_domain {
     uint32_t pair_count;
     uint32_t count, limit, backpressure;
     uint32_t synchronous_depth;
+    /* Optional creation-instance keepalive for domain-owned pairs. Bind once,
+     * before admission, with both hooks or neither. Each pair retains until both
+     * ends close, including foreign table publication. Release may destroy this
+     * domain; close notification must not access it afterwards. */
+    void *pair_owner;
+    bool (*pair_retain)(void *owner);
+    void (*pair_release)(void *owner);
 } turbowasm_component_task_domain;
 
 /* Called exactly once after backpressure clears, on the retained Core coroutine

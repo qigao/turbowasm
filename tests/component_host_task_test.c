@@ -1,5 +1,7 @@
 #include "component_api_internal.h"
 #include "instance_internal.h"
+#include "component_endpoint_builtin.h"
+#include "runtime_alloc.h"
 #include "fixtures/component_host_tasks.h"
 #ifdef TURBOWASM_TEST_MIR
 #include "jit/mir_backend.h"
@@ -16,9 +18,50 @@ static turbowasm_component_host_task owners[OWNER_COUNT];
 static turbowasm_component_host_budget budget;
 static turbowasm_component_host_value resource, output;
 static struct { size_t live, attempts, fail_at; } allocations;
+static turbowasm_component_instance destination;
+static turbowasm_component_endpoint *pair_ends[2][2];
+static turbowasm_component_value endpoint_value, payload;
+static turbowasm_component_endpoint_codec endpoint_codec;
+static turbowasm_component_buffer write_buffer;
+static bool close_on_allocate;
+
+static uint32_t endpoint_type(turbowasm_component_instance_public_impl *owner, bool future) {
+    const turbowasm_component_type_graph *graph = &owner->exec.binary->type_graph;
+    uint32_t i;
+    for (i = 0u; i < graph->count; ++i)
+        if (graph->types[i].kind == (future ? TURBOWASM_COMPONENT_TYPE_FUTURE : TURBOWASM_COMPONENT_TYPE_STREAM)) return i;
+    return UINT32_MAX;
+}
+static turbowasm_status open_pair(unsigned index, bool future, bool guest) {
+    turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(&impl->exec.binary->config);
+    turbowasm_status status = turbowasm_component_endpoint_domain_pair_open(&impl->exec.task_domain,
+        &impl->exec.binary->type_graph, endpoint_type(impl, future), guest, &pair_ends[index][0], &pair_ends[index][1]);
+    turbowasm_runtime_scope_leave(scope);
+    return status;
+}
+static void close_pair(unsigned index) {
+    turbowasm_component_endpoint *ends[2] = {pair_ends[index][0], pair_ends[index][1]};
+    bool close[2];
+    unsigned i;
+    for (i = 0u; i < 2u; ++i) {
+        close[i] = ends[i] != NULL && !ends[i]->closed;
+        if (close[i] && ends[i]->operation != NULL) {
+            turbowasm_component_event event;
+            if (ends[i]->waitable.state.endpoint.phase == TURBOWASM_COMPONENT_ENDPOINT_COPYING)
+                check_equal(turbowasm_component_endpoint_cancel(ends[i]), TURBOWASM_OK);
+            (void)turbowasm_component_endpoint_take(ends[i], &event);
+        }
+    }
+    pair_ends[index][0] = pair_ends[index][1] = NULL;
+    for (i = 0u; i < 2u; ++i) if (close[i]) check_equal(turbowasm_component_endpoint_close(ends[i]), TURBOWASM_OK);
+}
 
 static void *allocate(void *context, size_t size) {
     void *p; (void)context;
+    if (close_on_allocate) {
+        close_on_allocate = false;
+        turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
+    }
     if (++allocations.attempts == allocations.fail_at) return NULL;
     p = malloc(size); if (p != NULL) ++allocations.live; return p;
 }
@@ -121,6 +164,7 @@ spec("Retained Component host task owners") {
         turbowasm_runtime_config config;
         turbowasm_component_exec_async_limits limits = {2u, 16u};
         memset(&allocations, 0, sizeof(allocations)); budget = (turbowasm_component_host_budget){BYTE_LIMIT, 0u};
+        close_on_allocate = false;
         turbowasm_runtime_config_init(&config);
         config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
         check_equal(turbowasm_component_load_async_private(&component, component_host_tasks_bytes,
@@ -142,6 +186,17 @@ spec("Retained Component host task owners") {
             }
             (void)turbowasm_component_host_task_destroy(&owners[i]); check_null(owners[i].impl);
         }
+        if (endpoint_codec.table != NULL)
+            check_equal(turbowasm_component_endpoint_codec_rollback(&endpoint_codec), TURBOWASM_OK);
+        if ((int)endpoint_value.kind != 0) {
+            turbowasm_component_endpoint *taken = NULL;
+            (void)turbowasm_component_endpoint_take_value(&endpoint_value, &taken);
+            (void)turbowasm_component_value_destroy(&endpoint_value);
+        }
+        for (i = 0u; i < 2u; ++i) close_pair(i);
+        memset(&endpoint_codec, 0, sizeof(endpoint_codec)); memset(&write_buffer, 0, sizeof(write_buffer));
+        (void)turbowasm_component_value_destroy(&payload);
+        turbowasm_component_instance_destroy(&destination);
         (void)turbowasm_component_host_value_destroy(&resource);
         (void)turbowasm_component_host_value_destroy(&output);
         turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
@@ -154,6 +209,146 @@ spec("Retained Component host task owners") {
         check_null(ordinary.impl);
         check_equal(turbowasm_component_instance_create(&sync, &component), TURBOWASM_UNSUPPORTED);
         check_null(sync.impl);
+    }
+    it("retains each pair's creation instance until both host or guest ends close") {
+        unsigned future, guest;
+        uint32_t refs = impl->ref_count;
+        for (future = 0u; future < 2u; ++future) for (guest = 0u; guest < 2u; ++guest) {
+            check_equal(open_pair(0u, future != 0u, guest != 0u), TURBOWASM_OK);
+            check_equal(impl->ref_count, refs + 1u);
+            check_equal(turbowasm_component_endpoint_close(pair_ends[0][0]), TURBOWASM_OK);
+            check_equal(impl->ref_count, refs + 1u);
+            close_pair(0u); check_equal(impl->ref_count, refs);
+            turbowasm_component_endpoint_domain_collect(&impl->exec.task_domain);
+            check_equal(impl->exec.task_domain.pair_count, 0u);
+        }
+    }
+    it("does not leak an instance reference after pair allocation or handle registration failure") {
+        size_t failure, live = allocations.live;
+        uint32_t refs = impl->ref_count;
+        bool complete = false;
+        for (failure = 1u; failure < FAILURE_LIMIT; ++failure) {
+            turbowasm_status status;
+            allocations.attempts = 0u; allocations.fail_at = failure;
+            status = open_pair(0u, false, true); allocations.fail_at = 0u;
+            if (status == TURBOWASM_OK) { complete = true; break; }
+            check_equal(status, TURBOWASM_OUT_OF_MEMORY);
+            check_null(pair_ends[0][0]); check_null(pair_ends[0][1]);
+            check_equal(impl->ref_count, refs); check_equal(allocations.live, live);
+            check_equal(impl->exec.task_domain.pair_count, 0u); check_equal(impl->exec.resource_table.live_count, 0u);
+        }
+        check_true(complete); close_pair(0u);
+    }
+    it("rejects creation-instance reference overflow before allocating or publishing a pair") {
+        uint32_t refs = impl->ref_count;
+        size_t attempts = allocations.attempts;
+        turbowasm_status status;
+        impl->ref_count = UINT32_MAX;
+        status = open_pair(0u, false, false);
+        impl->ref_count = refs;
+        check_equal(status, TURBOWASM_INVALID_ARGUMENT); check_equal(allocations.attempts, attempts);
+        check_null(pair_ends[0][0]); check_null(pair_ends[0][1]);
+        check_equal(impl->exec.task_domain.pair_count, 0u);
+    }
+    it("keeps host pair storage and the instance alive after all public handles close") {
+        check_equal(open_pair(0u, false, false), TURBOWASM_OK);
+        check_equal(open_pair(1u, true, false), TURBOWASM_OK);
+        turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
+        check_equal(impl->ref_count, 2u); close_pair(0u); check_equal(impl->ref_count, 1u);
+        check_greater(allocations.live, (size_t)0);
+        close_pair(1u); impl = NULL; check_equal(allocations.live, (size_t)0);
+    }
+    it("releases the final instance after allocation failure even when the allocator closes public handles") {
+        allocations.attempts = 0u; allocations.fail_at = 1u; close_on_allocate = true;
+        check_equal(open_pair(0u, false, false), TURBOWASM_OUT_OF_MEMORY);
+        allocations.fail_at = 0u; impl = NULL;
+        check_null(instance.impl); check_null(component.impl);
+        check_null(pair_ends[0][0]); check_null(pair_ends[0][1]); check_equal(allocations.live, (size_t)0);
+    }
+    it("returns pair keepalives after forwarding consumes intermediate ends") {
+        unsigned future;
+        uint32_t refs = impl->ref_count;
+        for (future = 0u; future < 2u; ++future) {
+            check_equal(open_pair(0u, future != 0u, false), TURBOWASM_OK);
+            check_equal(open_pair(1u, future != 0u, false), TURBOWASM_OK);
+            check_equal(impl->ref_count, refs + 2u);
+            check_equal(turbowasm_component_endpoint_forward(pair_ends[0][0], pair_ends[1][1]), TURBOWASM_OK);
+            check_true(pair_ends[0][0]->closed); check_true(pair_ends[1][1]->closed);
+            check_equal(impl->ref_count, refs + 2u);
+            close_pair(0u); check_equal(impl->ref_count, refs + 1u);
+            close_pair(1u); check_equal(impl->ref_count, refs);
+            turbowasm_component_endpoint_domain_collect(&impl->exec.task_domain);
+            check_equal(impl->exec.task_domain.pair_count, 0u);
+        }
+    }
+    it("closes a forwarded self pair after its public instance and component handles disappear") {
+        turbowasm_component_endpoint *reader, *writer;
+        check_equal(open_pair(0u, false, false), TURBOWASM_OK);
+        reader = pair_ends[0][0]; writer = pair_ends[0][1];
+        pair_ends[0][0] = pair_ends[0][1] = NULL;
+        turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
+        check_equal(turbowasm_component_endpoint_forward(reader, writer), TURBOWASM_OK);
+        impl = NULL; check_equal(allocations.live, (size_t)0);
+    }
+    it("retains a guest-created pair after the creating task and public instance handles close") {
+        size_t count;
+        uint64_t packed;
+        check_equal(create(0u, "pair-stream", NULL, 0u, false), TURBOWASM_OK); finish(0u);
+        check_equal(turbowasm_component_host_task_take_result(&owners[0], &output, &count), TURBOWASM_OK);
+        check_equal(output.kind, TURBOWASM_COMPONENT_HOST_U64); packed = output.as.u64;
+        check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_OK);
+        pair_ends[0][0] = turbowasm_component_endpoint_get(&impl->exec.resource_table, (uint32_t)packed,
+            TURBOWASM_COMPONENT_HANDLE_STREAM_READ);
+        pair_ends[0][1] = turbowasm_component_endpoint_get(&impl->exec.resource_table, (uint32_t)(packed >> 32),
+            TURBOWASM_COMPONENT_HANDLE_STREAM_WRITE);
+        check_not_null(pair_ends[0][0]); check_not_null(pair_ends[0][1]); check_equal(impl->ref_count, 2u);
+        turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
+        check_equal(impl->ref_count, 1u); close_pair(0u); impl = NULL;
+        check_equal(allocations.live, (size_t)0);
+    }
+    it("keeps the creation type graph alive through foreign canonical publication and compiled guest reads") {
+        turbowasm_component_exec_async_limits limits = {2u, 16u};
+        turbowasm_component_instance_public_impl *original = impl, *target;
+        turbowasm_component_host_value handle = {.kind = TURBOWASM_COMPONENT_HOST_U32};
+        turbowasm_component_event event;
+        uint32_t guest_handle = 0u;
+        size_t count;
+        check_equal(turbowasm_component_instance_create_async_private(&destination, &component, &limits), TURBOWASM_OK);
+        target = turbowasm_component_instance_public_impl_get(&destination);
+        impl = target; attach(); impl = original;
+        check_equal(open_pair(0u, false, false), TURBOWASM_OK);
+        payload.kind = TURBOWASM_COMPONENT_TYPE_U32; payload.as.u32 = 42u;
+        write_buffer.values = &payload; write_buffer.length = 1u;
+        check_equal(turbowasm_component_endpoint_submit(pair_ends[0][1], &write_buffer), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_into_value(pair_ends[0][0], &endpoint_value), TURBOWASM_OK);
+        endpoint_codec.table = &target->exec.resource_table;
+        check_equal(turbowasm_component_endpoint_codec_lower(&endpoint_codec, &target->exec.binary->type_graph,
+            turbowasm_component_type_ref_indexed(endpoint_type(target, false)), &endpoint_value, &guest_handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_codec_commit(&endpoint_codec), TURBOWASM_OK);
+        check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
+        turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
+        check_equal(original->ref_count, 1u);
+        impl = target; handle.as.u32 = guest_handle;
+        check_equal(create(0u, "read-stream", &handle, 1u, false), TURBOWASM_OK); finish(0u); take(0u, 16u);
+        {
+            const turbowasm_component_task *view = turbowasm_component_host_task_view(&owners[0]);
+            turbowasm_component_value received = {0};
+            check_equal(turbowasm_component_canonical_lift_value(view->binding.graph,
+                turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_U32), &view->binding.memory,
+                128u, &received), TURBOWASM_OK);
+            check_equal(received.as.u32, 42u); check_equal(turbowasm_component_value_destroy(&received), TURBOWASM_OK);
+        }
+        check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_value_destroy(&output), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_take(pair_ends[0][1], &event), TURBOWASM_OK);
+        check_equal(event.payload, 16u); check_false(write_buffer.leased);
+        check_equal(turbowasm_component_endpoint_close(pair_ends[0][1]), TURBOWASM_OK);
+        pair_ends[0][0] = pair_ends[0][1] = NULL;
+        check_equal(create(0u, "drop-stream-read", &handle, 1u, false), TURBOWASM_OK); finish(0u);
+        check_equal(turbowasm_component_host_task_take_result(&owners[0], NULL, &count), TURBOWASM_OK);
+        check_equal(count, (size_t)0);
+        check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_OK);
+        check_equal(target->exec.resource_table.live_count, 0u);
     }
     it("delivers one scalar result and rejects early or repeated delivery without changing outputs") {
         size_t count = 99u;

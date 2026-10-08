@@ -6,7 +6,21 @@
 typedef struct turbowasm_component_task_owned_pair {
     turbowasm_component_endpoint reader, writer;
     struct turbowasm_component_task_owned_pair *next;
+    void *owner;
+    void (*release)(void *owner);
+    bool retained;
 } turbowasm_component_task_owned_pair;
+
+static void pair_closed(void *context) {
+    turbowasm_component_task_owned_pair *pair = context;
+    if (pair->retained && pair->reader.closed && pair->writer.closed) {
+        void (*release)(void *) = pair->release;
+        void *owner = pair->owner;
+        pair->retained = false;
+        /* Release can collect this pair with its creation instance. */
+        release(owner);
+    }
+}
 
 bool turbowasm_component_endpoint_builtin_kind(turbowasm_component_async_builtin_kind kind, bool *future) {
     if ((kind >= TURBOWASM_COMPONENT_STREAM_NEW && kind <= TURBOWASM_COMPONENT_STREAM_DROP_WRITABLE) ||
@@ -33,8 +47,11 @@ turbowasm_status turbowasm_component_endpoint_domain_pair_open(
     turbowasm_component_task_owned_pair *pair;
     const turbowasm_component_type *type;
     turbowasm_status status;
+    bool retained;
     if (domain == NULL || domain->table == NULL || domain->table->max_entries == 0u ||
         reader == NULL || writer == NULL || reader == writer || *reader != NULL || *writer != NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if ((domain->pair_retain == NULL) != (domain->pair_release == NULL))
         return TURBOWASM_INVALID_ARGUMENT;
     type = turbowasm_component_type_graph_get(graph, type_id);
     if (type == NULL || (type->kind != TURBOWASM_COMPONENT_TYPE_STREAM && type->kind != TURBOWASM_COMPONENT_TYPE_FUTURE))
@@ -44,14 +61,24 @@ turbowasm_status turbowasm_component_endpoint_domain_pair_open(
     /* Moving ends does not release stable storage. Bound that retained storage
      * independently of currently occupied handle slots. */
     if (domain->pair_count >= domain->table->max_entries) return TURBOWASM_OUT_OF_MEMORY;
+    retained = domain->pair_retain != NULL;
+    if (retained && !domain->pair_retain(domain->pair_owner)) return TURBOWASM_INVALID_ARGUMENT;
     pair = turbowasm_rt_calloc(1, sizeof(*pair));
-    if (pair == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    if (pair == NULL) { status = TURBOWASM_OUT_OF_MEMORY; goto fail; }
     status = turbowasm_component_endpoint_pair_open(graph, type_id,
         guest_handles ? domain->table : NULL, guest_handles ? domain->table : NULL, &pair->reader, &pair->writer);
-    if (status != TURBOWASM_OK) { turbowasm_rt_free(pair); return status; }
+    if (status != TURBOWASM_OK) { turbowasm_rt_free(pair); goto fail; }
+    pair->retained = retained; pair->owner = domain->pair_owner; pair->release = domain->pair_release;
+    if (retained) {
+        pair->reader.closed_notify = pair->writer.closed_notify = pair_closed;
+        pair->reader.closed_context = pair->writer.closed_context = pair;
+    }
     pair->next = domain->pairs; domain->pairs = pair; ++domain->pair_count;
     *reader = &pair->reader; *writer = &pair->writer;
     return TURBOWASM_OK;
+fail:
+    if (retained) domain->pair_release(domain->pair_owner);
+    return status;
 }
 
 static turbowasm_status new_pair(turbowasm_component_task_builtin *binding, turbowasm_value *result) {

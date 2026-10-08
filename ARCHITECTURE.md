@@ -827,6 +827,27 @@ passes all five [native CI jobs](https://github.com/qigao/turbowasm/actions/runs
 Linux MIR 209/209 in 3.02 s and macOS MIR 209/209 in 2.82 s, including compiled
 Core memory32/64 rendezvous with the host writer.
 
+Private async instances bind pair keepalive hooks to their existing reference
+count. Each admitted pair acquires one instance reference before allocation;
+allocation/registration failure returns it. The pair retains that creation
+instance while either end is open, regardless of current handle table or host
+value ownership. Close and forward notify the stable pair only after ownership
+and peer state commit. Closing the second end returns the reference once; it may
+destroy an otherwise unreferenced instance and invalidate both closed endpoint
+pointers. Other live pairs keep the instance retained. Collection frees only
+fully closed storage and does not return the reference again. Plain private
+domains without hooks preserve their caller-owned graph/domain contract. The
+public async shutdown step must still drain local guest ends and obligations;
+pair keepalive does not substitute for that protocol.
+Formal host-task cases exercise host/guest stream/future creation, allocation
+rollback, reference overflow, multiple-pair retention, forwarding after public
+handles close, guest-created packed handles and foreign publication followed by
+actual Core reads and drops. The foreign reader verifies the payload in guest
+memory as well as completion; the final foreign drop releases the original
+instance. Windows ASan passes 31 cases and 17,555 assertions; the related
+Component/WASI/Runtime regression passes 86/86 in 9.72 s. Native qualification
+of creation-instance pair keepalive is pending.
+
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
 an existing Core instance for its allocator/store and caller memory; it constructs

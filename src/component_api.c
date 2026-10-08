@@ -10,6 +10,8 @@
 
 static bool component_instance_retain(turbowasm_component_instance_public_impl *impl);
 static void component_instance_release(turbowasm_component_instance_public_impl *impl);
+static bool pair_instance_retain(void *owner) { return component_instance_retain(owner); }
+static void pair_instance_release(void *owner) { component_instance_release(owner); }
 
 struct turbowasm_component_host_resource {
     turbowasm_component_instance_public_impl *instance;
@@ -1377,6 +1379,11 @@ static turbowasm_status component_instance_create(
     }
 
     impl->ref_count = 1u;
+    if (limits != NULL) {
+        impl->exec.task_domain.pair_owner = impl;
+        impl->exec.task_domain.pair_retain = pair_instance_retain;
+        impl->exec.task_domain.pair_release = pair_instance_release;
+    }
     instance->impl = impl;
     return TURBOWASM_OK;
 }
