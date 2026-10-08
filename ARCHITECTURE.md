@@ -710,6 +710,12 @@ destructor failure, and every snapshot allocation failure. Windows ASan passes
 17 cases and 11,831 assertions; the related Component/WASI/Runtime graph passes
 85/85 in 7.84 s. Async resource-codec adoption and task-owner integration remain
 separate steps; these tests do not claim an available public async execution API.
+Commit `19b5dde` passed all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37718126233):
+Linux MIR 206/206 in 2.52 s and macOS MIR 206/206 in 2.51 s, including the
+host-argument suite on both platforms. The suite uses the existing synchronous
+canonical execution path to verify snapshot lifetime; compiled async integration
+continues to be covered separately by the Runtime task/import suites.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
