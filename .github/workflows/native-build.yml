@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.rid }} / ${{ matrix.preset }}
+    name: ${{ matrix.id }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -27,6 +27,10 @@ jobs:
       TURBOWASM_TRIPLET: ${{ matrix.triplet }}
       TURBOWASM_HOST_TRIPLET: ${{ matrix.host_triplet }}
       GITHUB_TOKEN: ${{ github.token }}
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: turbowasm-${{ matrix.id }}-v1
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,6 +57,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+      - name: Prepare compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Prepare Unix tools
         if: runner.os != 'Windows'
         shell: bash

@@ -8,15 +8,50 @@ permissions:
   contents: read
   packages: read
 
+concurrency:
+  group: turbowasm-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  scope:
+    name: Select affected checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      builds: ${{ steps.select.outputs.builds }}
+      has_builds: ${{ steps.select.outputs.has_builds }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select native profiles
+        id: select
+        shell: pwsh
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: ./cmake/ci/select-ci-scope.ps1 -EventName $env:CI_EVENT -BaseRef $env:CI_BASE -HeadRef $env:CI_HEAD
   native:
+    needs: scope
+    if: needs.scope.outputs.has_builds == 'true'
     uses: ./.github/workflows/native-build.yml
     with:
-      builds: >-
-        {"include":[
-          {"runner":"ubuntu-24.04","rid":"linux-x64","triplet":"x64-linux","host_triplet":"x64-linux","preset":"ci-linux-user","tests":true,"utils":true,"littlefs":true,"consumer":"ci-user"},
-          {"runner":"windows-2025","rid":"windows-x64","triplet":"x64-windows","host_triplet":"x64-windows","preset":"ci-win-qualify-user","tests":true,"utils":true,"consumer":"ci-win-user"},
-          {"runner":"ubuntu-24.04","rid":"android-arm64-v8a","triplet":"arm64-android","host_triplet":"x64-linux","preset":"ci-android-user","consumer":"ci-android-user"},
-          {"runner":"ubuntu-24.04","rid":"linux-x64","triplet":"x64-linux","host_triplet":"x64-linux","preset":"ci-mir-user","tests":true},
-          {"runner":"macos-15","rid":"macos-arm64","triplet":"arm64-osx","host_triplet":"arm64-osx","preset":"ci-macos-mir-user","tests":true}
-        ]}
+      builds: ${{ needs.scope.outputs.builds }}
+  result:
+    name: CI result
+    needs: [scope, native]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require successful selected checks
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          HAS_BUILDS: ${{ needs.scope.outputs.has_builds }}
+          BUILD_RESULT: ${{ needs.native.result }}
+        run: |
+          set -euo pipefail
+          test "$SCOPE_RESULT" = success
+          if [ "$HAS_BUILDS" = true ]; then test "$BUILD_RESULT" = success; fi

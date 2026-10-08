@@ -12,6 +12,8 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "$env{TURBOWASM_TRIPLET}",
         "VCPKG_HOST_TRIPLET": "$env{TURBOWASM_HOST_TRIPLET}",
+        "CMAKE_C_COMPILER_LAUNCHER": "$penv{CMAKE_C_COMPILER_LAUNCHER}",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "$penv{CMAKE_CXX_COMPILER_LAUNCHER}",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/../../vcpkg_installed/installed-${presetName}"
       },
       "environment": {

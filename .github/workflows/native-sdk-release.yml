@@ -14,10 +14,12 @@ on:
       - ".github/workflows/native-build.yml"
       - "cmake/TurboWasmConfig.cmake.in"
       - "cmake/ci/restore-salts-sdk.ps1"
+      - "cmake/ci/select-ci-scope.ps1"
       - "include/turbowasm/**"
       - "src/**"
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,6 +31,7 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       source_commit: ${{ steps.meta.outputs.source_commit }}
+      builds: ${{ steps.select.outputs.builds }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,19 +51,17 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "source_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Select SDK profiles
+        id: select
+        shell: pwsh
+        run: ./cmake/ci/select-ci-scope.ps1 -EventName '${{ github.event_name }}' -HeadRef '${{ github.sha }}' -Profile sdk
 
   native:
     needs: metadata
     uses: ./.github/workflows/native-build.yml
     with:
       version: ${{ needs.metadata.outputs.version }}
-      builds: >-
-        {"include":[
-          {"runner":"ubuntu-latest","rid":"linux-x64","triplet":"x64-linux","host_triplet":"x64-linux","preset":"ci-sdk-user","package":true},
-          {"runner":"macos-15","rid":"macos-arm64","triplet":"arm64-osx","host_triplet":"arm64-osx","preset":"ci-sdk-user","package":true},
-          {"runner":"windows-2025","rid":"windows-x64","triplet":"x64-windows","host_triplet":"x64-windows","preset":"ci-win-sdk-user","package":true},
-          {"runner":"ubuntu-latest","rid":"android-arm64-v8a","triplet":"arm64-android","host_triplet":"x64-linux","preset":"ci-android-sdk-user","package":true}
-        ]}
+      builds: ${{ needs.metadata.outputs.builds }}
 
   pack:
     name: Pack TurboWasm.Native

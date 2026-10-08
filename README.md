@@ -251,7 +251,17 @@ Windows CI uses `windows-2025` and the Windows triplet supplied by the shared
 cache action, matching its compiler/SDK contract.
 
 CI and native SDK releases share `.github/workflows/native-build.yml` and use
-`ci-*-user` presets. CI restores the latest published SDK on every run and
+`ci-*-user` presets. `cmake/ci/select-ci-scope.ps1` owns the platform matrix:
+code changes and manual CI runs select all five qualification profiles;
+prose-only PRs skip native builds and still report `CI result`. SDK preparation
+selects the four shipping platforms from the same definitions. Manual SDK runs
+build package artifacts; publication remains restricted to release tags.
+The shared workflow uses Mozilla's [sccache Action](https://github.com/mozilla-actions/sccache-action)
+for C/C++ compiler caching, with a separate GitHub Actions cache namespace per
+profile and hit/miss statistics in each job. The compiler launcher comes from
+the CI environment through the user presets; ordinary local builds do not
+require sccache. vcpkg binary caching remains independent.
+CI restores the latest published SDK on every run and
 builds the complete selected graph. The published package remains Runtime +
 Component only; MIR remains outside the installed Runtime link interface.
 Android uses the shared outer vcpkg toolchain with the NDK chainloaded, and its
