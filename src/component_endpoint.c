@@ -359,6 +359,9 @@ static turbowasm_component_endpoint *owned_endpoint(const turbowasm_component_va
     return endpoint;
 }
 
+const turbowasm_component_endpoint *turbowasm_component_endpoint_value_get(
+    const turbowasm_component_value *value) { return owned_endpoint(value); }
+
 turbowasm_status turbowasm_component_endpoint_take_value(
     turbowasm_component_value *value, turbowasm_component_endpoint **out) {
     turbowasm_component_endpoint *endpoint = owned_endpoint(value);

@@ -24,6 +24,9 @@ static turbowasm_component_value endpoint_value, payload;
 static turbowasm_component_endpoint_codec endpoint_codec;
 static turbowasm_component_buffer write_buffer;
 static bool close_on_allocate;
+static bool reenter_endpoint_on_allocate;
+static turbowasm_component_host_endpoint host_ends[OWNER_COUNT];
+static turbowasm_component_endpoint loose_ends[2];
 
 static uint32_t endpoint_type(turbowasm_component_instance_public_impl *owner, bool future) {
     const turbowasm_component_type_graph *graph = &owner->exec.binary->type_graph;
@@ -58,8 +61,21 @@ static void close_pair(unsigned index) {
 
 static void *allocate(void *context, size_t size) {
     void *p; (void)context;
+    if (reenter_endpoint_on_allocate) {
+        turbowasm_component_value value = {0};
+        turbowasm_component_event event;
+        reenter_endpoint_on_allocate = false;
+        check_null(turbowasm_component_host_endpoint_view(&host_ends[0]));
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[0]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_endpoint_into_value(&host_ends[0], &value), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_endpoint_submit(&host_ends[0], NULL, NULL), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_endpoint_take(&host_ends[0], &event), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_endpoint_cancel(&host_ends[0]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal((int)value.kind, 0);
+    }
     if (close_on_allocate) {
-        close_on_allocate = false;
+        close_on_allocate = reenter_endpoint_on_allocate = false;
+        memset(loose_ends, 0, sizeof(loose_ends));
         turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
     }
     if (++allocations.attempts == allocations.fail_at) return NULL;
@@ -190,10 +206,33 @@ spec("Retained Component host task owners") {
             check_equal(turbowasm_component_endpoint_codec_rollback(&endpoint_codec), TURBOWASM_OK);
         if ((int)endpoint_value.kind != 0) {
             turbowasm_component_endpoint *taken = NULL;
-            (void)turbowasm_component_endpoint_take_value(&endpoint_value, &taken);
+            if (turbowasm_component_endpoint_take_value(&endpoint_value, &taken) == TURBOWASM_OK && pair_ends[0][0] == NULL)
+                pair_ends[0][0] = taken;
             (void)turbowasm_component_value_destroy(&endpoint_value);
         }
+        for (i = 0u; i < OWNER_COUNT; ++i) {
+            const turbowasm_component_endpoint *view = turbowasm_component_host_endpoint_view(&host_ends[i]);
+            if (view != NULL && view->operation != NULL) {
+                turbowasm_component_event event;
+                if (view->waitable.state.endpoint.phase == TURBOWASM_COMPONENT_ENDPOINT_COPYING)
+                    (void)turbowasm_component_host_endpoint_cancel(&host_ends[i]);
+                (void)turbowasm_component_host_endpoint_take(&host_ends[i], &event);
+            }
+            check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[i]), TURBOWASM_OK);
+        }
         for (i = 0u; i < 2u; ++i) close_pair(i);
+        for (i = 0u; i < 2u; ++i) if (loose_ends[i].initialized && !loose_ends[i].closed)
+            check_equal(turbowasm_component_endpoint_close(&loose_ends[i]), TURBOWASM_OK);
+        if (destination.impl != NULL) {
+            turbowasm_component_instance_public_impl *target = turbowasm_component_instance_public_impl_get(&destination);
+            for (i = 0u; i < target->exec.resource_table.capacity; ++i) {
+                uint32_t handle; turbowasm_component_handle_kind kind; void *object;
+                if (turbowasm_component_handle_at(&target->exec.resource_table, i, &handle, &kind, &object)) {
+                    turbowasm_component_endpoint *end = turbowasm_component_endpoint_get(&target->exec.resource_table, handle, kind);
+                    if (end != NULL) check_equal(turbowasm_component_endpoint_close(end), TURBOWASM_OK);
+                }
+            }
+        }
         memset(&endpoint_codec, 0, sizeof(endpoint_codec)); memset(&write_buffer, 0, sizeof(write_buffer));
         (void)turbowasm_component_value_destroy(&payload);
         turbowasm_component_instance_destroy(&destination);
@@ -209,6 +248,157 @@ spec("Retained Component host task owners") {
         check_null(ordinary.impl);
         check_equal(turbowasm_component_instance_create(&sync, &component), TURBOWASM_UNSUPPORTED);
         check_null(sync.impl);
+    }
+    it("creates finite host stream and future owners with balanced byte and instance reservations") {
+        unsigned future;
+        uint32_t refs = impl->ref_count;
+        for (future = 0u; future < 2u; ++future) {
+            size_t charge;
+            check_equal(turbowasm_component_host_endpoint_pair_create(&host_ends[0], &host_ends[1], impl,
+                endpoint_type(impl, future != 0u), &budget), TURBOWASM_OK);
+            charge = budget.used; check_greater(charge, (size_t)0); check_equal(impl->ref_count, refs + 3u);
+            check_true(turbowasm_component_host_endpoint_view(&host_ends[0])->readable);
+            check_false(turbowasm_component_host_endpoint_view(&host_ends[1])->readable);
+            check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[0]), TURBOWASM_OK);
+            check_equal(budget.used, charge / 2u); check_equal(impl->ref_count, refs + 2u);
+            check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_OK);
+            check_equal(budget.used, (size_t)0); check_equal(impl->ref_count, refs);
+            check_equal(impl->exec.task_domain.pair_count, 0u);
+        }
+    }
+    it("rolls back every host endpoint pair allocation without publishing a half owner") {
+        size_t failure, live = allocations.live;
+        uint32_t refs = impl->ref_count;
+        bool complete = false;
+        for (failure = 1u; failure < FAILURE_LIMIT; ++failure) {
+            turbowasm_status status;
+            allocations.attempts = 0u; allocations.fail_at = failure;
+            status = turbowasm_component_host_endpoint_pair_create(&host_ends[0], &host_ends[1], impl,
+                endpoint_type(impl, false), &budget); allocations.fail_at = 0u;
+            if (status == TURBOWASM_OK) { complete = true; break; }
+            check_equal(status, TURBOWASM_OUT_OF_MEMORY);
+            check_null(host_ends[0].impl); check_null(host_ends[1].impl);
+            check_equal(impl->ref_count, refs); check_equal(allocations.live, live);
+            check_equal(budget.used, (size_t)0); check_equal(impl->exec.task_domain.pair_count, 0u);
+        }
+        check_true(complete); check_greater(failure, (size_t)3);
+    }
+    it("preflights byte quota and retries canonical endpoint promotion after allocation failure") {
+        size_t charge, attempts, used;
+        turbowasm_component_host_budget short_budget;
+        void *value_owner;
+        check_equal(turbowasm_component_host_endpoint_pair_create(&host_ends[0], &host_ends[1], impl,
+            endpoint_type(impl, false), &budget), TURBOWASM_OK);
+        charge = budget.used;
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_OK);
+        budget.limit = charge - 1u; attempts = allocations.attempts;
+        check_equal(turbowasm_component_host_endpoint_pair_create(&host_ends[0], &host_ends[1], impl,
+            endpoint_type(impl, false), &budget), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(allocations.attempts, attempts); check_equal(budget.used, (size_t)0);
+        budget.limit = charge;
+        check_equal(turbowasm_component_host_endpoint_pair_create(&host_ends[0], &host_ends[1], impl,
+            endpoint_type(impl, false), &budget), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_into_value(&host_ends[0], &endpoint_value), TURBOWASM_OK);
+        check_null(host_ends[0].impl); used = budget.used; value_owner = endpoint_value.as.endpoint.owner;
+        short_budget = (turbowasm_component_host_budget){charge / 2u - 1u, 0u};
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], impl, &endpoint_value,
+            &short_budget), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(short_budget.used, (size_t)0); check_true(endpoint_value.as.endpoint.owner == value_owner);
+        allocations.attempts = 0u; allocations.fail_at = 1u;
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], impl, &endpoint_value,
+            &budget), TURBOWASM_OUT_OF_MEMORY); allocations.fail_at = 0u;
+        check_equal(budget.used, used); check_true(endpoint_value.as.endpoint.owner == value_owner);
+        check_null(host_ends[2].impl);
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], impl, &endpoint_value,
+            &budget), TURBOWASM_OK);
+        check_equal((int)endpoint_value.kind, 0); check_equal(budget.used, budget.limit);
+    }
+    it("preserves readable ownership when canonical value allocation fails and rejects a writable move") {
+        void *owner;
+        size_t used;
+        check_equal(turbowasm_component_host_endpoint_pair_create(&host_ends[0], &host_ends[1], impl,
+            endpoint_type(impl, false), &budget), TURBOWASM_OK);
+        owner = host_ends[0].impl; used = budget.used;
+        allocations.attempts = 0u; allocations.fail_at = 1u;
+        check_equal(turbowasm_component_host_endpoint_into_value(&host_ends[0], &endpoint_value), TURBOWASM_OUT_OF_MEMORY);
+        allocations.fail_at = 0u;
+        check_true(host_ends[0].impl == owner); check_equal(budget.used, used); check_equal((int)endpoint_value.kind, 0);
+        check_equal(turbowasm_component_host_endpoint_into_value(&host_ends[1], &endpoint_value), TURBOWASM_INVALID_ARGUMENT);
+    }
+    it("rejects promotion while a canonical readable end is reserved for publication") {
+        uint32_t handle;
+        size_t attempts, used;
+        void *value_owner;
+        check_equal(turbowasm_component_host_endpoint_pair_create(&host_ends[0], &host_ends[1], impl,
+            endpoint_type(impl, false), &budget), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_into_value(&host_ends[0], &endpoint_value), TURBOWASM_OK);
+        endpoint_codec.table = &impl->exec.resource_table;
+        check_equal(turbowasm_component_endpoint_codec_lower(&endpoint_codec, &impl->exec.binary->type_graph,
+            turbowasm_component_type_ref_indexed(endpoint_type(impl, false)), &endpoint_value, &handle), TURBOWASM_OK);
+        attempts = allocations.attempts; used = budget.used; value_owner = endpoint_value.as.endpoint.owner;
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], impl, &endpoint_value,
+            &budget), TURBOWASM_TYPE_MISMATCH);
+        check_equal(allocations.attempts, attempts); check_equal(budget.used, used);
+        check_true(endpoint_value.as.endpoint.owner == value_owner);
+        check_equal(turbowasm_component_endpoint_codec_rollback(&endpoint_codec), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], impl, &endpoint_value,
+            &budget), TURBOWASM_OK);
+    }
+    it("rejects caller-owned canonical endpoint storage that has no creation-instance keepalive") {
+        turbowasm_runtime_scope scope;
+        void *value_owner;
+        size_t attempts;
+        check_equal(turbowasm_component_endpoint_pair_open(&impl->exec.binary->type_graph, endpoint_type(impl, false),
+            NULL, NULL, &loose_ends[0], &loose_ends[1]), TURBOWASM_OK);
+        scope = turbowasm_runtime_scope_enter(&impl->exec.binary->config);
+        check_equal(turbowasm_component_endpoint_into_value(&loose_ends[0], &endpoint_value), TURBOWASM_OK);
+        turbowasm_runtime_scope_leave(scope);
+        value_owner = endpoint_value.as.endpoint.owner; attempts = allocations.attempts;
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[0], impl, &endpoint_value,
+            &budget), TURBOWASM_TYPE_MISMATCH);
+        check_true(endpoint_value.as.endpoint.owner == value_owner); check_equal(allocations.attempts, attempts);
+        check_equal(budget.used, (size_t)0); check_null(host_ends[0].impl);
+    }
+    it("guards endpoint ownership during allocator reentry on a canonical move") {
+        check_equal(turbowasm_component_host_endpoint_pair_create(&host_ends[0], &host_ends[1], impl,
+            endpoint_type(impl, false), &budget), TURBOWASM_OK);
+        reenter_endpoint_on_allocate = true;
+        check_equal(turbowasm_component_host_endpoint_into_value(&host_ends[0], &endpoint_value), TURBOWASM_OK);
+        check_false(reenter_endpoint_on_allocate); check_null(host_ends[0].impl);
+    }
+    it("keeps busy owners intact until cancellation acknowledgement delivers the borrowed buffer") {
+        void *owner;
+        size_t used;
+        turbowasm_component_event event;
+        check_equal(turbowasm_component_host_endpoint_pair_create(&host_ends[0], &host_ends[1], impl,
+            endpoint_type(impl, false), &budget), TURBOWASM_OK);
+        payload.kind = TURBOWASM_COMPONENT_TYPE_U32; payload.as.u32 = 42u;
+        write_buffer.values = &payload; write_buffer.length = 1u;
+        check_equal(turbowasm_component_host_endpoint_submit(&host_ends[1], &write_buffer, NULL), TURBOWASM_OK);
+        owner = host_ends[1].impl; used = budget.used;
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_TRAPPED);
+        check_true(host_ends[1].impl == owner); check_equal(budget.used, used); check_true(write_buffer.leased);
+        check_equal(turbowasm_component_host_endpoint_cancel(&host_ends[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_take(&host_ends[1], &event), TURBOWASM_OK);
+        check_equal(event.payload, 2u); check_false(write_buffer.leased);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_OK);
+    }
+    it("retains both creation and receiving instances when a host owner promotes a foreign canonical end") {
+        turbowasm_component_exec_async_limits limits = {2u, 16u};
+        turbowasm_component_instance_public_impl *target;
+        check_equal(turbowasm_component_instance_create_async_private(&destination, &component, &limits), TURBOWASM_OK);
+        target = turbowasm_component_instance_public_impl_get(&destination);
+        check_equal(turbowasm_component_host_endpoint_pair_create(&host_ends[0], &host_ends[1], impl,
+            endpoint_type(impl, true), &budget), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_into_value(&host_ends[0], &endpoint_value), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], target, &endpoint_value,
+            &budget), TURBOWASM_OK);
+        turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
+        turbowasm_component_instance_destroy(&destination);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[2]), TURBOWASM_OK);
+        impl = NULL; check_equal(budget.used, (size_t)0); check_equal(allocations.live, (size_t)0);
     }
     it("retains each pair's creation instance until both host or guest ends close") {
         unsigned future, guest;
@@ -306,7 +496,7 @@ spec("Retained Component host task owners") {
         check_equal(impl->ref_count, 1u); close_pair(0u); impl = NULL;
         check_equal(allocations.live, (size_t)0);
     }
-    it("keeps the creation type graph alive through foreign canonical publication and compiled guest reads") {
+    it("keeps the creation type graph and host writer alive through foreign publication and compiled guest reads") {
         turbowasm_component_exec_async_limits limits = {2u, 16u};
         turbowasm_component_instance_public_impl *original = impl, *target;
         turbowasm_component_host_value handle = {.kind = TURBOWASM_COMPONENT_HOST_U32};
@@ -316,18 +506,19 @@ spec("Retained Component host task owners") {
         check_equal(turbowasm_component_instance_create_async_private(&destination, &component, &limits), TURBOWASM_OK);
         target = turbowasm_component_instance_public_impl_get(&destination);
         impl = target; attach(); impl = original;
-        check_equal(open_pair(0u, false, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_pair_create(&host_ends[0], &host_ends[1], impl,
+            endpoint_type(impl, false), &budget), TURBOWASM_OK);
         payload.kind = TURBOWASM_COMPONENT_TYPE_U32; payload.as.u32 = 42u;
         write_buffer.values = &payload; write_buffer.length = 1u;
-        check_equal(turbowasm_component_endpoint_submit(pair_ends[0][1], &write_buffer), TURBOWASM_OK);
-        check_equal(turbowasm_component_endpoint_into_value(pair_ends[0][0], &endpoint_value), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_submit(&host_ends[1], &write_buffer, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_into_value(&host_ends[0], &endpoint_value), TURBOWASM_OK);
         endpoint_codec.table = &target->exec.resource_table;
         check_equal(turbowasm_component_endpoint_codec_lower(&endpoint_codec, &target->exec.binary->type_graph,
             turbowasm_component_type_ref_indexed(endpoint_type(target, false)), &endpoint_value, &guest_handle), TURBOWASM_OK);
         check_equal(turbowasm_component_endpoint_codec_commit(&endpoint_codec), TURBOWASM_OK);
         check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
         turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
-        check_equal(original->ref_count, 1u);
+        check_equal(original->ref_count, 2u);
         impl = target; handle.as.u32 = guest_handle;
         check_equal(create(0u, "read-stream", &handle, 1u, false), TURBOWASM_OK); finish(0u); take(0u, 16u);
         {
@@ -340,10 +531,9 @@ spec("Retained Component host task owners") {
         }
         check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_OK);
         check_equal(turbowasm_component_host_value_destroy(&output), TURBOWASM_OK);
-        check_equal(turbowasm_component_endpoint_take(pair_ends[0][1], &event), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_take(&host_ends[1], &event), TURBOWASM_OK);
         check_equal(event.payload, 16u); check_false(write_buffer.leased);
-        check_equal(turbowasm_component_endpoint_close(pair_ends[0][1]), TURBOWASM_OK);
-        pair_ends[0][0] = pair_ends[0][1] = NULL;
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_OK);
         check_equal(create(0u, "drop-stream-read", &handle, 1u, false), TURBOWASM_OK); finish(0u);
         check_equal(turbowasm_component_host_task_take_result(&owners[0], NULL, &count), TURBOWASM_OK);
         check_equal(count, (size_t)0);

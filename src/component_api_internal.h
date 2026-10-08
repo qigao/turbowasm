@@ -138,4 +138,38 @@ turbowasm_status turbowasm_component_host_task_take_result(turbowasm_component_h
  * freed despite a destructor error; the primary guest error takes precedence. */
 turbowasm_status turbowasm_component_host_task_destroy(turbowasm_component_host_task *owner);
 
+typedef struct turbowasm_component_host_endpoint { void *impl; } turbowasm_component_host_endpoint;
+/* Private finite host owner. Graph/type comes from the retained instance; both
+ * empty output owners are published together. Budget outlives reservations.
+ * Owner-thread only, output/source cells are exclusive through each transition. */
+turbowasm_status turbowasm_component_host_endpoint_pair_create(
+    turbowasm_component_host_endpoint *reader, turbowasm_component_host_endpoint *writer,
+    turbowasm_component_instance_public_impl *instance, uint32_t type,
+    turbowasm_component_host_budget *budget);
+/* Read-only borrowed view, NULL while driving and invalidated by move/destroy.
+ * Never mutate or close it. */
+const turbowasm_component_endpoint *turbowasm_component_host_endpoint_view(
+    const turbowasm_component_host_endpoint *owner);
+/* Internal transfer driver: successful submit borrows the stable canonical
+ * buffer and its payload/graph until event delivery. Failed admission preserves
+ * them. Driver is borrowed during submission, including retained realloc. */
+turbowasm_status turbowasm_component_host_endpoint_submit(turbowasm_component_host_endpoint *owner,
+    turbowasm_component_buffer *buffer, turbowasm_component_task *driver);
+turbowasm_status turbowasm_component_host_endpoint_take(turbowasm_component_host_endpoint *owner,
+    turbowasm_component_event *event);
+turbowasm_status turbowasm_component_host_endpoint_cancel(turbowasm_component_host_endpoint *owner);
+/* Success consumes a readable owner into an empty canonical value and returns
+ * its host byte charge. Failure preserves ownership and output. */
+turbowasm_status turbowasm_component_host_endpoint_into_value(
+    turbowasm_component_host_endpoint *owner, turbowasm_component_value *out);
+/* Fresh idle canonical readable end in retained domain storage. Allocates before
+ * taking source; failure preserves source/budget/output. The receiving instance
+ * stays alive while the host body exists; the pair retains its creation instance. */
+turbowasm_status turbowasm_component_host_endpoint_from_value(
+    turbowasm_component_host_endpoint *owner, turbowasm_component_instance_public_impl *instance,
+    turbowasm_component_value *source, turbowasm_component_host_budget *budget);
+/* Busy/reentrant destruction rejects without mutation. Idle close returns the
+ * byte reservation and instance reference. Empty owner destruction succeeds. */
+turbowasm_status turbowasm_component_host_endpoint_destroy(turbowasm_component_host_endpoint *owner);
+
 #endif /* TURBOWASM_COMPONENT_API_INTERNAL_H */

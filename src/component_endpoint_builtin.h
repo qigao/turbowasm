@@ -13,6 +13,8 @@ turbowasm_status turbowasm_component_endpoint_domain_pair_open(
     turbowasm_component_task_domain *domain, const turbowasm_component_type_graph *graph,
     turbowasm_component_type_id type, bool guest_handles,
     struct turbowasm_component_endpoint **reader, struct turbowasm_component_endpoint **writer);
+/* True only for a still-retained end in this module's stable pair storage. */
+bool turbowasm_component_endpoint_domain_pair_retained(const struct turbowasm_component_endpoint *endpoint);
 
 bool turbowasm_component_endpoint_builtin_kind(turbowasm_component_async_builtin_kind kind, bool *future);
 turbowasm_status turbowasm_component_endpoint_builtin_invoke(turbowasm_component_task_builtin *binding,

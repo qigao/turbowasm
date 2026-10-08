@@ -22,6 +22,13 @@ static void pair_closed(void *context) {
     }
 }
 
+bool turbowasm_component_endpoint_domain_pair_retained(const turbowasm_component_endpoint *endpoint) {
+    const turbowasm_component_task_owned_pair *pair;
+    if (endpoint == NULL || endpoint->closed_notify != pair_closed || endpoint->closed_context == NULL) return false;
+    pair = endpoint->closed_context;
+    return (endpoint == &pair->reader || endpoint == &pair->writer) && pair->retained;
+}
+
 bool turbowasm_component_endpoint_builtin_kind(turbowasm_component_async_builtin_kind kind, bool *future) {
     if ((kind >= TURBOWASM_COMPONENT_STREAM_NEW && kind <= TURBOWASM_COMPONENT_STREAM_DROP_WRITABLE) ||
         kind == TURBOWASM_COMPONENT_STREAM_FORWARD) { *future = false; return true; }

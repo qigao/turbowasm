@@ -87,6 +87,10 @@ turbowasm_status turbowasm_component_endpoint_into_value(
     turbowasm_component_endpoint *endpoint, turbowasm_component_value *out);
 turbowasm_status turbowasm_component_endpoint_take_value(
     turbowasm_component_value *value, turbowasm_component_endpoint **out);
+/* Borrowed authentic readable end; NULL for malformed/consumed values. The value
+ * remains the owner and its graph/storage lifetime requirements still apply. */
+const turbowasm_component_endpoint *turbowasm_component_endpoint_value_get(
+    const turbowasm_component_value *value);
 /* Host value-array copies acknowledge cancellation immediately, retaining the
  * borrow until event delivery. This does not cancel an external I/O request. */
 turbowasm_status turbowasm_component_endpoint_cancel(turbowasm_component_endpoint *endpoint);

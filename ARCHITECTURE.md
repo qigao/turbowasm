@@ -845,8 +845,36 @@ handles close, guest-created packed handles and foreign publication followed by
 actual Core reads and drops. The foreign reader verifies the payload in guest
 memory as well as completion; the final foreign drop releases the original
 instance. Windows ASan passes 31 cases and 17,555 assertions; the related
-Component/WASI/Runtime regression passes 86/86 in 9.72 s. Native qualification
-of creation-instance pair keepalive is pending.
+Component/WASI/Runtime regression passes 86/86 in 9.72 s. Commit `acad04c`
+passes all five [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37726052086):
+Linux MIR 209/209 in 3.10 s and macOS MIR 209/209 in 2.78 s.
+
+The private host endpoint owner holds an instance reference and a byte-charged
+opaque body in addition to the creation pair's keepalive. Pair creation stages
+both host bodies and the domain pair before publishing either owner; failure
+returns every reservation. Its graph/type comes from the instance. A readable
+owner moves into a canonical value only after that value's allocation succeeds;
+success empties the owner and returns its host byte charge. The stable pair then
+keeps the creation instance alive. Promotion of a fresh canonical readable end
+requires a retained domain pair, stages the host body and retains the receiving
+instance before taking the value. Failure preserves the value. Close rejects an
+active operation without changing the owner and frees idle owners exactly once.
+Owners and output/source cells are exclusively borrowed during transitions;
+allocator callbacks cannot modify those cells. Read-only endpoint views cannot
+be used to close or move the underlying end. Host-value kind integration and
+transfer-owned payload storage remain the next boundary; this internal owner
+does not open public async loading.
+Internal submit/take/cancel retain the host body while the existing endpoint
+engine borrows a stable canonical buffer through event delivery. A retained task
+may drive guest realloc; there is no separate transfer scheduler. Reentrant
+owner mutations are rejected throughout allocation/conversion and views are
+unavailable while driving. Formal cases cover stream/future creation, all pair
+allocations, exact byte quota, canonical allocation/promotion retry, reservation
+and unretained-storage rejection, cancellation acknowledgement before busy
+destruction, allocator reentry and independent creation/receiving instance
+lifetimes. Foreign Core reads now rendezvous through the retained host writer
+owner. Windows ASan passes 40 cases and 22,869 assertions; the related regression
+passes 86/86 in 10.33 s. Native qualification of the host endpoint owner is pending.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
