@@ -145,6 +145,7 @@ static void suspend_result(const char *name) {
     check_true(execs[0].task_domain.auxiliary == execs[1].task_domain.auxiliary);
     check_false(execs[1].may_leave); check_equal(execs[1].async_call_count, 1u);
 }
+static bool interrupt(void *context) { ++*(unsigned *)context; return true; }
 
 spec("retained async instance imports") {
     before_each() {
@@ -207,6 +208,18 @@ spec("retained async instance imports") {
     it("unwinds cross-instance result realloc before releasing endpoint reservations") {
         suspend_result("mixed"); abort_calls();
         check_true(execs[1].may_leave); check_null(execs[0].task_domain.auxiliary); check_null(execs[1].task_domain.auxiliary);
+        check_equal(execs[0].resource_table.live_count, 0u); check_equal(execs[1].resource_table.live_count, 0u);
+    }
+    it("yields consumer realloc on the provider task's interrupt policy and resumes without replay") {
+        turbowasm_execution_options options = {0}; unsigned checks = 0u; uint32_t pending;
+        suspend_result("mixed"); options.should_interrupt = interrupt; options.interrupt_context = &checks;
+        check_equal(turbowasm_component_exec_async_poll(&execs[1], 1u, &options, &pending), TURBOWASM_YIELDED);
+        check_greater(checks, 0u); check_false(execs[1].may_leave);
+        check_not_null(execs[0].task_domain.auxiliary);
+        check_true(execs[0].task_domain.auxiliary == execs[1].task_domain.auxiliary);
+        check_equal(turbowasm_execution_yield_reason_get(&execs[0].task_domain.auxiliary->core), TURBOWASM_YIELD_INTERRUPTION);
+        finish(5, NULL); check_true(execs[1].may_leave);
+        check_null(execs[0].task_domain.auxiliary); check_null(execs[1].task_domain.auxiliary);
         check_equal(execs[0].resource_table.live_count, 0u); check_equal(execs[1].resource_table.live_count, 0u);
     }
     it("acknowledges cancellation through the provider's callback") {

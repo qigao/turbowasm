@@ -1355,7 +1355,17 @@ separate from transfer carrier features. Windows ASan passed 15 import cases wit
 1,919 assertions and 19 async-type cases with 2,565 assertions; related regression
 passed 82/82 targets in 4.64 seconds. The MIR
 variant checks compiled caller/provider functions and callbacks; native
-qualification of this import extension is pending.
+macOS arm64 qualification at `c6ec840` passed 202/202 targets in 3.01 seconds,
+including the compiled import suite in 0.03 seconds, in the
+[native run](https://github.com/qigao/turbowasm/actions/runs/37705223445).
+Linux MIR and Android jobs were still running when this result was recorded.
+
+A further interruption case resumes a suspended consumer realloc with the
+provider task's new interrupt policy. It verifies the interruption yield reason,
+both retained domain guards, successful continuation without replay and complete
+endpoint cleanup. Windows ASan passed all 16 import cases with 2,086 assertions;
+production code was unchanged after the preceding related regression. Native MIR
+qualification of this additional case is pending.
 
 Async host capability callbacks, cross-instance resource borrowing and payload
 conversion, nested Component instantiation, public task/endpoint owners, synchronous
