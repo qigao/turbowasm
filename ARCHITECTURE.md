@@ -3678,3 +3678,15 @@ partial receive, PEEK/WAITALL, truncation, empty datagrams, FIN and descriptor
 ownership. Descriptor tests cover rights reduction, accepted-child rights,
 guest-memory validation and growth during suspension, clocks, duplicate poll
 subscriptions, capacity exhaustion, close and shutdown.
+
+Integration with the `master` CNet substrate from #413/#414 preserves its
+single-owner external progress and terminal listener-drain contracts through the
+completed public CNet/IO API. The early private initializer and polling entry
+points are superseded by the public IO domain, reusable pollables and explicit
+shutdown API; their regression tests now exercise those public entry points.
+A separate listen-ready state keeps a completed start-listen ready until
+finish-listen consumes it, before accept readiness takes over. Repeated advance
+does not submit duplicate accepts, and cancellation cannot reuse the physical
+socket slot before its terminal completion is routed. Both ordinary close and
+adapter shutdown are covered. The Runtime static library also retains #419's
+position-independent-code setting for embedding in shared libraries.

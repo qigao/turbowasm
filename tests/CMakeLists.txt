@@ -507,6 +507,15 @@ if(TARGET turbowasm_wasi02_cnet_core)
   target_include_directories(turbowasm_wasi02_cnet_tcp_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
   target_link_libraries(turbowasm_wasi02_cnet_tcp_test PRIVATE TurboWasm::WASI02CNet Salts::TinyTest)
   add_test(NAME turbowasm_wasi02_cnet_tcp_test COMMAND turbowasm_wasi02_cnet_tcp_test)
+  foreach(_progress IN ITEMS external listener)
+    add_executable(turbowasm_wasi02_cnet_${_progress}_progress_test
+      wasi02_cnet_${_progress}_progress_test.c)
+    target_link_libraries(turbowasm_wasi02_cnet_${_progress}_progress_test
+      PRIVATE TurboWasm::WASI02CNet Salts::TinyTest)
+    add_test(NAME turbowasm_wasi02_cnet_${_progress}_progress_test
+      COMMAND turbowasm_wasi02_cnet_${_progress}_progress_test)
+    set_tests_properties(turbowasm_wasi02_cnet_${_progress}_progress_test PROPERTIES TIMEOUT 30)
+  endforeach()
   endif()
   add_executable(turbowasm_wasi02_cnet_control_test
     wasi02_cnet_control_test.c)
@@ -537,7 +546,8 @@ if(TARGET turbowasm_wasi02_cnet_core)
   # list, so embedding a Windows PATH there splits it into separate entries.
   set(_turbowasm_cnet_tests turbowasm_wasi02_cnet_control_test)
   if(TARGET turbowasm_wasi02_cnet_tcp_test)
-    list(APPEND _turbowasm_cnet_tests turbowasm_wasi02_cnet_tcp_test turbowasm_wasi02_cnet_network_test)
+    list(APPEND _turbowasm_cnet_tests turbowasm_wasi02_cnet_tcp_test turbowasm_wasi02_cnet_network_test
+      turbowasm_wasi02_cnet_external_progress_test turbowasm_wasi02_cnet_listener_progress_test)
   endif()
   set_tests_properties(${_turbowasm_cnet_tests} PROPERTIES
     ENVIRONMENT_MODIFICATION

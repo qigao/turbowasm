@@ -17,6 +17,8 @@ typedef enum tw_cnet_slot_state {
     TW_CNET_SLOT_FREE = 0,
     TW_CNET_SLOT_UNBOUND,
     TW_CNET_SLOT_BOUND,
+    /* Listen has completed, but finish-listen has not consumed its readiness. */
+    TW_CNET_SLOT_LISTEN_READY,
     TW_CNET_SLOT_LISTENING,
     TW_CNET_SLOT_CONNECTING,
     TW_CNET_SLOT_CONNECTED,
@@ -530,7 +532,7 @@ static turbowasm_status provider_start_listen(
         &slot->listener, slot->listen_backlog);
     *out_error = map_error(status);
     if (status == SALTS_OK)
-        slot->state = TW_CNET_SLOT_LISTENING;
+        slot->state = TW_CNET_SLOT_LISTEN_READY;
     return TURBOWASM_OK;
 }
 
@@ -544,9 +546,11 @@ static turbowasm_status provider_finish_listen(
     if (out_error == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     *out_error =
-        slot != NULL && slot->state == TW_CNET_SLOT_LISTENING
+        slot != NULL && slot->state == TW_CNET_SLOT_LISTEN_READY
             ? TURBOWASM_WASI02_SOCKET_ERROR_NONE
             : TURBOWASM_WASI02_SOCKET_ERROR_INVALID_STATE;
+    if (*out_error == TURBOWASM_WASI02_SOCKET_ERROR_NONE)
+        slot->state = TW_CNET_SLOT_LISTENING;
     return TURBOWASM_OK;
 }
 
