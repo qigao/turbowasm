@@ -115,6 +115,9 @@ static bool component_resources_quiescent(
          impl->sockets.tcp_free_count !=
              impl->sockets.tcp_capacity))
         return false;
+    if (impl->sockets_initialized && impl->sockets.network)
+        for (unsigned i = 0; i < TW_NETWORK_KINDS; ++i)
+            if (impl->sockets.network->tables[i].live_count) return false;
     if (impl->streams_initialized &&
         (impl->streams.resources.live_count != 0u ||
          impl->streams.free_count != impl->streams.capacity))
@@ -154,6 +157,10 @@ static void reset_component_resource_identities(
         impl->streams.component_error_identity_bound = false;
     }
     if (impl->sockets_initialized) {
+        if (impl->sockets.network) {
+            memset(impl->sockets.network->identities, 0, sizeof(impl->sockets.network->identities));
+            memset(impl->sockets.network->identity_bound, 0, sizeof(impl->sockets.network->identity_bound));
+        }
         impl->sockets.component_network_identity = 0u;
         impl->sockets.component_tcp_identity = 0u;
         impl->sockets.component_network_identity_bound = false;
@@ -352,6 +359,9 @@ turbowasm_status turbowasm_wasi02_destroy(
          impl->sockets.tcp_free_count !=
              impl->sockets.tcp_capacity))
         return TURBOWASM_INVALID_ARGUMENT;
+    if (impl->sockets_initialized && impl->sockets.network)
+        for (unsigned i = 0; i < TW_NETWORK_KINDS; ++i)
+            if (impl->sockets.network->tables[i].live_count) return TURBOWASM_INVALID_ARGUMENT;
     if (impl->streams_initialized &&
         (impl->streams.resources.live_count != 0u ||
          impl->streams.free_count != impl->streams.capacity))
@@ -508,4 +518,29 @@ turbowasm_status turbowasm_wasi02_component_instance_create_async(
     impl = turbowasm_component_instance_public_impl_get(instance);
     impl->owner_context = wasi; impl->owner_release = wasi02_instance_release;
     return TURBOWASM_OK;
+}
+
+void turbowasm_wasi02_config_v2_init(turbowasm_wasi02_config_v2 *c) {
+    if (!c) return;
+    memset(c, 0, sizeof(*c)); c->size = sizeof(*c); c->api_version = 2;
+    c->network.size = sizeof(c->network); c->network.api_version = 1;
+}
+turbowasm_status turbowasm_wasi02_set_network_private(turbowasm_wasi02 *wasi,
+    const turbowasm_wasi02_config_v2 *config) {
+    turbowasm_wasi02_public_impl *p = wasi02_impl(wasi);
+    if (!p || p->instance_count) return TURBOWASM_INVALID_ARGUMENT;
+    if (!p->sockets_initialized) return !config->udp_socket_capacity && !config->datagram_stream_capacity && !config->resolve_stream_capacity ? TURBOWASM_OK : TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(&p->runtime_config);
+    turbowasm_status status = tw_network_init(&p->sockets, config);
+    turbowasm_runtime_scope_leave(scope); return status;
+}
+turbowasm_status turbowasm_wasi02_init_v2(turbowasm_wasi02 *wasi,
+    const turbowasm_wasi02_config_v2 *config, const turbowasm_runtime_config *runtime) {
+    if (!config || config->size != sizeof(*config) || config->api_version != 2)
+        return TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_status status = turbowasm_wasi02_init(wasi, &config->base, runtime);
+    if (status != TURBOWASM_OK) return status;
+    status = turbowasm_wasi02_set_network_private(wasi, config);
+    if (status != TURBOWASM_OK) (void)turbowasm_wasi02_destroy(wasi);
+    return status;
 }

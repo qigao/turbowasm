@@ -115,7 +115,7 @@ static bool family_valid(
            family == TURBOWASM_WASI02_IP_ADDRESS_IPV6;
 }
 
-static turbowasm_status address_from_value(
+turbowasm_status turbowasm_wasi02_socket_address_from_value(
     const turbowasm_wasi02_value *value,
     turbowasm_wasi02_ip_socket_address *out) {
     const turbowasm_wasi02_value *record;
@@ -192,7 +192,7 @@ static turbowasm_status address_from_value(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status address_to_value(
+turbowasm_status turbowasm_wasi02_socket_address_to_value(
     const turbowasm_wasi02_ip_socket_address *address,
     turbowasm_wasi02_value *out) {
     turbowasm_wasi02_value *record_items = NULL;
@@ -267,7 +267,7 @@ static turbowasm_status result_address_ok(
     turbowasm_wasi02_value *out,
     const turbowasm_wasi02_ip_socket_address *address) {
     turbowasm_wasi02_value payload = {0};
-    turbowasm_status status = address_to_value(address, &payload);
+    turbowasm_status status = turbowasm_wasi02_socket_address_to_value(address, &payload);
 
     if (status != TURBOWASM_OK)
         return status;
@@ -482,6 +482,12 @@ turbowasm_status turbowasm_wasi02_sockets_destroy(
         sockets->tcp_free_count != sockets->tcp_capacity)
         return TURBOWASM_INVALID_ARGUMENT;
 
+    if (sockets->network) {
+        for (unsigned i = 0; i < TW_NETWORK_KINDS; ++i)
+            if (sockets->network->tables[i].live_count) return TURBOWASM_INVALID_ARGUMENT;
+        turbowasm_status status = tw_network_destroy(sockets);
+        if (status != TURBOWASM_OK) return status;
+    }
     turbowasm_component_resource_table_destroy(
         &sockets->networks);
     turbowasm_component_resource_table_destroy(
@@ -718,7 +724,7 @@ static turbowasm_status call_start_bind(
         return result_error(
             out, TURBOWASM_WASI02_SOCKET_ERROR_INVALID_STATE);
 
-    status = address_from_value(&arguments[2], &address);
+    status = turbowasm_wasi02_socket_address_from_value(&arguments[2], &address);
     if (status != TURBOWASM_OK)
         return status;
     if (address.family != slot->family)
@@ -799,7 +805,7 @@ static turbowasm_status call_start_connect(
         return result_error(
             out, TURBOWASM_WASI02_SOCKET_ERROR_INVALID_STATE);
 
-    status = address_from_value(&arguments[2], &address);
+    status = turbowasm_wasi02_socket_address_from_value(&arguments[2], &address);
     if (status != TURBOWASM_OK)
         return status;
     if (address.family != slot->family) {
@@ -1574,6 +1580,9 @@ static turbowasm_status sockets_call_unprotected(
         return call_create_tcp(
             sockets, arguments, argument_count, out_result);
 
+    if (!strcmp(interface_name, "udp") || !strcmp(interface_name, "udp-create-socket") || !strcmp(interface_name, "ip-name-lookup"))
+        return tw_network_call(sockets, interface_name, function_name, arguments, argument_count, out_result);
+
     if (strcmp(interface_name, "tcp") == 0)
         return call_tcp(
             sockets, function_name,
@@ -1759,6 +1768,12 @@ static bool socket_bind_resource_type(
             &sockets->component_tcp_identity,
             &sockets->component_tcp_identity_bound,
             identity);
+
+    if (!strcmp(base->as.resource.package_name, "wasi:sockets") && sockets->network) {
+        int kind = tw_network_resource_kind(base->as.resource.interface_name, base->as.resource.resource_name);
+        if (kind >= 0 && sockets->network->capacities[kind])
+            return socket_bind_identity(&sockets->network->identities[kind], &sockets->network->identity_bound[kind], identity);
+    }
 
     if (strcmp(base->as.resource.package_name, "wasi:io") == 0 &&
         strcmp(base->as.resource.interface_name, "streams") == 0 &&
@@ -1974,6 +1989,12 @@ socket_interface_by_component_name(
             name, "wasi:sockets/instance-network@0.2.8"))
         return turbowasm_wasi02_find_interface(
             "wasi:sockets", "instance-network");
+    if (socket_component_name_is(name, "wasi:sockets/udp@0.2.8"))
+        return turbowasm_wasi02_find_interface("wasi:sockets", "udp");
+    if (socket_component_name_is(name, "wasi:sockets/udp-create-socket@0.2.8"))
+        return turbowasm_wasi02_find_interface("wasi:sockets", "udp-create-socket");
+    if (socket_component_name_is(name, "wasi:sockets/ip-name-lookup@0.2.8"))
+        return turbowasm_wasi02_find_interface("wasi:sockets", "ip-name-lookup");
     return NULL;
 }
 
@@ -2057,6 +2078,10 @@ static bool wasi02_sockets_can_bind(
         socket_function_by_component_name(
             iface, function_name);
 
+    if (iface && (!strcmp(iface->interface_name, "udp") || !strcmp(iface->interface_name, "udp-create-socket") || !strcmp(iface->interface_name, "ip-name-lookup"))) {
+        unsigned kind = !strcmp(iface->interface_name, "ip-name-lookup") ? TW_NETWORK_RESOLVE : TW_NETWORK_UDP;
+        if (!sockets || !sockets->network || !sockets->network->capacities[kind]) return false;
+    }
     return sockets != NULL && sockets->initialized &&
            socket_binding_matches_descriptor(
                sockets, graph, function_type, function);
@@ -2065,7 +2090,11 @@ static bool wasi02_sockets_can_bind(
 typedef enum socket_component_resource_kind {
     SOCKET_COMPONENT_RESOURCE_NONE = 0,
     SOCKET_COMPONENT_RESOURCE_NETWORK,
-    SOCKET_COMPONENT_RESOURCE_TCP
+    SOCKET_COMPONENT_RESOURCE_TCP,
+    SOCKET_COMPONENT_RESOURCE_UDP,
+    SOCKET_COMPONENT_RESOURCE_INCOMING,
+    SOCKET_COMPONENT_RESOURCE_OUTGOING,
+    SOCKET_COMPONENT_RESOURCE_RESOLVE
 } socket_component_resource_kind;
 
 static socket_component_resource_kind
@@ -2080,6 +2109,9 @@ socket_component_identity_kind(
     if (sockets->component_tcp_identity_bound &&
         sockets->component_tcp_identity == identity)
         return SOCKET_COMPONENT_RESOURCE_TCP;
+    if (sockets->network) for (unsigned i = 0; i < TW_NETWORK_KINDS; ++i)
+        if (sockets->network->identity_bound[i] && sockets->network->identities[i] == identity)
+            return (socket_component_resource_kind)(SOCKET_COMPONENT_RESOURCE_UDP + i);
     return SOCKET_COMPONENT_RESOURCE_NONE;
 }
 
@@ -2152,6 +2184,9 @@ static turbowasm_status wasi02_sockets_resource_lower(
                 TW_WASI02_NETWORK_ID,
                 &rep) != TURBOWASM_OK)
             return TURBOWASM_TRAPPED;
+    } else if (resource_kind >= SOCKET_COMPONENT_RESOURCE_UDP) {
+        if (tw_network_rep(sockets->network, (unsigned)(resource_kind - SOCKET_COMPONENT_RESOURCE_UDP), handle, &rep) != TURBOWASM_OK)
+            return TURBOWASM_TRAPPED;
     } else if (tcp_slot_get(
                    sockets, handle, &slot) != TURBOWASM_OK) {
         return TURBOWASM_TRAPPED;
@@ -2186,6 +2221,9 @@ static turbowasm_status wasi02_sockets_resource_lift(
                 handle,
                 TW_WASI02_NETWORK_ID,
                 &rep) != TURBOWASM_OK)
+            return TURBOWASM_TRAPPED;
+    } else if (resource_kind >= SOCKET_COMPONENT_RESOURCE_UDP) {
+        if (tw_network_rep(sockets->network, (unsigned)(resource_kind - SOCKET_COMPONENT_RESOURCE_UDP), handle, &rep) != TURBOWASM_OK)
             return TURBOWASM_TRAPPED;
     } else if (tcp_slot_get(
                    sockets, handle, &slot) != TURBOWASM_OK) {
@@ -2232,6 +2270,8 @@ static turbowasm_status wasi02_sockets_resource_drop(
         release_tcp_slot(sockets, slot);
         return sockets->provider.tcp_drop(sockets->provider.context, provider_rep);
     }
+    if (kind >= SOCKET_COMPONENT_RESOURCE_UDP)
+        return tw_network_drop(sockets->network, (unsigned)(kind - SOCKET_COMPONENT_RESOURCE_UDP), handle);
     return TURBOWASM_TYPE_MISMATCH;
 }
 

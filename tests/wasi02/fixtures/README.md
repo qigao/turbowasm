@@ -26,6 +26,9 @@ Corpus coverage:
   → IPv4 enum lowering → indirect canonical
   `result<own<tcp-socket>, error-code>` memory result → nominal TCP resource
   drop.
+- `socket-create-udp.wat`: UDP nominal resource creation and canonical drop.
+- `socket-name-lookup.wat` / `socket-name-lookup64.wat`: numeric name lookup,
+  IP address variants, option/EOF, pollable block and ownership cleanup.
 - `socket-tcp-roundtrip.wat` / `socket-tcp-roundtrip64.wat`: real async TCP
   connect/subscription/finish-connect, check-write/write, blocking-read and
   canonical ownership cleanup, using memory32 and memory64 respectively.

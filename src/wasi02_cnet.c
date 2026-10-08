@@ -72,6 +72,7 @@ struct tw_cnet_impl {
     cnet_client client;
     size_t payload_used;
     int cleanup_error;
+    struct tw_cnet_network *network;
 };
 
 extern bool turbowasm_wasi02_io_retain_private(turbowasm_wasi02_io *);
@@ -1255,7 +1256,7 @@ turbowasm_status turbowasm_wasi02_cnet_init_external(turbowasm_wasi02_cnet *adap
     cc.command_capacity = 2u;
     while (cc.command_capacity < (size_t)p->capacity * 4u) cc.command_capacity *= 2u;
     cc.event_capacity = cc.command_capacity;
-    cc.request_capacity = (size_t)p->capacity * 3u; cc.completion_batch_capacity = native_config.completion_batch_capacity;
+    cc.request_capacity = (size_t)p->capacity * 3u; cc.completion_batch_capacity = native_config.completion_batch_capacity < cc.request_capacity ? native_config.completion_batch_capacity : cc.request_capacity;
     cc.max_send_bytes = config->send_bytes; cc.receive_buffer_bytes = config->receive_bytes;
     cc.connect_timeout_ms = config->connect_timeout_ms; cc.read_timeout_ms = config->read_timeout_ms;
     cc.write_timeout_ms = config->write_timeout_ms;
@@ -1268,6 +1269,8 @@ turbowasm_status turbowasm_wasi02_cnet_init_external(turbowasm_wasi02_cnet *adap
     }
     adapter->impl = p; return TURBOWASM_OK;
 }
+
+#include "wasi02_cnet_network.inc"
 
 static void native_cleanup_error(tw_cnet_impl *p, int rc) {
     if (rc != SALTS_OK && rc != SALTS_EALREADY && rc != SALTS_EBUSY && p->cleanup_error == SALTS_OK)
@@ -1346,6 +1349,7 @@ turbowasm_status turbowasm_wasi02_cnet_advance(turbowasm_wasi02_cnet *adapter, s
             native_storage_release(s); release_slot(p, s);
         }
     }
+    if (rc == SALTS_OK) rc = cnet_network_advance(p);
     p->busy = false;
     return rc == SALTS_OK ? TURBOWASM_OK : TURBOWASM_TRAPPED;
 }
@@ -1368,6 +1372,7 @@ turbowasm_status turbowasm_wasi02_cnet_route_completion(turbowasm_wasi02_cnet *a
         }
         break;
     }
+    if (rc == SALTS_OK && !*consumed) rc = cnet_network_route(p, completion, consumed);
     native_cleanup_error(p, rc); p->busy = false;
     return rc == SALTS_OK ? TURBOWASM_OK : TURBOWASM_TRAPPED;
 }
@@ -1375,12 +1380,15 @@ turbowasm_status turbowasm_wasi02_cnet_next_timeout(turbowasm_wasi02_cnet *adapt
     uint32_t max, uint32_t *timeout) {
     tw_cnet_impl *p = impl_mut(adapter);
     if (!p || !p->external || p->busy || !timeout) return TURBOWASM_INVALID_ARGUMENT;
-    return cnet_client_external_timeout(&p->client, max, timeout) == SALTS_OK ? TURBOWASM_OK : TURBOWASM_TRAPPED;
+    if (cnet_client_external_timeout(&p->client, max, timeout) != SALTS_OK) return TURBOWASM_TRAPPED;
+    if (p->network && p->network->lookup.impl && cnet_name_lookup_next_timeout(&p->network->lookup, *timeout, timeout) != SALTS_OK) return TURBOWASM_TRAPPED;
+    return TURBOWASM_OK;
 }
 turbowasm_status turbowasm_wasi02_cnet_shutdown_request(turbowasm_wasi02_cnet *adapter) {
     tw_cnet_impl *p = impl_mut(adapter);
     if (!p || !p->external || p->busy) return TURBOWASM_INVALID_ARGUMENT;
     p->stopping = true;
+    if (p->network && p->network->lookup.impl && cnet_name_lookup_close(&p->network->lookup) != SALTS_OK) return TURBOWASM_TRAPPED;
     for (uint32_t i = 0; i < p->capacity; ++i) if (p->slots[i].active) {
         tw_cnet_slot *s = &p->slots[i]; s->rx_closed = s->tx_closed = true; s->rx_size = s->permit = 0; native_changed(s);
     }
@@ -1391,7 +1399,7 @@ turbowasm_status turbowasm_wasi02_cnet_shutdown_poll(turbowasm_wasi02_cnet *adap
     if (!p || !p->external || p->busy || !p->stopping || !complete) return TURBOWASM_INVALID_ARGUMENT;
     *complete = false;
     if (turbowasm_wasi02_cnet_advance(adapter, &events) != TURBOWASM_OK) return TURBOWASM_TRAPPED;
-    if (p->active_count) return p->cleanup_error == SALTS_OK ? TURBOWASM_OK : TURBOWASM_TRAPPED;
+    if (p->active_count || cnet_network_active(p)) return p->cleanup_error == SALTS_OK ? TURBOWASM_OK : TURBOWASM_TRAPPED;
     rc = cnet_client_stop_external(&p->client);
     if (rc == SALTS_EBUSY) return TURBOWASM_OK;
     native_cleanup_error(p, rc);
@@ -1456,6 +1464,7 @@ turbowasm_status turbowasm_wasi02_cnet_destroy(
 
 #if defined(TURBOWASM_WASI02_NATIVE_TCP)
     if (impl->external) {
+        if (cnet_network_destroy(impl) != SALTS_OK) return TURBOWASM_TRAPPED;
         if (cnet_client_destroy(&impl->client) != SALTS_OK) return TURBOWASM_TRAPPED;
         turbowasm_wasi02_io_release_private(turbowasm_wasi02_io_context_private(impl->io));
         adapter->impl = NULL;

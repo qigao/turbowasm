@@ -277,7 +277,8 @@ if(TARGET turbowasm_wasi02_core AND
   # S2 typed sockets state/provider contract. Keep this backend-neutral:
   # CNet/NativeIO integration belongs to #393.
   add_library(turbowasm_wasi02_sockets_core STATIC
-    src/wasi02_sockets.c)
+    src/wasi02_sockets.c
+    src/wasi02_network.c)
   target_compile_features(turbowasm_wasi02_sockets_core PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_sockets_core
     PRIVATE
@@ -434,6 +435,7 @@ if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
     src/wasi02_poll.c
     src/wasi02_streams.c
     src/wasi02_sockets.c
+    src/wasi02_network.c
     src/wasi02_exec.c)
 
   if(TARGET TurboWasm::WASI)
@@ -498,7 +500,18 @@ if(TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND)
     int main(void) { cnet_client c = {0}; cnet_connection r = {0};
       return cnet_connection_preserve_send_on_eof(&c, r); }"
     TURBOWASM_CNET_DIRECTIONAL_EOF)
+  unset(TURBOWASM_CNET_DATAGRAM_LOOKUP CACHE)
+  check_c_source_compiles("#include <cnet/name_lookup.h>
+    #if !defined(CNET_DATAGRAM_SOCKET_CONTROL_VERSION) || !defined(CNET_NAME_LOOKUP_API_VERSION)
+    #error required socket capabilities missing
+    #endif
+    int main(void) { cnet_datagram d = {0}; cnet_name_lookup l = {0};
+      return cnet_datagram_pause_receive(&d) + cnet_name_lookup_advance(&l); }"
+    TURBOWASM_CNET_DATAGRAM_LOOKUP)
   unset(CMAKE_REQUIRED_LIBRARIES)
+  if(NOT TURBOWASM_CNET_DATAGRAM_LOOKUP)
+    message(FATAL_ERROR "WASI02 native sockets require a Salts SDK with datagram socket control and public name lookup")
+  endif()
   if(NOT TURBOWASM_CNET_DIRECTIONAL_EOF)
     message(FATAL_ERROR "WASI02 native TCP requires a Salts SDK with cnet_connection_preserve_send_on_eof; the selected SDK cannot satisfy directional WASI streams")
   endif()

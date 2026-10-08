@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       salts_ci_run:
-        description: Optional successful Salts SDK CI run for native TCP qualification
+        description: Optional successful Salts SDK CI run for native socket qualification
         type: string
         default: ''
 

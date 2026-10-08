@@ -3379,3 +3379,41 @@ all atomic descriptor families. The semantics reference is the
 [WebAssembly Threads execution specification](https://webassembly.github.io/threads/core/exec/instructions.html).
 
 Reference: [Memory64 proposal](https://github.com/WebAssembly/memory64/blob/main/proposals/memory64/Overview.md).
+
+### Implemented UDP and DNS gate
+
+The versioned `wasi02_network.h` provider and `wasi02_cnet.h` v2 constructors
+implement the UDP/name-lookup gate described above. The existing TCP config and
+provider layouts remain unchanged; callers opt into complete bundles and finite
+facade resource capacities. The canonical bridge binds all four nominal resource
+identities and handles own/borrow/drop through the same Component handle tables.
+It reserves result storage before native admission or record/result consumption.
+
+CNet owns native unbound/bind, connect/disconnect, IPv6 endpoint details and
+socket options. TurboWasm retains fixed packet rings, explicit message grants,
+ordered-prefix send errors and one live pair per socket. Readiness contexts for
+closed pairs occupy bounded pair slots until every poll alias retires. Parent
+socket drop does not invalidate child streams. Native cancellation does not
+release request or payload storage before the actual terminal. Default policy
+denies UDP bind/send/receive and DNS; optional address/name callbacks restrict
+admission further. Denied incoming peers are filtered before guest publication.
+
+Salts exposes `cnet/name_lookup.h` using its existing c-ares owner and ICU UTS46
+with nontransitional STD3/Bidi/context validation. This adds ICU behind the Salts
+CNet ABI; TurboWasm does not link to ICU or c-ares. ASCII-only validation would
+violate the pinned WIT Unicode contract; a second resolver would duplicate
+progress, cancellation and ordering. The cost is ICU's SDK/runtime footprint.
+Salts records the baseline-selected ICU version/license and installs Windows
+runtime dependencies. No fallback silently relaxes IDNA validation.
+
+Verification includes IPv4/IPv6 loopback, real empty datagrams, repeated source
+readiness, exact send prefixes, connected/disconnected UDP, default-deny policy,
+bounded local DNS A/AAAA responses, result overflow, deadline and dropped-query
+retention. Pinned wasm-tools fixtures execute UDP ownership and DNS through
+memory32/memory64 canonical ABI. The same host loop drives TCP, UDP, DNS and
+shared pollables. Full Preview1 socket coverage and Preview3 remain independent
+work. Rollback removes v2 admission without changing existing TCP callers or
+persisted guest data.
+
+References: [WASI UDP 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/udp.wit),
+[WASI name lookup 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/ip-name-lookup.wit).

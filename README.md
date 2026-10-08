@@ -125,7 +125,8 @@ WASI 0.2 TCP has a provider-neutral state machine and an optional installed
 CNet backend covering connect/accept, byte streams and reusable readiness.
 See [native TCP setup](#native-wasi-02-tcp) and the
 [socket backend design](ARCHITECTURE.md#wasi-socket-backend-and-reusable-io-readiness).
-UDP and DNS remain separate implementation gates.
+WASI UDP message streams and asynchronous name lookup use additive versioned
+providers and the same optional CNet backend. See [UDP and DNS setup](#native-wasi-02-udp-and-dns).
 
 MIR admits the complete helper-backed SIMD instruction set, including shuffle,
 lane extraction/replacement, extending/splat/zero loads and lane loads/stores.
@@ -180,9 +181,10 @@ Its public header is `<turbowasm/wasi02_cnet.h>`; the provider-neutral facade
 and Runtime retain their existing dependency boundaries.
 
 Enable `TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND=ON` with a Salts SDK exporting
-`cnet_connection_preserve_send_on_eof`. The prerequisite is implemented on
+`cnet_connection_preserve_send_on_eof`, datagram socket controls and public
+name lookup. The prerequisite is implemented on
 [the Salts prerequisite branch](https://github.com/qigao/salts/tree/codex/wasi-socket-prerequisites)
-and qualified by [Salts CI](https://github.com/qigao/salts/actions/runs/37777155164).
+with SDK qualification through [Salts CI](https://github.com/qigao/salts/actions/workflows/ci.yml).
 The option defaults off until an SDK carrying this capability is selected;
 requesting it with an unsuitable SDK fails configuration.
 
@@ -207,14 +209,61 @@ metadata and dropping a subscription does not cancel transport.
 
 The installed TCP consumer test performs real async WIT ping/pong through
 memory32 and memory64, plus IPv4/IPv6, backpressure, flush, inherited options,
-half-close and retained-carrier shutdown. UDP and DNS are separate planned
-gates and currently have no native public implementation. See
+half-close and retained-carrier shutdown. UDP/DNS tests cover message boundaries,
+empty packets, ordered address results and retained subscriptions. See
 [the socket design](ARCHITECTURE.md#wasi-socket-backend-and-reusable-io-readiness).
 
 For branch SDK qualification, dispatch TurboWasm CI with `salts_ci_run` set to
 a successful Salts SDK preparation run. CI verifies the artifact's source
-commit, enables the TCP target, builds the full native matrix and runs the
+commit, enables the socket target, builds the full native matrix and runs the
 existing installed-package tests. Ordinary CI continues selecting published SDKs.
+
+## Native WASI 0.2 UDP and DNS
+
+Include `<turbowasm/wasi02_network.h>` for the complete provider-neutral
+`udp`, `udp-create-socket` and `ip-name-lookup@0.2.8` bundles. Existing TCP
+provider/config layouts remain unchanged. Versioned config helpers initialize
+finite defaults; zero facade capacities omit the corresponding capability.
+
+For CNet, use `turbowasm_wasi02_cnet_init_external_v2` followed by
+`turbowasm_wasi02_cnet_wasi02_init_v2`. The optional `TurboWasm::WASI02CNet`
+target requires a Salts SDK exposing datagram socket controls and
+`<cnet/name_lookup.h>`, in addition to directional TCP EOF. Salts implements
+IDNA validation with ICU and reuses its existing c-ares progress owner.
+
+```c
+turbowasm_wasi02_cnet_config_v2 native;
+turbowasm_wasi02_config_v2 facade;
+turbowasm_wasi02_cnet_config_v2_init(&native);
+turbowasm_wasi02_config_v2_init(&facade);
+native.allow_udp_bind = native.allow_udp_send = true;
+native.allow_udp_receive = native.allow_name_lookup = true;
+facade.base.socket_network_resource_capacity = 16;
+facade.base.tcp_socket_resource_capacity = 16;
+facade.base.stream_resource_capacity = 32;
+facade.base.pollable_capacity = 64;
+facade.udp_socket_capacity = 16;
+facade.datagram_stream_capacity = 32;
+facade.resolve_stream_capacity = 16;
+```
+
+Apply the desired address/name restrictions before initializing the adapter.
+The borrowed backend must cover `2*T + U` endpoints and
+`3*T + U*(send_datagrams+1)` requests, where `T` and `U` are configured TCP/UDP
+capacities. DNS deadlines join `..._next_timeout`; use the same progress and
+shutdown sequence described above. Numeric literals never issue DNS requests.
+
+Datagram receive returns bounded message records, including empty messages.
+Send requires a fresh check-send grant and reports the exact admitted prefix;
+a later failure appears on the next check. Drop both old datagram streams before
+changing the UDP association. A concurrency-conflict requires routing retained
+terminals before retrying. Closed poll aliases retain their original metadata
+and count against the configured pair capacity. Name streams return pending,
+ordered addresses, EOF or an exact resolver error; cancel/drop keeps in-flight
+c-ares storage until its real terminal. External DNS is unnecessary for tests.
+
+CNet's [WebSocket API](../salts/cnet/include/cnet/websocket.h) remains available
+to hosts. WASI sockets 0.2.8 does not define a WebSocket interface.
 
 ## Dependency boundary
 
