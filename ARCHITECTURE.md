@@ -3439,7 +3439,7 @@ References: [WASI UDP 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0
 This is a separate admission gate after the implemented WASI 0.2 TCP/UDP/DNS
 backend. The user authorized implementation of this public boundary. The existing
 Preview1 configuration, initializer, imports and filesystem provider contracts
-remain supported. No socket API is advertised until the complete gate passes.
+remain supported. The complete socket/poll gate passed the qualification below.
 
 ### Scope and evidence
 
@@ -3654,4 +3654,27 @@ its bounded staging and propagates that status. A copied poll list retains each
 subscription separately, including duplicates. Accepted children use current
 inheriting rights at publication, allowing safe rights reduction during waits.
 
-Local ASAN and non-Windows CI results are recorded after execution below.
+Implementation commit `79515a51ad5e2d3c317c4f15123eeccc99ae44a8` passed
+[native CI run 37818815010](https://github.com/qigao/turbowasm/actions/runs/37818815010).
+The run consumed the successful platform SDK artifacts from
+[Salts prerequisite run 37805023643](https://github.com/qigao/salts/actions/runs/37805023643),
+commit `9cf0af7504f32ea0773830e93dfdbd10e4c15ef1`; Windows CI was explicitly
+skipped. Qualification results:
+
+- Linux Release: 179 CTest entries passed, followed by 24 installed C/C++
+  consumer tests, including the public-only descriptor, real CNet and C++ tests.
+- Linux MIR and macOS MIR Release: each CTest graph completed with 221 entries
+  and no failures. Both new MIR variants passed; the fixtures assert that
+  executed guest wrappers reached compiled MIR state.
+- Android arm64-v8a: the complete configured graph built and installed,
+  including both public headers. No device execution was performed.
+- Local Windows ASAN: `ctest --preset win-core3-asan-user --output-on-failure`
+  passed all 180 entries, including both pinned Core 3 conformance suites.
+  The installed ASAN consumer graph passed all 23 entries using the
+  `ci-win-user` configure/build/test presets in `tests/installed_consumer`.
+
+The socket tests exercise actual IPv4/IPv6 TCP and connected UDP, cancellation,
+partial receive, PEEK/WAITALL, truncation, empty datagrams, FIN and descriptor
+ownership. Descriptor tests cover rights reduction, accepted-child rights,
+guest-memory validation and growth during suspension, clocks, duplicate poll
+subscriptions, capacity exhaustion, close and shutdown.
