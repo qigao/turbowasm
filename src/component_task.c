@@ -108,6 +108,7 @@ turbowasm_status turbowasm_component_task_binding_validate(
     turbowasm_status status;
     if (binding == NULL || binding->instance == NULL || binding->graph == NULL || out == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+    if (binding->host_import && binding->host_entry == NULL) return TURBOWASM_INVALID_ARGUMENT;
     type = turbowasm_component_type_graph_get(binding->graph, binding->function_type);
     if (type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION || !type->as.function.is_async)
         return TURBOWASM_TYPE_MISMATCH;
@@ -226,7 +227,7 @@ static turbowasm_status finish(turbowasm_component_task *task, turbowasm_status 
 }
 
 static bool can_start(const turbowasm_component_task *task) {
-    return task->domain->backpressure == 0u &&
+    return (task->binding.host_import || task->domain->backpressure == 0u) &&
         (task->binding.callback_instance == NULL || task->domain->exclusive == NULL);
 }
 

@@ -65,6 +65,9 @@ typedef struct turbowasm_component_task_binding {
     void *caller_context;
     turbowasm_component_task_host_entry_fn host_entry;
     void *host_context;
+    /* An imported host runs in the caller's quota domain, but is not a new
+     * guest entry into that instance and does not inherit its backpressure. */
+    bool host_import;
 } turbowasm_component_task_binding;
 
 typedef enum turbowasm_component_task_phase {

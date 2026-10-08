@@ -26,6 +26,9 @@ static bool other_resource_provider;
 static bool failing_resource;
 static const char *borrow_override;
 static const turbowasm_component_exec_async_limits limits = {8u, 32u};
+static turbowasm_component_task *host_task;
+static bool host_wait, host_fail;
+static unsigned host_calls, host_unwinds;
 
 static void *allocate(void *context, size_t size) {
     void *p; (void)context;
@@ -249,11 +252,61 @@ static void suspend_destructor(void) {
     check_not_null(execs[0].task_domain.auxiliary);
 }
 
+static bool make_import(void *context, turbowasm_component_name instance, turbowasm_component_name function,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_id type) {
+    return can_bind(context, instance, function, graph, type) && name_is(function, "resource-result");
+}
+static bool resource_host_import(void *context, turbowasm_component_name instance, turbowasm_component_name function,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_id type) {
+    return can_bind(context, instance, function, graph, type) && !name_is(function, "resource-result");
+}
+static turbowasm_status invoke_resource_host(void *context, turbowasm_component_task *task, turbowasm_host_call *call,
+    turbowasm_component_name instance, turbowasm_component_name function,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_id type,
+    turbowasm_component_value *arguments, size_t count) {
+    turbowasm_component_value result = {0};
+    turbowasm_status status = TURBOWASM_OK, cleanup_status;
+    check_true(context == &execs[0]); check_true(task->domain == &execs[1].task_domain);
+    check_true(name_is(instance, "provider")); check_equal(count, 1u);
+    check_true(graph == task->binding.graph); check_equal(type, task->binding.function_type);
+    host_task = task; ++host_calls;
+    if (host_wait) {
+        turbowasm_host_wait wait; int completion;
+        status = turbowasm_host_call_wait(call, 91u, &wait, &completion);
+    }
+    if (status == TURBOWASM_OK) {
+        if (name_is(function, "resource-borrow-child")) {
+            check_equal(arguments[0].kind, TURBOWASM_COMPONENT_TYPE_BORROW);
+            result.kind = TURBOWASM_COMPONENT_TYPE_U32; result.as.u32 = (uint32_t)arguments[0].as.resource_rep.as.i32;
+        } else { result = arguments[0]; memset(&arguments[0], 0, sizeof(result)); }
+        if (host_fail) { task->trap = TURBOWASM_TRAP_UNREACHABLE; status = TURBOWASM_TRAPPED; }
+        else status = turbowasm_component_task_return(task->domain, &result);
+    }
+    if (status == TURBOWASM_INTERRUPTED) ++host_unwinds;
+    cleanup_status = turbowasm_component_value_destroy(&result); host_task = NULL;
+    return status != TURBOWASM_OK ? status : cleanup_status;
+}
+static void use_resource_host(void) {
+    turbowasm_component_exec_imports sets[2];
+    check_equal(turbowasm_component_exec_destroy(&execs[1]), TURBOWASM_OK);
+    sets[0] = imports(0u); sets[0].can_bind = make_import;
+    memset(&sets[1], 0, sizeof(sets[1])); sets[1].context = &execs[0];
+    sets[1].can_bind = resource_host_import; sets[1].async_invoke = invoke_resource_host;
+    check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[1], &binaries[1], &limits, sets, 2), TURBOWASM_OK);
+    attach(1u); check_equal(execs[0].async_import_owners, 2u);
+}
+static void complete_resource_host(void) {
+    turbowasm_host_wait wait;
+    check_not_null(host_task); check_true(turbowasm_execution_pending_host_wait(&host_task->core, &wait));
+    check_equal(turbowasm_execution_complete_host_wait(&host_task->core, wait, 0), TURBOWASM_OK);
+}
+
 spec("resource imports between async Component instances") {
     before_each() {
         turbowasm_component_exec_imports set;
         live = 0u; allowance = SIZE_MAX; other_resource_provider = false; failing_resource = false;
         borrow_override = NULL;
+        host_task = NULL; host_wait = host_fail = false; host_calls = host_unwinds = 0u;
         turbowasm_runtime_config_init(&config); config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
         scope = turbowasm_runtime_scope_enter(&config);
         check_equal(turbowasm_component_binary_decode_async_metadata(&binaries[0], component_async_lower_bytes,
@@ -270,6 +323,41 @@ spec("resource imports between async Component instances") {
         for (i = 2; i >= 0; --i) check_equal(turbowasm_component_exec_destroy(&execs[i]), TURBOWASM_OK);
         turbowasm_component_binary_destroy(&binaries[1]); turbowasm_component_binary_destroy(&binaries[0]);
         turbowasm_runtime_scope_leave(scope); check_equal(live, 0u);
+    }
+    it("routes own borrow and composite resource values through a host with defining-instance identity") {
+        use_resource_host();
+        number(1u, "roundtrip", 42u, NULL);
+        number(1u, "borrow-roundtrip", 42u, NULL);
+        number(1u, "text", 5u, NULL);
+        check_equal(host_calls, 3u); check_equal(destructions(), 3u); compiled_destructor();
+    }
+    it("retains imported resource owners and loans across host I/O until terminal delivery") {
+        unsigned i; const char *entries[] = {"roundtrip", "borrow-roundtrip", "text"};
+        use_resource_host(); host_wait = true;
+        for (i = 0u; i < 3u; ++i) {
+            create(1u, entries[i]); check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_YIELDED);
+            check_not_null(host_task); check_equal(destructions(), i); check_equal(execs[1].async_resource_owners, 1u);
+            check_equal(turbowasm_component_exec_destroy(&execs[0]), TURBOWASM_TRAPPED);
+            complete_resource_host(); check_equal(drive(NULL), TURBOWASM_OK);
+            check_equal(turbowasm_component_task_take_result(&root, &value), TURBOWASM_OK);
+            check_equal(value.as.u32, i == 2u ? 5u : 42u); cleanup();
+            check_equal(destructions(), i + 1u); check_equal(execs[1].async_resource_owners, 0u);
+        }
+    }
+    it("unwinds a suspended host before destroying its own value or releasing its borrow lender") {
+        unsigned i; const char *entries[] = {"roundtrip", "borrow-roundtrip", "text"};
+        use_resource_host(); host_wait = true;
+        for (i = 0u; i < 3u; ++i) {
+            create(1u, entries[i]); check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_YIELDED);
+            cleanup(); check_equal(host_unwinds, i + 1u); check_null(host_task);
+            check_equal(destructions(), i + 1u); check_equal(execs[1].async_resource_owners, 0u);
+        }
+    }
+    it("destroys a consumed host resource result once when the callback fails") {
+        use_resource_host(); host_fail = true;
+        create(1u, "text"); check_equal(drive(NULL), TURBOWASM_TRAPPED);
+        check_equal(root.trap, TURBOWASM_TRAP_UNREACHABLE); cleanup();
+        check_equal(destructions(), 1u); check_null(host_task); check_equal(execs[1].async_resource_owners, 0u);
     }
     it("round trips owned resources using destination IDs and the defining destructor") {
         uint32_t i; bool checked = false;

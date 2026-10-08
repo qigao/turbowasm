@@ -22,6 +22,11 @@ static size_t live, allowance;
 static bool wrong_target;
 static turbowasm_component_type_graph admission_graph;
 static turbowasm_component_task_binding *overridden_binding, saved_binding;
+static struct {
+    turbowasm_component_task *active[8];
+    unsigned entered, exited, interrupted;
+    bool wait_before, wait_after, acknowledge_cancel, raw_yield, omit_return, wrong_result;
+} host_state;
 
 static void *allocate(void *context, size_t size) {
     void *p; (void)context;
@@ -147,9 +152,87 @@ static void suspend_result(const char *name) {
 }
 static bool interrupt(void *context) { ++*(unsigned *)context; return true; }
 
+static bool function_named(turbowasm_component_name function, const char *name) {
+    return function.size == strlen(name) && memcmp(function.bytes, name, function.size) == 0;
+}
+static turbowasm_status host_import(void *context, turbowasm_component_task *task, turbowasm_host_call *core_call,
+    turbowasm_component_name instance, turbowasm_component_name function,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_id type,
+    turbowasm_component_value *arguments, size_t argument_count) {
+    turbowasm_component_value value = {0};
+    turbowasm_status status = TURBOWASM_OK, cleanup;
+    unsigned slot;
+    check_true(context == &host_state); check_true(task->domain == &execs[1].task_domain);
+    check_true(graph == task->binding.graph); check_equal(type, task->binding.function_type);
+    check_true(can_bind(NULL, instance, function, graph, type));
+    check_equal(argument_count, graph->types[type].as.function.param_count);
+    for (slot = 0; slot < 8 && host_state.active[slot] != NULL; ++slot) {}
+    check_less(slot, 8u); host_state.active[slot] = task; ++host_state.entered;
+    if (host_state.wait_before) {
+        turbowasm_host_wait wait; int completion;
+        status = turbowasm_host_call_wait(core_call, 77u, &wait, &completion);
+    }
+    if (status == TURBOWASM_OK && host_state.raw_yield) status = TURBOWASM_YIELDED;
+    if (status == TURBOWASM_OK && host_state.acknowledge_cancel && turbowasm_component_task_deliver_cancel(task->domain))
+        status = turbowasm_component_task_cancel(task->domain);
+    else if (status == TURBOWASM_OK && !host_state.omit_return) {
+        if (function_named(function, "trap")) { task->trap = TURBOWASM_TRAP_UNREACHABLE; status = TURBOWASM_TRAPPED; }
+        else {
+            if (argument_count != 0) {
+                value = arguments[0]; memset(&arguments[0], 0, sizeof(value));
+                if (function_named(function, "scalar")) ++value.as.u32;
+            } else {
+                value.kind = TURBOWASM_COMPONENT_TYPE_U32;
+                value.as.u32 = function_named(function, "early") ? 43u : 44u;
+            }
+            if (host_state.wrong_result) value.kind = TURBOWASM_COMPONENT_TYPE_S32;
+            status = turbowasm_component_task_return(task->domain, &value);
+        }
+    }
+    if (status == TURBOWASM_OK && host_state.wait_after) {
+        turbowasm_host_wait wait; int completion;
+        status = turbowasm_host_call_wait(core_call, 78u, &wait, &completion);
+        if (status == TURBOWASM_OK) {
+            check_true(turbowasm_host_call_instance(core_call)->impl == task->binding.instance->impl);
+            check_not_null(turbowasm_instance_module(task->binding.instance));
+        }
+    }
+    if (status == TURBOWASM_INTERRUPTED) ++host_state.interrupted;
+    cleanup = turbowasm_component_value_destroy(&value);
+    host_state.active[slot] = NULL; ++host_state.exited;
+    return status != TURBOWASM_OK ? status : cleanup;
+}
+static void use_host_imports(void) {
+    check_equal(turbowasm_component_exec_destroy(&execs[1]), TURBOWASM_OK);
+    imports.async_target = NULL; imports.async_invoke = host_import; imports.context = &host_state;
+    check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[1], &binaries[1], &limits, &imports, 1), TURBOWASM_OK);
+    attach(1); check_equal(execs[0].async_import_owners, 0u);
+}
+static void complete_host_wait(void) {
+    turbowasm_host_wait wait;
+    check_not_null(host_state.active[0]);
+    check_true(turbowasm_execution_pending_host_wait(&host_state.active[0]->core, &wait));
+    check_equal(turbowasm_execution_complete_host_wait(&host_state.active[0]->core, wait, 0), TURBOWASM_OK);
+}
+static bool dynamic_import(void *context, turbowasm_component_name instance, turbowasm_component_name function,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_id type) {
+    return can_bind(context, instance, function, graph, type) &&
+        (function_named(function, "text") || function_named(function, "mixed"));
+}
+static bool scalar_import(void *context, turbowasm_component_name instance, turbowasm_component_name function,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_id type) {
+    return can_bind(context, instance, function, graph, type) && !dynamic_import(context, instance, function, graph, type);
+}
+static turbowasm_status prepare_backpressure(void *context, turbowasm_component_task *task,
+    turbowasm_value *arguments, size_t capacity, size_t *count) {
+    (void)context; (void)arguments; (void)capacity; *count = 0;
+    return turbowasm_component_task_backpressure(task->domain, true);
+}
+
 spec("retained async instance imports") {
     before_each() {
         live = 0; allowance = SIZE_MAX; wrong_target = false;
+        memset(&host_state, 0, sizeof(host_state));
         turbowasm_runtime_config_init(&config); config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
         scope = turbowasm_runtime_scope_enter(&config);
         check_equal(turbowasm_component_binary_decode_async_metadata(&binaries[0], component_async_provider_bytes,
@@ -170,6 +253,150 @@ spec("retained async instance imports") {
         check_equal(turbowasm_component_exec_destroy(&execs[0]), TURBOWASM_OK);
         turbowasm_component_binary_destroy(&binaries[1]); turbowasm_component_binary_destroy(&binaries[0]);
         turbowasm_runtime_scope_leave(scope); check_equal(live, 0u);
+    }
+    it("routes typed scalar string and nested endpoint imports directly to a host") {
+        unsigned i; const char *names[] = {"scalar", "text", "mixed"};
+        use_host_imports();
+        for (i = 0; i < 3; ++i) {
+            create(names[i]); check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_OK);
+            finish(i == 0 ? 41u : 5u, NULL);
+            check_equal(execs[1].resource_table.live_count, 0u); check_equal(execs[0].task_domain.count, 0u);
+        }
+        check_equal(host_state.entered, 3u); check_equal(host_state.exited, 3u);
+    }
+    it("retains a host import across real I/O without replaying entry or consuming a false completion") {
+        uint32_t pending;
+        turbowasm_host_wait wait;
+        use_host_imports(); host_state.wait_before = true;
+        create("scalar"); check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_YIELDED);
+        check_equal(execs[1].task_domain.count, 2u); check_equal(execs[1].async_call_count, 1u);
+        check_equal(turbowasm_component_exec_async_poll(&execs[1], 8, NULL, &pending), TURBOWASM_YIELDED);
+        check_equal(host_state.entered, 1u); check_equal(host_state.exited, 0u);
+        check_true(turbowasm_execution_pending_host_wait(&host_state.active[0]->core, &wait)); ++wait.generation;
+        check_equal(turbowasm_execution_complete_host_wait(&host_state.active[0]->core, wait, 0), TURBOWASM_INVALID_ARGUMENT);
+        complete_host_wait(); finish(41, NULL);
+        check_equal(host_state.entered, 1u); check_equal(host_state.exited, 1u);
+    }
+    it("keeps the host instance carrier alive after the initiating Core stack exits") {
+        uint32_t pending;
+        use_host_imports(); host_state.wait_after = true;
+        create("early"); check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_OK); result(43);
+        check_equal(turbowasm_component_task_destroy(&root), TURBOWASM_OK);
+        check_equal(execs[1].task_domain.count, 1u); check_equal(host_state.exited, 0u);
+        check_equal(turbowasm_component_exec_destroy(&execs[1]), TURBOWASM_TRAPPED);
+        complete_host_wait();
+        check_equal(turbowasm_component_exec_async_poll(&execs[1], 8, NULL, &pending), TURBOWASM_OK);
+        check_equal(pending, 0u); check_equal(host_state.exited, 1u); check_equal(execs[1].task_domain.count, 0u);
+    }
+    it("requires actual I/O completion before a host acknowledges the caller cancellation request") {
+        uint32_t pending;
+        use_host_imports(); host_state.wait_before = host_state.acknowledge_cancel = true;
+        create("cancel"); check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_YIELDED);
+        check_true(host_state.active[0]->cancellation_requested); check_false(host_state.active[0]->cancellation_delivered);
+        check_equal(turbowasm_component_exec_async_poll(&execs[1], 8, NULL, &pending), TURBOWASM_YIELDED);
+        check_equal(host_state.exited, 0u); complete_host_wait(); finish(49, NULL);
+        check_equal(host_state.exited, 1u);
+    }
+    it("unwinds a suspended host import before releasing nested endpoint owners") {
+        use_host_imports(); host_state.wait_before = true;
+        create("mixed"); check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_YIELDED);
+        check_equal(host_state.entered, 1u); check_equal(host_state.exited, 0u);
+        abort_calls();
+        check_equal(host_state.interrupted, 1u); check_equal(host_state.exited, 1u);
+        check_equal(execs[1].resource_table.live_count, 0u); check_equal(execs[1].async_call_count, 0u);
+    }
+    it("preserves host result conversion and task context across fuel and interruption yields") {
+        turbowasm_execution_options options = {0}; unsigned turns = 0, checks = 0; uint32_t pending;
+        use_host_imports(); options.has_fuel_limit = true; options.fuel = 4;
+        create("text"); check_equal(turbowasm_component_task_resume(&root, &options), TURBOWASM_YIELDED);
+        while (execs[1].task_domain.auxiliary == NULL) {
+            turbowasm_status status = turbowasm_component_exec_async_poll(&execs[1], 1, &options, &pending);
+            check_true(status == TURBOWASM_OK || status == TURBOWASM_YIELDED);
+            check_equal(turbowasm_component_task_resume(&root, &options), TURBOWASM_YIELDED);
+            check_less(++turns, 1000u);
+        }
+        check_true(execs[1].task_domain.auxiliary == host_state.active[0]); check_equal(host_state.entered, 1u);
+        check_false(execs[1].may_leave); check_equal(host_state.exited, 0u);
+        options.has_fuel_limit = false; options.should_interrupt = interrupt; options.interrupt_context = &checks;
+        check_equal(turbowasm_component_exec_async_poll(&execs[1], 1, &options, &pending), TURBOWASM_YIELDED);
+        check_greater(checks, 0u);
+        check_equal(turbowasm_execution_yield_reason_get(&host_state.active[0]->core), TURBOWASM_YIELD_INTERRUPTION);
+        check_equal(turbowasm_component_task_create(&sibling, &execs[1].task_domain, binding(1, "scalar")), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&sibling, NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_task_destroy(&sibling), TURBOWASM_OK);
+        finish(5, NULL); check_true(execs[1].may_leave); check_null(execs[1].task_domain.auxiliary);
+        check_equal(host_state.entered, 1u); check_equal(host_state.exited, 1u);
+    }
+    it("propagates host traps type errors and invalid callback exits through the import boundary") {
+        unsigned mode;
+        use_host_imports();
+        for (mode = 0; mode < 4; ++mode) {
+            host_state.raw_yield = mode == 1; host_state.omit_return = mode == 2; host_state.wrong_result = mode == 3;
+            create(mode == 0 ? "trap" : "scalar");
+            check_equal(turbowasm_component_task_resume(&root, NULL), mode == 1 ? TURBOWASM_INVALID_ARGUMENT
+                : mode == 3 ? TURBOWASM_TYPE_MISMATCH : TURBOWASM_TRAPPED);
+            if (mode == 0) check_equal(root.trap, TURBOWASM_TRAP_UNREACHABLE);
+            abort_calls(); check_equal(execs[1].task_domain.count, 0u); check_equal(host_state.exited, mode + 1u);
+        }
+    }
+    it("charges host task admission to the consumer quota before invoking the host") {
+        use_host_imports(); execs[1].task_domain.limit = 1;
+        create("scalar"); check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(host_state.entered, 0u); check_equal(execs[1].async_call_count, 0u); abort_calls();
+    }
+    it("does not apply the caller's guest-entry backpressure to an outbound host import") {
+        turbowasm_component_task_binding b;
+        use_host_imports(); b = *binding(1, "scalar"); b.prepare = prepare_backpressure;
+        check_equal(turbowasm_component_task_create(&root, &execs[1].task_domain, &b), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_OK);
+        check_equal(execs[1].task_domain.backpressure, 1u); check_equal(host_state.entered, 1u);
+        check_equal(turbowasm_component_task_create(&sibling, &execs[1].task_domain, binding(1, "scalar")), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&sibling, NULL), TURBOWASM_YIELDED);
+        check_equal(host_state.entered, 1u);
+        check_equal(turbowasm_component_task_destroy(&sibling), TURBOWASM_OK);
+        finish(41, NULL);
+        check_equal(turbowasm_component_task_backpressure(&execs[1].task_domain, false), TURBOWASM_OK);
+    }
+    it("rejects ambiguous host claims and dual async backends before executing guest code") {
+        turbowasm_component_exec_imports sets[2];
+        check_equal(turbowasm_component_exec_destroy(&execs[1]), TURBOWASM_OK);
+        sets[0] = imports; sets[0].async_invoke = host_import;
+        check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[1], &binaries[1], &limits, sets, 1),
+            TURBOWASM_INVALID_ARGUMENT);
+        sets[0].async_target = NULL; sets[0].context = &host_state; sets[1] = sets[0];
+        check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[1], &binaries[1], &limits, sets, 2),
+            TURBOWASM_LINK_ERROR);
+        check_false(execs[1].initialized); check_equal(host_state.entered, 0u);
+        use_host_imports();
+    }
+    it("routes disjoint host and Component provider imports without changing registration semantics") {
+        turbowasm_component_exec_imports sets[2];
+        check_equal(turbowasm_component_exec_destroy(&execs[1]), TURBOWASM_OK);
+        sets[0] = imports; sets[0].can_bind = scalar_import;
+        memset(&sets[1], 0, sizeof(sets[1])); sets[1].context = &host_state;
+        sets[1].can_bind = dynamic_import; sets[1].async_invoke = host_import;
+        check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[1], &binaries[1], &limits, sets, 2), TURBOWASM_OK);
+        attach(1); check_equal(execs[0].async_import_owners, 4u);
+        create("scalar"); check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_OK); finish(41, NULL);
+        compiled_provider("scalar"); check_equal(host_state.entered, 0u);
+        create("mixed"); check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_OK); finish(5, NULL);
+        check_equal(host_state.entered, 1u);
+    }
+    it("reclaims every failed allocation during host admission lifting and nested result publication") {
+        size_t baseline, budget; bool succeeded = false;
+        use_host_imports();
+        create("mixed"); check_equal(turbowasm_component_task_resume(&root, NULL), TURBOWASM_OK); finish(5, NULL);
+        abort_calls(); baseline = live;
+        for (budget = 0; budget < 256; ++budget) {
+            turbowasm_status status;
+            create("mixed"); allowance = budget;
+            status = turbowasm_component_task_resume(&root, NULL); allowance = SIZE_MAX;
+            if (status == TURBOWASM_OK) { succeeded = true; finish(5, NULL); }
+            else check_equal(status, TURBOWASM_OUT_OF_MEMORY);
+            abort_calls(); check_equal(live, baseline); check_null(host_state.active[0]);
+            if (succeeded) break;
+        }
+        check_true(succeeded); check_greater(budget, 4u);
     }
     it("retains the provider binding and completes an eager scalar across instances") {
         check_equal(turbowasm_component_exec_destroy(&execs[0]), TURBOWASM_TRAPPED);

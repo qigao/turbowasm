@@ -11,6 +11,8 @@ typedef struct turbowasm_component_exec_async_call {
     turbowasm_component_async_call call;
     turbowasm_component_exec_async_transaction parameters, result;
     turbowasm_component_exec_realloc_context result_realloc;
+    turbowasm_instance host_instance;
+    const turbowasm_component_exec_canon_lower_context *host_binding;
     struct turbowasm_component_exec_async_call *next;
     turbowasm_status failure;
 } turbowasm_component_exec_async_call;
@@ -214,6 +216,13 @@ static turbowasm_status collect(turbowasm_component_exec *exec) {
     return TURBOWASM_OK;
 }
 
+static turbowasm_status invoke_host(void *context, turbowasm_component_task *task, turbowasm_host_call *call) {
+    turbowasm_component_exec_async_call *frame = context;
+    const turbowasm_component_exec_canon_lower_context *lower = frame->host_binding;
+    return lower->async_host(lower->async_host_context, task, call, lower->instance_name, lower->function_name,
+        lower->graph, lower->function_type, frame->call.arguments, frame->call.argument_count);
+}
+
 turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_host_call *caller,
     const turbowasm_value *arguments, size_t argument_count, turbowasm_value *results,
     size_t result_capacity, size_t *result_count, turbowasm_trap *trap) {
@@ -233,8 +242,8 @@ turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_h
         return TURBOWASM_TRAPPED;
     provider = lower->async_provider != NULL ? lower->async_provider : exec;
     adapter = lower->async_provider != NULL ? lower->async_adapter_index : lower->local_adapter_index;
-    if (provider->async_functions == NULL || adapter >= provider->adapter_count ||
-        provider->async_functions[adapter].instance == NULL)
+    if (lower->async_host == NULL && (provider->async_functions == NULL || adapter >= provider->adapter_count ||
+        provider->async_functions[adapter].instance == NULL))
         return TURBOWASM_UNSUPPORTED;
     status = collect(exec);
     if (status != TURBOWASM_OK) return status;
@@ -243,14 +252,24 @@ turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_h
     binding.caller_graph = lower->graph; binding.caller_function_type = lower->function_type;
     binding.caller_domain = &exec->task_domain; binding.callee_domain = &provider->task_domain;
     binding.caller_memory = lower->memory;
-    binding.callee = provider->async_functions[adapter];
     frame = turbowasm_rt_calloc(1u, sizeof(*frame));
     if (frame == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    if (lower->async_host != NULL) {
+        turbowasm_instance *instance = turbowasm_host_call_instance(caller);
+        if (instance == NULL || instance->impl == NULL) { turbowasm_rt_free(frame); return TURBOWASM_INVALID_ARGUMENT; }
+        /* The host-call instance view lives on the initiating Core stack. */
+        frame->host_instance = *instance; frame->host_binding = lower;
+        binding.callee.instance = &frame->host_instance;
+        binding.callee.graph = lower->graph; binding.callee.function_type = lower->function_type;
+        binding.callee.host_entry = invoke_host; binding.callee.host_context = frame;
+        binding.callee.host_import = true;
+    } else binding.callee = provider->async_functions[adapter];
     /* These contexts survive guest realloc suspension and are never shared with
      * a recursive lower or a different call's pending result conversion. */
-    bind_values(&binding.callee.memory, &binding.parameters, &frame->parameters, provider);
+    if (lower->async_host == NULL)
+        bind_values(&binding.callee.memory, &binding.parameters, &frame->parameters, provider);
     bind_values(&binding.caller_memory, &binding.result, &frame->result, exec);
-    if (provider != exec && binding.caller_memory.guest_realloc != NULL) {
+    if ((provider != exec || lower->async_host != NULL) && binding.caller_memory.guest_realloc != NULL) {
         frame->result_realloc = lower->realloc_context;
         frame->result_realloc.progress_task = &frame->call.task;
         binding.caller_memory.realloc_context = &frame->result_realloc;

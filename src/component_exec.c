@@ -17,6 +17,7 @@
 static turbowasm_status initialize_lift_adapter(
     turbowasm_component_exec *exec, const turbowasm_component_binary *binary, uint32_t index);
 static turbowasm_status bind_async_builtin(turbowasm_component_exec *exec, uint32_t index);
+static turbowasm_status component_import_router_bind_async(turbowasm_component_exec_canon_lower_context *lower);
 
 static bool component_name_equal(
     turbowasm_component_name left,
@@ -1214,7 +1215,7 @@ static turbowasm_status define_inline_provider(
                 &exec->canon_lower_contexts[
                     function->canon_lower_index];
             type = context->host_type;
-            if (context->is_async && context->async_provider == NULL) {
+            if (context->is_async && context->local_adapter_index != UINT32_MAX) {
                 turbowasm_status status = initialize_lift_adapter(exec, binary, context->local_adapter_index);
                 if (status != TURBOWASM_OK) return status;
             }
@@ -2131,14 +2132,7 @@ static turbowasm_status initialize_canon_lower_state(
             return TURBOWASM_LINK_ERROR;
 
         if (lower->is_async && context->local_adapter_index == UINT32_MAX) {
-            turbowasm_component_exec *provider = NULL;
-            uint32_t adapter = UINT32_MAX;
-            turbowasm_status status;
-            if (exec->imports.async_target == NULL) return TURBOWASM_UNSUPPORTED;
-            status = exec->imports.async_target(exec->imports.context, context->instance_name,
-                context->function_name, context->graph, context->function_type, &provider, &adapter);
-            if (status == TURBOWASM_OK)
-                status = turbowasm_component_exec_async_bind(context, provider, adapter);
+            turbowasm_status status = component_import_router_bind_async(context);
             if (status != TURBOWASM_OK) return status;
         }
 
@@ -2343,7 +2337,8 @@ static bool component_import_router_can_bind(
                graph,
                function_type);
     return selected != NULL && type != NULL && type->kind == TURBOWASM_COMPONENT_TYPE_FUNCTION &&
-        (type->as.function.is_async ? selected->async_target != NULL : selected->invoke != NULL);
+        (type->as.function.is_async ? (selected->async_target != NULL || selected->async_invoke != NULL)
+                                   : selected->invoke != NULL);
 }
 
 static turbowasm_status component_import_router_invoke(
@@ -2383,16 +2378,31 @@ static turbowasm_status component_import_router_invoke(
         trap);
 }
 
-static turbowasm_status component_import_router_async_target(void *context,
-    turbowasm_component_name instance_name, turbowasm_component_name function_name,
-    const turbowasm_component_type_graph *graph, turbowasm_component_type_id function_type,
-    turbowasm_component_exec **provider, uint32_t *adapter_index) {
+static turbowasm_status component_import_router_bind_async(turbowasm_component_exec_canon_lower_context *lower) {
+    turbowasm_component_exec *provider = NULL;
+    uint32_t adapter_index = UINT32_MAX;
+    turbowasm_status status;
     const turbowasm_component_exec_imports *selected = component_import_router_select(
-        context, instance_name, function_name, graph, function_type);
+        lower->exec, lower->instance_name, lower->function_name, lower->graph, lower->function_type);
     if (selected == NULL) return TURBOWASM_LINK_ERROR;
+    if (selected->async_invoke != NULL) {
+        const turbowasm_component_type *type = turbowasm_component_type_graph_get(lower->graph, lower->function_type);
+        uint32_t i;
+        if (type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION || !type->as.function.is_async)
+            return TURBOWASM_TYPE_MISMATCH;
+        for (i = 0; i < type->as.function.param_count; ++i)
+            if (!turbowasm_component_value_type_async_importable(lower->graph, type->as.function.params[i]))
+                return TURBOWASM_UNSUPPORTED;
+        if (type->as.function.has_result &&
+            !turbowasm_component_value_type_async_importable(lower->graph, type->as.function.result))
+            return TURBOWASM_UNSUPPORTED;
+        lower->async_host = selected->async_invoke; lower->async_host_context = selected->context;
+        return TURBOWASM_OK;
+    }
     if (selected->async_target == NULL) return TURBOWASM_UNSUPPORTED;
-    return selected->async_target(selected->context, instance_name, function_name,
-        graph, function_type, provider, adapter_index);
+    status = selected->async_target(selected->context, lower->instance_name, lower->function_name,
+        lower->graph, lower->function_type, &provider, &adapter_index);
+    return status == TURBOWASM_OK ? turbowasm_component_exec_async_bind(lower, provider, adapter_index) : status;
 }
 
 static turbowasm_status component_import_router_resource_lower(
@@ -2514,7 +2524,8 @@ static turbowasm_status component_import_router_init(
 
     for (i = 0u; i < import_set_count; ++i) {
         if (import_sets[i].can_bind == NULL ||
-            (import_sets[i].invoke == NULL && import_sets[i].async_target == NULL))
+            (import_sets[i].invoke == NULL && import_sets[i].async_target == NULL && import_sets[i].async_invoke == NULL) ||
+            (import_sets[i].async_target != NULL && import_sets[i].async_invoke != NULL))
             return TURBOWASM_INVALID_ARGUMENT;
         has_resource_lower =
             has_resource_lower ||
@@ -2544,7 +2555,6 @@ static turbowasm_status component_import_router_init(
     exec->imports.context = exec;
     exec->imports.can_bind = component_import_router_can_bind;
     exec->imports.invoke = component_import_router_invoke;
-    exec->imports.async_target = component_import_router_async_target;
     if (has_resource_lower)
         exec->imports.resource_lower =
             component_import_router_resource_lower;
@@ -2838,7 +2848,9 @@ static turbowasm_status initialize_exec(
              import_index < import_set_count;
              ++import_index) {
             if (import_sets[import_index].can_bind == NULL ||
-                (import_sets[import_index].invoke == NULL && import_sets[import_index].async_target == NULL))
+                (import_sets[import_index].invoke == NULL && import_sets[import_index].async_target == NULL &&
+                 import_sets[import_index].async_invoke == NULL) ||
+                (import_sets[import_index].async_target != NULL && import_sets[import_index].async_invoke != NULL))
                 return TURBOWASM_INVALID_ARGUMENT;
         }
     }

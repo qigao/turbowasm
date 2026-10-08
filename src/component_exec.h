@@ -110,6 +110,17 @@ typedef turbowasm_status
     uint64_t resource_identity,
     uint32_t handle);
 
+/* Private stackful async host boundary. The capability owns context through exec
+ * teardown. Arguments belong to the call until terminal delivery; clear cells
+ * when moving values and stop accessing them before task.return/task.cancel.
+ * The callback may wait, must explicitly resolve/cancel, and unwinds on forced
+ * interruption. A bare YIELDED return does not preserve its stack and is invalid. */
+typedef turbowasm_status (*turbowasm_component_import_async_invoke_fn)(void *context,
+    turbowasm_component_task *task, turbowasm_host_call *call,
+    turbowasm_component_name instance_name, turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_id function_type,
+    turbowasm_component_value *arguments, size_t argument_count);
+
 typedef struct turbowasm_component_exec_imports {
     void *context;
     turbowasm_component_import_can_bind_fn can_bind;
@@ -132,6 +143,8 @@ typedef struct turbowasm_component_exec_imports {
     turbowasm_status (*resource_target)(void *context,
         turbowasm_component_name instance_name, turbowasm_component_name resource_name,
         struct turbowasm_component_exec **provider, uint32_t *resource_type);
+    /* Mutually exclusive with async_target in one capability set. */
+    turbowasm_component_import_async_invoke_fn async_invoke;
 } turbowasm_component_exec_imports;
 
 typedef struct turbowasm_component_exec_canon_lower_context {
@@ -143,6 +156,8 @@ typedef struct turbowasm_component_exec_canon_lower_context {
     uint32_t local_adapter_index;
     struct turbowasm_component_exec *async_provider;
     uint32_t async_adapter_index;
+    turbowasm_component_import_async_invoke_fn async_host;
+    void *async_host_context;
     bool is_async;
 
     turbowasm_component_flat_signature flat_signature;

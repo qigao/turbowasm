@@ -725,8 +725,8 @@ the task; unmoved values and caller loans are released at terminal delivery or
 failure teardown. Result lowering still uses the caller memory and atomic
 resource/endpoint publication transaction, including guest realloc suspension.
 Host bindings reject a guest parameter transaction because no such destination
-exists. This call boundary is internal; capability routing and public owners
-remain to be connected. The Windows ASan async-call suite passes 33 cases and
+exists. This call boundary is internal; public owners remain to be connected.
+The Windows ASan async-call suite passes 33 cases and
 2,811 assertions, covering indirect arguments, both caller memory widths, host
 and result-realloc suspension, own/borrow/future movement, rollback, forced
 teardown and every Runtime allocation failure. The related regression graph
@@ -734,6 +734,37 @@ passes 84/84 in 7.74 s. Commit `7f60a88` passed all five
 [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37714492087):
 Linux MIR 205/205 in 2.89 s and macOS MIR 205/205 in 3.31 s, including
 the host canonical-call suite with compiled callers and result realloc.
+
+Private async capability imports select exactly one registered capability set
+using the existing nominal `can_bind` router. A set supplies either an initialized
+Component provider resolver or a stackful host callback for its async functions;
+specifying both is invalid, and multiple claiming sets remain a link error.
+Synchronous functions continue to use the separate synchronous invoke callback.
+The host callback receives the instance-specific function graph, mutable retained
+canonical arguments and the callee task. It moves values by clearing consumed
+argument cells, explicitly resolves/cancels the task, and stops using arguments
+before resolution. Callback/context ownership remains with the capability owner,
+which outlives the exec and all retained calls.
+
+Host calls use the consumer's bounded task domain and existing async-call FIFO
+for ownership and quota accounting. They are marked as imports: the consumer's
+guest-entry backpressure does not block an outbound host call. Ordinary guest
+tasks and standalone host-domain tasks keep their existing admission gate.
+Each frame copies the initiating Core instance carrier into stable frame storage
+before the caller can suspend or exit; the borrowed host-call view itself is never
+retained. The exec owns the underlying Core instances through frame retirement.
+Per-call result codecs and realloc control stay on the host task continuation.
+Quota failures precede argument lifting, failed admission leaves inputs intact,
+and teardown unwinds host waits/result conversion before releasing values and
+caller loans. No extra scheduler, synthetic Wasm function, or public partial API
+is introduced. A single resolver with an implicit host fallback was rejected:
+provider resolution failures must keep their original error semantics.
+The Windows ASan import suite passes 28 cases and 3,047 assertions, and the
+resource-import suite passes 30 cases and 7,902 assertions. They cover mixed
+host/provider routing, ambiguous claims, callback errors, real I/O cancellation,
+early caller exit, caller-backpressure isolation, nested result realloc control,
+resource identity/loans, forced teardown and per-call allocation rollback. The
+related Component/WASI/Runtime regression graph passes 84/84 in 9.03 s.
 Qualification must cover scalar/composite/own payloads, unit futures, nested
 endpoints, memory32/64, partial transfers, all cancellation phases, event ordering,
 backpressure, capacity exhaustion, allocation failure, traps and exactly-once
