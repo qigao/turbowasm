@@ -736,6 +736,13 @@ failure, invalidated admission flags, public-handle closure and foreign creation
 instance teardown with receiver allocator reentry. Windows ASan passes 90
 host-task cases (61,398 assertions) and 18 endpoint-codec cases (743 assertions);
 related Component/WASI/Runtime regression passes 88/88 in 10.67 s.
+Commit `89fa006` passes all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37748449762)
+with the newly published Salts 3.0.0 SDK: Linux MIR 213/213 in 1.96 s,
+macOS MIR 213/213 in 4.03 s, and Windows 172 tests plus 16 installed-package
+tests. The MIR suites include actual compiled task-body assertions. The new
+address assertions explicitly use TinyTest's `const void *` trait on every
+compiler; they do not rely on implicit pointer-to-integer conversion.
 This supplies transactional endpoint ownership for the remaining whole-tree
 host-value conversion; public async values and owners remain under integration.
 
