@@ -3398,6 +3398,9 @@ socket drop does not invalidate child streams. Native cancellation does not
 release request or payload storage before the actual terminal. Default policy
 denies UDP bind/send/receive and DNS; optional address/name callbacks restrict
 admission further. Denied incoming peers are filtered before guest publication.
+UDP buffer setters implement the WIT's allowed clamping: after a native ENOBUFS
+capacity rejection, halve the request with a finite integer bound until a real
+setting succeeds. Other native errors propagate; getters report actual settings.
 
 Salts exposes `cnet/name_lookup.h` using its existing c-ares owner and ICU UTS46
 with nontransitional STD3/Bidi/context validation. This adds ICU behind the Salts
@@ -3410,7 +3413,8 @@ runtime dependencies. No fallback silently relaxes IDNA validation.
 Verification includes IPv4/IPv6 loopback, real empty datagrams, repeated source
 readiness, exact send prefixes, connected/disconnected UDP, default-deny policy,
 bounded local DNS A/AAAA responses, result overflow, deadline and dropped-query
-retention. Pinned wasm-tools fixtures execute UDP ownership and DNS through
+retention. Pinned wasm-tools fixtures execute UDP message-list send/receive,
+empty-message publication, ownership and DNS through
 memory32/memory64 canonical ABI. The same host loop drives TCP, UDP, DNS and
 shared pollables. Full Preview1 socket coverage and Preview3 remain independent
 work. Rollback removes v2 admission without changing existing TCP callers or

@@ -86,6 +86,8 @@ jobs:
               "socket-name-lookup64.wasm",
               "socket-tcp-roundtrip.wasm",
               "socket-tcp-roundtrip64.wasm",
+              "socket-udp-roundtrip.wasm",
+              "socket-udp-roundtrip64.wasm",
               "stream-poll-block.wasm",
           ]
           for name in expected:

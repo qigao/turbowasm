@@ -122,7 +122,12 @@ static void run_component(const uint8_t *bytes, size_t size, uint32_t expected) 
     check_equal(turbowasm_component_load_borrowed(&component,bytes,size), TURBOWASM_OK);
     check_equal(turbowasm_wasi02_component_instance_create_async(&instance,&component,&facade,NULL), TURBOWASM_OK);
     check_equal(turbowasm_component_call_create(&call,&instance,(turbowasm_name){(const uint8_t *)"run",3},NULL,0), TURBOWASM_OK);
-    check_equal(turbowasm_component_call_resume(&call,NULL), TURBOWASM_OK);
+    turbowasm_status status = TURBOWASM_YIELDED;
+    for (unsigned tries = 0; tries < 100 && status == TURBOWASM_YIELDED; ++tries) {
+        status = turbowasm_component_call_resume(&call,NULL);
+        if (status == TURBOWASM_YIELDED) pump();
+    }
+    check_equal(status, TURBOWASM_OK);
     check_equal(turbowasm_component_call_take_result(&call,&result), TURBOWASM_OK);
     check_equal(result.kind,TURBOWASM_COMPONENT_HOST_U32); check_equal(result.as.u32,expected);
     check_equal(turbowasm_component_host_value_destroy(&result), TURBOWASM_OK);
@@ -178,6 +183,12 @@ suite("native WASI datagrams and name lookup") {
     after_each() { fixture_destroy(); }
     it("executes UDP creation and canonical resource drop from a real Component") {
         run_component(turbowasm_wasi02_fixture_socket_create_udp,turbowasm_wasi02_fixture_socket_create_udp_size,1);
+    }
+    it("executes UDP message lists, polling and empty messages through memory32") {
+        run_component(turbowasm_wasi02_fixture_socket_udp_roundtrip,turbowasm_wasi02_fixture_socket_udp_roundtrip_size,2);
+    }
+    it("executes UDP message lists, polling and empty messages through memory64") {
+        run_component(turbowasm_wasi02_fixture_socket_udp_roundtrip64,turbowasm_wasi02_fixture_socket_udp_roundtrip64_size,2);
     }
     it("executes name lookup, options, polling and ownership through memory32") {
         run_component(turbowasm_wasi02_fixture_socket_name_lookup,turbowasm_wasi02_fixture_socket_name_lookup_size,127);

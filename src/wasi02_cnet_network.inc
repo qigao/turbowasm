@@ -1,6 +1,7 @@
 /* Private extension compiled in the CNet adapter translation unit so the
  * existing owner, admission guard and backend stay the sole authority. */
 #include <cnet/name_lookup.h>
+#include <limits.h>
 #include "component_resource.h"
 
 typedef struct tw_udp tw_udp;
@@ -248,13 +249,23 @@ static cnet_tcp_socket_option udp_option(turbowasm_wasi02_udp_option option) {
 }
 static turbowasm_status net_udp_get_option(void *c, turbowasm_value r, turbowasm_wasi02_udp_option o, uint64_t *v, turbowasm_wasi02_socket_error *e) {
     tw_cnet_impl *p = c; tw_udp *u = udp_get(p,r);
-    if (!u || !u->live || p->busy || !v || !e || o > TURBOWASM_WASI02_UDP_SEND_BUFFER) return TURBOWASM_INVALID_ARGUMENT;
+    if (!u || !u->live || p->busy || !v || !e || (unsigned)o > TURBOWASM_WASI02_UDP_SEND_BUFFER) return TURBOWASM_INVALID_ARGUMENT;
     *e = map_error(cnet_datagram_option_get(&u->datagram, udp_option(o), v)); return TURBOWASM_OK;
 }
 static turbowasm_status net_udp_set_option(void *c, turbowasm_value r, turbowasm_wasi02_udp_option o, uint64_t v, turbowasm_wasi02_socket_error *e) {
     tw_cnet_impl *p = c; tw_udp *u = udp_get(p,r);
-    if (!u || !u->live || p->busy || !e || o > TURBOWASM_WASI02_UDP_SEND_BUFFER) return TURBOWASM_INVALID_ARGUMENT;
-    *e = map_error(cnet_datagram_option_set(&u->datagram, udp_option(o), v)); return TURBOWASM_OK;
+    if (!u || !u->live || p->busy || !e || (unsigned)o > TURBOWASM_WASI02_UDP_SEND_BUFFER) return TURBOWASM_INVALID_ARGUMENT;
+    bool buffer = o != TURBOWASM_WASI02_UDP_HOP_LIMIT;
+    if (buffer && v > INT_MAX) v = INT_MAX;
+    int rc = cnet_datagram_option_set(&u->datagram, udp_option(o), v);
+    /* WIT allows buffer rounding/clamping. BSD reports ENOBUFS for a size over
+     * its socket limit; halve that request until it succeeds, at most 31 times.
+     * Other errors and an exhausted minimum remain observable. */
+    while (buffer && rc == SALTS_ENOBUFS && v > 1) {
+        v /= 2;
+        rc = cnet_datagram_option_set(&u->datagram, udp_option(o), v);
+    }
+    *e = map_error(rc); return TURBOWASM_OK;
 }
 static turbowasm_status net_udp_subscribe(void *ctx, turbowasm_value rep, turbowasm_value *out) {
     tw_cnet_impl *p = ctx; tw_udp *u = udp_get(p, rep);
