@@ -730,7 +730,10 @@ remain to be connected. The Windows ASan async-call suite passes 33 cases and
 2,811 assertions, covering indirect arguments, both caller memory widths, host
 and result-realloc suspension, own/borrow/future movement, rollback, forced
 teardown and every Runtime allocation failure. The related regression graph
-passes 84/84 in 7.74 s.
+passes 84/84 in 7.74 s. Commit `7f60a88` passed all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37714492087):
+Linux MIR 205/205 in 2.89 s and macOS MIR 205/205 in 3.31 s, including
+the host canonical-call suite with compiled callers and result realloc.
 Qualification must cover scalar/composite/own payloads, unit futures, nested
 endpoints, memory32/64, partial transfers, all cancellation phases, event ordering,
 backpressure, capacity exhaustion, allocation failure, traps and exactly-once
