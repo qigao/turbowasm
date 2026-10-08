@@ -9,10 +9,14 @@ on:
       version:
         type: string
         default: 0.0.0-ci
+      salts_ci_run:
+        type: string
+        default: ''
 
 permissions:
   contents: read
   packages: read
+  actions: read
 
 jobs:
   build:
@@ -102,12 +106,48 @@ jobs:
       - name: Restore latest published SDKs
         shell: pwsh
         run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid '${{ matrix.rid }}' -WithSaltsUtils:${{ matrix.utils && '$true' || '$false' }}
+      - name: Select explicit Salts prerequisite artifact
+        if: inputs.salts_ci_run != ''
+        id: prerequisite
+        shell: pwsh
+        env:
+          SALTS_CI_RUN: ${{ inputs.salts_ci_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SALTS_CI_RUN -notmatch '^[1-9][0-9]+$') { throw 'Salts CI run must be a positive run ID' }
+          $run = gh api "repos/qigao/salts/actions/runs/$env:SALTS_CI_RUN" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read Salts prerequisite run' }
+          if ($run.status -ne 'completed' -or $run.conclusion -ne 'success') { throw 'Salts prerequisite run must have succeeded' }
+          $artifact = if ($env:TURBOWASM_SDK_RID -eq 'macos-arm64') { 'salts-sdk-macos' } else { "salts-sdk-$env:TURBOWASM_SDK_RID" }
+          "artifact=$artifact" >> $env:GITHUB_OUTPUT
+          "SALTS_PREREQUISITE_COMMIT=$($run.head_sha)" >> $env:GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        if: inputs.salts_ci_run != ''
+        with:
+          repository: qigao/salts
+          run-id: ${{ inputs.salts_ci_run }}
+          github-token: ${{ github.token }}
+          name: ${{ steps.prerequisite.outputs.artifact }}
+          path: build/salts-prerequisite-sdk
+      - name: Admit native TCP prerequisite SDK
+        if: inputs.salts_ci_run != ''
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdk = Join-Path $env:GITHUB_WORKSPACE "build/salts-prerequisite-sdk/$env:TURBOWASM_SDK_RID"
+          $manifest = Join-Path $sdk 'salts-sdk-manifest.txt'
+          $config = Join-Path $sdk 'lib/cmake/Salts/SaltsConfig.cmake'
+          if (-not (Test-Path -LiteralPath $manifest) -or -not (Test-Path -LiteralPath $config)) { throw 'Incomplete Salts prerequisite SDK' }
+          if ((Get-Content -LiteralPath $manifest) -notcontains "commit=$env:SALTS_PREREQUISITE_COMMIT") { throw 'Salts SDK commit does not match its CI run' }
+          "SALTS_ROOT=$sdk" >> $env:GITHUB_ENV
+          "SALTS_VERSION=ci-$env:SALTS_PREREQUISITE_COMMIT" >> $env:GITHUB_ENV
+          "TURBOWASM_SOCKET_BACKEND=ON" >> $env:GITHUB_ENV
       - name: Configure, build and install Unix graph
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
-          cmake --preset '${{ matrix.preset }}'
+          cmake --preset '${{ matrix.preset }}' -DTURBOWASM_ENABLE_WASI02_SOCKET_BACKEND="${TURBOWASM_SOCKET_BACKEND:-OFF}"
           cmake --build --preset '${{ matrix.preset }}' --parallel 2
           cmake --build --preset 'install-${{ matrix.preset }}' --parallel 2
       - name: Configure, build and install Windows graph
@@ -117,7 +157,8 @@ jobs:
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%TURBOWASM_VCPKG_ROOT%"
-          cmake --preset "${{ matrix.preset }}"
+          if not defined TURBOWASM_SOCKET_BACKEND set "TURBOWASM_SOCKET_BACKEND=OFF"
+          cmake --preset "${{ matrix.preset }}" -DTURBOWASM_ENABLE_WASI02_SOCKET_BACKEND=%TURBOWASM_SOCKET_BACKEND%
           if errorlevel 1 exit /b 1
           cmake --build --preset "${{ matrix.preset }}" --parallel 2
           if errorlevel 1 exit /b 1

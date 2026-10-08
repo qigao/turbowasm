@@ -96,6 +96,35 @@ static turbowasm_status new_resource(
     return status;
 }
 
+turbowasm_status turbowasm_wasi02_stream_reserve(turbowasm_wasi02_streams *streams,
+    turbowasm_wasi02_stream_slot_kind kind, void *owner, uint32_t *handle, uint32_t *index) {
+    turbowasm_value empty = {0}; turbowasm_status status;
+    if (!streams || !streams->initialized || streams->data_busy || !owner || !handle || !index ||
+        (kind != TURBOWASM_WASI02_STREAM_SLOT_INPUT && kind != TURBOWASM_WASI02_STREAM_SLOT_OUTPUT))
+        return TURBOWASM_INVALID_ARGUMENT;
+    *handle = 0;
+    if (!reserve_slot(streams, kind, empty, index)) return TURBOWASM_OUT_OF_MEMORY;
+    status = turbowasm_component_handle_insert(&streams->resources,
+        TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION, owner, handle);
+    if (status != TURBOWASM_OK) release_slot(streams, &streams->slots[*index]);
+    return status;
+}
+turbowasm_status turbowasm_wasi02_stream_publish(turbowasm_wasi02_streams *streams,
+    uint32_t handle, uint32_t index, void *owner, turbowasm_value provider_rep) {
+    turbowasm_value rep = {0}; turbowasm_status status;
+    rep.kind = TURBOWASM_VALUE_I32; rep.as.i32 = (int32_t)(index + 1u);
+    status = turbowasm_component_resource_publish(&streams->resources, handle, owner,
+        identity_for_kind(streams->slots[index].kind), rep);
+    if (status == TURBOWASM_OK) streams->slots[index].provider_rep = provider_rep;
+    return status;
+}
+void turbowasm_wasi02_stream_cancel(turbowasm_wasi02_streams *streams, uint32_t handle, uint32_t index) {
+    void *owner;
+    if (handle && turbowasm_component_handle_remove(&streams->resources, handle,
+        TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION, &owner) == TURBOWASM_OK)
+        release_slot(streams, &streams->slots[index]);
+}
+
 static turbowasm_status slot_from_resource(
     turbowasm_wasi02_streams *streams,
     uint32_t resource,
@@ -275,7 +304,7 @@ turbowasm_status turbowasm_wasi02_streams_destroy(
         return TURBOWASM_INVALID_ARGUMENT;
     if (!streams->initialized)
         return TURBOWASM_OK;
-    if (streams->resources.live_count != 0u ||
+    if (streams->data_busy || streams->resources.live_count != 0u ||
         streams->free_count != streams->capacity)
         return TURBOWASM_INVALID_ARGUMENT;
 
@@ -329,7 +358,7 @@ turbowasm_status turbowasm_wasi02_stream_resource_drop(
     };
     size_t i;
 
-    if (streams == NULL || !streams->initialized)
+    if (streams == NULL || !streams->initialized || streams->data_busy)
         return TURBOWASM_INVALID_ARGUMENT;
 
     for (i = 0u; i < sizeof(kinds) / sizeof(kinds[0]); ++i) {
@@ -381,107 +410,83 @@ static turbowasm_status make_result_u64_ok(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status make_result_bytes_ok(
-    const uint8_t *data,
-    size_t size,
-    turbowasm_wasi02_value *out) {
-    turbowasm_wasi02_value *result_payload = NULL;
-    turbowasm_wasi02_value *items = NULL;
-    size_t i;
+enum { TW_WASI02_READ_CHUNK_BYTES = 65536u };
 
-    if (out == NULL || (size != 0u && data == NULL))
-        return TURBOWASM_INVALID_ARGUMENT;
+/* All value storage and the possible error resource are reserved before a
+ * provider may consume bytes. Canonical reservations reject ordinary resource
+ * operations; rollback does not invoke a provider destructor. */
+typedef struct stream_result_reservation {
+    turbowasm_wasi02_streams *streams;
+    turbowasm_wasi02_value *payload, *items, *variant, *resource_value;
+    uint32_t error_handle, error_slot;
+    bool slot_reserved;
+} stream_result_reservation;
 
-    result_payload = (turbowasm_wasi02_value *)
-        turbowasm_rt_calloc(1u, sizeof(*result_payload));
-    if (result_payload == NULL)
-        return TURBOWASM_OUT_OF_MEMORY;
-
-    if (size != 0u) {
-        if (size > SIZE_MAX / sizeof(*items)) {
-            turbowasm_rt_free(result_payload);
-            return TURBOWASM_OUT_OF_MEMORY;
-        }
-        items = (turbowasm_wasi02_value *)turbowasm_rt_calloc(
-            size, sizeof(*items));
-        if (items == NULL) {
-            turbowasm_rt_free(result_payload);
-            return TURBOWASM_OUT_OF_MEMORY;
-        }
+static void stream_result_cancel(stream_result_reservation *r) {
+    if (r->error_handle) {
+        void *object;
+        (void)turbowasm_component_handle_remove(&r->streams->resources, r->error_handle,
+            TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION, &object);
     }
+    if (r->slot_reserved) release_slot(r->streams, &r->streams->slots[r->error_slot]);
+    turbowasm_rt_free(r->payload); turbowasm_rt_free(r->items);
+    turbowasm_rt_free(r->variant); turbowasm_rt_free(r->resource_value);
+    memset(r, 0, sizeof(*r));
+}
 
-    for (i = 0u; i < size; ++i) {
-        items[i].kind = TURBOWASM_WASI02_VALUE_U8;
-        items[i].as.u8 = data[i];
+static turbowasm_status stream_result_reserve(turbowasm_wasi02_streams *streams,
+    bool payload, size_t bytes, stream_result_reservation *r) {
+    turbowasm_status status;
+    turbowasm_value empty = {0};
+    memset(r, 0, sizeof(*r)); r->streams = streams;
+    if (bytes > SIZE_MAX / sizeof(*r->items)) return TURBOWASM_OUT_OF_MEMORY;
+    if (payload) r->payload = turbowasm_rt_calloc(1, sizeof(*r->payload));
+    if (bytes) r->items = turbowasm_rt_calloc(bytes, sizeof(*r->items));
+    r->variant = turbowasm_rt_calloc(1, sizeof(*r->variant));
+    if (!r->variant || (payload && !r->payload) || (bytes && !r->items)) {
+        stream_result_cancel(r); return TURBOWASM_OUT_OF_MEMORY;
     }
-
-    result_payload->kind = TURBOWASM_WASI02_VALUE_LIST;
-    result_payload->as.list.items = items;
-    result_payload->as.list.count = size;
-
-    memset(out, 0, sizeof(*out));
-    out->kind = TURBOWASM_WASI02_VALUE_RESULT;
-    out->as.result.value = result_payload;
+    if (streams->provider.error_drop && streams->provider.error_debug) {
+        r->resource_value = turbowasm_rt_calloc(1, sizeof(*r->resource_value));
+        if (!r->resource_value || !reserve_slot(streams, TURBOWASM_WASI02_STREAM_SLOT_ERROR, empty, &r->error_slot)) {
+            stream_result_cancel(r); return TURBOWASM_OUT_OF_MEMORY;
+        }
+        r->slot_reserved = true;
+        status = turbowasm_component_handle_insert(&streams->resources,
+            TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION, r, &r->error_handle);
+        if (status != TURBOWASM_OK) { stream_result_cancel(r); return status; }
+    }
     return TURBOWASM_OK;
 }
 
-static turbowasm_status make_stream_error(
-    turbowasm_wasi02_streams *streams,
-    const turbowasm_wasi02_stream_error *error,
-    turbowasm_wasi02_value *out) {
-    turbowasm_wasi02_value *variant = NULL;
-    turbowasm_wasi02_value *resource_value = NULL;
-    uint32_t error_resource = 0u;
+static turbowasm_status stream_result_finish(stream_result_reservation *r,
+    const turbowasm_wasi02_stream_error *error, turbowasm_wasi02_value *out) {
     turbowasm_status status;
-
-    if (streams == NULL || error == NULL || out == NULL ||
-        error->kind == TURBOWASM_WASI02_STREAM_ERROR_NONE)
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    variant = (turbowasm_wasi02_value *)turbowasm_rt_calloc(
-        1u, sizeof(*variant));
-    if (variant == NULL)
-        return TURBOWASM_OUT_OF_MEMORY;
-    variant->kind = TURBOWASM_WASI02_VALUE_VARIANT;
-
-    if (error->kind ==
-        TURBOWASM_WASI02_STREAM_ERROR_LAST_OPERATION_FAILED) {
-        status = new_resource(
-            streams,
-            TURBOWASM_WASI02_STREAM_SLOT_ERROR,
-            error->error_rep,
-            &error_resource);
-        if (status != TURBOWASM_OK) {
-            turbowasm_rt_free(variant);
-            return status;
-        }
-
-        resource_value = (turbowasm_wasi02_value *)
-            turbowasm_rt_calloc(1u, sizeof(*resource_value));
-        if (resource_value == NULL) {
-            (void)turbowasm_wasi02_stream_resource_drop(
-                streams, error_resource);
-            turbowasm_rt_free(variant);
-            return TURBOWASM_OUT_OF_MEMORY;
-        }
-
-        resource_value->kind = TURBOWASM_WASI02_VALUE_RESOURCE;
-        resource_value->as.resource = error_resource;
-        variant->as.variant.case_index = 0u;
-        variant->as.variant.value = resource_value;
-    } else if (error->kind ==
-               TURBOWASM_WASI02_STREAM_ERROR_CLOSED) {
-        variant->as.variant.case_index = 1u;
-    } else {
-        turbowasm_rt_free(variant);
-        return TURBOWASM_INVALID_ARGUMENT;
-    }
-
-    memset(out, 0, sizeof(*out));
-    out->kind = TURBOWASM_WASI02_VALUE_RESULT;
-    out->as.result.is_error = true;
-    out->as.result.value = variant;
-    return TURBOWASM_OK;
+    memset(out, 0, sizeof(*out)); out->kind = TURBOWASM_WASI02_VALUE_RESULT;
+    if (error->kind == TURBOWASM_WASI02_STREAM_ERROR_NONE) {
+        out->as.result.value = r->payload; r->payload = NULL; r->items = NULL;
+    } else if (error->kind == TURBOWASM_WASI02_STREAM_ERROR_CLOSED ||
+               error->kind == TURBOWASM_WASI02_STREAM_ERROR_LAST_OPERATION_FAILED) {
+        r->variant->kind = TURBOWASM_WASI02_VALUE_VARIANT;
+        if (error->kind == TURBOWASM_WASI02_STREAM_ERROR_LAST_OPERATION_FAILED) {
+            turbowasm_value rep = {0};
+            if (!r->error_handle) { stream_result_cancel(r); return TURBOWASM_TRAPPED; }
+            rep.kind = TURBOWASM_VALUE_I32; rep.as.i32 = (int32_t)(r->error_slot + 1u);
+            status = turbowasm_component_resource_publish(&r->streams->resources, r->error_handle, r,
+                TW_WASI02_IO_ERROR_ID, rep);
+            if (status != TURBOWASM_OK) {
+                r->streams->provider.error_drop(r->streams->provider.context, error->error_rep);
+                stream_result_cancel(r); return status;
+            }
+            r->streams->slots[r->error_slot].provider_rep = error->error_rep;
+            r->resource_value->kind = TURBOWASM_WASI02_VALUE_RESOURCE;
+            r->resource_value->as.resource = r->error_handle;
+            r->variant->as.variant.value = r->resource_value; r->resource_value = NULL;
+            r->error_handle = 0; r->slot_reserved = false;
+        } else r->variant->as.variant.case_index = 1;
+        out->as.result.is_error = true; out->as.result.value = r->variant; r->variant = NULL;
+    } else { stream_result_cancel(r); return TURBOWASM_TRAPPED; }
+    stream_result_cancel(r); return TURBOWASM_OK;
 }
 
 static turbowasm_status copy_debug_string(
@@ -506,7 +511,7 @@ static turbowasm_status copy_debug_string(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status call_input_read(
+static turbowasm_status call_input_read_unprotected(
     turbowasm_wasi02_streams *streams,
     const turbowasm_wasi02_value *arguments,
     turbowasm_wasi02_value *out) {
@@ -516,6 +521,8 @@ static turbowasm_status call_input_read(
     uint64_t max_bytes = arguments[1].as.u64;
     turbowasm_wasi02_stream_error error = {0};
     turbowasm_status status;
+    stream_result_reservation reserved;
+    if (max_bytes > TW_WASI02_READ_CHUNK_BYTES) max_bytes = TW_WASI02_READ_CHUNK_BYTES;
 
     if (streams->provider.input_read == NULL)
         return TURBOWASM_UNSUPPORTED;
@@ -527,6 +534,8 @@ static turbowasm_status call_input_read(
     if (status != TURBOWASM_OK)
         return status;
 
+    status = stream_result_reserve(streams, true, (size_t)max_bytes, &reserved);
+    if (status != TURBOWASM_OK) return status;
     status = streams->provider.input_read(
         streams->provider.context,
         slot->provider_rep,
@@ -534,18 +543,30 @@ static turbowasm_status call_input_read(
         &data,
         &size,
         &error);
-    if (status != TURBOWASM_OK)
-        return status;
-    if (error.kind != TURBOWASM_WASI02_STREAM_ERROR_NONE)
-        return make_stream_error(streams, &error, out);
-    if ((uint64_t)size > max_bytes ||
-        (size != 0u && data == NULL))
-        return TURBOWASM_TRAPPED;
-
-    return make_result_bytes_ok(data, size, out);
+    if (status != TURBOWASM_OK) { stream_result_cancel(&reserved); return status; }
+    if (error.kind == TURBOWASM_WASI02_STREAM_ERROR_NONE) {
+        if ((uint64_t)size > max_bytes || (size != 0u && data == NULL)) {
+            stream_result_cancel(&reserved); return TURBOWASM_TRAPPED;
+        }
+        for (size_t i = 0; i < size; ++i) { reserved.items[i].kind = TURBOWASM_WASI02_VALUE_U8; reserved.items[i].as.u8 = data[i]; }
+        reserved.payload->kind = TURBOWASM_WASI02_VALUE_LIST;
+        reserved.payload->as.list.items = reserved.items; reserved.payload->as.list.count = size;
+    }
+    return stream_result_finish(&reserved, &error, out);
 }
 
-static turbowasm_status call_input_skip(
+static turbowasm_status call_input_read(turbowasm_wasi02_streams *streams, const turbowasm_wasi02_value *arguments, turbowasm_wasi02_value *out) {
+    turbowasm_status status;
+    if (streams->data_busy) return TURBOWASM_INVALID_ARGUMENT;
+    streams->data_busy = true;
+    status = turbowasm_component_resource_lend_acquire(&streams->resources, arguments[0].as.resource, TW_WASI02_INPUT_STREAM_ID);
+    if (status != TURBOWASM_OK) { streams->data_busy = false; return status; }
+    status = call_input_read_unprotected(streams, arguments, out);
+    (void)turbowasm_component_resource_lend_release(&streams->resources, arguments[0].as.resource, TW_WASI02_INPUT_STREAM_ID);
+    streams->data_busy = false; return status;
+}
+
+static turbowasm_status call_input_skip_unprotected(
     turbowasm_wasi02_streams *streams,
     const turbowasm_wasi02_value *arguments,
     turbowasm_wasi02_value *out) {
@@ -554,6 +575,7 @@ static turbowasm_status call_input_skip(
     uint64_t max_bytes = arguments[1].as.u64;
     turbowasm_wasi02_stream_error error = {0};
     turbowasm_status status;
+    stream_result_reservation reserved;
 
     if (streams->provider.input_skip == NULL)
         return TURBOWASM_UNSUPPORTED;
@@ -565,22 +587,34 @@ static turbowasm_status call_input_skip(
     if (status != TURBOWASM_OK)
         return status;
 
+    status = stream_result_reserve(streams, true, 0, &reserved);
+    if (status != TURBOWASM_OK) return status;
     status = streams->provider.input_skip(
         streams->provider.context,
         slot->provider_rep,
         max_bytes,
         &skipped,
         &error);
-    if (status != TURBOWASM_OK)
-        return status;
-    if (error.kind != TURBOWASM_WASI02_STREAM_ERROR_NONE)
-        return make_stream_error(streams, &error, out);
-    if (skipped > max_bytes)
-        return TURBOWASM_TRAPPED;
-    return make_result_u64_ok(skipped, out);
+    if (status != TURBOWASM_OK) { stream_result_cancel(&reserved); return status; }
+    if (error.kind == TURBOWASM_WASI02_STREAM_ERROR_NONE && skipped > max_bytes) {
+        stream_result_cancel(&reserved); return TURBOWASM_TRAPPED;
+    }
+    reserved.payload->kind = TURBOWASM_WASI02_VALUE_U64; reserved.payload->as.u64 = skipped;
+    return stream_result_finish(&reserved, &error, out);
 }
 
-static turbowasm_status call_output_check_write(
+static turbowasm_status call_input_skip(turbowasm_wasi02_streams *streams, const turbowasm_wasi02_value *arguments, turbowasm_wasi02_value *out) {
+    turbowasm_status status;
+    if (streams->data_busy) return TURBOWASM_INVALID_ARGUMENT;
+    streams->data_busy = true;
+    status = turbowasm_component_resource_lend_acquire(&streams->resources, arguments[0].as.resource, TW_WASI02_INPUT_STREAM_ID);
+    if (status != TURBOWASM_OK) { streams->data_busy = false; return status; }
+    status = call_input_skip_unprotected(streams, arguments, out);
+    (void)turbowasm_component_resource_lend_release(&streams->resources, arguments[0].as.resource, TW_WASI02_INPUT_STREAM_ID);
+    streams->data_busy = false; return status;
+}
+
+static turbowasm_status call_output_check_write_unprotected(
     turbowasm_wasi02_streams *streams,
     const turbowasm_wasi02_value *arguments,
     turbowasm_wasi02_value *out) {
@@ -588,6 +622,7 @@ static turbowasm_status call_output_check_write(
     uint64_t permit = 0u;
     turbowasm_wasi02_stream_error error = {0};
     turbowasm_status status;
+    stream_result_reservation reserved;
 
     if (streams->provider.output_check_write == NULL)
         return TURBOWASM_UNSUPPORTED;
@@ -599,22 +634,33 @@ static turbowasm_status call_output_check_write(
     if (status != TURBOWASM_OK)
         return status;
 
+    status = stream_result_reserve(streams, true, 0, &reserved);
+    if (status != TURBOWASM_OK) return status;
     status = streams->provider.output_check_write(
         streams->provider.context,
         slot->provider_rep,
         &permit,
         &error);
-    if (status != TURBOWASM_OK)
-        return status;
+    if (status != TURBOWASM_OK) { stream_result_cancel(&reserved); return status; }
 
     slot->write_permit_valid = false;
     slot->write_permit = 0u;
-    if (error.kind != TURBOWASM_WASI02_STREAM_ERROR_NONE)
-        return make_stream_error(streams, &error, out);
+    if (error.kind == TURBOWASM_WASI02_STREAM_ERROR_NONE) {
+        slot->write_permit = permit; slot->write_permit_valid = true;
+    }
+    reserved.payload->kind = TURBOWASM_WASI02_VALUE_U64; reserved.payload->as.u64 = permit;
+    return stream_result_finish(&reserved, &error, out);
+}
 
-    slot->write_permit = permit;
-    slot->write_permit_valid = true;
-    return make_result_u64_ok(permit, out);
+static turbowasm_status call_output_check_write(turbowasm_wasi02_streams *streams, const turbowasm_wasi02_value *arguments, turbowasm_wasi02_value *out) {
+    turbowasm_status status;
+    if (streams->data_busy) return TURBOWASM_INVALID_ARGUMENT;
+    streams->data_busy = true;
+    status = turbowasm_component_resource_lend_acquire(&streams->resources, arguments[0].as.resource, TW_WASI02_OUTPUT_STREAM_ID);
+    if (status != TURBOWASM_OK) { streams->data_busy = false; return status; }
+    status = call_output_check_write_unprotected(streams, arguments, out);
+    (void)turbowasm_component_resource_lend_release(&streams->resources, arguments[0].as.resource, TW_WASI02_OUTPUT_STREAM_ID);
+    streams->data_busy = false; return status;
 }
 
 static turbowasm_status list_to_bytes(
@@ -651,7 +697,7 @@ static turbowasm_status list_to_bytes(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status call_output_write(
+static turbowasm_status call_output_write_unprotected(
     turbowasm_wasi02_streams *streams,
     const turbowasm_wasi02_value *arguments,
     bool zeroes,
@@ -662,6 +708,7 @@ static turbowasm_status call_output_write(
     size_t size = 0u;
     uint64_t requested;
     turbowasm_status status;
+    stream_result_reservation reserved;
 
     status = slot_from_resource(
         streams,
@@ -690,6 +737,8 @@ static turbowasm_status call_output_write(
         turbowasm_rt_free(data);
         return TURBOWASM_TRAPPED;
     }
+    status = stream_result_reserve(streams, false, 0, &reserved);
+    if (status != TURBOWASM_OK) { turbowasm_rt_free(data); return status; }
 
     /*
      * check-write permits exactly the next write-like call. Consume it before
@@ -714,20 +763,29 @@ static turbowasm_status call_output_write(
     }
     turbowasm_rt_free(data);
 
-    if (status != TURBOWASM_OK)
-        return status;
-    if (error.kind != TURBOWASM_WASI02_STREAM_ERROR_NONE)
-        return make_stream_error(streams, &error, out);
-    return make_result_unit_ok(out);
+    if (status != TURBOWASM_OK) { stream_result_cancel(&reserved); return status; }
+    return stream_result_finish(&reserved, &error, out);
 }
 
-static turbowasm_status call_output_flush(
+static turbowasm_status call_output_write(turbowasm_wasi02_streams *streams, const turbowasm_wasi02_value *arguments, bool zeroes, turbowasm_wasi02_value *out) {
+    turbowasm_status status;
+    if (streams->data_busy) return TURBOWASM_INVALID_ARGUMENT;
+    streams->data_busy = true;
+    status = turbowasm_component_resource_lend_acquire(&streams->resources, arguments[0].as.resource, TW_WASI02_OUTPUT_STREAM_ID);
+    if (status != TURBOWASM_OK) { streams->data_busy = false; return status; }
+    status = call_output_write_unprotected(streams, arguments, zeroes, out);
+    (void)turbowasm_component_resource_lend_release(&streams->resources, arguments[0].as.resource, TW_WASI02_OUTPUT_STREAM_ID);
+    streams->data_busy = false; return status;
+}
+
+static turbowasm_status call_output_flush_unprotected(
     turbowasm_wasi02_streams *streams,
     const turbowasm_wasi02_value *arguments,
     turbowasm_wasi02_value *out) {
     turbowasm_wasi02_stream_slot *slot;
     turbowasm_wasi02_stream_error error = {0};
     turbowasm_status status;
+    stream_result_reservation reserved;
 
     if (streams->provider.output_flush == NULL)
         return TURBOWASM_UNSUPPORTED;
@@ -739,17 +797,27 @@ static turbowasm_status call_output_flush(
     if (status != TURBOWASM_OK)
         return status;
 
+    status = stream_result_reserve(streams, false, 0, &reserved);
+    if (status != TURBOWASM_OK) return status;
     slot->write_permit_valid = false;
     slot->write_permit = 0u;
     status = streams->provider.output_flush(
         streams->provider.context,
         slot->provider_rep,
         &error);
-    if (status != TURBOWASM_OK)
-        return status;
-    if (error.kind != TURBOWASM_WASI02_STREAM_ERROR_NONE)
-        return make_stream_error(streams, &error, out);
-    return make_result_unit_ok(out);
+    if (status != TURBOWASM_OK) { stream_result_cancel(&reserved); return status; }
+    return stream_result_finish(&reserved, &error, out);
+}
+
+static turbowasm_status call_output_flush(turbowasm_wasi02_streams *streams, const turbowasm_wasi02_value *arguments, turbowasm_wasi02_value *out) {
+    turbowasm_status status;
+    if (streams->data_busy) return TURBOWASM_INVALID_ARGUMENT;
+    streams->data_busy = true;
+    status = turbowasm_component_resource_lend_acquire(&streams->resources, arguments[0].as.resource, TW_WASI02_OUTPUT_STREAM_ID);
+    if (status != TURBOWASM_OK) { streams->data_busy = false; return status; }
+    status = call_output_flush_unprotected(streams, arguments, out);
+    (void)turbowasm_component_resource_lend_release(&streams->resources, arguments[0].as.resource, TW_WASI02_OUTPUT_STREAM_ID);
+    streams->data_busy = false; return status;
 }
 
 static turbowasm_status create_subscription_resource(
@@ -1273,147 +1341,79 @@ static void clear_output_write_permit(
     slot->write_permit = 0u;
 }
 
-static turbowasm_status call_output_splice(
+static turbowasm_status call_output_splice_unprotected(
     turbowasm_wasi02_streams *streams,
     const turbowasm_wasi02_value *arguments,
     turbowasm_wasi02_value *out) {
-    turbowasm_wasi02_stream_slot *output_slot;
-    turbowasm_wasi02_stream_slot *input_slot;
-    turbowasm_wasi02_value check_args[1] = {{0}};
+    turbowasm_wasi02_stream_slot *output_slot, *input_slot;
     turbowasm_wasi02_value check_result = {0};
-    turbowasm_wasi02_value read_args[2] = {{0}};
-    turbowasm_wasi02_value read_result = {0};
-    turbowasm_wasi02_value write_args[2] = {{0}};
-    turbowasm_wasi02_value write_result = {0};
-    turbowasm_wasi02_value *read_bytes;
-    uint64_t permit = 0u;
-    uint64_t requested = arguments[2].as.u64;
-    uint64_t read_limit;
-    uint64_t transferred;
+    turbowasm_wasi02_stream_error error = {0};
+    stream_result_reservation reserved;
+    const uint8_t *borrowed = NULL;
+    uint8_t *scratch = NULL;
+    size_t size = 0;
+    uint64_t permit = 0, limit;
     bool is_error = false;
     turbowasm_status status;
 
-    /*
-     * Splice is a pure composition of the already-qualified operations. Check
-     * the whole provider/resource boundary before the first provider call so
-     * an unsupported adapter cannot leave a hidden check-write permit behind.
-     */
-    if (streams->provider.output_check_write == NULL ||
-        streams->provider.input_read == NULL ||
-        streams->provider.output_write == NULL)
+    if (!streams->provider.output_check_write || !streams->provider.input_read || !streams->provider.output_write)
         return TURBOWASM_UNSUPPORTED;
-
-    status = slot_from_resource(
-        streams,
-        arguments[0].as.resource,
-        TURBOWASM_WASI02_STREAM_SLOT_OUTPUT,
-        &output_slot);
-    if (status != TURBOWASM_OK)
-        return status;
-    status = slot_from_resource(
-        streams,
-        arguments[1].as.resource,
-        TURBOWASM_WASI02_STREAM_SLOT_INPUT,
-        &input_slot);
-    if (status != TURBOWASM_OK)
-        return status;
-    (void)input_slot;
-
-    check_args[0] = arguments[0];
-    status = call_output_check_write(
-        streams, check_args, &check_result);
-    if (status != TURBOWASM_OK)
-        return status;
-    if (!stream_result_u64_state(
-            &check_result, &is_error, &permit)) {
+    status = slot_from_resource(streams, arguments[0].as.resource, TURBOWASM_WASI02_STREAM_SLOT_OUTPUT, &output_slot);
+    if (status != TURBOWASM_OK) return status;
+    status = slot_from_resource(streams, arguments[1].as.resource, TURBOWASM_WASI02_STREAM_SLOT_INPUT, &input_slot);
+    if (status != TURBOWASM_OK) return status;
+    status = call_output_check_write_unprotected(streams, arguments, &check_result);
+    if (status != TURBOWASM_OK) return status;
+    if (!stream_result_u64_state(&check_result, &is_error, &permit)) {
         turbowasm_wasi02_value_destroy(&check_result);
-        clear_output_write_permit(output_slot);
-        return TURBOWASM_MALFORMED_MODULE;
+        clear_output_write_permit(output_slot); return TURBOWASM_MALFORMED_MODULE;
     }
-    if (is_error) {
-        *out = check_result;
-        return TURBOWASM_OK;
-    }
+    if (is_error) { *out = check_result; return TURBOWASM_OK; }
     turbowasm_wasi02_value_destroy(&check_result);
+    limit = permit < arguments[2].as.u64 ? permit : arguments[2].as.u64;
+    if (limit > TW_WASI02_READ_CHUNK_BYTES) limit = TW_WASI02_READ_CHUNK_BYTES;
 
-    read_limit = permit < requested ? permit : requested;
-    if (read_limit == 0u) {
-        /*
-         * No transfer is possible. Avoid touching the input stream and do not
-         * leak splice's internal check-write permit to a later external write.
-         */
-        clear_output_write_permit(output_slot);
-        return make_result_u64_ok(0u, out);
+    /* Reserve the scalar result, possible error carrier and byte copy before
+     * consuming input. Splice may return a short transfer under the WIT contract.
+     * No Runtime allocation follows read or successful write admission. */
+    status = stream_result_reserve(streams, true, 0, &reserved);
+    if (status != TURBOWASM_OK) { clear_output_write_permit(output_slot); return status; }
+    if (limit) scratch = turbowasm_rt_malloc((size_t)limit);
+    if (limit && !scratch) {
+        stream_result_cancel(&reserved); clear_output_write_permit(output_slot); return TURBOWASM_OUT_OF_MEMORY;
     }
+    clear_output_write_permit(output_slot);
+    if (limit) status = streams->provider.input_read(streams->provider.context, input_slot->provider_rep,
+        limit, &borrowed, &size, &error);
+    if (status == TURBOWASM_OK && error.kind == TURBOWASM_WASI02_STREAM_ERROR_NONE) {
+        if (size > limit || (size && !borrowed)) status = TURBOWASM_TRAPPED;
+        else if (size) {
+            memcpy(scratch, borrowed, size);
+            status = streams->provider.output_write(streams->provider.context, output_slot->provider_rep, scratch, size, &error);
+        }
+    }
+    turbowasm_rt_free(scratch);
+    if (status != TURBOWASM_OK) { stream_result_cancel(&reserved); return status; }
+    reserved.payload->kind = TURBOWASM_WASI02_VALUE_U64;
+    reserved.payload->as.u64 = (uint64_t)size;
+    return stream_result_finish(&reserved, &error, out);
+}
 
-    read_args[0] = arguments[1];
-    read_args[1].kind = TURBOWASM_WASI02_VALUE_U64;
-    read_args[1].as.u64 = read_limit;
-
-    status = call_input_read(
-        streams, read_args, &read_result);
+static turbowasm_status call_output_splice(turbowasm_wasi02_streams *streams, const turbowasm_wasi02_value *arguments, turbowasm_wasi02_value *out) {
+    turbowasm_status status;
+    if (streams->data_busy) return TURBOWASM_INVALID_ARGUMENT;
+    streams->data_busy = true;
+    status = turbowasm_component_resource_lend_acquire(&streams->resources, arguments[0].as.resource, TW_WASI02_OUTPUT_STREAM_ID);
+    if (status != TURBOWASM_OK) { streams->data_busy = false; return status; }
+    status = turbowasm_component_resource_lend_acquire(&streams->resources, arguments[1].as.resource, TW_WASI02_INPUT_STREAM_ID);
     if (status != TURBOWASM_OK) {
-        clear_output_write_permit(output_slot);
-        return status;
+        (void)turbowasm_component_resource_lend_release(&streams->resources, arguments[0].as.resource, TW_WASI02_OUTPUT_STREAM_ID);
+        streams->data_busy = false; return status;
     }
-    if (!stream_result_error_state(
-            &read_result, &is_error)) {
-        turbowasm_wasi02_value_destroy(&read_result);
-        clear_output_write_permit(output_slot);
-        return TURBOWASM_MALFORMED_MODULE;
-    }
-    if (is_error) {
-        clear_output_write_permit(output_slot);
-        *out = read_result;
-        return TURBOWASM_OK;
-    }
-
-    read_bytes = read_result.as.result.value;
-    if (read_bytes == NULL ||
-        read_bytes->kind != TURBOWASM_WASI02_VALUE_LIST ||
-        (read_bytes->as.list.count != 0u &&
-         read_bytes->as.list.items == NULL)) {
-        turbowasm_wasi02_value_destroy(&read_result);
-        clear_output_write_permit(output_slot);
-        return TURBOWASM_MALFORMED_MODULE;
-    }
-    transferred = (uint64_t)read_bytes->as.list.count;
-    if (transferred > read_limit) {
-        turbowasm_wasi02_value_destroy(&read_result);
-        clear_output_write_permit(output_slot);
-        return TURBOWASM_TRAPPED;
-    }
-    if (transferred == 0u) {
-        turbowasm_wasi02_value_destroy(&read_result);
-        clear_output_write_permit(output_slot);
-        return make_result_u64_ok(0u, out);
-    }
-
-    write_args[0] = arguments[0];
-    write_args[1] = *read_bytes;
-    status = call_output_write(
-        streams, write_args, false, &write_result);
-    if (status != TURBOWASM_OK) {
-        turbowasm_wasi02_value_destroy(&read_result);
-        clear_output_write_permit(output_slot);
-        return status;
-    }
-    if (!stream_result_error_state(
-            &write_result, &is_error)) {
-        turbowasm_wasi02_value_destroy(&write_result);
-        turbowasm_wasi02_value_destroy(&read_result);
-        clear_output_write_permit(output_slot);
-        return TURBOWASM_MALFORMED_MODULE;
-    }
-
-    turbowasm_wasi02_value_destroy(&read_result);
-    if (is_error) {
-        *out = write_result;
-        return TURBOWASM_OK;
-    }
-
-    turbowasm_wasi02_value_destroy(&write_result);
-    return make_result_u64_ok(transferred, out);
+    status = call_output_splice_unprotected(streams, arguments, out);
+    (void)turbowasm_component_resource_lend_release(&streams->resources, arguments[1].as.resource, TW_WASI02_INPUT_STREAM_ID);
+    (void)turbowasm_component_resource_lend_release(&streams->resources, arguments[0].as.resource, TW_WASI02_OUTPUT_STREAM_ID);
+    streams->data_busy = false; return status;
 }
 
 static turbowasm_status blocking_splice_preflight(
@@ -1669,7 +1669,7 @@ turbowasm_status turbowasm_wasi02_streams_call_with_host(
     size_t i;
     turbowasm_status status;
 
-    if (streams == NULL || !streams->initialized ||
+    if (streams == NULL || !streams->initialized || streams->data_busy ||
         interface_name == NULL || function_name == NULL ||
         out_result == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -2393,7 +2393,7 @@ static turbowasm_status wasi02_streams_resource_drop(
     turbowasm_wasi02_stream_slot *slot;
     uint64_t internal_identity;
 
-    if (streams == NULL || !streams->initialized)
+    if (streams == NULL || !streams->initialized || streams->data_busy)
         return TURBOWASM_INVALID_ARGUMENT;
     if (!stream_component_identity_kind(
             streams, resource_identity, &slot_kind))

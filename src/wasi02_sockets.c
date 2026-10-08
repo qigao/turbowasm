@@ -107,36 +107,7 @@ static turbowasm_status result_resource_ok(
     return result_take_payload(out, false, &payload);
 }
 
-static turbowasm_status make_result_tuple_resources(
-    const uint32_t *resources,
-    size_t count,
-    turbowasm_wasi02_value *out) {
-    turbowasm_wasi02_value tuple = {0};
-    turbowasm_wasi02_value *items = NULL;
-    size_t i;
-    turbowasm_status status;
 
-    if (resources == NULL || out == NULL || count == 0u ||
-        count > SIZE_MAX / sizeof(*items))
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    items = (turbowasm_wasi02_value *)turbowasm_rt_calloc(
-        count, sizeof(*items));
-    if (items == NULL)
-        return TURBOWASM_OUT_OF_MEMORY;
-    for (i = 0u; i < count; ++i) {
-        items[i].kind = TURBOWASM_WASI02_VALUE_RESOURCE;
-        items[i].as.resource = resources[i];
-    }
-
-    tuple.kind = TURBOWASM_WASI02_VALUE_TUPLE;
-    tuple.as.tuple.items = items;
-    tuple.as.tuple.count = count;
-    status = result_take_payload(out, false, &tuple);
-    if (status != TURBOWASM_OK)
-        turbowasm_wasi02_value_destroy(&tuple);
-    return status;
-}
 
 static bool family_valid(
     turbowasm_wasi02_ip_address_family family) {
@@ -403,6 +374,13 @@ static turbowasm_status tcp_slot_get(
         return TURBOWASM_TRAPPED;
     if (!sockets->tcp_slots[index].active)
         return TURBOWASM_TRAPPED;
+    if (sockets->tcp_slots[index].state == TURBOWASM_WASI02_TCP_CONNECTED && sockets->transport_closed) {
+        bool closed = false;
+        status = sockets->transport_closed(sockets->transport_context,
+            sockets->tcp_slots[index].provider_rep, &closed);
+        if (status != TURBOWASM_OK) return status;
+        if (closed) sockets->tcp_slots[index].state = TURBOWASM_WASI02_TCP_CLOSED;
+    }
     *out_slot = &sockets->tcp_slots[index];
     return TURBOWASM_OK;
 }
@@ -433,57 +411,9 @@ static turbowasm_status semantic_result(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status stream_reps_drop(
-    turbowasm_wasi02_sockets *sockets,
-    turbowasm_value input_rep,
-    turbowasm_value output_rep) {
-    if (sockets == NULL || sockets->streams == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (sockets->streams->provider.input_drop != NULL)
-        sockets->streams->provider.input_drop(
-            sockets->streams->provider.context, input_rep);
-    if (sockets->streams->provider.output_drop != NULL)
-        sockets->streams->provider.output_drop(
-            sockets->streams->provider.context, output_rep);
-    return TURBOWASM_OK;
-}
 
-static turbowasm_status wrap_stream_pair(
-    turbowasm_wasi02_sockets *sockets,
-    turbowasm_value input_rep,
-    turbowasm_value output_rep,
-    uint32_t *out_input,
-    uint32_t *out_output) {
-    turbowasm_status status;
 
-    if (sockets == NULL || sockets->streams == NULL ||
-        out_input == NULL || out_output == NULL ||
-        sockets->streams->provider.input_drop == NULL ||
-        sockets->streams->provider.output_drop == NULL)
-        return TURBOWASM_UNSUPPORTED;
 
-    *out_input = 0u;
-    *out_output = 0u;
-    status = turbowasm_wasi02_input_stream_new(
-        sockets->streams, input_rep, out_input);
-    if (status != TURBOWASM_OK) {
-        (void)stream_reps_drop(sockets, input_rep, output_rep);
-        return status;
-    }
-
-    status = turbowasm_wasi02_output_stream_new(
-        sockets->streams, output_rep, out_output);
-    if (status != TURBOWASM_OK) {
-        if (sockets->streams->provider.output_drop != NULL)
-            sockets->streams->provider.output_drop(
-                sockets->streams->provider.context, output_rep);
-        (void)turbowasm_wasi02_stream_resource_drop(
-            sockets->streams, *out_input);
-        *out_input = 0u;
-        return status;
-    }
-    return TURBOWASM_OK;
-}
 
 turbowasm_status turbowasm_wasi02_sockets_init(
     turbowasm_wasi02_sockets *sockets,
@@ -547,7 +477,7 @@ turbowasm_status turbowasm_wasi02_sockets_destroy(
     turbowasm_wasi02_sockets *sockets) {
     if (sockets == NULL || !sockets->initialized)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (sockets->networks.live_count != 0u ||
+    if (sockets->busy || sockets->networks.live_count != 0u ||
         sockets->tcp_resources.live_count != 0u ||
         sockets->tcp_free_count != sockets->tcp_capacity)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -612,7 +542,7 @@ turbowasm_status turbowasm_wasi02_tcp_mark_closed(
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_wasi02_network_drop(
+static turbowasm_status turbowasm_wasi02_network_drop_unprotected(
     turbowasm_wasi02_sockets *sockets,
     uint32_t network_resource) {
     turbowasm_value rep = {0};
@@ -633,7 +563,12 @@ turbowasm_status turbowasm_wasi02_network_drop(
         NULL);
 }
 
-turbowasm_status turbowasm_wasi02_tcp_drop(
+turbowasm_status turbowasm_wasi02_network_drop(turbowasm_wasi02_sockets *sockets, uint32_t network_resource) {
+    if (!sockets || sockets->busy) return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_wasi02_network_drop_unprotected(sockets, network_resource);
+}
+
+static turbowasm_status turbowasm_wasi02_tcp_drop_unprotected(
     turbowasm_wasi02_sockets *sockets,
     uint32_t socket_resource) {
     turbowasm_wasi02_tcp_slot *slot;
@@ -656,6 +591,11 @@ turbowasm_status turbowasm_wasi02_tcp_drop(
         return status;
     release_tcp_slot(sockets, slot);
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_wasi02_tcp_drop(turbowasm_wasi02_sockets *sockets, uint32_t socket_resource) {
+    if (!sockets || sockets->busy) return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_wasi02_tcp_drop_unprotected(sockets, socket_resource);
 }
 
 static turbowasm_status call_instance_network(
@@ -893,63 +833,108 @@ static turbowasm_status call_start_connect(
     return result_unit_ok(out);
 }
 
-static turbowasm_status call_finish_connect(
-    turbowasm_wasi02_sockets *sockets,
-    turbowasm_wasi02_tcp_slot *slot,
-    turbowasm_wasi02_value *out) {
-    turbowasm_wasi02_socket_error error =
-        TURBOWASM_WASI02_SOCKET_ERROR_NONE;
-    turbowasm_value input_rep = {0};
-    turbowasm_value output_rep = {0};
-    uint32_t resources[2] = {0u, 0u};
-    turbowasm_status status;
+typedef struct socket_publication {
+    turbowasm_wasi02_sockets *sockets;
+    turbowasm_wasi02_value *payload, *items;
+    uint32_t handles[3], slots[3];
+    bool committed[3], child;
+} socket_publication;
 
-    if (slot->state != TURBOWASM_WASI02_TCP_CONNECT_IN_PROGRESS)
-        return result_error(
-            out, TURBOWASM_WASI02_SOCKET_ERROR_NOT_IN_PROGRESS);
-    if (sockets->provider.tcp_finish_connect == NULL)
-        return TURBOWASM_UNSUPPORTED;
-    if (sockets->streams == NULL ||
-        sockets->streams->provider.input_drop == NULL ||
-        sockets->streams->provider.output_drop == NULL)
-        return TURBOWASM_UNSUPPORTED;
-
-    status = sockets->provider.tcp_finish_connect(
-        sockets->provider.context,
-        slot->provider_rep,
-        &input_rep,
-        &output_rep,
-        &error);
-    if (status != TURBOWASM_OK)
-        return status;
-    if (!socket_error_valid(error))
-        return TURBOWASM_TRAPPED;
-    if (error == TURBOWASM_WASI02_SOCKET_ERROR_WOULD_BLOCK)
-        return result_error(out, error);
-    if (error != TURBOWASM_WASI02_SOCKET_ERROR_NONE) {
-        slot->state = TURBOWASM_WASI02_TCP_CLOSED;
-        return result_error(out, error);
+static void socket_publication_cancel(socket_publication *r) {
+    turbowasm_wasi02_sockets *s = r->sockets;
+    size_t first = r->child ? 1u : 0u;
+    if (r->child && r->handles[0]) {
+        if (r->committed[0]) (void)turbowasm_wasi02_tcp_drop_unprotected(s, r->handles[0]);
+        else {
+            void *owner;
+            (void)turbowasm_component_handle_remove(&s->tcp_resources, r->handles[0],
+                TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION, &owner);
+            release_tcp_slot(s, &s->tcp_slots[r->slots[0]]);
+        }
     }
-
-    status = wrap_stream_pair(
-        sockets, input_rep, output_rep,
-        &resources[0], &resources[1]);
-    if (status != TURBOWASM_OK) {
-        slot->state = TURBOWASM_WASI02_TCP_CLOSED;
-        return status;
+    for (size_t i = first; i < first + 2u; ++i) if (r->handles[i]) {
+        if (r->committed[i]) (void)turbowasm_wasi02_stream_resource_drop(s->streams, r->handles[i]);
+        else turbowasm_wasi02_stream_cancel(s->streams, r->handles[i], r->slots[i]);
     }
+    turbowasm_rt_free(r->payload); turbowasm_rt_free(r->items); memset(r, 0, sizeof(*r));
+}
 
-    status = make_result_tuple_resources(resources, 2u, out);
-    if (status != TURBOWASM_OK) {
-        (void)turbowasm_wasi02_stream_resource_drop(
-            sockets->streams, resources[0]);
-        (void)turbowasm_wasi02_stream_resource_drop(
-            sockets->streams, resources[1]);
-        slot->state = TURBOWASM_WASI02_TCP_CLOSED;
-        return status;
+static turbowasm_status socket_publication_reserve(turbowasm_wasi02_sockets *s,
+    bool child, turbowasm_wasi02_ip_address_family family, socket_publication *r) {
+    turbowasm_status status; turbowasm_value empty = {0}; size_t first = child ? 1u : 0u;
+    memset(r, 0, sizeof(*r)); r->sockets = s; r->child = child;
+    r->payload = turbowasm_rt_calloc(1, sizeof(*r->payload));
+    r->items = turbowasm_rt_calloc(first + 2u, sizeof(*r->items));
+    if (!r->payload || !r->items) { socket_publication_cancel(r); return TURBOWASM_OUT_OF_MEMORY; }
+    if (child) {
+        if (!reserve_tcp_slot(s, empty, family, TURBOWASM_WASI02_TCP_CONNECTED, &r->slots[0])) {
+            socket_publication_cancel(r); return TURBOWASM_OUT_OF_MEMORY;
+        }
+        status = turbowasm_component_handle_insert(&s->tcp_resources,
+            TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION, r, &r->handles[0]);
+        if (status != TURBOWASM_OK) {
+            release_tcp_slot(s, &s->tcp_slots[r->slots[0]]); socket_publication_cancel(r); return status;
+        }
     }
-    slot->state = TURBOWASM_WASI02_TCP_CONNECTED;
+    for (size_t i = first; i < first + 2u; ++i) {
+        status = turbowasm_wasi02_stream_reserve(s->streams, i == first ?
+            TURBOWASM_WASI02_STREAM_SLOT_INPUT : TURBOWASM_WASI02_STREAM_SLOT_OUTPUT,
+            r, &r->handles[i], &r->slots[i]);
+        if (status != TURBOWASM_OK) { socket_publication_cancel(r); return status; }
+    }
     return TURBOWASM_OK;
+}
+
+static turbowasm_status socket_publication_finish(socket_publication *r,
+    turbowasm_wasi02_socket_error error, turbowasm_value reps[3], turbowasm_wasi02_value *out) {
+    turbowasm_status status = TURBOWASM_OK; size_t first = r->child ? 1u : 0u;
+    turbowasm_wasi02_sockets *s = r->sockets;
+    if (!socket_error_valid(error)) { socket_publication_cancel(r); return TURBOWASM_TRAPPED; }
+    memset(out, 0, sizeof(*out)); out->kind = TURBOWASM_WASI02_VALUE_RESULT;
+    if (error != TURBOWASM_WASI02_SOCKET_ERROR_NONE) {
+        r->payload->kind = TURBOWASM_WASI02_VALUE_ENUM;
+        r->payload->as.enum_index = (uint32_t)error - 1u;
+        out->as.result.is_error = true; out->as.result.value = r->payload; r->payload = NULL;
+        socket_publication_cancel(r); return TURBOWASM_OK;
+    }
+    for (size_t i = 0; i < first + 2u; ++i) {
+        if (i < first) {
+            turbowasm_value rep = {0}; rep.kind = TURBOWASM_VALUE_I32; rep.as.i32 = (int32_t)(r->slots[i] + 1u);
+            status = turbowasm_component_resource_publish(&s->tcp_resources, r->handles[i], r, TW_WASI02_TCP_SOCKET_ID, rep);
+            if (status == TURBOWASM_OK) s->tcp_slots[r->slots[i]].provider_rep = reps[i];
+        } else status = turbowasm_wasi02_stream_publish(s->streams, r->handles[i], r->slots[i], r, reps[i]);
+        if (status != TURBOWASM_OK) {
+            for (size_t j = i; j < first + 2u; ++j) {
+                if (j < first) (void)s->provider.tcp_drop(s->provider.context, reps[j]);
+                else if (j == first) s->streams->provider.input_drop(s->streams->provider.context, reps[j]);
+                else s->streams->provider.output_drop(s->streams->provider.context, reps[j]);
+            }
+            socket_publication_cancel(r); return status;
+        }
+        r->committed[i] = true; r->items[i].kind = TURBOWASM_WASI02_VALUE_RESOURCE; r->items[i].as.resource = r->handles[i];
+    }
+    r->payload->kind = TURBOWASM_WASI02_VALUE_TUPLE;
+    r->payload->as.tuple.items = r->items; r->payload->as.tuple.count = first + 2u;
+    out->as.result.value = r->payload; r->payload = r->items = NULL;
+    memset(r->handles, 0, sizeof(r->handles)); socket_publication_cancel(r); return TURBOWASM_OK;
+}
+
+static turbowasm_status call_finish_connect(turbowasm_wasi02_sockets *sockets,
+    turbowasm_wasi02_tcp_slot *slot, turbowasm_wasi02_value *out) {
+    turbowasm_wasi02_socket_error error = TURBOWASM_WASI02_SOCKET_ERROR_NONE;
+    turbowasm_value reps[3] = {{0}}; socket_publication reserved; turbowasm_status status;
+    if (slot->state != TURBOWASM_WASI02_TCP_CONNECT_IN_PROGRESS)
+        return result_error(out, TURBOWASM_WASI02_SOCKET_ERROR_NOT_IN_PROGRESS);
+    if (!sockets->provider.tcp_finish_connect || !sockets->streams || !sockets->streams->provider.input_drop || !sockets->streams->provider.output_drop)
+        return TURBOWASM_UNSUPPORTED;
+    status = socket_publication_reserve(sockets, false, slot->family, &reserved);
+    if (status != TURBOWASM_OK) return status;
+    status = sockets->provider.tcp_finish_connect(sockets->provider.context, slot->provider_rep, &reps[0], &reps[1], &error);
+    if (status != TURBOWASM_OK) { socket_publication_cancel(&reserved); return status; }
+    if (error != TURBOWASM_WASI02_SOCKET_ERROR_NONE && error != TURBOWASM_WASI02_SOCKET_ERROR_WOULD_BLOCK) slot->state = TURBOWASM_WASI02_TCP_CLOSED;
+    status = socket_publication_finish(&reserved, error, reps, out);
+    if (status == TURBOWASM_OK && error == TURBOWASM_WASI02_SOCKET_ERROR_NONE) slot->state = TURBOWASM_WASI02_TCP_CONNECTED;
+    return status;
 }
 
 static turbowasm_status call_start_listen(
@@ -1012,75 +997,20 @@ static turbowasm_status call_finish_listen(
     return result_unit_ok(out);
 }
 
-static turbowasm_status call_accept(
-    turbowasm_wasi02_sockets *sockets,
-    turbowasm_wasi02_tcp_slot *listener,
-    turbowasm_wasi02_value *out) {
-    turbowasm_wasi02_socket_error error =
-        TURBOWASM_WASI02_SOCKET_ERROR_NONE;
-    turbowasm_value child_rep = {0};
-    turbowasm_value input_rep = {0};
-    turbowasm_value output_rep = {0};
-    uint32_t resources[3] = {0u, 0u, 0u};
-    turbowasm_status status;
-
+static turbowasm_status call_accept(turbowasm_wasi02_sockets *sockets,
+    turbowasm_wasi02_tcp_slot *listener, turbowasm_wasi02_value *out) {
+    turbowasm_wasi02_socket_error error = TURBOWASM_WASI02_SOCKET_ERROR_NONE;
+    turbowasm_value reps[3] = {{0}}; socket_publication reserved; turbowasm_status status;
     if (listener->state != TURBOWASM_WASI02_TCP_LISTENING)
-        return result_error(
-            out, TURBOWASM_WASI02_SOCKET_ERROR_INVALID_STATE);
-    if (sockets->provider.tcp_accept == NULL)
+        return result_error(out, TURBOWASM_WASI02_SOCKET_ERROR_INVALID_STATE);
+    if (!sockets->provider.tcp_accept || !sockets->streams || !sockets->streams->provider.input_drop || !sockets->streams->provider.output_drop)
         return TURBOWASM_UNSUPPORTED;
-    if (sockets->streams == NULL ||
-        sockets->streams->provider.input_drop == NULL ||
-        sockets->streams->provider.output_drop == NULL)
-        return TURBOWASM_UNSUPPORTED;
-
-    status = sockets->provider.tcp_accept(
-        sockets->provider.context,
-        listener->provider_rep,
-        &child_rep,
-        &input_rep,
-        &output_rep,
-        &error);
-    if (status != TURBOWASM_OK)
-        return status;
-    if (!socket_error_valid(error))
-        return TURBOWASM_TRAPPED;
-    if (error != TURBOWASM_WASI02_SOCKET_ERROR_NONE)
-        return result_error(out, error);
-
-    status = tcp_resource_new(
-        sockets,
-        child_rep,
-        listener->family,
-        TURBOWASM_WASI02_TCP_CONNECTED,
-        &resources[0]);
-    if (status != TURBOWASM_OK) {
-        (void)sockets->provider.tcp_drop(
-            sockets->provider.context, child_rep);
-        (void)stream_reps_drop(sockets, input_rep, output_rep);
-        return status;
-    }
-
-    status = wrap_stream_pair(
-        sockets, input_rep, output_rep,
-        &resources[1], &resources[2]);
-    if (status != TURBOWASM_OK) {
-        (void)turbowasm_wasi02_tcp_drop(
-            sockets, resources[0]);
-        return status;
-    }
-
-    status = make_result_tuple_resources(resources, 3u, out);
-    if (status != TURBOWASM_OK) {
-        (void)turbowasm_wasi02_tcp_drop(
-            sockets, resources[0]);
-        (void)turbowasm_wasi02_stream_resource_drop(
-            sockets->streams, resources[1]);
-        (void)turbowasm_wasi02_stream_resource_drop(
-            sockets->streams, resources[2]);
-        return status;
-    }
-    return TURBOWASM_OK;
+    status = socket_publication_reserve(sockets, true, listener->family, &reserved);
+    if (status != TURBOWASM_OK) return status;
+    status = sockets->provider.tcp_accept(sockets->provider.context, listener->provider_rep, &reps[0], &reps[1], &reps[2], &error);
+    if (status != TURBOWASM_OK) { socket_publication_cancel(&reserved); return status; }
+    status = socket_publication_finish(&reserved, error, reps, out);
+    return status;
 }
 
 static bool local_address_state(
@@ -1619,7 +1549,7 @@ static turbowasm_status call_tcp(
     return TURBOWASM_UNSUPPORTED;
 }
 
-turbowasm_status turbowasm_wasi02_sockets_call(
+static turbowasm_status sockets_call_unprotected(
     turbowasm_wasi02_sockets *sockets,
     const char *interface_name,
     const char *function_name,
@@ -1650,6 +1580,22 @@ turbowasm_status turbowasm_wasi02_sockets_call(
             arguments, argument_count, out_result);
 
     return TURBOWASM_UNSUPPORTED;
+}
+
+turbowasm_status turbowasm_wasi02_sockets_call(turbowasm_wasi02_sockets *sockets,
+    const char *iface, const char *function, const turbowasm_wasi02_value *args,
+    size_t count, turbowasm_wasi02_value *out) {
+    turbowasm_status status; bool lent = false;
+    if (!sockets || sockets->busy) return TURBOWASM_INVALID_ARGUMENT;
+    sockets->busy = true;
+    if (iface && strcmp(iface, "tcp") == 0 && args && count && args[0].kind == TURBOWASM_WASI02_VALUE_RESOURCE) {
+        status = turbowasm_component_resource_lend_acquire(&sockets->tcp_resources, args[0].as.resource, TW_WASI02_TCP_SOCKET_ID);
+        if (status != TURBOWASM_OK) { sockets->busy = false; return status; }
+        lent = true;
+    }
+    status = sockets_call_unprotected(sockets, iface, function, args, count, out);
+    if (lent) (void)turbowasm_component_resource_lend_release(&sockets->tcp_resources, args[0].as.resource, TW_WASI02_TCP_SOCKET_ID);
+    sockets->busy = false; return status;
 }
 
 

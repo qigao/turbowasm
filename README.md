@@ -121,11 +121,11 @@ synchronous admission retains its behavior. Component provider linking, nested
 instantiation and broader WASI 0.2 integration remain incomplete; the Component
 Model is not yet complete.
 
-WASI 0.2 TCP has a provider-neutral interface and state machine; its current
-built-in CNet backend covers create/bind/listen/options. Native connect/accept,
-byte-stream I/O and reusable readiness, followed by UDP and DNS, are described
-in the [proposed socket backend design](ARCHITECTURE.md#wasi-socket-backend-and-reusable-io-readiness-proposed).
-These proposed additions are not yet installed APIs.
+WASI 0.2 TCP has a provider-neutral state machine and an optional installed
+CNet backend covering connect/accept, byte streams and reusable readiness.
+See [native TCP setup](#native-wasi-02-tcp) and the
+[socket backend design](ARCHITECTURE.md#wasi-socket-backend-and-reusable-io-readiness).
+UDP and DNS remain separate implementation gates.
 
 MIR admits the complete helper-backed SIMD instruction set, including shuffle,
 lane extraction/replacement, extending/splat/zero loads and lane loads/stores.
@@ -170,6 +170,51 @@ limit returns the Wasm failure sentinel without changing the table.
 Rebuild consumers for the expanded public value/API surface. Artifact schema 2
 retains GC type groups, store requirements and 64-bit table limits; regenerate
 schema 1 artifacts from source.
+
+## Native WASI 0.2 TCP
+
+`TurboWasm::WASI02IO` supplies bounded shared stream/poll readiness.
+`TurboWasm::WASI02CNet` adds externally driven TCP, including connect/accept,
+portable addresses/options, reusable subscriptions, streams and half-close.
+Its public header is `<turbowasm/wasi02_cnet.h>`; the provider-neutral facade
+and Runtime retain their existing dependency boundaries.
+
+Enable `TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND=ON` with a Salts SDK exporting
+`cnet_connection_preserve_send_on_eof`. The prerequisite is implemented on
+[the Salts prerequisite branch](https://github.com/qigao/salts/tree/codex/wasi-socket-prerequisites)
+and qualified by [Salts CI](https://github.com/qigao/salts/actions/runs/37777155164).
+The option defaults off until an SDK carrying this capability is selected;
+requesting it with an unsuitable SDK fails configuration.
+
+Initialize zeroed I/O and CNet owners, then compose the facade with
+`turbowasm_wasi02_cnet_wasi02_init` and create the Component instance with
+`turbowasm_wasi02_component_instance_create_async`. CNet config helpers set
+finite bounds and deny bind/connect/accept by default; explicitly enable the
+required operations and supply an optional additional address policy.
+
+One host owner drives progress in this order:
+
+1. `turbowasm_wasi02_cnet_advance` and `..._next_timeout` prepare pending work.
+2. Observe the caller-owned NativeIO backend once; route every completion with
+   `..._route_completion`. Forward unconsumed completions to their actual owner.
+3. Advance CNet and the shared I/O domain, then explicitly resume yielded calls.
+
+Drop calls/instances and facade resources, request adapter shutdown, continue
+observing/routing until `..._shutdown_poll` reports complete, then destroy the
+adapter and I/O domain before destroying the backend. Child streams remain
+usable after their parent socket is dropped; poll aliases retain readiness
+metadata and dropping a subscription does not cancel transport.
+
+The installed TCP consumer test performs real async WIT ping/pong through
+memory32 and memory64, plus IPv4/IPv6, backpressure, flush, inherited options,
+half-close and retained-carrier shutdown. UDP and DNS are separate planned
+gates and currently have no native public implementation. See
+[the socket design](ARCHITECTURE.md#wasi-socket-backend-and-reusable-io-readiness).
+
+For branch SDK qualification, dispatch TurboWasm CI with `salts_ci_run` set to
+a successful Salts SDK preparation run. CI verifies the artifact's source
+commit, enables the TCP target, builds the full native matrix and runs the
+existing installed-package tests. Ordinary CI continues selecting published SDKs.
 
 ## Dependency boundary
 

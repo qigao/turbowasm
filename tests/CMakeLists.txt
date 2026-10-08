@@ -491,7 +491,19 @@ if(TARGET turbowasm_wasi02_sockets_core)
            COMMAND turbowasm_wasi02_tcp_state_test)
 endif()
 
+if(TARGET turbowasm_wasi02_io)
+    add_executable(turbowasm_wasi02_io_test wasi02_io_test.c)
+    target_include_directories(turbowasm_wasi02_io_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(turbowasm_wasi02_io_test PRIVATE turbowasm_wasi02_io Salts::TinyTest)
+    add_test(NAME turbowasm_wasi02_io_test COMMAND turbowasm_wasi02_io_test)
+endif()
 if(TARGET turbowasm_wasi02_cnet_core)
+  if(TARGET TurboWasm::WASI02CNet)
+  add_executable(turbowasm_wasi02_cnet_tcp_test wasi02_cnet_tcp_test.c)
+  target_include_directories(turbowasm_wasi02_cnet_tcp_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_wasi02_cnet_tcp_test PRIVATE TurboWasm::WASI02CNet Salts::TinyTest)
+  add_test(NAME turbowasm_wasi02_cnet_tcp_test COMMAND turbowasm_wasi02_cnet_tcp_test)
+  endif()
   add_executable(turbowasm_wasi02_cnet_control_test
     wasi02_cnet_control_test.c)
   target_link_libraries(turbowasm_wasi02_cnet_control_test
@@ -519,10 +531,15 @@ if(TARGET turbowasm_wasi02_cnet_core)
   endif()
   # Preserve the launch-time toolchain/sanitizer path. ENVIRONMENT is a CMake
   # list, so embedding a Windows PATH there splits it into separate entries.
-  set_tests_properties(turbowasm_wasi02_cnet_control_test PROPERTIES
+  set(_turbowasm_cnet_tests turbowasm_wasi02_cnet_control_test)
+  if(TARGET turbowasm_wasi02_cnet_tcp_test)
+    list(APPEND _turbowasm_cnet_tests turbowasm_wasi02_cnet_tcp_test)
+  endif()
+  set_tests_properties(${_turbowasm_cnet_tests} PROPERTIES
     ENVIRONMENT_MODIFICATION
       "${_turbowasm_cnet_runtime_path}=path_list_prepend:${SALTS_ROOT_PATH}/lib;${_turbowasm_cnet_runtime_path}=path_list_prepend:${SALTS_ROOT_PATH}/bin;${_turbowasm_cnet_runtime_path}=path_list_prepend:$<TARGET_FILE_DIR:Salts::CNet>")
   unset(_turbowasm_cnet_runtime_path)
+  unset(_turbowasm_cnet_tests)
 endif()
 
 set(_turbowasm_wasi02_fixture_dir
@@ -642,6 +659,10 @@ if(TARGET turbowasm_wasi02_streams_core)
 
   add_executable(turbowasm_wasi02_streams_test
     wasi02_streams_test.c)
+  add_executable(turbowasm_wasi02_stream_allocation_test wasi02_stream_allocation_test.c)
+  target_include_directories(turbowasm_wasi02_stream_allocation_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_wasi02_stream_allocation_test PRIVATE turbowasm_wasi02_streams_core TurboWasm::Component Salts::TinyTest)
+  add_test(NAME turbowasm_wasi02_stream_allocation_test COMMAND turbowasm_wasi02_stream_allocation_test)
   target_link_libraries(turbowasm_wasi02_streams_test
     PRIVATE
       turbowasm_wasi02_streams_core

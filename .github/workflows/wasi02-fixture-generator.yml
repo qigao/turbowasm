@@ -59,7 +59,7 @@ jobs:
           for source in tests/wasi02/fixtures/src/*.wat; do
             name="$(basename "$source" .wat)"
             "$WASM_TOOLS" parse "$source" -o "$out/$name.wasm"
-            "$WASM_TOOLS" validate "$out/$name.wasm"
+            "$WASM_TOOLS" validate --features cm64 "$out/$name.wasm"
             "$WASM_TOOLS" print "$out/$name.wasm" > "$out/$name.canonical.wat"
             test "$(od -An -tx1 -N8 "$out/$name.wasm" | tr -d ' \n')" = "0061736d0d000100"
           done
@@ -81,6 +81,8 @@ jobs:
               "random-u64.wasm",
               "socket-create-tcp.wasm",
               "socket-instance-network.wasm",
+              "socket-tcp-roundtrip.wasm",
+              "socket-tcp-roundtrip64.wasm",
               "stream-poll-block.wasm",
           ]
           for name in expected:

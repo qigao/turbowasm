@@ -398,7 +398,8 @@
       "name": "win-core3-asan-user",
       "inherits": "win-core3-user",
       "cacheVariables": {
-        "ENABLE_SANITIZER_ADDRESS": true
+        "ENABLE_SANITIZER_ADDRESS": true,
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/asan/windows-x64"
       }
     },
     {
@@ -598,6 +599,11 @@
     {
       "name": "win-core3-asan-user",
       "configurePreset": "win-core3-asan-user"
+    },
+    {
+      "name": "install-win-core3-asan-user",
+      "configurePreset": "win-core3-asan-user",
+      "targets": ["install"]
     },
     {
       "name": "ci-core3-mir-user",

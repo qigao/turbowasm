@@ -13,6 +13,8 @@
 
 typedef struct turbowasm_wasi02_poll {
     turbowasm_wasi02_poll_provider provider;
+    void (*wait_done)(void *context, uintptr_t operation_token);
+    void *wait_done_context;
     turbowasm_component_resource_table resources;
     uint64_t pollable_identity;
     bool pollable_identity_bound;

@@ -320,6 +320,16 @@ turbowasm_status turbowasm_wasi02_component_instance_create(
     const turbowasm_component *component,
     turbowasm_wasi02 *wasi02);
 
+/* Async instantiation uses the same capability context and retains it until
+ * the instance and all suspended calls retire. Options are copied; NULL uses
+ * Component defaults. Poll waits require the shared I/O domain constructor
+ * (wasi02_io.h), driven by its single host owner. */
+turbowasm_status turbowasm_wasi02_component_instance_create_async(
+    turbowasm_component_instance *instance,
+    const turbowasm_component *component,
+    turbowasm_wasi02 *wasi02,
+    const turbowasm_component_async_options *options);
+
 #ifdef __cplusplus
 }
 #endif

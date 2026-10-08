@@ -3,10 +3,16 @@ name: TurboWasm CI
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      salts_ci_run:
+        description: Optional successful Salts SDK CI run for native TCP qualification
+        type: string
+        default: ''
 
 permissions:
   contents: read
   packages: read
+  actions: read
 
 concurrency:
   group: turbowasm-ci-${{ github.event.pull_request.number || github.ref }}
@@ -39,6 +45,7 @@ jobs:
     uses: ./.github/workflows/native-build.yml
     with:
       builds: ${{ needs.scope.outputs.builds }}
+      salts_ci_run: ${{ inputs.salts_ci_run || '' }}
   result:
     name: CI result
     needs: [scope, native]

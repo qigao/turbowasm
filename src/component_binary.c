@@ -1912,6 +1912,155 @@ fail_definition:
         : TURBOWASM_MALFORMED_MODULE;
 }
 
+/* Imported value aliases retain their complete dependency closure. Auxiliary
+ * nodes live after the reserved serialized index space, so decoding later
+ * declarations never changes their binary indices. One source-index map bounds
+ * a clone to O(reachable nodes + edges), including shared subtrees. */
+typedef struct cross_graph_clone {
+    turbowasm_component_type_graph *destination;
+    const turbowasm_component_type_graph *source;
+    uint32_t *mapping;
+    uint32_t capacity;
+} cross_graph_clone;
+static bool clone_cross_node(cross_graph_clone *c, uint32_t to, uint32_t from, uint32_t depth);
+static bool clone_cross_ref(cross_graph_clone *c, turbowasm_component_type_ref *ref, uint32_t depth) {
+    uint32_t source, target;
+    if (ref->kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE) return true;
+    if (ref->kind != TURBOWASM_COMPONENT_TYPE_REF_INDEXED || ref->as.indexed >= c->source->count) return false;
+    source = ref->as.indexed; target = c->mapping[source];
+    if (target == UINT32_MAX) {
+        if (depth >= TURBOWASM_COMPONENT_VALUE_MAX_DEPTH || c->destination->count >= c->capacity) return false;
+        target = c->destination->count++; c->mapping[source] = target;
+        if (!clone_cross_node(c, target, source, depth + 1u)) return false;
+    }
+    ref->as.indexed = target; return true;
+}
+static bool clone_cross_node(cross_graph_clone *c, uint32_t to, uint32_t from, uint32_t depth) {
+    const turbowasm_component_type *source = turbowasm_component_type_graph_get(c->source, from);
+    turbowasm_component_type *t; size_t bytes;
+    if (!source || depth > TURBOWASM_COMPONENT_VALUE_MAX_DEPTH || source->kind == TURBOWASM_COMPONENT_TYPE_UNDEFINED ||
+        source->kind == TURBOWASM_COMPONENT_TYPE_INSTANCE) return false;
+    t = &c->destination->types[to]; *t = *source;
+    /* Install no borrowed owned array: graph destruction must remain valid if
+     * an allocation or dependency fails partway through this clone. */
+    switch (t->kind) {
+        case TURBOWASM_COMPONENT_TYPE_RECORD: {
+            uint32_t n = source->as.record.count; t->as.record.fields = NULL;
+            if ((size_t)n > SIZE_MAX / sizeof(*t->as.record.fields)) return false;
+            bytes = (size_t)n * sizeof(*t->as.record.fields);
+            if (bytes) { t->as.record.fields = turbowasm_rt_malloc(bytes); if (!t->as.record.fields) return false;
+                memcpy(t->as.record.fields, source->as.record.fields, bytes); }
+            for (uint32_t i = 0; i < n; ++i) if (!clone_cross_ref(c, &t->as.record.fields[i].type, depth)) return false;
+            return true;
+        }
+        case TURBOWASM_COMPONENT_TYPE_TUPLE: {
+            uint32_t n = source->as.tuple.count; t->as.tuple.elements = NULL;
+            if ((size_t)n > SIZE_MAX / sizeof(*t->as.tuple.elements)) return false;
+            bytes = (size_t)n * sizeof(*t->as.tuple.elements);
+            if (bytes) { t->as.tuple.elements = turbowasm_rt_malloc(bytes); if (!t->as.tuple.elements) return false;
+                memcpy(t->as.tuple.elements, source->as.tuple.elements, bytes); }
+            for (uint32_t i = 0; i < n; ++i) if (!clone_cross_ref(c, &t->as.tuple.elements[i], depth)) return false;
+            return true;
+        }
+        case TURBOWASM_COMPONENT_TYPE_VARIANT: {
+            uint32_t n = source->as.variant.count; t->as.variant.cases = NULL;
+            if ((size_t)n > SIZE_MAX / sizeof(*t->as.variant.cases)) return false;
+            bytes = (size_t)n * sizeof(*t->as.variant.cases);
+            if (bytes) { t->as.variant.cases = turbowasm_rt_malloc(bytes); if (!t->as.variant.cases) return false;
+                memcpy(t->as.variant.cases, source->as.variant.cases, bytes); }
+            for (uint32_t i = 0; i < n; ++i) if (t->as.variant.cases[i].has_payload &&
+                !clone_cross_ref(c, &t->as.variant.cases[i].payload, depth)) return false;
+            return true;
+        }
+        case TURBOWASM_COMPONENT_TYPE_FUNCTION: {
+            uint32_t n = source->as.function.param_count; t->as.function.params = NULL;
+            if ((size_t)n > SIZE_MAX / sizeof(*t->as.function.params)) return false;
+            bytes = (size_t)n * sizeof(*t->as.function.params);
+            if (bytes) { t->as.function.params = turbowasm_rt_malloc(bytes); if (!t->as.function.params) return false;
+                memcpy(t->as.function.params, source->as.function.params, bytes); }
+            for (uint32_t i = 0; i < n; ++i) if (!clone_cross_ref(c, &t->as.function.params[i], depth)) return false;
+            return !t->as.function.has_result || clone_cross_ref(c, &t->as.function.result, depth);
+        }
+        case TURBOWASM_COMPONENT_TYPE_ENUM:
+        case TURBOWASM_COMPONENT_TYPE_FLAGS: {
+            uint32_t n = source->as.enumeration.count; t->as.enumeration.labels = NULL;
+            if ((size_t)n > SIZE_MAX / sizeof(*t->as.enumeration.labels)) return false;
+            bytes = (size_t)n * sizeof(*t->as.enumeration.labels);
+            if (bytes) { t->as.enumeration.labels = turbowasm_rt_malloc(bytes); if (!t->as.enumeration.labels) return false;
+                memcpy(t->as.enumeration.labels, source->as.enumeration.labels, bytes); }
+            return true;
+        }
+        case TURBOWASM_COMPONENT_TYPE_LIST: return clone_cross_ref(c, &t->as.list.element_type, depth);
+        case TURBOWASM_COMPONENT_TYPE_OPTION: return clone_cross_ref(c, &t->as.option.payload, depth);
+        case TURBOWASM_COMPONENT_TYPE_RESULT:
+            return (!t->as.result.has_ok || clone_cross_ref(c, &t->as.result.ok, depth)) &&
+                (!t->as.result.has_error || clone_cross_ref(c, &t->as.result.error, depth));
+        case TURBOWASM_COMPONENT_TYPE_FUTURE:
+        case TURBOWASM_COMPONENT_TYPE_STREAM:
+            return !t->as.async_value.has_payload || clone_cross_ref(c, &t->as.async_value.payload, depth);
+        case TURBOWASM_COMPONENT_TYPE_OWN:
+        case TURBOWASM_COMPONENT_TYPE_BORROW: {
+            turbowasm_component_type_ref ref = turbowasm_component_type_ref_indexed(t->as.handle.resource_type);
+            if (!clone_cross_ref(c, &ref, depth)) return false;
+            t->as.handle.resource_type = ref.as.indexed; return true;
+        }
+        case TURBOWASM_COMPONENT_TYPE_RESOURCE: t->as.resource.identity_alias = true; return true;
+        default: return t->kind >= TURBOWASM_COMPONENT_TYPE_BOOL && t->kind <= TURBOWASM_COMPONENT_TYPE_STRING;
+    }
+}
+static bool clone_cross_graph(turbowasm_component_type_graph *destination, uint32_t to,
+    const turbowasm_component_type_graph *source, uint32_t from) {
+    cross_graph_clone c = {destination, source, NULL, 0}; turbowasm_component_type *grown;
+    if (to >= destination->count || from >= source->count || source->count > UINT32_MAX - destination->count ||
+        (size_t)source->count > SIZE_MAX / sizeof(*c.mapping)) return false;
+    c.capacity = destination->count + source->count;
+    if ((size_t)c.capacity > SIZE_MAX / sizeof(*grown)) return false;
+    c.mapping = turbowasm_rt_malloc((size_t)source->count * sizeof(*c.mapping));
+    if (!c.mapping) return false;
+    for (uint32_t i = 0; i < source->count; ++i) c.mapping[i] = UINT32_MAX;
+    grown = turbowasm_rt_realloc(destination->types, (size_t)c.capacity * sizeof(*grown));
+    if (!grown) { turbowasm_rt_free(c.mapping); return false; }
+    memset(grown + destination->count, 0, (size_t)source->count * sizeof(*grown)); destination->types = grown;
+    c.mapping[from] = to;
+    bool ok = clone_cross_node(&c, to, from, 0);
+    turbowasm_rt_free(c.mapping); return ok;
+}
+static void compact_alias_ref(turbowasm_component_type_ref *ref, uint32_t base, uint32_t delta) {
+    if (ref->kind == TURBOWASM_COMPONENT_TYPE_REF_INDEXED && ref->as.indexed >= base) ref->as.indexed -= delta;
+}
+static void compact_alias_graph(turbowasm_component_type_graph *g, uint32_t serialized, uint32_t reserved) {
+    uint32_t delta = reserved - serialized, auxiliary = g->count - reserved;
+    if (auxiliary) memmove(g->types + serialized, g->types + reserved, (size_t)auxiliary * sizeof(*g->types));
+    g->count = serialized + auxiliary;
+    for (uint32_t i = 0; i < g->count; ++i) {
+        turbowasm_component_type *t = &g->types[i];
+        switch (t->kind) {
+            case TURBOWASM_COMPONENT_TYPE_LIST: compact_alias_ref(&t->as.list.element_type, reserved, delta); break;
+            case TURBOWASM_COMPONENT_TYPE_RECORD:
+                for (uint32_t j = 0; j < t->as.record.count; ++j) compact_alias_ref(&t->as.record.fields[j].type, reserved, delta); break;
+            case TURBOWASM_COMPONENT_TYPE_TUPLE:
+                for (uint32_t j = 0; j < t->as.tuple.count; ++j) compact_alias_ref(&t->as.tuple.elements[j], reserved, delta); break;
+            case TURBOWASM_COMPONENT_TYPE_VARIANT:
+                for (uint32_t j = 0; j < t->as.variant.count; ++j) if (t->as.variant.cases[j].has_payload)
+                    compact_alias_ref(&t->as.variant.cases[j].payload, reserved, delta); break;
+            case TURBOWASM_COMPONENT_TYPE_OPTION: compact_alias_ref(&t->as.option.payload, reserved, delta); break;
+            case TURBOWASM_COMPONENT_TYPE_RESULT:
+                if (t->as.result.has_ok) compact_alias_ref(&t->as.result.ok, reserved, delta);
+                if (t->as.result.has_error) compact_alias_ref(&t->as.result.error, reserved, delta); break;
+            case TURBOWASM_COMPONENT_TYPE_FUNCTION:
+                for (uint32_t j = 0; j < t->as.function.param_count; ++j) compact_alias_ref(&t->as.function.params[j], reserved, delta);
+                if (t->as.function.has_result) compact_alias_ref(&t->as.function.result, reserved, delta); break;
+            case TURBOWASM_COMPONENT_TYPE_FUTURE:
+            case TURBOWASM_COMPONENT_TYPE_STREAM:
+                if (t->as.async_value.has_payload) compact_alias_ref(&t->as.async_value.payload, reserved, delta); break;
+            case TURBOWASM_COMPONENT_TYPE_OWN:
+            case TURBOWASM_COMPONENT_TYPE_BORROW:
+                if (t->as.handle.resource_type >= reserved) t->as.handle.resource_type -= delta; break;
+            default: break;
+        }
+    }
+}
+
 static bool clone_type_between_graphs(
     turbowasm_component_type_graph *destination_graph,
     uint32_t destination,
@@ -1926,6 +2075,13 @@ static bool clone_type_between_graphs(
     if (type == NULL)
         return false;
     same_graph = destination_graph == source_graph;
+    if (!same_graph && (type->kind == TURBOWASM_COMPONENT_TYPE_LIST || type->kind == TURBOWASM_COMPONENT_TYPE_RECORD ||
+        type->kind == TURBOWASM_COMPONENT_TYPE_TUPLE || type->kind == TURBOWASM_COMPONENT_TYPE_VARIANT ||
+        type->kind == TURBOWASM_COMPONENT_TYPE_OPTION || type->kind == TURBOWASM_COMPONENT_TYPE_RESULT ||
+        type->kind == TURBOWASM_COMPONENT_TYPE_FUNCTION || type->kind == TURBOWASM_COMPONENT_TYPE_FUTURE ||
+        type->kind == TURBOWASM_COMPONENT_TYPE_STREAM || type->kind == TURBOWASM_COMPONENT_TYPE_OWN ||
+        type->kind == TURBOWASM_COMPONENT_TYPE_BORROW))
+        return clone_cross_graph(destination_graph, destination, source_graph, source);
 
     if (type->kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
         type->kind <= TURBOWASM_COMPONENT_TYPE_CHAR)
@@ -2338,7 +2494,7 @@ static turbowasm_status decode_flat_instance_type(
         }
     }
 
-    instance_type->type_graph.count = next_local_type;
+    compact_alias_graph(&instance_type->type_graph, next_local_type, declaration_count);
     if (!turbowasm_component_type_graph_define_instance(
             outer_graph, outer_type_index, instance_type)) {
         status = TURBOWASM_MALFORMED_MODULE;
@@ -2355,7 +2511,7 @@ fail:
          */
         if (instance_type->type_graph.types != NULL &&
             instance_type->type_graph.count < next_local_type)
-            instance_type->type_graph.count = next_local_type;
+            compact_alias_graph(&instance_type->type_graph, next_local_type, declaration_count);
         turbowasm_component_type_graph_destroy(
             &instance_type->type_graph);
         turbowasm_rt_free(instance_type->exports);
@@ -2841,7 +2997,7 @@ static turbowasm_status decode_component_semantics(
 
     if (current_core_modules != component->core_module_count)
         return TURBOWASM_MALFORMED_MODULE;
-    component->type_graph.count = current_types;
+    compact_alias_graph(&component->type_graph, current_types, total_types);
     if (!turbowasm_component_type_graph_validate(
             &component->type_graph))
         return TURBOWASM_MALFORMED_MODULE;

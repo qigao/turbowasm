@@ -12,6 +12,10 @@
 #endif
 
 typedef struct turbowasm_wasi02_public_impl {
+    void *io_owner;
+    void (*io_owner_release)(void *);
+    void *socket_owner;
+    void (*socket_owner_release)(void *);
     turbowasm_runtime_config runtime_config;
     turbowasm_wasi02_config config;
 
@@ -396,6 +400,8 @@ turbowasm_status turbowasm_wasi02_destroy(
 
     runtime_config = impl->runtime_config;
     wasi02->impl = NULL;
+    if (impl->io_owner_release != NULL) impl->io_owner_release(impl->io_owner);
+    if (impl->socket_owner_release != NULL) impl->socket_owner_release(impl->socket_owner);
     scope = turbowasm_runtime_scope_enter(&runtime_config);
     turbowasm_rt_free(impl);
     turbowasm_runtime_scope_leave(scope);
@@ -463,5 +469,43 @@ turbowasm_status turbowasm_wasi02_component_instance_create(
         wasi02_instance_release;
     instance_state->ref_count = 1u;
     instance->impl = instance_state;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_wasi02_set_transport_observer(turbowasm_wasi02 *wasi,
+    turbowasm_status (*closed)(void *, turbowasm_value, bool *), void *context, void (*release)(void *)) {
+    turbowasm_wasi02_public_impl *p = wasi02_impl(wasi);
+    if (!p || !p->sockets_initialized || p->instance_count || p->socket_owner || !closed || !release)
+        return TURBOWASM_INVALID_ARGUMENT;
+    p->sockets.transport_closed = closed; p->sockets.transport_context = context;
+    p->socket_owner = context; p->socket_owner_release = release; return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_wasi02_set_wait_cleanup(turbowasm_wasi02 *wasi02,
+    void (*cleanup)(void *, uintptr_t), void *context, void (*owner_release)(void *)) {
+    turbowasm_wasi02_public_impl *impl = wasi02_impl(wasi02);
+    if (impl == NULL || impl->instance_count || !impl->poll_initialized) return TURBOWASM_INVALID_ARGUMENT;
+    impl->poll.wait_done = cleanup; impl->poll.wait_done_context = context;
+    impl->io_owner = context; impl->io_owner_release = owner_release; return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_wasi02_component_instance_create_async(
+    turbowasm_component_instance *instance, const turbowasm_component *component,
+    turbowasm_wasi02 *wasi02, const turbowasm_component_async_options *options) {
+    turbowasm_wasi02_public_impl *wasi = wasi02_impl(wasi02);
+    turbowasm_component_exec_imports imports[5]; size_t count = 0;
+    turbowasm_component_async_options defaults;
+    turbowasm_component_instance_public_impl *impl;
+    turbowasm_status status;
+    if (wasi == NULL || wasi->instance_count == UINT32_MAX) return TURBOWASM_INVALID_ARGUMENT;
+    if (options == NULL) { turbowasm_component_async_options_init(&defaults); options = &defaults; }
+    status = turbowasm_wasi02_exec_import_sets(&wasi->capabilities, imports, 5u, &count);
+    if (status != TURBOWASM_OK) return status;
+    /* Pin the facade before allocator/import callbacks can attempt destruction. */
+    ++wasi->instance_count;
+    status = turbowasm_component_instance_create_async_with_options_private(instance, component, options, imports, count);
+    if (status != TURBOWASM_OK) { --wasi->instance_count; return status; }
+    impl = turbowasm_component_instance_public_impl_get(instance);
+    impl->owner_context = wasi; impl->owner_release = wasi02_instance_release;
     return TURBOWASM_OK;
 }

@@ -9,6 +9,8 @@ option(TURBOWASM_ENABLE_WASI02_ADAPTER
   "Build experimental WASI 0.2 typed Component capability layer" ON)
 option(TURBOWASM_ENABLE_WASI02_CNET_ADAPTER
   "Build optional released-Salts CNet WASI 0.2 TCP control-plane provider" ON)
+option(TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND
+  "Build installed WASI 0.2 native TCP backend (requires directional CNet EOF)" OFF)
 option(TURBOWASM_ENABLE_CFLOW_ADAPTER "Build optional CFlow execution adapter" ON)
 option(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER
   "Build optional Salts NativeIO host-wait adapter" ON)

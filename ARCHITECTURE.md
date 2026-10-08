@@ -2693,10 +2693,38 @@ limits for module bytes, individual Runtime allocations, owned linear memories
 and owned tables. Module-derived instances and restartable executions inherit
 that policy; imported memories/tables retain the provider instance policy.
 
-## WASI socket backend and reusable I/O readiness (proposed)
+## WASI socket backend and reusable I/O readiness
 
-This is an implementation design, not a claim that the APIs below are already
-installed. The initial deliverable is a complete native TCP path for the pinned
+The TCP implementation now provides installed `WASI02IO` and optional
+`WASI02CNet` targets, reusable bounded readiness, external TCP progress and an
+async WASI02 constructor. Enable `TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND` only
+with an SDK exporting `cnet_connection_preserve_send_on_eof`; configure checks
+that capability. The Salts prerequisite is on `codex/wasi-socket-prerequisites`
+at `8aeeaff7`. Published SDKs without it cannot enable this target.
+
+Compose TCP facades with `turbowasm_wasi02_cnet_wasi02_init`. This explicitly
+retains the adapter/domain and installs a private transport-terminal predicate;
+state observation commits only actual termination to the authoritative WIT
+table. Peer EOF and half-shutdown leave the socket connected. The installed
+provider layout remains unchanged. Generic sources use
+`turbowasm_wasi02_io_wasi02_init`. Existing synchronous constructors remain
+available. Stream/splice and connect/accept publication reserve facade result
+storage and canonical handles before consuming provider results.
+
+Real loopback tests exercise IPv4/IPv6, inherited listener options, repeated
+subscriptions, bounded transfer/flush, immediate half-close, detached streams
+and shutdown with retained carriers. Pinned Component fixtures exercise WIT
+connect, wait, finish-connect, write, blocking-read and cleanup through memory32
+and memory64. Imported compound type aliases retain their dependency closure:
+auxiliary cloned nodes preserve serialized indices during decoding and are
+compacted before validation; shared dependencies are cloned once per closure,
+with checked size arithmetic and the existing value-depth bound.
+
+UDP/DNS gates C/D, Preview1 sockets and Preview3 remain unimplemented. The
+sections below retain the design and qualification requirements for those
+gates; an API name in a proposed later gate is not an implementation claim.
+
+The initial deliverable is a complete native TCP path for the pinned
 `wasi:sockets@0.2.8` interfaces. UDP and name lookup are separate qualification
 gates. Component async host owners remain the execution/lifetime boundary;
 WASI 0.2 byte-stream resources are not Component typed `stream<T>` endpoints.
@@ -2705,20 +2733,20 @@ not aliases added to this implementation.
 
 ### Evidence and dependency boundary
 
-The current public `include/turbowasm/wasi02_sockets.h` already describes TCP
+At the design baseline, `include/turbowasm/wasi02_sockets.h` described TCP
 providers. `src/wasi02_sockets.c` implements the typed state machine, connects
 successful connect/accept results to the existing stream resource table, and
 rejects absent provider methods. `tests/wasi02_tcp_state_test.c` qualifies that
 contract with a fake provider. The concrete provider in `src/wasi02_cnet.c`
-currently supplies create/bind/listen/options only;
+then supplied create/bind/listen/options only;
 `tests/wasi02_cnet_control_test.c` explicitly checks that connect, accept,
 remote-address, subscribe and shutdown callbacks remain absent.
 
 `src/wasi02_poll_native_io.c` records readiness for one terminal NativeIO
 request. That contract remains useful for completion-bound sources, but cannot
 represent a socket subscription reused across bind/connect/listen operations.
-The existing installed WASI02 facade also selects only the synchronous exec
-constructor; a separate async-aware constructor is required.
+At that baseline the installed WASI02 facade selected only the synchronous exec
+constructor; the implementation now adds a separate async-aware constructor.
 
 The locally inspected released Salts 2.2.0 SDK exports external CNet client and
 listener progress, exact bound-socket connect handoff, portable endpoint
@@ -2772,22 +2800,25 @@ already connected WIT socket closed. Do not mirror OS descriptors or maintain
 a second mutable copy of the WIT state machine.
 
 WASI02IO holds bounded provider-token slots and wait membership, not another
-Component resource table or scheduler. Tokens include domain identity, kind,
-slot and generation; cross-domain, stale, or wrong-kind tokens fail before
-callbacks. Exhausted generations retire slots rather than wrap to a live alias.
+Component resource table or scheduler. Source handles include domain identity;
+provider tokens use unique, non-wrapping identities checked against live slots
+of the expected kind. Cross-domain, stale, or wrong-kind tokens fail before
+callbacks. Identity exhaustion rejects admission rather than aliasing an old token.
 Source readiness is queried from its owner. Change notifications are hints to
 recheck, not a second authoritative boolean.
 
-### Proposed host interface and composition
+### Host interface and composition
 
-The following are proposed entry points, to be declared only when each complete
-gate passes. All owner carriers are unique, opaque and zero initialized.
+The following TCP and I/O entry points are implemented; exact declarations and
+ownership contracts are in the installed headers. Later UDP/DNS entry points
+remain proposed until their separate gates pass. All owner carriers are unique,
+opaque and zero initialized.
 Configuration structs have `size` and `api_version`, finite defaults, checked
 field validation, and no implicit unlimited values. Source handles are opaque
 generation-checked identities scoped to the I/O domain.
 
 ```c
-/* New wasi02_io.h; proposed names, not current declarations. */
+/* Installed wasi02_io.h; see that header for the complete declarations. */
 turbowasm_status turbowasm_wasi02_io_init(
     turbowasm_wasi02_io *io, const turbowasm_wasi02_io_config *config,
     const turbowasm_runtime_config *runtime_config);

@@ -26,6 +26,10 @@ Corpus coverage:
   → IPv4 enum lowering → indirect canonical
   `result<own<tcp-socket>, error-code>` memory result → nominal TCP resource
   drop.
+- `socket-tcp-roundtrip.wat` / `socket-tcp-roundtrip64.wat`: real async TCP
+  connect/subscription/finish-connect, check-write/write, blocking-read and
+  canonical ownership cleanup, using memory32 and memory64 respectively.
+  Memory64 validation explicitly enables wasm-tools' `cm64` feature.
 
 The public corpus test executes the checked-in corpus through `TurboWasm::WASI02`. A
 separate internal resume test drives the same stream/poll Component through

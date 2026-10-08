@@ -53,6 +53,7 @@ typedef struct turbowasm_wasi02_streams {
     bool component_output_identity_bound;
     bool component_error_identity_bound;
 
+    bool data_busy;
     bool initialized;
 } turbowasm_wasi02_streams;
 
@@ -77,6 +78,15 @@ turbowasm_status turbowasm_wasi02_output_stream_new(
     turbowasm_wasi02_streams *streams,
     turbowasm_value provider_rep,
     uint32_t *out_resource);
+
+/* Socket publication preflights storage and canonical handles before native
+ * connect/accept consumption. Publish is allocation-free; cancel owns no rep. */
+turbowasm_status turbowasm_wasi02_stream_reserve(turbowasm_wasi02_streams *streams,
+    turbowasm_wasi02_stream_slot_kind kind, void *owner, uint32_t *handle, uint32_t *slot);
+turbowasm_status turbowasm_wasi02_stream_publish(turbowasm_wasi02_streams *streams,
+    uint32_t handle, uint32_t slot, void *owner, turbowasm_value rep);
+void turbowasm_wasi02_stream_cancel(turbowasm_wasi02_streams *streams,
+    uint32_t handle, uint32_t slot);
 
 /*
  * Explicit direct-drop qualification entrypoint. Real Component resource drop

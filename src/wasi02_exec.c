@@ -6,16 +6,14 @@
 #define TURBOWASM_WASI02_HAS_FILESYSTEM 1
 #endif
 
-turbowasm_status turbowasm_wasi02_exec_init(
-    turbowasm_component_exec *exec,
-    const turbowasm_component_binary *binary,
-    const turbowasm_wasi02_exec_capabilities *capabilities) {
+turbowasm_status turbowasm_wasi02_exec_import_sets(
+    const turbowasm_wasi02_exec_capabilities *capabilities,
+    turbowasm_component_exec_imports *out_sets, size_t capacity, size_t *out_count) {
     turbowasm_component_exec_imports sets[5];
     size_t count = 0u;
     turbowasm_status status;
 
-    if (exec == NULL || binary == NULL ||
-        capabilities == NULL)
+    if (out_sets == NULL || out_count == NULL || capacity < 5u || capabilities == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     memset(sets, 0, sizeof(sets));
@@ -81,6 +79,16 @@ turbowasm_status turbowasm_wasi02_exec_init(
     if (count == 0u)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    return turbowasm_component_exec_init_with_import_sets(
-        exec, binary, sets, count);
+    memcpy(out_sets, sets, count * sizeof(*sets));
+    *out_count = count;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_wasi02_exec_init(turbowasm_component_exec *exec,
+    const turbowasm_component_binary *binary, const turbowasm_wasi02_exec_capabilities *capabilities) {
+    turbowasm_component_exec_imports sets[5]; size_t count = 0;
+    turbowasm_status status;
+    if (exec == NULL || binary == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    status = turbowasm_wasi02_exec_import_sets(capabilities, sets, 5u, &count);
+    return status != TURBOWASM_OK ? status : turbowasm_component_exec_init_with_import_sets(exec, binary, sets, count);
 }

@@ -193,8 +193,11 @@ turbowasm_status turbowasm_wasi02_pollable_block(
             &wait_storage);
         if (status != TURBOWASM_OK)
             return status;
-        if (wait_storage == NULL)
+        if (wait_storage == NULL) {
+            if (poll->wait_done != NULL)
+                poll->wait_done(poll->wait_done_context, operation_token);
             return TURBOWASM_INVALID_ARGUMENT;
+        }
     } else {
         status = poll->provider.arm(
             poll->provider.context,
@@ -209,6 +212,8 @@ turbowasm_status turbowasm_wasi02_pollable_block(
         operation_token,
         wait_storage,
         &completion_status);
+    if (poll->wait_done != NULL)
+        poll->wait_done(poll->wait_done_context, operation_token);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -372,6 +377,8 @@ turbowasm_status turbowasm_wasi02_poll_many(
         if (status != TURBOWASM_OK)
             goto done;
         if (wait_storage == NULL) {
+            if (poll->wait_done != NULL)
+                poll->wait_done(poll->wait_done_context, operation_token);
             status = TURBOWASM_INVALID_ARGUMENT;
             goto done;
         }
@@ -390,6 +397,8 @@ turbowasm_status turbowasm_wasi02_poll_many(
         operation_token,
         wait_storage,
         &completion_status);
+    if (poll->wait_done != NULL)
+        poll->wait_done(poll->wait_done_context, operation_token);
     if (status != TURBOWASM_OK)
         goto done;
 

@@ -474,6 +474,43 @@ if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
   endif()
 endif()
 
+if(TARGET turbowasm_wasi02)
+  add_library(turbowasm_wasi02_io STATIC src/wasi02_io.c)
+  add_library(TurboWasm::WASI02IO ALIAS turbowasm_wasi02_io)
+  set_target_properties(turbowasm_wasi02_io PROPERTIES EXPORT_NAME WASI02IO)
+  target_compile_features(turbowasm_wasi02_io PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02_io PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  target_link_libraries(turbowasm_wasi02_io PUBLIC turbowasm_wasi02 PRIVATE Salts::Core)
+  if(TARGET turbowasm_wasi02_cnet_core)
+    target_link_libraries(turbowasm_wasi02_cnet_core PRIVATE turbowasm_wasi02_io)
+  endif()
+endif()
+
+if(TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND)
+  if(NOT TARGET TurboWasm::WASI02IO OR NOT TARGET Salts::CNet)
+    message(FATAL_ERROR "WASI02 socket backend requires WASI02IO and Salts::CNet")
+  endif()
+  include(CheckCSourceCompiles)
+  set(CMAKE_REQUIRED_LIBRARIES Salts::CNet)
+  unset(TURBOWASM_CNET_DIRECTIONAL_EOF CACHE)
+  check_c_source_compiles("#include <cnet/cnet.h>
+    int main(void) { cnet_client c = {0}; cnet_connection r = {0};
+      return cnet_connection_preserve_send_on_eof(&c, r); }"
+    TURBOWASM_CNET_DIRECTIONAL_EOF)
+  unset(CMAKE_REQUIRED_LIBRARIES)
+  if(NOT TURBOWASM_CNET_DIRECTIONAL_EOF)
+    message(FATAL_ERROR "WASI02 native TCP requires a Salts SDK with cnet_connection_preserve_send_on_eof; the selected SDK cannot satisfy directional WASI streams")
+  endif()
+  add_library(turbowasm_wasi02_cnet STATIC src/wasi02_cnet.c)
+  add_library(TurboWasm::WASI02CNet ALIAS turbowasm_wasi02_cnet)
+  set_target_properties(turbowasm_wasi02_cnet PROPERTIES EXPORT_NAME WASI02CNet)
+  target_compile_definitions(turbowasm_wasi02_cnet PRIVATE TURBOWASM_WASI02_NATIVE_TCP=1)
+  target_compile_features(turbowasm_wasi02_cnet PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02_cnet PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_wasi02_cnet PUBLIC TurboWasm::WASI02IO Salts::CNet)
+endif()
+
 if(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN)
   if(NOT TURBOWASM_ENABLE_WASI_ADAPTER)
     message(FATAL_ERROR
@@ -745,6 +782,15 @@ if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+if(TARGET turbowasm_wasi02_io)
+  install(TARGETS turbowasm_wasi02_io EXPORT TurboWasmTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
+if(TARGET turbowasm_wasi02_cnet)
+  install(TARGETS turbowasm_wasi02_cnet EXPORT TurboWasmTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif()
 
 if(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)
