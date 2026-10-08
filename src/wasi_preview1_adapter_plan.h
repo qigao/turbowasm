@@ -154,6 +154,57 @@ static const turbowasm_wasi_preview1_adapter_param_plan turbowasm_wasi_preview1_
   {"opened_fd", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
 };
 
+static const turbowasm_wasi_preview1_adapter_param_plan turbowasm_wasi_preview1_adapter_params_21[] = {
+  {"fd", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"flags", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"accepted_fd", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+};
+
+static const turbowasm_wasi_preview1_adapter_param_plan turbowasm_wasi_preview1_adapter_params_22[] = {
+  {"fd", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"ri_data", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"ri_data_len", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"ri_flags", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"ro_datalen", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"ro_flags", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+};
+
+static const turbowasm_wasi_preview1_adapter_param_plan turbowasm_wasi_preview1_adapter_params_23[] = {
+  {"fd", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"si_data", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"si_data_len", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"si_flags", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"so_datalen", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+};
+
+static const turbowasm_wasi_preview1_adapter_param_plan turbowasm_wasi_preview1_adapter_params_24[] = {
+  {"fd", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"how", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+};
+
+static const turbowasm_wasi_preview1_adapter_param_plan turbowasm_wasi_preview1_adapter_params_25[] = {
+  {"fd", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"stat", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+};
+
+static const turbowasm_wasi_preview1_adapter_param_plan turbowasm_wasi_preview1_adapter_params_26[] = {
+  {"fd", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"flags", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+};
+
+static const turbowasm_wasi_preview1_adapter_param_plan turbowasm_wasi_preview1_adapter_params_27[] = {
+  {"fd", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"rights_base", 1u, turbowasm_wasi_preview1_adapter_carrier_u64},
+  {"rights_inheriting", 1u, turbowasm_wasi_preview1_adapter_carrier_u64},
+};
+
+static const turbowasm_wasi_preview1_adapter_param_plan turbowasm_wasi_preview1_adapter_params_28[] = {
+  {"subscriptions", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"events", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"count", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+  {"nevents", 1u, turbowasm_wasi_preview1_adapter_carrier_u32},
+};
+
 static const turbowasm_wasi_preview1_adapter_function_plan turbowasm_wasi_preview1_adapter_functions[] = {
   {0u, "args_sizes_get", turbowasm_wasi_preview1_adapter_params_0, 2u, turbowasm_wasi_preview1_adapter_carrier_u32, 9u, 0u},
   {1u, "args_get", turbowasm_wasi_preview1_adapter_params_1, 2u, turbowasm_wasi_preview1_adapter_carrier_u32, 9u, 0u},
@@ -176,8 +227,16 @@ static const turbowasm_wasi_preview1_adapter_function_plan turbowasm_wasi_previe
   {18u, "fd_filestat_get", turbowasm_wasi_preview1_adapter_params_18, 2u, turbowasm_wasi_preview1_adapter_carrier_u32, 12u, 0u},
   {19u, "path_filestat_get", turbowasm_wasi_preview1_adapter_params_19, 5u, turbowasm_wasi_preview1_adapter_carrier_u32, 12u, 0u},
   {20u, "path_open", turbowasm_wasi_preview1_adapter_params_20, 9u, turbowasm_wasi_preview1_adapter_carrier_u32, 12u, 0u},
+  {21u, "sock_accept", turbowasm_wasi_preview1_adapter_params_21, 3u, turbowasm_wasi_preview1_adapter_carrier_u32, 12u, 0u},
+  {22u, "sock_recv", turbowasm_wasi_preview1_adapter_params_22, 6u, turbowasm_wasi_preview1_adapter_carrier_u32, 12u, 0u},
+  {23u, "sock_send", turbowasm_wasi_preview1_adapter_params_23, 5u, turbowasm_wasi_preview1_adapter_carrier_u32, 12u, 0u},
+  {24u, "sock_shutdown", turbowasm_wasi_preview1_adapter_params_24, 2u, turbowasm_wasi_preview1_adapter_carrier_u32, 12u, 0u},
+  {25u, "fd_fdstat_get", turbowasm_wasi_preview1_adapter_params_25, 2u, turbowasm_wasi_preview1_adapter_carrier_u32, 12u, 0u},
+  {26u, "fd_fdstat_set_flags", turbowasm_wasi_preview1_adapter_params_26, 2u, turbowasm_wasi_preview1_adapter_carrier_u32, 12u, 0u},
+  {27u, "fd_fdstat_set_rights", turbowasm_wasi_preview1_adapter_params_27, 3u, turbowasm_wasi_preview1_adapter_carrier_u32, 12u, 0u},
+  {28u, "poll_oneoff", turbowasm_wasi_preview1_adapter_params_28, 4u, turbowasm_wasi_preview1_adapter_carrier_u32, 12u, 0u},
 };
 
-static const size_t turbowasm_wasi_preview1_adapter_function_count = 21u;
+static const size_t turbowasm_wasi_preview1_adapter_function_count = 29u;
 
 #endif /* turbowasm_wasi_preview1_adapter_plan_generated_h */

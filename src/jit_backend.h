@@ -96,6 +96,11 @@ typedef struct turbowasm_jit_backend {
      * TurboWasm execution-control contract at bounded safe points. */
     bool supports_execution_control;
 
+    /* Requires execution control and retention of native frames, rooted value
+     * cells and invocation-local scratch across owner-thread coroutine yields.
+     * Code and backend storage must outlive every suspended invocation. */
+    bool supports_resumable_execution;
+
     bool (*is_function_eligible)(
         void *context,
         const struct turbowasm_validation_context *validation,
@@ -167,6 +172,8 @@ typedef struct turbowasm_jit_backend {
  *   backend-specific runtime state;
  * - supports_execution_control defaults false; Runtime interprets policy-
  *   controlled calls unless the backend explicitly opts in;
+ * - supports_resumable_execution separately admits suspend/resume callbacks;
+ *   backends without it keep interpreter execution for resumable calls;
  * - SIMD may call Salts::SIMD helpers instead of native-lowering V128;
  * - backend implementation types must never enter public TurboWasm headers;
  * - persistent blobs are optional and backend-private;

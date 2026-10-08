@@ -1,0 +1,86 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "ci-user",
+      "inherits": [
+        "release-mode",
+        "pkg-vcpkg"
+      ],
+      "binaryDir": "${sourceDir}/../../build/installed-${presetName}",
+      "toolchainFile": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/cmake/QigaoVcpkgToolchain.cmake",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "$env{TURBOWASM_TRIPLET}",
+        "VCPKG_HOST_TRIPLET": "$env{TURBOWASM_HOST_TRIPLET}",
+        "CMAKE_C_COMPILER_LAUNCHER": "$penv{CMAKE_C_COMPILER_LAUNCHER}",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "$penv{CMAKE_CXX_COMPILER_LAUNCHER}",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/../../vcpkg_installed/installed-${presetName}"
+      },
+      "environment": {
+        "PATH": "$env{TURBOWASM_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{TURBOWASM_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "$env{TURBOWASM_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+      },
+      "generator": "Ninja"
+    },
+    {
+      "name": "ci-win-user",
+      "inherits": [
+        "ISWindows",
+        "Msvc",
+        "ci-user"
+      ],
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "/utf-8",
+        "CMAKE_CXX_FLAGS": "/utf-8"
+      }
+    },
+    {
+      "name": "ci-android-user",
+      "inherits": [
+        "android-base",
+        "ci-user"
+      ],
+      "cacheVariables": {
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-26"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "ci-user",
+      "configurePreset": "ci-user"
+    },
+    {
+      "name": "ci-win-user",
+      "configurePreset": "ci-win-user"
+    },
+    {
+      "name": "ci-android-user",
+      "configurePreset": "ci-android-user"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "ci-user",
+      "configurePreset": "ci-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-win-user",
+      "configurePreset": "ci-win-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}

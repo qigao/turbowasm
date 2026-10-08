@@ -113,6 +113,19 @@ typedef struct turbowasm_module_summary {
     uint32_t data_segment_count;
 } turbowasm_module_summary;
 
+typedef struct turbowasm_table_desc {
+    uint64_t minimum;
+    uint64_t maximum;
+    bool has_maximum;
+    bool table64;
+    bool imported;
+} turbowasm_table_desc;
+
+/* Declared table limits and address width. Returns false for an invalid module,
+ * index or output pointer. maximum is meaningful only when has_maximum is true. */
+bool turbowasm_module_table_at(const turbowasm_module *module,size_t index,
+    turbowasm_table_desc *out);
+
 turbowasm_status turbowasm_module_load_borrowed(turbowasm_module *module,
                                                 const uint8_t *bytes,
                                                 size_t size);

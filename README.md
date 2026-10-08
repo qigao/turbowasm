@@ -15,15 +15,19 @@ The repository currently provides:
   exception handling;
 - proposal-aware multi-memory, custom page sizes, extended const, relaxed
   SIMD and memory64 semantics with pinned upstream qualification;
+- Core 3.0 recursive types/subtyping, typed function references, GC structures/arrays,
+  explicit store/root ownership and table64 addresses;
 - typed tag/exception identity and cross-frame unwind across direct, indirect,
   imported and tail-call boundaries;
 - shared fuel and interruption semantics across interpreted and compiled
-  execution, plus restartable interpreter execution with fuel/interruption/
+  execution, plus restartable interpreted/native execution with fuel/interruption/
   host-wait yields;
 - scalar value kinds plus typed `v128` lane refinement;
 - CMeta-backed vector/mask semantic descriptors;
 - portable SIMD execution through `Salts::SIMD`;
 - an optional lazy MIR JIT for eligible hot functions;
+- complete scalar numeric MIR admission, including comparisons, conversions,
+  saturation and exact floating constants, sharing Runtime numeric primitives;
 - helper-backed SIMD MIR lowering with invocation-local private `v128` slots,
   including structured control flow;
 - an explicit MIR executable-mapping budget;
@@ -46,12 +50,300 @@ The repository currently provides:
 
 The current implementation is intentionally scoped. Core shared-memory atomics,
 legacy WASI threads, the qualified Preview1 capability layer, and interpreter
-memory64 are part of the completed Runtime surface. memory64 modules remain
-interpreter-only for the current MIR backend, and shared+memory64 remains
-unsupported. The synchronous Component Model subset is exposed separately
+memory64 are part of the completed Runtime surface. Shared memory64 supports
+atomic operations, wait/notify, imports and guarded growth. MIR admits unshared
+memory64 modules and lowers scalar load/store, size/grow, bulk memory and its
+SIMD memory instructions through Runtime helpers. Shared memory32/memory64
+also use these helpers, including atomic load/store, RMW, compare-exchange,
+fence and interruptible wait/notify. The private entry
+accepts mixed scalar/reference/vector parameters and zero or multiple results.
+Direct, table-indirect and typed-reference calls and their tail forms support these tuples
+through Runtime, including interpreted callees and imports admitted by the
+existing host-signature API. Tail dispatch
+reuses the logical call depth. Reference locals, control merges and call scratch
+use complete value cells rooted in the owning store. Vector call cells preserve
+bits and shape through invocation-owned SIMD slots. Indirect targets retain Runtime's table bounds,
+null and subtype checks; cross-instance tails switch owners after the native
+frame unwinds. Each instance/backend retains one execution owner,
+while distinct instances can import the same shared backing. Native MIR
+memory64 verification passed the Linux and macOS MIR test profiles; see the
+[qualification record](tests/conformance/README.md). The Windows MIR dependency
+is not supported. The Component Model host API is exposed separately
 through the optional `TurboWasm::Component` façade; it does not enter the
-`TurboWasm::Runtime` public ABI. WebAssembly GC and WASI 0.2 remain outside
-the completed Runtime surface and are tracked by Runtime v2 (#301).
+`TurboWasm::Runtime` public ABI. WASI 0.2 remains a separate capability layer
+tracked by Runtime v2 (#301). The interpreter supports GC and all table64
+operations. MIR also lowers table.size, table.init, table.copy, elem.drop and
+table.get/set/grow/fill
+through Runtime for table32/table64, including mixed-width and imported tables.
+MIR lowers the complete GC instruction family through Runtime: struct/array
+construction and access, segment operations, casts/tests and cast branches,
+external-reference conversions and i31. Constructor operands and intermediate
+references use the native frame's rooted value cells; store quotas and collection
+remain Runtime-owned. MIR also lowers typed exceptions with lexical catch
+dispatch, Runtime tag identity/payload ownership and mixed-tier unwind. Native EH
+passed Linux/macOS MIR and the complete pinned Core 3.0 differential suite.
+
+MIR also executes scalar/vector/reference global reads and writes through Runtime,
+including imported globals, nullable-reference branches and `unreachable` traps.
+Provider state, reference owners and GC roots follow the same Runtime contracts.
+
+Restartable executions use the instance's tiering policy when the attached
+backend explicitly supports suspension. MIR retains native frames through fuel,
+interruption and host-wait yields; GC roots and vector slots remain live until
+the call completes or cancellation unwinds it. Host effects are not replayed.
+The instance, module, providers and backend must outlive the execution handle.
+
+The synchronous Component layer supports UTF-8, UTF-16LE and compact
+Latin-1/UTF-16 canonical strings, including nested host values and memory64.
+`post-return` callbacks run after result lifting and share the
+resumable call's fuel/interruption control; failed cleanup discards unpublished
+results. Direct canonical cleanup targets are type checked and enforce the same
+leave restrictions as indirect calls from Core cleanup. Canonical lower and
+resource creation/deletion trap during cleanup or guest realloc.
+Guest resource destructors inherit the invoking call's fuel, interruption,
+host-wait ownership and call-depth limit. Consumed handles stay consumed if
+destruction traps or the suspended call is cancelled.
+Guest realloc reached during canonical lowering shares that control too; failed
+or cancelled result conversion restores the leave gate without publishing a
+partial host result.
+Local-function canonical lowering shares these adapters and resource ownership
+rules, including aliases, Core start calls, nested composite values and string
+conversion across memory32/memory64. Large parameter tuples use the canonical
+indirect ABI with aligned, checked memory access and a separate result pointer.
+The Component host API also exposes explicit async loading, bounded instances,
+task driving and cancellation, authenticated host-wait completion, typed
+future/stream endpoint moves, transfer results and cooperative shutdown.
+See [component.h](include/turbowasm/component.h) for the ownership/error contract
+and [the async interface](ARCHITECTURE.md#public-async-c-interface) for examples.
+Async tasks and transfers consume owned leaves only through explicit move entry
+points; returned storage remains charged until actual destruction. Existing
+synchronous admission retains its behavior. Component provider linking, nested
+instantiation and broader WASI 0.2 integration remain incomplete; the Component
+Model is not yet complete.
+
+WASI 0.2 TCP has a provider-neutral state machine and an optional installed
+CNet backend covering connect/accept, byte streams and reusable readiness.
+See [native TCP setup](#native-wasi-02-tcp) and the
+[socket backend design](ARCHITECTURE.md#wasi-socket-backend-and-reusable-io-readiness).
+WASI UDP message streams and asynchronous name lookup use additive versioned
+providers and the same optional CNet backend. See [UDP and DNS setup](#native-wasi-02-udp-and-dns).
+
+MIR admits the complete helper-backed SIMD instruction set, including shuffle,
+lane extraction/replacement, extending/splat/zero loads and lane loads/stores.
+Immediate SIMD operations reuse Runtime's validated instruction semantics; this
+does not introduce a platform vector calling convention or MIR vector registers.
+
+## Core 3.0 and managed references
+
+The interpreter passes the complete pinned [Core 3.0 suite](tests/conformance/README.md):
+258 files, 63970 binary commands, zero failures and zero unsupported commands.
+The 1229 text-syntax assertions are checked by wasm-tools and reported separately;
+TurboWasm itself accepts binary modules. This qualification does not imply full
+Component Model, WASI 0.2, or native JIT coverage.
+
+Modules with GC operations or composite types use `turbowasm_instance_create_in_store`.
+Create one `turbowasm_store` on its owner thread and use it for the consumer and
+all instance providers linked to it (host-function bindings need no instance). Ordinary instance creation rejects these modules
+with `TURBOWASM_INVALID_ARGUMENT`. Existing non-GC creation remains available.
+
+Returned GC values borrow their object until the next allocation/collection in the
+store. Call `turbowasm_root_retain` before keeping a value across that boundary and
+`turbowasm_root_release` when done. Copying `turbowasm_value` does not retain it.
+Globals, tables, element segments, active/suspended frames and execution results
+are traced automatically. Destroy executions and instances, release host roots,
+then destroy the store. Function/exception references inside GC objects still
+borrow their original owner instances. All store operations use the owner thread;
+shared-memory threads do not enable shared GC execution.
+
+See the complete, installed-package-tested [GC example](examples/gc.c) and
+[store API](include/turbowasm/store.h). It retains a struct across instance/module
+destruction and collection. To build the example independently, set
+`CMAKE_PREFIX_PATH` to the installed TurboWasm and Salts SDK roots when configuring
+`examples/CMakeLists.txt`.
+
+Store defaults are finite: 64 MiB of requested metadata/payload bytes, 65536
+objects, and 4096 root registrations (host roots plus active frames). Override
+these through `turbowasm_store_config`; exhaustion returns `OUT_OF_MEMORY`.
+Table64 accessors preserve all 64 address bits. Dense table storage is limited to
+`UINT32_MAX` elements and `runtime.limits.max_table_elements`; growth beyond the
+limit returns the Wasm failure sentinel without changing the table.
+
+Rebuild consumers for the expanded public value/API surface. Artifact schema 2
+retains GC type groups, store requirements and 64-bit table limits; regenerate
+schema 1 artifacts from source.
+
+## Native WASI 0.2 TCP
+
+`TurboWasm::WASI02IO` supplies bounded shared stream/poll readiness.
+`TurboWasm::WASI02CNet` adds externally driven TCP, including connect/accept,
+portable addresses/options, reusable subscriptions, streams and half-close.
+Its public header is `<turbowasm/wasi02_cnet.h>`; the provider-neutral facade
+and Runtime retain their existing dependency boundaries.
+
+Enable `TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND=ON` with a Salts SDK exporting
+`cnet_connection_preserve_send_on_eof`, datagram socket controls and public
+name lookup. The prerequisite is implemented on
+[the Salts prerequisite branch](https://github.com/qigao/salts/tree/codex/wasi-socket-prerequisites)
+with SDK qualification through [Salts CI](https://github.com/qigao/salts/actions/workflows/ci.yml).
+The option defaults off until an SDK carrying this capability is selected;
+requesting it with an unsuitable SDK fails configuration.
+
+Initialize zeroed I/O and CNet owners, then compose the facade with
+`turbowasm_wasi02_cnet_wasi02_init` and create the Component instance with
+`turbowasm_wasi02_component_instance_create_async`. CNet config helpers set
+finite bounds and deny bind/connect/accept by default; explicitly enable the
+required operations and supply an optional additional address policy.
+
+One host owner drives progress in this order:
+
+1. `turbowasm_wasi02_cnet_advance` and `..._next_timeout` prepare pending work.
+2. Observe the caller-owned NativeIO backend once; route every completion with
+   `..._route_completion`. Forward unconsumed completions to their actual owner.
+3. Advance CNet and the shared I/O domain, then explicitly resume yielded calls.
+
+Drop calls/instances and facade resources, request adapter shutdown, continue
+observing/routing until `..._shutdown_poll` reports complete, then destroy the
+adapter and I/O domain before destroying the backend. Child streams remain
+usable after their parent socket is dropped; poll aliases retain readiness
+metadata and dropping a subscription does not cancel transport.
+
+The installed TCP consumer test performs real async WIT ping/pong through
+memory32 and memory64, plus IPv4/IPv6, backpressure, flush, inherited options,
+half-close and retained-carrier shutdown. UDP/DNS tests cover message boundaries,
+empty packets, ordered address results and retained subscriptions. See
+[the socket design](ARCHITECTURE.md#wasi-socket-backend-and-reusable-io-readiness).
+
+For branch SDK qualification, dispatch TurboWasm CI with `salts_ci_run` set to
+a successful Salts SDK preparation run. CI verifies the artifact's source
+commit, enables the socket target, builds the full native matrix and runs the
+existing installed-package tests. Ordinary CI continues selecting published SDKs.
+Set `skip_windows=true` for an explicitly partial qualification of Linux,
+macOS and Android. In that mode, each prerequisite Salts platform job must
+have completed successfully and its SDK source commit must match the run;
+an unfinished Windows job does not block those platforms. The CI summary
+records the omission, and this run does not qualify Windows.
+
+## WASI Preview1 sockets and polling
+
+`TurboWasm::WASI` implements `sock_accept`, `sock_recv`, `sock_send`,
+`sock_shutdown`, `fd_fdstat_get`, `fd_fdstat_set_flags`,
+`fd_fdstat_set_rights` and `poll_oneoff` in `wasi_snapshot_preview1`.
+The existing file descriptor table also routes socket `fd_read`, `fd_write`
+and `fd_close`. These are memory32 Preview1 imports; native socket creation,
+bind, connect and DNS remain explicit host capabilities.
+
+Include `<turbowasm/wasi_sockets.h>` and opt in with
+`turbowasm_wasi_preview1_init_v2`. The old initializer remains available.
+The table is borrowed and must outlive WASI and every consumer instance.
+
+```c
+turbowasm_wasi_preview1_config_v2 config;
+turbowasm_wasi_preview1_config_v2_init(&config);
+config.base.filesystem = &filesystem; /* already initialized common fd table */
+config.base.allow_fd_read = config.base.allow_fd_write = true;
+config.allow_sockets = config.allow_poll = true;
+/* Check status; clock subscriptions require a separate base.allow_clock grant
+ * and base.clock_time provider. Defaults do not grant either capability. */
+turbowasm_status status = turbowasm_wasi_preview1_init_v2(&wasi, &config);
+```
+
+Defaults bound simultaneous waits to 64, subscriptions per poll to 64,
+bytes per socket call to 65536 and all staged call storage to 4 MiB.
+Capacity exhaustion returns `AGAIN` (waits), `NOMEM` (staging), `MFILE`
+(descriptors), or `MSGSIZE` (per-call bytes). The facade never blocks its
+owner thread. Use `turbowasm_execution_resume`; after progressing providers,
+call `turbowasm_wasi_preview1_advance` to complete readiness waits and resume
+the execution. One-shot invocation returns `AGAIN` when it would need to wait.
+`next_timeout` reports the next timer delay in nanoseconds, or `UINT64_MAX`.
+
+`TurboWasm::WASICNet` composes the existing CNet owner with Preview1; it adds
+no worker or backend observation loop. Include `<turbowasm/wasi_cnet.h>`,
+create host TCP/UDP carriers through the existing CNet providers, then move
+them using `turbowasm_wasi_cnet_listener_move`, `tcp_move` or `udp_move`.
+The CNet adapter must have no published facade bindings or stream/poll/error
+aliases during transfer. TCP moves its socket/input/output together; UDP
+requires an associated peer and moves its socket/datagram pair together.
+Moves zero carriers only on success and invalidate old stream-domain tokens.
+
+Obtain operations with `turbowasm_wasi_cnet_descriptor_ops`, then admit the
+owned file using `turbowasm_wasi_fs_bind_socket_move` with its socket type,
+explicit rights and optional `TURBOWASM_WASI_FDFLAG_NONBLOCK`. If fd admission
+fails, the file remains host-owned; retry or close it through `ops.file.close`.
+A successful bind transfers close ownership to the common table.
+All APIs run on the same owner thread. The host observes the existing native
+backend once, routes every completion to CNet, progresses CNet and its IO
+domain, then advances Preview1. Files and sockets share fd allocation and
+can use different copied providers.
+
+Receive supports `PEEK` and `WAITALL`; UDP retains one packet boundary and
+reports `DATA_TRUNCATED`, including empty messages. TCP PEEK|WAITALL reserves
+another `receive_bytes` from the CNet payload budget at admission and accepts
+at most `receive_bytes` per peek. Ordinary WAITALL uses bounded facade staging.
+Only one active operation per descriptor and direction is admitted (`BUSY` on
+conflict). Rights can only decrease; accept uses the listener's current
+inheriting rights, restricted to stream capabilities.
+
+Closing a descriptor invalidates its guest identity immediately after provider
+close succeeds. Advance Preview1 to wake its waiters; leases prevent old calls
+from accessing a new fd with the same number. Execution destruction unwinds
+waits and releases staging. `shutdown_request` wakes calls with `INTR`;
+`shutdown_poll` confirms they have unwound. Destroy consumer instances before
+`destroy_checked`, close remaining fds and drain CNet's actual native terminals
+before destroying its owner, IO domain and backend.
+
+The executable tests in `tests/wasi_preview1_sockets_test.c` and
+`tests/wasi_preview1_cnet_test.c` use the checked-in Core fixture
+`tests/fixtures/wasi_preview1_sockets.wat`; the native test executes real IPv4
+and IPv6 TCP/UDP. The installed package runs the same public-API tests plus a
+C++ consumer. MIR profiles attach a native backend to the fixture and verify
+that executed import wrappers compile.
+
+## Native WASI 0.2 UDP and DNS
+
+Include `<turbowasm/wasi02_network.h>` for the complete provider-neutral
+`udp`, `udp-create-socket` and `ip-name-lookup@0.2.8` bundles. Existing TCP
+provider/config layouts remain unchanged. Versioned config helpers initialize
+finite defaults; zero facade capacities omit the corresponding capability.
+
+For CNet, use `turbowasm_wasi02_cnet_init_external_v2` followed by
+`turbowasm_wasi02_cnet_wasi02_init_v2`. The optional `TurboWasm::WASI02CNet`
+target requires a Salts SDK exposing datagram socket controls and
+`<cnet/name_lookup.h>`, in addition to directional TCP EOF. Salts implements
+IDNA validation with ICU and reuses its existing c-ares progress owner.
+
+```c
+turbowasm_wasi02_cnet_config_v2 native;
+turbowasm_wasi02_config_v2 facade;
+turbowasm_wasi02_cnet_config_v2_init(&native);
+turbowasm_wasi02_config_v2_init(&facade);
+native.allow_udp_bind = native.allow_udp_send = true;
+native.allow_udp_receive = native.allow_name_lookup = true;
+facade.base.socket_network_resource_capacity = 16;
+facade.base.tcp_socket_resource_capacity = 16;
+facade.base.stream_resource_capacity = 32;
+facade.base.pollable_capacity = 64;
+facade.udp_socket_capacity = 16;
+facade.datagram_stream_capacity = 32;
+facade.resolve_stream_capacity = 16;
+```
+
+Apply the desired address/name restrictions before initializing the adapter.
+The borrowed backend must cover `2*T + U` endpoints and
+`3*T + U*(send_datagrams+1)` requests, where `T` and `U` are configured TCP/UDP
+capacities. DNS deadlines join `..._next_timeout`; use the same progress and
+shutdown sequence described above. Numeric literals never issue DNS requests.
+
+Datagram receive returns bounded message records, including empty messages.
+Send requires a fresh check-send grant and reports the exact admitted prefix;
+a later failure appears on the next check. Drop both old datagram streams before
+changing the UDP association. A concurrency-conflict requires routing retained
+terminals before retrying. Closed poll aliases retain their original metadata
+and count against the configured pair capacity. Name streams return pending,
+ordered addresses, EOF or an exact resolver error; cancel/drop keeps in-flight
+c-ares storage until its real terminal. External DNS is unnecessary for tests.
+
+CNet's [WebSocket API](../salts/cnet/include/cnet/websocket.h) remains available
+to hosts. WASI sockets 0.2.8 does not define a WebSocket interface.
 
 ## Dependency boundary
 
@@ -95,28 +387,103 @@ the installed `TurboWasm::Runtime` target.
 
 ## Build
 
-Install a compatible Salts SDK and point `SALTS_ROOT` at it. TurboWasm does not
-pin the SDK version in CMake and does not link SaltsUtils directly:
+Use CMake 3.25+, Ninja, the latest released Salts SDK, and the shared
+[qigao/vcpkg-cache](https://github.com/qigao/vcpkg-cache) toolchain. The Salts
+2.x API uses `cmeta_v128`, `cmeta_simd_*`, `cmeta_*` platform/filesystem
+functions, and `<coro.h>`. TurboWasm does not pin the SDK version or provide
+aliases for the removed Salts names.
 
-```sh
-export SALTS_ROOT=/path/to/salts-sdk
+`CMakeOptions.cmake` owns feature defaults. The versioned `CMakeUserPresets.json`
+provides configure/build/test/install entry points; `presets/` contains shared
+base settings. Third-party dependencies use the root `vcpkg.json`: enabling
+`TURBOWASM_ENABLE_MIR_JIT` selects `mir`, while conformance selects host WABT.
+The shared NuGet feed is read-only and the local binary cache is writable.
+Provide `GITHUB_TOKEN` with package read access in the parent environment;
+presets do not load `.env`.
 
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-ctest --test-dir build --output-on-failure
+For local SDK acquisition, run the following in PowerShell with .NET SDK 8+
+on `PATH` (the runtime alone is insufficient):
+
+```powershell
+./cmake/ci/restore-salts-sdk.ps1 -Local -SaltsRid windows-x64
 ```
 
-To enable the optional MIR backend, install the canonical `mir-jit` profile
-from `qigao/vcpkg-cache` and configure with:
+This resolves the latest package with `--no-cache --force-evaluate` and exports
+`SALTS_ROOT` in that PowerShell process. Alternatively, set `SALTS_ROOT` to an
+already installed release SDK. `-WithSaltsUtils` additionally provides
+`SALTS_UTILS_ROOT` for `TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN`.
 
-```sh
-cmake -S . -B build-mir -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DTURBOWASM_ENABLE_MIR_JIT=ON
+Set `PROJECT_ROOT` to the parent containing `external/pkgs`, and `VCPKG_ROOT`
+to the vcpkg checkout. Windows expects the cache checkout at
+`%LOCALAPPDATA%/qigao/vcpkg-cache`; Linux uses `VCPKG_CACHE_REPOSITORY_ROOT`
+and requires Mono for NuGet restore. SDK lookup is restricted to `SALTS_ROOT`;
+`CMAKE_PREFIX_PATH` contains only the matching vcpkg profile.
+
+From a Windows VS developer environment (`VsDevCmd.bat -arch=x64 -host_arch=x64`):
+
+```bat
+cmake --preset win-release-user
+cmake --build --preset win-release-user
+ctest --preset win-release-user
+cmake --build --preset install-win-release-user
 ```
 
-CI restores the latest published Salts SDK from GitHub Packages and restores MIR
-from the shared binary cache on Linux and macOS. The installed Runtime export remains MIR-free.
+On Linux, use `linux-release-user` for the same four commands. The `win-dev-user`
+and `linux-dev-user` presets select Debug and require a matching Debug Salts SDK
+in `SALTS_ROOT`. Build and vcpkg installed trees are separate per profile;
+installation uses `$PROJECT_ROOT/external/pkgs/turbowasm/debug|release`.
+To select the optional MIR backend locally, set `TURBOWASM_ENABLE_MIR_JIT` in
+the selected user preset before configuring; no manual MIR prefix is needed.
+
+Windows CI uses `windows-2025` and the Windows triplet supplied by the shared
+cache action, matching its compiler/SDK contract.
+
+CI and native SDK releases share `.github/workflows/native-build.yml` and use
+`ci-*-user` presets. `cmake/ci/select-ci-scope.ps1` owns the platform matrix:
+code changes and manual CI runs select all five qualification profiles by default;
+prose-only PRs skip native builds and still report `CI result`. SDK preparation
+selects the four shipping platforms from the same definitions. Manual SDK runs
+build package artifacts; publication remains restricted to release tags.
+The shared workflow uses Mozilla's [sccache Action](https://github.com/mozilla-actions/sccache-action)
+for C/C++ compiler caching. `actions/cache` restores and saves a bounded 1 GiB
+local cache per OS, architecture and preset, with independent writer keys and
+hit/miss statistics in each job. This avoids the per-object GHA backend writes
+that failed during full-graph qualification. The compiler launcher comes from
+the CI environment through the user presets; ordinary local builds do not
+require sccache. vcpkg binary caching remains independent.
+For published Salts SDKs, including 2.2.0, the build and installed-package tests
+normalize the imported `/experimental:c11atomics` option to MSVC's equivalent
+`-experimental:c11atomics` spelling. sccache 0.18.0 treats the unrecognized slash
+spelling as an input file, while retaining the dash spelling as an argument.
+The SDK's C-only condition and atomics semantics are preserved; SDK files are
+unchanged. Remove this normalization when the minimum supported Salts SDK
+exports the corrected spelling.
+CI restores the latest published SDK on every run and
+builds the complete selected graph. The published package remains Runtime +
+Component only; MIR remains outside the installed Runtime link interface.
+Android uses the shared outer vcpkg toolchain with the NDK chainloaded, and its
+existing installed consumers are cross-compiled without running host CTest.
+
+Commit `27d6efb` passes all five profiles in both the
+[cold build](https://github.com/qigao/turbowasm/actions/runs/37738464606) and
+[cache-restored build](https://github.com/qigao/turbowasm/actions/runs/37738955984),
+with zero cache write errors. Restored Linux and macOS MIR builds each record
+300 hits and one miss and pass 209/209 tests. Windows records 196 hits, zero
+misses and 76 uncached calls; its cacheable-hit percentage excludes those calls.
+The same commit passes the four-platform
+[SDK build and packaging](https://github.com/qigao/turbowasm/actions/runs/37738470020).
+
+After atomics-option normalization, commit `2efaf00` passes the
+[five-platform CI](https://github.com/qigao/turbowasm/actions/runs/37740255366)
+and [four-platform SDK packaging](https://github.com/qigao/turbowasm/actions/runs/37740259898).
+Its [restored Windows CI](https://github.com/qigao/turbowasm/actions/runs/37740607137/job/113190251265)
+records 272 hits, zero misses, zero non-cacheable calls and zero cache write
+errors, passing 170 tests plus 16 installed-package tests. The
+[restored Windows SDK build](https://github.com/qigao/turbowasm/actions/runs/37740611588/job/113190297701)
+records 56 hits and zero misses, non-cacheable calls or cache write errors.
+The hit percentages exclude other compiler requests: sccache separately reports
+two cache errors and eight non-cacheable compilations for Windows CI, and one
+cache error and four non-cacheable compilations for the Windows SDK profile.
 
 ## SIMD
 

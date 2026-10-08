@@ -15,6 +15,7 @@ typedef struct wait_probe {
     uint32_t can_wait_checks;
     uint32_t submitted;
     uint32_t resumed;
+    uint32_t cancelled;
     int last_completion;
     uintptr_t operation_token;
 } wait_probe;
@@ -60,8 +61,11 @@ static turbowasm_status host_wait_i32(
         assert(wait.generation != 0u);
         assert(wait.operation_token == probe->operation_token);
     }
-    if (status != TURBOWASM_OK)
+    if (status != TURBOWASM_OK) {
+        if (status == TURBOWASM_INTERRUPTED)
+            ++probe->cancelled;
         return status;
+    }
 
     ++probe->resumed;
     probe->last_completion = completion_status;
@@ -276,7 +280,24 @@ static void test_one_shot_rejects_before_async_submission(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_destroy_unwinds_pending_host_wait(void) {
+    turbowasm_module module={0};
+    turbowasm_instance instance={0};
+    turbowasm_linker linker={0};
+    turbowasm_execution execution={0};
+    wait_probe probe={0};
+    setup(&module,&instance,&linker,&probe);
+    assert(turbowasm_execution_create(&execution,&instance,1u,NULL,0u)==TURBOWASM_OK);
+    assert(turbowasm_execution_resume(&execution,NULL)==TURBOWASM_YIELDED);
+    turbowasm_execution_destroy(&execution);
+    assert(probe.submitted==1u && probe.cancelled==1u && probe.resumed==0u);
+    turbowasm_instance_destroy(&instance);
+    turbowasm_module_destroy(&module);
+    turbowasm_linker_destroy(&linker);
+}
+
 int main(void) {
+    test_destroy_unwinds_pending_host_wait();
     test_nested_host_wait_resumes_without_replay();
     test_tail_call_host_wait_retains_callback_frame();
     test_one_shot_rejects_before_async_submission();

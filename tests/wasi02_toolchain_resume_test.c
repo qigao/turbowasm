@@ -182,6 +182,11 @@ int main(void) {
     assert(wait.generation != 0u);
     assert(wait.operation_token == probe.operation_token);
 
+    /* The suspended call retains the instance and its capability owner. */
+    turbowasm_component_instance_destroy(&instance);
+    turbowasm_component_destroy(&component);
+    assert(turbowasm_wasi02_destroy(&wasi02) == TURBOWASM_INVALID_ARGUMENT);
+
     /* Resume without completion must not re-enter the retained callback. */
     assert(turbowasm_component_call_resume(
                &call, NULL) == TURBOWASM_YIELDED);

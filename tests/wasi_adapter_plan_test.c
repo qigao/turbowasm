@@ -40,7 +40,7 @@ int main(void) {
     size_t i;
 
     assert(count == turbowasm_wasi_preview1_adapter_function_count);
-    assert(count == 21u);
+    assert(count == 29u);
 
     for (i = 0u; i < count; ++i) {
         const cmeta_function_desc *function =

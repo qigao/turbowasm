@@ -12,7 +12,15 @@ typedef enum turbowasm_validation_heap_kind {
     TURBOWASM_VALIDATION_HEAP_EXTERN,
     TURBOWASM_VALIDATION_HEAP_EXN,
     TURBOWASM_VALIDATION_HEAP_NOEXN,
-    TURBOWASM_VALIDATION_HEAP_TYPE_INDEX
+    TURBOWASM_VALIDATION_HEAP_TYPE_INDEX,
+    TURBOWASM_VALIDATION_HEAP_NOFUNC,
+    TURBOWASM_VALIDATION_HEAP_NOEXTERN,
+    TURBOWASM_VALIDATION_HEAP_ANY,
+    TURBOWASM_VALIDATION_HEAP_EQ,
+    TURBOWASM_VALIDATION_HEAP_I31,
+    TURBOWASM_VALIDATION_HEAP_STRUCT,
+    TURBOWASM_VALIDATION_HEAP_ARRAY,
+    TURBOWASM_VALIDATION_HEAP_BOTTOM
 } turbowasm_validation_heap_kind;
 
 typedef struct turbowasm_validation_value_type {
@@ -21,7 +29,20 @@ typedef struct turbowasm_validation_value_type {
     bool nullable;
     turbowasm_validation_heap_kind heap_kind;
     uint32_t type_index;
+    const struct turbowasm_validation_func_type *definition;
 } turbowasm_validation_value_type;
+
+typedef enum turbowasm_validation_type_kind {
+    TURBOWASM_TYPE_FUNCTION = 0,
+    TURBOWASM_TYPE_STRUCT,
+    TURBOWASM_TYPE_ARRAY
+} turbowasm_validation_type_kind;
+
+typedef struct turbowasm_validation_field {
+    turbowasm_validation_value_type type;
+    uint8_t packed_bits;
+    bool mutable_value;
+} turbowasm_validation_field;
 
 typedef struct turbowasm_validation_func_type {
     bool defined;
@@ -31,7 +52,25 @@ typedef struct turbowasm_validation_func_type {
     uint8_t *results;
     turbowasm_validation_value_type *result_semantics;
     uint32_t result_count;
+    turbowasm_validation_type_kind kind;
+    turbowasm_validation_field *fields;
+    uint32_t field_count;
+    bool final_type;
+    uint32_t super_index;
+    const struct turbowasm_validation_func_type *super;
+    const struct turbowasm_validation_func_type *group;
+    uint32_t group_count;
+    uint32_t group_offset;
+    uint32_t dependency_depth;
+    const struct turbowasm_validation_func_type *canonical;
 } turbowasm_validation_func_type;
+
+bool turbowasm_validation_defined_type_equal(
+    const turbowasm_validation_func_type *left,
+    const turbowasm_validation_func_type *right);
+bool turbowasm_validation_defined_type_matches(
+    const turbowasm_validation_func_type *actual,
+    const turbowasm_validation_func_type *expected);
 
 typedef enum turbowasm_validation_control_kind {
     TURBOWASM_VALIDATION_CONTROL_BLOCK = 1,
@@ -111,9 +150,10 @@ typedef struct turbowasm_validation_global {
 } turbowasm_validation_global;
 
 typedef struct turbowasm_validation_limits {
-    uint32_t minimum;
-    uint32_t maximum;
+    uint64_t minimum;
+    uint64_t maximum;
     bool has_maximum;
+    bool table64;
 } turbowasm_validation_limits;
 
 typedef struct turbowasm_validation_table {
@@ -192,6 +232,7 @@ typedef struct turbowasm_validation_element_segment {
 } turbowasm_validation_element_segment;
 
 typedef struct turbowasm_validation_context {
+    bool requires_store;
     turbowasm_import_desc *imports;
     uint32_t import_count;
     uint32_t import_capacity;

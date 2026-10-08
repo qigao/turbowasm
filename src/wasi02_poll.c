@@ -112,6 +112,20 @@ turbowasm_status turbowasm_wasi02_pollable_drop(
         NULL);
 }
 
+turbowasm_status turbowasm_wasi02_pollable_release(
+    turbowasm_wasi02_poll *poll, uint32_t resource) {
+    turbowasm_value rep = {0};
+    turbowasm_status status;
+    if (poll == NULL || !poll->initialized)
+        return TURBOWASM_INVALID_ARGUMENT;
+    status = turbowasm_component_resource_take_owned(
+        &poll->resources, resource, TURBOWASM_WASI02_POLLABLE_ID, &rep);
+    if (status != TURBOWASM_OK)
+        return status;
+    return poll->provider.drop != NULL
+        ? poll->provider.drop(poll->provider.context, rep) : TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_wasi02_pollable_ready(
     turbowasm_wasi02_poll *poll,
     uint32_t resource,
@@ -179,8 +193,11 @@ turbowasm_status turbowasm_wasi02_pollable_block(
             &wait_storage);
         if (status != TURBOWASM_OK)
             return status;
-        if (wait_storage == NULL)
+        if (wait_storage == NULL) {
+            if (poll->wait_done != NULL)
+                poll->wait_done(poll->wait_done_context, operation_token);
             return TURBOWASM_INVALID_ARGUMENT;
+        }
     } else {
         status = poll->provider.arm(
             poll->provider.context,
@@ -195,6 +212,8 @@ turbowasm_status turbowasm_wasi02_pollable_block(
         operation_token,
         wait_storage,
         &completion_status);
+    if (poll->wait_done != NULL)
+        poll->wait_done(poll->wait_done_context, operation_token);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -358,6 +377,8 @@ turbowasm_status turbowasm_wasi02_poll_many(
         if (status != TURBOWASM_OK)
             goto done;
         if (wait_storage == NULL) {
+            if (poll->wait_done != NULL)
+                poll->wait_done(poll->wait_done_context, operation_token);
             status = TURBOWASM_INVALID_ARGUMENT;
             goto done;
         }
@@ -376,6 +397,8 @@ turbowasm_status turbowasm_wasi02_poll_many(
         operation_token,
         wait_storage,
         &completion_status);
+    if (poll->wait_done != NULL)
+        poll->wait_done(poll->wait_done_context, operation_token);
     if (status != TURBOWASM_OK)
         goto done;
 
@@ -691,7 +714,7 @@ static turbowasm_status wasi02_poll_resource_drop(
         resource_identity != poll->pollable_identity)
         return TURBOWASM_TYPE_MISMATCH;
 
-    return turbowasm_wasi02_pollable_drop(
+    return turbowasm_wasi02_pollable_release(
         poll, handle);
 }
 

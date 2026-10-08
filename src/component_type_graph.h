@@ -39,7 +39,10 @@ typedef enum turbowasm_component_type_kind {
     TURBOWASM_COMPONENT_TYPE_RESOURCE,
     TURBOWASM_COMPONENT_TYPE_OWN,
     TURBOWASM_COMPONENT_TYPE_BORROW,
-    TURBOWASM_COMPONENT_TYPE_INSTANCE
+    TURBOWASM_COMPONENT_TYPE_INSTANCE,
+    /* Private metadata until async execution and the host boundary are ready. */
+    TURBOWASM_COMPONENT_TYPE_FUTURE,
+    TURBOWASM_COMPONENT_TYPE_STREAM
 } turbowasm_component_type_kind;
 
 typedef enum turbowasm_component_type_ref_kind {
@@ -83,6 +86,10 @@ typedef struct turbowasm_component_type {
             turbowasm_component_type_ref element_type;
         } list;
         struct {
+            bool has_payload;
+            turbowasm_component_type_ref payload;
+        } async_value;
+        struct {
             turbowasm_component_record_field *fields;
             uint32_t count;
         } record;
@@ -114,11 +121,15 @@ typedef struct turbowasm_component_type {
         struct {
             turbowasm_component_type_ref *params;
             uint32_t param_count;
+            bool is_async;
             bool has_result;
             turbowasm_component_type_ref result;
         } function;
         struct {
             uint64_t identity;
+            /* NULL in decoded metadata. Instance views supply a generative
+             * nominal key shared by aliases and retained imported providers. */
+            const void *instance_key;
             uint8_t rep_type;
             bool has_destructor;
             bool identity_alias;
@@ -154,6 +165,53 @@ struct turbowasm_component_instance_type {
     uint32_t export_count;
 };
 
+/* Resolve nominal aliases within one graph. An imported identity has no local
+ * definition and resolves to its alias node; it retains identity_alias=true. */
+const turbowasm_component_type *turbowasm_component_resource_definition(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id resource_type);
+
+enum {
+    TURBOWASM_COMPONENT_VALUE_MAX_DEPTH = 64,
+    TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY = 1u,
+    TURBOWASM_COMPONENT_VALUE_RESOURCES = 2u,
+    TURBOWASM_COMPONENT_VALUE_ENDPOINTS = 4u
+};
+
+/* Inspect a synchronous value tree without allocation. False rejects non-value
+ * nodes, invalid references and excessive depth; output is unchanged on error.
+ * Time O(expanded value-type tree), stack O(depth), bounded above. */
+bool turbowasm_component_value_type_features(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    uint32_t *out_features);
+/* Private transfer planning also visits endpoint payloads. This does not enable
+ * synchronous public admission, which keeps using value_type_features above. */
+bool turbowasm_component_transfer_type_features(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref, uint32_t *out_features);
+/* Valid value tree with no nominal resource leaves, including every nested
+ * endpoint payload. Used until import identity correspondence is established;
+ * transfer features alone describe the carrier and intentionally omit payloads. */
+bool turbowasm_component_value_type_resource_free(
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref ref);
+/* Private parameter admission: resource leaves require instantiated keys.
+ * Borrow leaves are allowed in parameters, never inside endpoint payloads.
+ * Function validation separately excludes borrow results. */
+bool turbowasm_component_value_type_async_importable(
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref ref);
+
+/* Structural equality of value types in validated immutable graphs, including
+ * nested future/stream types. Resource leaves compare instance keys when bound,
+ * otherwise declaration identities. Bound and unbound resources never match.
+ * Non-value nodes and excessive depth fail.
+ * Time O(expanded type tree), stack O(depth); does not allocate. */
+bool turbowasm_component_value_type_equal(
+    const turbowasm_component_type_graph *left_graph,
+    turbowasm_component_type_ref left,
+    const turbowasm_component_type_graph *right_graph,
+    turbowasm_component_type_ref right);
+
 /*
  * Allocate an exact number of stable type-id slots. The graph owns all nodes
  * but never owns Core Wasm validation metadata. Allocation uses the current
@@ -174,6 +232,17 @@ bool turbowasm_component_type_graph_define_scalar(
 bool turbowasm_component_type_graph_define_string(
     turbowasm_component_type_graph *graph,
     turbowasm_component_type_id id);
+
+/* Retain optional future/stream payload metadata in an undefined slot. Forward
+ * references are allowed; graph validation rejects non-value payloads, cycles,
+ * excessive nesting and transitive borrows. A unit endpoint has no payload.
+ * This does not enable canonical execution or public host admission. */
+bool turbowasm_component_type_graph_define_async_value(
+    turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id id,
+    turbowasm_component_type_kind kind,
+    bool has_payload,
+    turbowasm_component_type_ref payload);
 
 bool turbowasm_component_type_graph_define_list(
     turbowasm_component_type_graph *graph,
@@ -197,6 +266,12 @@ bool turbowasm_component_type_graph_define_tuple(
     const turbowasm_component_type_ref *elements,
     uint32_t element_count);
 
+/* Pure preflight separates malformed cases from allocation failure. */
+bool turbowasm_component_variant_cases_valid(
+    const turbowasm_component_type_graph *graph,
+    const turbowasm_component_variant_case *cases,
+    uint32_t case_count);
+
 bool turbowasm_component_type_graph_define_variant(
     turbowasm_component_type_graph *graph,
     turbowasm_component_type_id id,
@@ -215,6 +290,10 @@ bool turbowasm_component_type_graph_define_result(
     turbowasm_component_type_ref ok,
     bool has_error,
     turbowasm_component_type_ref error);
+
+bool turbowasm_component_labels_valid(
+    const turbowasm_component_label *labels,
+    uint32_t label_count);
 
 bool turbowasm_component_type_graph_define_enum(
     turbowasm_component_type_graph *graph,

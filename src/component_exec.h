@@ -2,8 +2,12 @@
 #define TURBOWASM_COMPONENT_EXEC_H
 
 #include "component_binary.h"
+#include "component_type_view.h"
 #include "component_core_call.h"
 #include "component_resource_binding.h"
+#include "component_task_builtin.h"
+#include "component_endpoint.h"
+#include "component_exec_async_resource.h"
 
 #include <turbowasm/instance.h>
 #include <turbowasm/link.h>
@@ -18,7 +22,8 @@ typedef enum turbowasm_component_exec_core_function_kind {
     TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INVALID = 0,
     TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_INSTANCE,
     TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_RESOURCE_BUILTIN,
-    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_CANON_LOWER
+    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_CANON_LOWER,
+    TURBOWASM_COMPONENT_EXEC_CORE_FUNCTION_ASYNC_BUILTIN
 } turbowasm_component_exec_core_function_kind;
 
 typedef struct turbowasm_component_exec_core_function {
@@ -27,6 +32,7 @@ typedef struct turbowasm_component_exec_core_function {
     uint32_t function_index;
     uint32_t resource_builtin_index;
     uint32_t canon_lower_index;
+    uint32_t async_builtin_index;
 } turbowasm_component_exec_core_function;
 
 typedef struct turbowasm_component_exec_core_memory {
@@ -38,11 +44,30 @@ typedef struct turbowasm_component_exec_realloc_context {
     turbowasm_instance *instance;
     uint32_t function_index;
     turbowasm_component_pointer_type pointer_type;
+    bool *may_leave;
+    turbowasm_host_call *call;
+    turbowasm_trap *trap;
+    turbowasm_component_task_domain *domain;
+    /* Retained cross-instance result conversion runs on this task's Core stack. */
+    turbowasm_component_task *progress_task;
 } turbowasm_component_exec_realloc_context;
+
+typedef struct turbowasm_component_exec_async_builtin {
+    turbowasm_component_task_builtin binding;
+    turbowasm_component_exec_realloc_context realloc_context;
+} turbowasm_component_exec_async_builtin;
+
+typedef struct turbowasm_component_exec_async_limits {
+    uint32_t tasks;
+    uint32_t handles;
+} turbowasm_component_exec_async_limits;
 
 typedef struct turbowasm_component_exec_resource_context {
     struct turbowasm_component_exec *exec;
     uint32_t resource_type;
+    turbowasm_host_call *call;
+    turbowasm_trap *trap;
+    turbowasm_component_task *progress_task;
 } turbowasm_component_exec_resource_context;
 
 typedef struct turbowasm_component_exec_resource_builtin_context {
@@ -85,15 +110,41 @@ typedef turbowasm_status
     uint64_t resource_identity,
     uint32_t handle);
 
+/* Private stackful async host boundary. The capability owns context through exec
+ * teardown. Arguments belong to the call until terminal delivery; clear cells
+ * when moving values and stop accessing them before task.return/task.cancel.
+ * The callback may wait, must explicitly resolve/cancel, and unwinds on forced
+ * interruption. A bare YIELDED return does not preserve its stack and is invalid. */
+typedef turbowasm_status (*turbowasm_component_import_async_invoke_fn)(void *context,
+    turbowasm_component_task *task, turbowasm_host_call *call,
+    turbowasm_component_name instance_name, turbowasm_component_name function_name,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_id function_type,
+    turbowasm_component_value *arguments, size_t argument_count);
+
 typedef struct turbowasm_component_exec_imports {
     void *context;
     turbowasm_component_import_can_bind_fn can_bind;
     turbowasm_component_import_invoke_fn invoke;
 
-    /* Optional imported-resource canonical boundary. */
+    /* Optional imported-resource canonical boundary. Values contain provider
+     * handles; Core sees only this exec's canonical table handles. resource_drop
+     * consumes the provider's logical handle even when its destructor fails. */
     turbowasm_component_resource_lower_fn resource_lower;
     turbowasm_component_resource_lift_fn resource_lift;
     turbowasm_component_import_resource_drop_fn resource_drop;
+    /* Private async resolver; no guest execution. Provider must already be
+     * initialized. The consumer retains it after validating the selected lift. */
+    turbowasm_status (*async_target)(void *context,
+        turbowasm_component_name instance_name, turbowasm_component_name function_name,
+        const turbowasm_component_type_graph *graph, turbowasm_component_type_id function_type,
+        struct turbowasm_component_exec **provider, uint32_t *adapter_index);
+    /* Optional private resource resolver. TYPE_MISMATCH means not claimed;
+     * success returns a root resource type in an initialized async provider. */
+    turbowasm_status (*resource_target)(void *context,
+        turbowasm_component_name instance_name, turbowasm_component_name resource_name,
+        struct turbowasm_component_exec **provider, uint32_t *resource_type);
+    /* Mutually exclusive with async_target in one capability set. */
+    turbowasm_component_import_async_invoke_fn async_invoke;
 } turbowasm_component_exec_imports;
 
 typedef struct turbowasm_component_exec_canon_lower_context {
@@ -102,6 +153,12 @@ typedef struct turbowasm_component_exec_canon_lower_context {
     turbowasm_component_name function_name;
     const turbowasm_component_type_graph *graph;
     turbowasm_component_type_id function_type;
+    uint32_t local_adapter_index;
+    struct turbowasm_component_exec *async_provider;
+    uint32_t async_adapter_index;
+    turbowasm_component_import_async_invoke_fn async_host;
+    void *async_host_context;
+    bool is_async;
 
     turbowasm_component_flat_signature flat_signature;
     turbowasm_host_function_type host_type;
@@ -117,6 +174,7 @@ typedef struct turbowasm_component_exec_canon_lower_context {
 
 typedef struct turbowasm_component_exec {
     const turbowasm_component_binary *binary;
+    turbowasm_component_type_view *type_view;
 
     turbowasm_module *core_modules;
     uint32_t core_module_count;
@@ -158,16 +216,27 @@ typedef struct turbowasm_component_exec {
     uint32_t *function_adapter_indices;
     uint32_t function_count;
 
+    turbowasm_component_task_domain task_domain;
+    /* Lift-only codec: no shared lower reservations across retained calls. */
+    turbowasm_component_endpoint_codec async_endpoint_lift;
+    turbowasm_component_exec_resource_codec async_resource_lift;
+    uint32_t async_resource_owners, async_buffer_owners;
+    turbowasm_component_task_binding *async_functions;
+    turbowasm_component_exec_async_builtin *async_builtins;
+    struct turbowasm_component_exec_async_call *async_calls, *async_calls_tail;
+    uint32_t async_call_count;
+    uint32_t async_import_owners;
+    bool async_driving;
+
+    bool may_leave;
     bool initialized;
 } turbowasm_component_exec;
 
 /*
- * Instantiate the C5c1 executable subset:
- * - no Component imports;
- * - Core instance definitions are zero-argument module instantiations;
- * - Core function definitions come from core-export aliases;
- * - Component functions come from synchronous canon lift with no options.
- *
+ * Instantiate the supported synchronous Component graph using the shared Core
+ * linker and alias resolver. Capability imports use the typed entries below.
+ * Async metadata requires the explicit private async entry; public admission
+ * remains gated until retained host ownership is integrated.
  * The executable borrows the decoded Component binary and its source bytes.
  */
 turbowasm_status turbowasm_component_exec_init(
@@ -190,7 +259,54 @@ turbowasm_status turbowasm_component_exec_init_with_import_sets(
     const turbowasm_component_exec_imports *import_sets,
     size_t import_set_count);
 
-void turbowasm_component_exec_destroy(
+/* Drop an abstract resource already removed from its canonical table. */
+turbowasm_status turbowasm_component_exec_resource_release(
+    turbowasm_component_exec *exec, uint64_t identity, turbowasm_value rep);
+
+/* Private staged async integration. Explicit nonzero bounded quotas; borrows
+ * binary/source bytes. Local resource/endpoint values use invocation- or
+ * buffer-owned transactions; imported resources bind defining-instance identities
+ * and foreign borrows belong to the receiving task's explicit scope.
+ * No public Component loader calls this entry. */
+turbowasm_status turbowasm_component_exec_init_async(
+    turbowasm_component_exec *exec, const turbowasm_component_binary *binary,
+    const turbowasm_component_exec_async_limits *limits);
+/* Same retained private entry, with synchronous capabilities and/or async
+ * instance targets, including resource-bearing signatures with resolved identities. */
+turbowasm_status turbowasm_component_exec_init_async_with_import_sets(
+    turbowasm_component_exec *exec, const turbowasm_component_binary *binary,
+    const turbowasm_component_exec_async_limits *limits,
+    const turbowasm_component_exec_imports *imports, size_t import_count);
+/* Validate and retain one already resolved imported async lift. */
+turbowasm_status turbowasm_component_exec_async_bind(
+    turbowasm_component_exec_canon_lower_context *lower,
+    turbowasm_component_exec *provider, uint32_t adapter_index);
+/* Returns a borrowed immutable lift binding. Copy it and install invocation
+ * prepare/resolve hooks before task_create against exec->task_domain. */
+turbowasm_status turbowasm_component_exec_async_export(
+    const turbowasm_component_exec *exec, const uint8_t *name, uint32_t name_size,
+    const turbowasm_component_task_binding **out);
+/* Owner-thread driver: at most max_quanta FIFO call turns, each with options as
+ * its fresh budget. Does not drive externally owned exported tasks. Return the
+ * first call error; successful pending work yields. out_pending includes Core
+ * continuations and completed calls awaiting terminal delivery/handle drop. */
+turbowasm_status turbowasm_component_exec_async_poll(turbowasm_component_exec *exec,
+    uint32_t max_quanta, const turbowasm_execution_options *options, uint32_t *out_pending);
+/* Private failure teardown after exported caller tasks are destroyed. A non-OK/non-YIELDED
+ * reason fails retained subtasks, then unwinds their tasks before releasing
+ * memory/loans. Pinned/in-conversion owners reject abort and remain retryable. */
+turbowasm_status turbowasm_component_exec_async_abort(turbowasm_component_exec *exec, turbowasm_status reason);
+/* Internal host binding selected by the shared inline-provider linker. */
+turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_host_call *call,
+    const turbowasm_value *arguments, size_t argument_count, turbowasm_value *results,
+    size_t result_capacity, size_t *result_count, turbowasm_trap *trap);
+/* Allocate one quota-bounded retained buffer transaction for an endpoint builtin.
+ * Input uses this exec's canonical memory/realloc options. The caller releases
+ * it on failed admission; otherwise the endpoint owns it until event delivery.
+ * Each copy borrows its explicit driver through commit/rollback and cleanup. */
+turbowasm_status turbowasm_component_exec_async_buffer_prepare(void *context, turbowasm_component_buffer *buffer);
+/* Refuses live async owners without destroying instances or bindings. */
+turbowasm_status turbowasm_component_exec_destroy(
     turbowasm_component_exec *exec);
 
 turbowasm_status turbowasm_component_exec_invoke_export(

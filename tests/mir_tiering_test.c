@@ -113,8 +113,7 @@ int main(void) {
     turbowasm_module_destroy(&module);
 
     /*
-     * Shared-memory modules are deliberately interpreter-only until MIR owns
-     * the same shared backing/locking contract.
+     * Shared memory does not exclude independently eligible scalar functions.
      */
     {
         static const uint8_t shared_bytes[] = {
@@ -155,12 +154,12 @@ int main(void) {
         assert(invoke_i32(&shared_instance) == 42);
         assert(shared_impl->jit_function_count == 1u);
         assert(shared_impl->jit_functions[0].state ==
-               TURBOWASM_JIT_INTERPRET_ONLY);
-        assert(shared_impl->jit_functions[0].compiled.impl == NULL);
+               TURBOWASM_JIT_COMPILED);
+        assert(shared_impl->jit_functions[0].compiled.impl != NULL);
 
         assert(invoke_i32(&shared_instance) == 42);
         assert(shared_impl->jit_functions[0].state ==
-               TURBOWASM_JIT_INTERPRET_ONLY);
+               TURBOWASM_JIT_COMPILED);
 
         turbowasm_instance_destroy(&shared_instance);
         turbowasm_module_destroy(&shared_module);
@@ -291,8 +290,8 @@ int main(void) {
     }
 
     /*
-     * Structured direct tail calls remain intentionally ineligible until the
-     * structured MIR lowering can prove the same trampoline semantics.
+     * Structured direct tail calls use the same Runtime trampoline as the
+     * straight-line path and must execute through a compiled caller.
      */
     {
         static const uint8_t structured_tail_bytes[] = {
@@ -335,8 +334,8 @@ int main(void) {
 
         assert(invoke_i32_at(&tail_instance, 1u) == 7);
         assert(tail_impl->jit_functions[1].state ==
-               TURBOWASM_JIT_INTERPRET_ONLY);
-        assert(tail_impl->jit_functions[1].compiled.impl == NULL);
+               TURBOWASM_JIT_COMPILED);
+        assert(tail_impl->jit_functions[1].compiled.impl != NULL);
 
         turbowasm_instance_destroy(&tail_instance);
         turbowasm_module_destroy(&tail_module);

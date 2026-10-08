@@ -8,6 +8,15 @@ static const cmeta_type_identity turbowasm_externref_type_identity =
     CMETA_TYPE_ID_ATOM_INIT("turbowasm.value.externref");
 static const cmeta_type_identity turbowasm_exnref_type_identity =
     CMETA_TYPE_ID_ATOM_INIT("turbowasm.value.exnref");
+static const cmeta_type_identity turbowasm_gcref_type_identity =
+    CMETA_TYPE_ID_ATOM_INIT("turbowasm.value.gcref");
+static const cmeta_type_desc turbowasm_gcref_type = {
+    .name = "turbowasm_gcref",
+    .size = sizeof(turbowasm_gcref),
+    .align = _Alignof(turbowasm_gcref),
+    .kind = CMETA_T_OBJECT,
+    .identity = &turbowasm_gcref_type_identity
+};
 
 static const cmeta_type_desc turbowasm_v128_type = {
     .name = "turbowasm_v128",
@@ -60,6 +69,8 @@ turbowasm_value_type_descriptor(turbowasm_value_kind kind) {
         case TURBOWASM_VALUE_FUNCREF: return &turbowasm_funcref_type;
         case TURBOWASM_VALUE_EXTERNREF: return &turbowasm_externref_type;
         case TURBOWASM_VALUE_EXNREF: return &turbowasm_exnref_type;
+        case TURBOWASM_VALUE_GCREF: return &turbowasm_gcref_type;
+        case TURBOWASM_VALUE_MANAGED_EXTERNREF: return &turbowasm_gcref_type;
         default: return NULL;
     }
 }
@@ -94,7 +105,7 @@ turbowasm_status turbowasm_v128_load(turbowasm_v128 *out,
     if (shape != TURBOWASM_V128_RAW &&
         turbowasm_v128_descriptor(shape) == NULL)
         return TURBOWASM_UNSUPPORTED;
-    salts_simd_v128_load(&out->bits, bytes);
+    cmeta_simd_v128_load(&out->bits, bytes);
     out->shape = shape;
     return TURBOWASM_OK;
 }
@@ -106,6 +117,6 @@ turbowasm_status turbowasm_v128_store(void *bytes,
     if (value->shape != TURBOWASM_V128_RAW &&
         turbowasm_v128_descriptor(value->shape) == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    salts_simd_v128_store(bytes, &value->bits);
+    cmeta_simd_v128_store(bytes, &value->bits);
     return TURBOWASM_OK;
 }

@@ -5,6 +5,7 @@
 #include "wasi02_poll.h"
 #include "wasi02_provider.h"
 #include "wasi02_streams.h"
+#include "wasi02_network.h"
 
 #include <turbowasm/wasi02_sockets.h>
 
@@ -32,6 +33,7 @@ typedef struct turbowasm_wasi02_tcp_slot {
 
 typedef struct turbowasm_wasi02_sockets {
     turbowasm_wasi02_socket_provider provider;
+    turbowasm_wasi02_network *network;
 
     turbowasm_component_resource_table networks;
     turbowasm_component_resource_table tcp_resources;
@@ -43,12 +45,15 @@ typedef struct turbowasm_wasi02_sockets {
 
     turbowasm_wasi02_streams *streams;
     turbowasm_wasi02_poll *poll;
+    turbowasm_status (*transport_closed)(void *, turbowasm_value, bool *);
+    void *transport_context;
 
     uint64_t component_network_identity;
     uint64_t component_tcp_identity;
     bool component_network_identity_bound;
     bool component_tcp_identity_bound;
 
+    bool busy;
     bool initialized;
 } turbowasm_wasi02_sockets;
 

@@ -2,8 +2,25 @@ cmake_minimum_required(VERSION 3.20)
 project(TurboWasmInstalledConsumer LANGUAGES C CXX)
 
 include(CTest)
+include(../../cmake/SaltsCompilerOptions.cmake)
 
-find_package(TurboWasm CONFIG REQUIRED)
+foreach(_dependency IN ITEMS Salts TurboWasm)
+  if(_dependency STREQUAL "Salts")
+    set(_root "$ENV{SALTS_ROOT}")
+  else()
+    set(_root "$ENV{TURBOWASM_ROOT}")
+  endif()
+  if(NOT IS_DIRECTORY "${_root}")
+    message(FATAL_ERROR "${_dependency} SDK root is not a directory: ${_root}")
+  endif()
+  unset(${_dependency}_DIR CACHE)
+  unset(${_dependency}_DIR)
+  file(TO_CMAKE_PATH "${_root}" _root)
+  find_package(${_dependency} CONFIG REQUIRED
+    PATHS "${_root}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+endforeach()
+
+turbowasm_normalize_salts_c11_atomics()
 
 add_executable(turbowasm_installed_consumer main.c)
 target_link_libraries(turbowasm_installed_consumer PRIVATE TurboWasm::Runtime)
@@ -14,6 +31,12 @@ set_target_properties(turbowasm_installed_consumer PROPERTIES
 
 add_test(NAME turbowasm_installed_consumer
          COMMAND turbowasm_installed_consumer)
+
+add_executable(turbowasm_installed_gc_consumer ../../examples/gc.c)
+target_link_libraries(turbowasm_installed_gc_consumer PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_installed_gc_consumer PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_installed_gc_consumer COMMAND turbowasm_installed_gc_consumer)
 
 add_executable(turbowasm_installed_artifact_cpp_consumer
   artifact_cpp_main.cpp)
@@ -162,6 +185,33 @@ if(TARGET TurboWasm::WASI02)
            COMMAND turbowasm_installed_wasi02_cpp_consumer)
 endif()
 
+if(TARGET TurboWasm::WASI02IO)
+  add_executable(turbowasm_installed_wasi02_io_cpp_consumer wasi02_io_cpp_main.cpp)
+  target_link_libraries(turbowasm_installed_wasi02_io_cpp_consumer PRIVATE TurboWasm::WASI02IO)
+  set_target_properties(turbowasm_installed_wasi02_io_cpp_consumer PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi02_io_cpp_consumer COMMAND turbowasm_installed_wasi02_io_cpp_consumer)
+endif()
+
+if(TARGET TurboWasm::WASI02CNet)
+  add_executable(turbowasm_installed_wasi02_cnet_cpp_consumer wasi02_cnet_cpp_main.cpp)
+  target_link_libraries(turbowasm_installed_wasi02_cnet_cpp_consumer PRIVATE TurboWasm::WASI02CNet)
+  set_target_properties(turbowasm_installed_wasi02_cnet_cpp_consumer PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi02_cnet_cpp_consumer COMMAND turbowasm_installed_wasi02_cnet_cpp_consumer)
+  add_executable(turbowasm_installed_wasi02_network_consumer ../wasi02_cnet_network_test.c)
+  target_compile_definitions(turbowasm_installed_wasi02_network_consumer PRIVATE TW_NETWORK_PUBLIC_ONLY=1)
+  target_link_libraries(turbowasm_installed_wasi02_network_consumer PRIVATE TurboWasm::WASI02CNet Salts::TinyTest)
+  set_target_properties(turbowasm_installed_wasi02_network_consumer PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi02_network_consumer COMMAND turbowasm_installed_wasi02_network_consumer)
+  add_executable(turbowasm_installed_wasi02_tcp_consumer ../wasi02_cnet_tcp_test.c)
+  target_link_libraries(turbowasm_installed_wasi02_tcp_consumer PRIVATE TurboWasm::WASI02CNet Salts::TinyTest)
+  set_target_properties(turbowasm_installed_wasi02_tcp_consumer PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi02_tcp_consumer COMMAND turbowasm_installed_wasi02_tcp_consumer)
+endif()
+
 if(TARGET TurboWasm::CFlow)
   add_executable(turbowasm_installed_cflow_consumer cflow_main.c)
   target_link_libraries(turbowasm_installed_cflow_consumer
@@ -237,6 +287,27 @@ if(TARGET TurboWasm::WASI)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_installed_wasi_consumer
            COMMAND turbowasm_installed_wasi_consumer)
+endif()
+
+if(TARGET TurboWasm::WASI)
+  add_executable(turbowasm_installed_wasi_preview1_sockets_consumer ../wasi_preview1_sockets_test.c)
+  target_link_libraries(turbowasm_installed_wasi_preview1_sockets_consumer PRIVATE TurboWasm::WASI Salts::TinyTest)
+  set_target_properties(turbowasm_installed_wasi_preview1_sockets_consumer PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_installed_wasi_preview1_sockets_consumer COMMAND turbowasm_installed_wasi_preview1_sockets_consumer)
+  if(TARGET TurboWasm::WASICNet)
+    add_executable(turbowasm_installed_wasi_preview1_cnet_consumer ../wasi_preview1_cnet_test.c)
+    target_link_libraries(turbowasm_installed_wasi_preview1_cnet_consumer PRIVATE TurboWasm::WASICNet Salts::TinyTest)
+    set_target_properties(turbowasm_installed_wasi_preview1_cnet_consumer PROPERTIES
+      C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    add_test(NAME turbowasm_installed_wasi_preview1_cnet_consumer COMMAND turbowasm_installed_wasi_preview1_cnet_consumer)
+    set_tests_properties(turbowasm_installed_wasi_preview1_cnet_consumer PROPERTIES TIMEOUT 30)
+    add_executable(turbowasm_installed_wasi_preview1_cnet_cpp_consumer wasi_preview1_cnet_cpp_main.cpp)
+    target_link_libraries(turbowasm_installed_wasi_preview1_cnet_cpp_consumer PRIVATE TurboWasm::WASICNet)
+    set_target_properties(turbowasm_installed_wasi_preview1_cnet_cpp_consumer PROPERTIES
+      CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    add_test(NAME turbowasm_installed_wasi_preview1_cnet_cpp_consumer COMMAND turbowasm_installed_wasi_preview1_cnet_cpp_consumer)
+  endif()
 endif()
 
 if(TARGET TurboWasm::WASIThreads)

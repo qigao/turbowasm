@@ -173,7 +173,7 @@ static void test_direct_call_shares_native_budget(void) {
         0x0a, 0x0c,
         0x02,
 
-        /* f0: const 7; nop; end = 3 instructions, MIR-ineligible */
+        /* f0: const 7; nop; end = 3 instructions. */
         0x05,
         0x00,
         0x41, 0x07,
@@ -210,7 +210,9 @@ static void test_direct_call_shares_native_budget(void) {
     callee = turbowasm_validation_context_function(
         &impl->validation, 0u);
     assert(callee != NULL);
-    assert(!backend.is_function_eligible(
+    /* This instance has no attached backend, so the call helper still enters
+     * the interpreter even though the callee is independently eligible. */
+    assert(backend.is_function_eligible(
         backend.context, &impl->validation, 0u, callee));
 
     compile_function(&backend, &module, 1u, &compiled);

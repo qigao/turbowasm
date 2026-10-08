@@ -233,8 +233,8 @@ static void test_shared_atomic_rmw_is_lossless(void) {
     turbowasm_linker linker = {0};
     increment_context a = {0};
     increment_context b = {0};
-    salts_thread_t thread_a = NULL;
-    salts_thread_t thread_b = NULL;
+    cmeta_thread_t thread_a = NULL;
+    cmeta_thread_t thread_b = NULL;
 
     assert(turbowasm_module_load_borrowed(
                &provider_module,
@@ -268,12 +268,12 @@ static void test_shared_atomic_rmw_is_lossless(void) {
     b.instance = &consumer_b;
     b.iterations = 1000u;
 
-    assert(salts_thread_create(
+    assert(cmeta_thread_create(
                &thread_a, increment_thread, &a) == 0);
-    assert(salts_thread_create(
+    assert(cmeta_thread_create(
                &thread_b, increment_thread, &b) == 0);
-    assert(salts_thread_join(&thread_a) == 0);
-    assert(salts_thread_join(&thread_b) == 0);
+    assert(cmeta_thread_join(&thread_a) == 0);
+    assert(cmeta_thread_join(&thread_b) == 0);
 
     assert(invoke_i32(&provider, 0u) == 2000);
 

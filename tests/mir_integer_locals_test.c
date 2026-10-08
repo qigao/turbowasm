@@ -144,7 +144,7 @@ int main(void) {
         0x7c,
         0x0b,
 
-        /* f2: valid, but arity 3 is outside #77 ABI bridge */
+        /* f2: arity three uses the array argument boundary. */
         0x04,
         0x00,
         0x20, 0x00,
@@ -154,7 +154,7 @@ int main(void) {
     turbowasm_module module = {0};
     turbowasm_instance instance = {0};
     turbowasm_jit_backend backend = {0};
-    turbowasm_value i32_args[2] = {0};
+    turbowasm_value i32_args[3] = {0};
     turbowasm_value i64_arg = {0};
     const turbowasm_module_impl *impl;
     const turbowasm_validation_function *unsupported;
@@ -186,21 +186,10 @@ int main(void) {
 
     impl = turbowasm_module_impl_get(&module);
     assert(impl != NULL);
-    unsupported = turbowasm_validation_context_function(
-        &impl->validation, 2u);
-    assert(unsupported != NULL);
-    assert(!backend.is_function_eligible(
-        backend.context,
-        &impl->validation,
-        2u,
-        unsupported));
-    assert(backend.compile_function(
-               backend.context,
-               &impl->validation,
-               2u,
-               unsupported,
-               &compiled) == TURBOWASM_UNSUPPORTED);
-    assert(compiled.impl == NULL);
+    i32_args[2].kind = TURBOWASM_VALUE_I32;
+    i32_args[2].as.i32 = 99;
+    compare_with_args(&backend, &module, &instance,
+        2u, i32_args, 3u, TURBOWASM_VALUE_I32);
 
     /* Type mismatch in the native ABI bridge is explicit. */
     unsupported = turbowasm_validation_context_function(

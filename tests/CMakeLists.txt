@@ -33,6 +33,34 @@ add_test(NAME turbowasm_artifact_restore_test
          COMMAND turbowasm_artifact_restore_test)
 
 if(TURBOWASM_ENABLE_COMPONENT)
+  add_executable(turbowasm_component_host_task_test component_host_task_test.c)
+  target_link_libraries(turbowasm_component_host_task_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  target_include_directories(turbowasm_component_host_task_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_component_host_task_test PROPERTIES FOLDER "tests/component"
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_host_task_test COMMAND turbowasm_component_host_task_test)
+  add_executable(turbowasm_component_async_options_test component_async_options_test.c)
+  target_link_libraries(turbowasm_component_async_options_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  target_include_directories(turbowasm_component_async_options_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_component_async_options_test PROPERTIES FOLDER "tests/component"
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_async_options_test COMMAND turbowasm_component_async_options_test)
+  add_executable(turbowasm_component_host_arguments_test component_host_arguments_test.c)
+  target_link_libraries(turbowasm_component_host_arguments_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  target_include_directories(turbowasm_component_host_arguments_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_component_host_arguments_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_host_arguments_test COMMAND turbowasm_component_host_arguments_test)
+  add_executable(turbowasm_component_host_resources_test component_host_resources_test.c)
+  target_link_libraries(turbowasm_component_host_resources_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  set_target_properties(turbowasm_component_host_resources_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_host_resources_test COMMAND turbowasm_component_host_resources_test)
+  add_executable(turbowasm_component_host_values_test component_host_values_test.c)
+  target_link_libraries(turbowasm_component_host_values_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  set_target_properties(turbowasm_component_host_values_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_host_values_test COMMAND turbowasm_component_host_values_test)
   add_executable(turbowasm_component_public_hardening_test
     component_public_hardening_test.c)
   target_link_libraries(turbowasm_component_public_hardening_test
@@ -215,6 +243,132 @@ set_target_properties(turbowasm_component_type_graph_test PROPERTIES
 add_test(NAME turbowasm_component_type_graph_test
          COMMAND turbowasm_component_type_graph_test)
 
+add_executable(turbowasm_component_async_type_test component_async_type_test.c)
+target_link_libraries(turbowasm_component_async_type_test
+  PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_type_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_type_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_async_type_test
+         COMMAND turbowasm_component_async_type_test)
+
+if(TURBOWASM_ENABLE_COMPONENT)
+  add_executable(turbowasm_component_async_binary_test component_async_binary_test.c)
+  target_link_libraries(turbowasm_component_async_binary_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  target_include_directories(turbowasm_component_async_binary_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_component_async_binary_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_async_binary_test COMMAND turbowasm_component_async_binary_test)
+endif()
+
+add_executable(turbowasm_component_async_state_test component_async_state_test.c)
+target_link_libraries(turbowasm_component_async_state_test
+  PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_state_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_state_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_async_state_test
+         COMMAND turbowasm_component_async_state_test)
+
+add_executable(turbowasm_component_task_test component_task_test.c)
+target_link_libraries(turbowasm_component_task_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_task_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_task_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_task_test COMMAND turbowasm_component_task_test)
+
+add_executable(turbowasm_component_async_call_test component_async_call_test.c)
+target_link_libraries(turbowasm_component_async_call_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_call_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_call_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_async_call_test COMMAND turbowasm_component_async_call_test)
+
+add_executable(turbowasm_component_async_exec_test component_async_exec_test.c)
+target_link_libraries(turbowasm_component_async_exec_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_exec_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_exec_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/component")
+add_test(NAME turbowasm_component_async_exec_test COMMAND turbowasm_component_async_exec_test)
+
+add_executable(turbowasm_component_async_lower_test component_async_lower_test.c)
+target_link_libraries(turbowasm_component_async_lower_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_lower_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_lower_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/component")
+add_test(NAME turbowasm_component_async_lower_test COMMAND turbowasm_component_async_lower_test)
+
+add_executable(turbowasm_component_type_view_test component_type_view_test.c)
+target_link_libraries(turbowasm_component_type_view_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_type_view_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_type_view_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/component")
+add_test(NAME turbowasm_component_type_view_test COMMAND turbowasm_component_type_view_test)
+
+add_executable(turbowasm_component_async_payload_test component_async_payload_test.c)
+target_link_libraries(turbowasm_component_async_payload_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_payload_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_payload_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/component")
+add_test(NAME turbowasm_component_async_payload_test COMMAND turbowasm_component_async_payload_test)
+
+add_executable(turbowasm_component_async_import_test component_async_import_test.c)
+target_link_libraries(turbowasm_component_async_import_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_import_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_import_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/component")
+add_test(NAME turbowasm_component_async_import_test COMMAND turbowasm_component_async_import_test)
+
+add_executable(turbowasm_component_async_resource_import_test component_async_resource_import_test.c)
+target_link_libraries(turbowasm_component_async_resource_import_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_async_resource_import_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_async_resource_import_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/component")
+add_test(NAME turbowasm_component_async_resource_import_test COMMAND turbowasm_component_async_resource_import_test)
+
+add_executable(turbowasm_component_endpoint_builtin_test component_endpoint_builtin_test.c)
+target_link_libraries(turbowasm_component_endpoint_builtin_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_endpoint_builtin_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_endpoint_builtin_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_endpoint_builtin_test COMMAND turbowasm_component_endpoint_builtin_test)
+
+add_executable(turbowasm_component_waitable_test component_waitable_test.c)
+target_link_libraries(turbowasm_component_waitable_test
+  PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_waitable_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_waitable_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_waitable_test COMMAND turbowasm_component_waitable_test)
+
+add_executable(turbowasm_component_endpoint_test component_endpoint_test.c)
+target_link_libraries(turbowasm_component_endpoint_test
+  PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_endpoint_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_endpoint_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_endpoint_test COMMAND turbowasm_component_endpoint_test)
+
+add_executable(turbowasm_component_endpoint_codec_test component_endpoint_codec_test.c)
+target_link_libraries(turbowasm_component_endpoint_codec_test
+  PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_endpoint_codec_test
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_endpoint_codec_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_endpoint_codec_test COMMAND turbowasm_component_endpoint_codec_test)
+
+add_executable(turbowasm_component_buffer_test component_buffer_test.c)
+target_link_libraries(turbowasm_component_buffer_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_buffer_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_buffer_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_component_buffer_test COMMAND turbowasm_component_buffer_test)
+
 if(TARGET turbowasm_wasi02_core)
   add_executable(turbowasm_wasi02_descriptor_test
     wasi02_descriptor_test.c)
@@ -337,7 +491,32 @@ if(TARGET turbowasm_wasi02_sockets_core)
            COMMAND turbowasm_wasi02_tcp_state_test)
 endif()
 
+if(TARGET turbowasm_wasi02_io)
+    add_executable(turbowasm_wasi02_io_test wasi02_io_test.c)
+    target_include_directories(turbowasm_wasi02_io_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(turbowasm_wasi02_io_test PRIVATE turbowasm_wasi02_io Salts::TinyTest)
+    add_test(NAME turbowasm_wasi02_io_test COMMAND turbowasm_wasi02_io_test)
+endif()
 if(TARGET turbowasm_wasi02_cnet_core)
+  if(TARGET TurboWasm::WASI02CNet)
+  add_executable(turbowasm_wasi02_cnet_network_test wasi02_cnet_network_test.c)
+  target_include_directories(turbowasm_wasi02_cnet_network_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_wasi02_cnet_network_test PRIVATE TurboWasm::WASI02CNet Salts::TinyTest)
+  add_test(NAME turbowasm_wasi02_cnet_network_test COMMAND turbowasm_wasi02_cnet_network_test)
+  add_executable(turbowasm_wasi02_cnet_tcp_test wasi02_cnet_tcp_test.c)
+  target_include_directories(turbowasm_wasi02_cnet_tcp_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_wasi02_cnet_tcp_test PRIVATE TurboWasm::WASI02CNet Salts::TinyTest)
+  add_test(NAME turbowasm_wasi02_cnet_tcp_test COMMAND turbowasm_wasi02_cnet_tcp_test)
+  foreach(_progress IN ITEMS external listener)
+    add_executable(turbowasm_wasi02_cnet_${_progress}_progress_test
+      wasi02_cnet_${_progress}_progress_test.c)
+    target_link_libraries(turbowasm_wasi02_cnet_${_progress}_progress_test
+      PRIVATE TurboWasm::WASI02CNet Salts::TinyTest)
+    add_test(NAME turbowasm_wasi02_cnet_${_progress}_progress_test
+      COMMAND turbowasm_wasi02_cnet_${_progress}_progress_test)
+    set_tests_properties(turbowasm_wasi02_cnet_${_progress}_progress_test PROPERTIES TIMEOUT 30)
+  endforeach()
+  endif()
   add_executable(turbowasm_wasi02_cnet_control_test
     wasi02_cnet_control_test.c)
   target_link_libraries(turbowasm_wasi02_cnet_control_test
@@ -354,70 +533,37 @@ if(TARGET turbowasm_wasi02_cnet_core)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_wasi02_cnet_control_test
            COMMAND turbowasm_wasi02_cnet_control_test)
-
-  add_executable(turbowasm_wasi02_cnet_external_progress_test
-    wasi02_cnet_external_progress_test.c)
-  target_link_libraries(turbowasm_wasi02_cnet_external_progress_test
-    PRIVATE
-      turbowasm_wasi02_cnet_core
-      Salts::CNet
-      Salts::NativeIO)
-  target_include_directories(turbowasm_wasi02_cnet_external_progress_test
-    PRIVATE
-      "${PROJECT_SOURCE_DIR}/src"
-      "${PROJECT_SOURCE_DIR}/include")
-  set_target_properties(
-    turbowasm_wasi02_cnet_external_progress_test PROPERTIES
-    C_STANDARD 11
-    C_STANDARD_REQUIRED ON
-    C_EXTENSIONS OFF)
-  add_test(NAME turbowasm_wasi02_cnet_external_progress_test
-           COMMAND turbowasm_wasi02_cnet_external_progress_test)
-
-  add_executable(turbowasm_wasi02_cnet_listener_progress_test
-    wasi02_cnet_listener_progress_test.c)
-  target_link_libraries(turbowasm_wasi02_cnet_listener_progress_test
-    PRIVATE
-      turbowasm_wasi02_cnet_core
-      Salts::CNet
-      Salts::NativeIO)
-  target_include_directories(turbowasm_wasi02_cnet_listener_progress_test
-    PRIVATE
-      "${PROJECT_SOURCE_DIR}/src"
-      "${PROJECT_SOURCE_DIR}/include")
-  set_target_properties(
-    turbowasm_wasi02_cnet_listener_progress_test PROPERTIES
-    C_STANDARD 11
-    C_STANDARD_REQUIRED ON
-    C_EXTENSIONS OFF)
-  add_test(NAME turbowasm_wasi02_cnet_listener_progress_test
-           COMMAND turbowasm_wasi02_cnet_listener_progress_test)
-
   # Salts::CNet is a released shared SDK dependency. Keep its runtime payload
   # explicit for CTest instead of relying on a system-wide Salts install.
-  set(_turbowasm_wasi02_cnet_tests
-    turbowasm_wasi02_cnet_control_test
-    turbowasm_wasi02_cnet_external_progress_test
-    turbowasm_wasi02_cnet_listener_progress_test)
   if(WIN32)
-    set_tests_properties(${_turbowasm_wasi02_cnet_tests} PROPERTIES
-      ENVIRONMENT
-        "PATH=$<TARGET_FILE_DIR:Salts::CNet>$<SEMICOLON>${SALTS_ROOT_PATH}/bin$<SEMICOLON>${SALTS_ROOT_PATH}/lib$<SEMICOLON>$ENV{PATH}")
+    set(_turbowasm_cnet_runtime_path PATH)
   elseif(APPLE)
-    set_tests_properties(${_turbowasm_wasi02_cnet_tests} PROPERTIES
-      ENVIRONMENT
-        "DYLD_LIBRARY_PATH=$<TARGET_FILE_DIR:Salts::CNet>:${SALTS_ROOT_PATH}/lib:$ENV{DYLD_LIBRARY_PATH}")
+    set(_turbowasm_cnet_runtime_path DYLD_LIBRARY_PATH)
   else()
-    set_tests_properties(${_turbowasm_wasi02_cnet_tests} PROPERTIES
-      ENVIRONMENT
-        "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Salts::CNet>:${SALTS_ROOT_PATH}/lib:$ENV{LD_LIBRARY_PATH}")
+    set(_turbowasm_cnet_runtime_path LD_LIBRARY_PATH)
   endif()
-  unset(_turbowasm_wasi02_cnet_tests)
+  # Preserve the launch-time toolchain/sanitizer path. ENVIRONMENT is a CMake
+  # list, so embedding a Windows PATH there splits it into separate entries.
+  set(_turbowasm_cnet_tests turbowasm_wasi02_cnet_control_test)
+  if(TARGET turbowasm_wasi02_cnet_tcp_test)
+    list(APPEND _turbowasm_cnet_tests turbowasm_wasi02_cnet_tcp_test turbowasm_wasi02_cnet_network_test
+      turbowasm_wasi02_cnet_external_progress_test turbowasm_wasi02_cnet_listener_progress_test)
+  endif()
+  set_tests_properties(${_turbowasm_cnet_tests} PROPERTIES
+    ENVIRONMENT_MODIFICATION
+      "${_turbowasm_cnet_runtime_path}=path_list_prepend:${SALTS_ROOT_PATH}/lib;${_turbowasm_cnet_runtime_path}=path_list_prepend:${SALTS_ROOT_PATH}/bin;${_turbowasm_cnet_runtime_path}=path_list_prepend:$<TARGET_FILE_DIR:Salts::CNet>")
+  unset(_turbowasm_cnet_runtime_path)
+  unset(_turbowasm_cnet_tests)
 endif()
 
 set(_turbowasm_wasi02_fixture_dir
   "${PROJECT_SOURCE_DIR}/tests/wasi02/fixtures/generated")
 if(TARGET turbowasm_wasi02)
+  add_executable(turbowasm_component_wasi_resources_test component_wasi_resources_test.c)
+  target_link_libraries(turbowasm_component_wasi_resources_test PRIVATE TurboWasm::WASI02 Salts::TinyTest)
+  set_target_properties(turbowasm_component_wasi_resources_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_wasi_resources_test COMMAND turbowasm_component_wasi_resources_test)
   add_executable(turbowasm_wasi02_toolchain_fixture_test
     wasi02_toolchain_fixture_test.c)
   target_link_libraries(turbowasm_wasi02_toolchain_fixture_test
@@ -527,6 +673,10 @@ if(TARGET turbowasm_wasi02_streams_core)
 
   add_executable(turbowasm_wasi02_streams_test
     wasi02_streams_test.c)
+  add_executable(turbowasm_wasi02_stream_allocation_test wasi02_stream_allocation_test.c)
+  target_include_directories(turbowasm_wasi02_stream_allocation_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_wasi02_stream_allocation_test PRIVATE turbowasm_wasi02_streams_core TurboWasm::Component Salts::TinyTest)
+  add_test(NAME turbowasm_wasi02_stream_allocation_test COMMAND turbowasm_wasi02_stream_allocation_test)
   target_link_libraries(turbowasm_wasi02_streams_test
     PRIVATE
       turbowasm_wasi02_streams_core
@@ -783,6 +933,13 @@ set_target_properties(turbowasm_header_cpp_test PROPERTIES
   CXX_STANDARD_REQUIRED ON
   CXX_EXTENSIONS OFF)
 add_test(NAME turbowasm_header_cpp_test COMMAND turbowasm_header_cpp_test)
+
+add_executable(turbowasm_store_test store_test.c)
+target_link_libraries(turbowasm_store_test PRIVATE TurboWasm::Runtime Salts::Platform)
+target_include_directories(turbowasm_store_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+set_target_properties(turbowasm_store_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_store_test COMMAND turbowasm_store_test)
 
 add_executable(turbowasm_semantic_type_test
   semantic_type_test.c)
@@ -1092,6 +1249,31 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
            COMMAND turbowasm_wasi_preview1_test)
 endif()
 
+if(TARGET TurboWasm::WASI)
+  add_executable(turbowasm_wasi_preview1_sockets_test wasi_preview1_sockets_test.c)
+  target_link_libraries(turbowasm_wasi_preview1_sockets_test PRIVATE TurboWasm::WASI Salts::TinyTest)
+  add_test(NAME turbowasm_wasi_preview1_sockets_test COMMAND turbowasm_wasi_preview1_sockets_test)
+  if(TURBOWASM_ENABLE_MIR_JIT)
+    add_executable(turbowasm_wasi_preview1_sockets_mir_test wasi_preview1_sockets_test.c)
+    target_compile_definitions(turbowasm_wasi_preview1_sockets_mir_test PRIVATE TW_P1_MIR=1)
+    target_link_libraries(turbowasm_wasi_preview1_sockets_mir_test PRIVATE TurboWasm::WASI turbowasm_mir_backend Salts::TinyTest)
+    add_test(NAME turbowasm_wasi_preview1_sockets_mir_test COMMAND turbowasm_wasi_preview1_sockets_mir_test)
+  endif()
+  if(TARGET TurboWasm::WASICNet)
+    add_executable(turbowasm_wasi_preview1_cnet_test wasi_preview1_cnet_test.c)
+    target_link_libraries(turbowasm_wasi_preview1_cnet_test PRIVATE TurboWasm::WASICNet Salts::TinyTest)
+    add_test(NAME turbowasm_wasi_preview1_cnet_test COMMAND turbowasm_wasi_preview1_cnet_test)
+    set_tests_properties(turbowasm_wasi_preview1_cnet_test PROPERTIES TIMEOUT 30)
+    if(TURBOWASM_ENABLE_MIR_JIT)
+      add_executable(turbowasm_wasi_preview1_cnet_mir_test wasi_preview1_cnet_test.c)
+      target_compile_definitions(turbowasm_wasi_preview1_cnet_mir_test PRIVATE TW_P1_MIR=1)
+      target_link_libraries(turbowasm_wasi_preview1_cnet_mir_test PRIVATE TurboWasm::WASICNet turbowasm_mir_backend Salts::TinyTest)
+      add_test(NAME turbowasm_wasi_preview1_cnet_mir_test COMMAND turbowasm_wasi_preview1_cnet_mir_test)
+      set_tests_properties(turbowasm_wasi_preview1_cnet_mir_test PROPERTIES TIMEOUT 30)
+    endif()
+  endif()
+endif()
+
 if(TURBOWASM_ENABLE_WASI_ADAPTER)
   add_executable(turbowasm_wasi_clock_random_test
     wasi_clock_random_test.c)
@@ -1208,6 +1390,12 @@ set_target_properties(turbowasm_reference_table_test PROPERTIES
   C_EXTENSIONS OFF)
 add_test(NAME turbowasm_reference_table_test
          COMMAND turbowasm_reference_table_test)
+
+add_executable(turbowasm_function_reference_test function_reference_test.c)
+target_link_libraries(turbowasm_function_reference_test PRIVATE TurboWasm::Runtime)
+set_target_properties(turbowasm_function_reference_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_function_reference_test COMMAND turbowasm_function_reference_test)
 
 
 add_executable(turbowasm_funcref_identity_test
@@ -1965,4 +2153,288 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
     set_tests_properties(turbowasm_wasi_threads_proc_exit_test PROPERTIES
       TIMEOUT 20)
   endif()
+endif()
+
+add_executable(turbowasm_memory64_execution_test memory64_execution_test.c)
+target_include_directories(turbowasm_memory64_execution_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_memory64_execution_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_memory64_execution_test COMMAND turbowasm_memory64_execution_test)
+
+add_executable(turbowasm_eh_native_test eh_native_test.c)
+target_include_directories(turbowasm_eh_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_eh_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_eh_native_test COMMAND turbowasm_eh_native_test)
+
+add_executable(turbowasm_resumable_native_test resumable_native_test.c)
+target_include_directories(turbowasm_resumable_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_resumable_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_resumable_native_test COMMAND turbowasm_resumable_native_test)
+
+if(TARGET TurboWasm::Component)
+  add_executable(turbowasm_component_indirect_lower_test component_indirect_lower_test.c)
+  target_include_directories(turbowasm_component_indirect_lower_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_component_indirect_lower_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  add_test(NAME turbowasm_component_indirect_lower_test COMMAND turbowasm_component_indirect_lower_test)
+  add_executable(turbowasm_component_local_lower_test component_local_lower_test.c)
+  target_include_directories(turbowasm_component_local_lower_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_component_local_lower_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  add_test(NAME turbowasm_component_local_lower_test COMMAND turbowasm_component_local_lower_test)
+  add_executable(turbowasm_component_realloc_execution_test component_realloc_execution_test.c)
+  target_include_directories(turbowasm_component_realloc_execution_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_component_realloc_execution_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  add_test(NAME turbowasm_component_realloc_execution_test COMMAND turbowasm_component_realloc_execution_test)
+  add_executable(turbowasm_component_resource_reentry_test component_resource_reentry_test.c)
+  target_include_directories(turbowasm_component_resource_reentry_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_component_resource_reentry_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  add_test(NAME turbowasm_component_resource_reentry_test COMMAND turbowasm_component_resource_reentry_test)
+  add_executable(turbowasm_component_shutdown_host_wait_test component_shutdown_host_wait_test.c)
+  target_include_directories(turbowasm_component_shutdown_host_wait_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_component_shutdown_host_wait_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  set_target_properties(turbowasm_component_shutdown_host_wait_test PROPERTIES FOLDER "tests/component"
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_shutdown_host_wait_test COMMAND turbowasm_component_shutdown_host_wait_test)
+  add_executable(turbowasm_component_post_return_test component_post_return_test.c)
+  target_include_directories(turbowasm_component_post_return_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_component_post_return_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  add_test(NAME turbowasm_component_post_return_test COMMAND turbowasm_component_post_return_test)
+  add_executable(turbowasm_component_encoding_test component_encoding_test.c)
+  target_include_directories(turbowasm_component_encoding_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_component_encoding_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  add_test(NAME turbowasm_component_encoding_test COMMAND turbowasm_component_encoding_test)
+endif()
+
+add_executable(turbowasm_gc_native_test gc_native_test.c)
+target_include_directories(turbowasm_gc_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_gc_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_gc_native_test COMMAND turbowasm_gc_native_test)
+
+add_executable(turbowasm_reference_native_test reference_native_test.c)
+target_include_directories(turbowasm_reference_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_reference_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_reference_native_test COMMAND turbowasm_reference_native_test)
+
+add_executable(turbowasm_indirect_native_test indirect_native_test.c)
+target_include_directories(turbowasm_indirect_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_indirect_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_indirect_native_test COMMAND turbowasm_indirect_native_test)
+
+add_executable(turbowasm_vector_calls_test vector_calls_test.c)
+target_include_directories(turbowasm_vector_calls_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_vector_calls_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_vector_calls_test COMMAND turbowasm_vector_calls_test)
+
+add_executable(turbowasm_numeric_native_test numeric_native_test.c)
+target_include_directories(turbowasm_numeric_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_numeric_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_numeric_native_test COMMAND turbowasm_numeric_native_test)
+
+add_executable(turbowasm_simd_native_test simd_native_test.c)
+target_include_directories(turbowasm_simd_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_simd_native_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_simd_native_test COMMAND turbowasm_simd_native_test)
+
+add_executable(turbowasm_table_storage_test table_storage_test.c)
+target_include_directories(turbowasm_table_storage_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_table_storage_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_table_storage_test COMMAND turbowasm_table_storage_test)
+
+add_executable(turbowasm_scalar_tail_calls_test scalar_tail_calls_test.c)
+target_include_directories(turbowasm_scalar_tail_calls_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_scalar_tail_calls_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_scalar_tail_calls_test COMMAND turbowasm_scalar_tail_calls_test)
+
+add_executable(turbowasm_scalar_results_test scalar_results_test.c)
+target_include_directories(turbowasm_scalar_results_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_scalar_results_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_scalar_results_test COMMAND turbowasm_scalar_results_test)
+
+add_executable(turbowasm_atomic_lowering_test atomic_lowering_test.c)
+target_include_directories(turbowasm_atomic_lowering_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(turbowasm_atomic_lowering_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+add_test(NAME turbowasm_atomic_lowering_test COMMAND turbowasm_atomic_lowering_test)
+
+if(TURBOWASM_ENABLE_MIR_JIT)
+  add_executable(turbowasm_mir_reference_test reference_native_test.c)
+  target_include_directories(turbowasm_mir_reference_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_reference_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_reference_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_reference_test COMMAND turbowasm_mir_reference_test)
+
+  add_executable(turbowasm_mir_gc_test gc_native_test.c)
+  target_include_directories(turbowasm_mir_gc_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_gc_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_gc_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_gc_test COMMAND turbowasm_mir_gc_test)
+
+  add_executable(turbowasm_mir_eh_test eh_native_test.c)
+  target_include_directories(turbowasm_mir_eh_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_eh_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_eh_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_eh_test COMMAND turbowasm_mir_eh_test)
+
+  add_executable(turbowasm_mir_resumable_test resumable_native_test.c)
+  target_include_directories(turbowasm_mir_resumable_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_resumable_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_resumable_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_resumable_test COMMAND turbowasm_mir_resumable_test)
+
+  add_executable(turbowasm_mir_component_task_test component_task_test.c)
+  target_include_directories(turbowasm_mir_component_task_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_component_task_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_component_task_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_component_task_test COMMAND turbowasm_mir_component_task_test)
+
+  add_executable(turbowasm_mir_component_async_call_test component_async_call_test.c)
+  target_include_directories(turbowasm_mir_component_async_call_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_component_async_call_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_component_async_call_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_component_async_call_test COMMAND turbowasm_mir_component_async_call_test)
+
+  add_executable(turbowasm_mir_component_async_exec_test component_async_exec_test.c)
+  target_include_directories(turbowasm_mir_component_async_exec_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_component_async_exec_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_component_async_exec_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  set_target_properties(turbowasm_mir_component_async_exec_test PROPERTIES FOLDER "tests/component")
+  add_test(NAME turbowasm_mir_component_async_exec_test COMMAND turbowasm_mir_component_async_exec_test)
+
+  add_executable(turbowasm_mir_component_async_lower_test component_async_lower_test.c)
+  target_include_directories(turbowasm_mir_component_async_lower_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_component_async_lower_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_component_async_lower_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  set_target_properties(turbowasm_mir_component_async_lower_test PROPERTIES FOLDER "tests/component")
+  add_test(NAME turbowasm_mir_component_async_lower_test COMMAND turbowasm_mir_component_async_lower_test)
+
+  add_executable(turbowasm_mir_component_async_payload_test component_async_payload_test.c)
+  target_include_directories(turbowasm_mir_component_async_payload_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_component_async_payload_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_component_async_payload_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  set_target_properties(turbowasm_mir_component_async_payload_test PROPERTIES FOLDER "tests/component")
+  add_test(NAME turbowasm_mir_component_async_payload_test COMMAND turbowasm_mir_component_async_payload_test)
+
+  add_executable(turbowasm_mir_component_async_resource_import_test component_async_resource_import_test.c)
+  target_include_directories(turbowasm_mir_component_async_resource_import_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_component_async_resource_import_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_component_async_resource_import_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  set_target_properties(turbowasm_mir_component_async_resource_import_test PROPERTIES FOLDER "tests/component")
+  add_test(NAME turbowasm_mir_component_async_resource_import_test COMMAND turbowasm_mir_component_async_resource_import_test)
+
+  add_executable(turbowasm_mir_component_async_import_test component_async_import_test.c)
+  target_include_directories(turbowasm_mir_component_async_import_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_component_async_import_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_component_async_import_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  set_target_properties(turbowasm_mir_component_async_import_test PROPERTIES FOLDER "tests/component")
+  add_test(NAME turbowasm_mir_component_async_import_test COMMAND turbowasm_mir_component_async_import_test)
+
+  add_executable(turbowasm_mir_component_endpoint_builtin_test component_endpoint_builtin_test.c)
+  target_include_directories(turbowasm_mir_component_endpoint_builtin_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_component_endpoint_builtin_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_component_endpoint_builtin_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_component_endpoint_builtin_test COMMAND turbowasm_mir_component_endpoint_builtin_test)
+  if(TARGET TurboWasm::Component)
+    add_executable(turbowasm_mir_component_host_task_test component_host_task_test.c)
+    target_include_directories(turbowasm_mir_component_host_task_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_definitions(turbowasm_mir_component_host_task_test PRIVATE TURBOWASM_TEST_MIR=1)
+    target_link_libraries(turbowasm_mir_component_host_task_test PRIVATE turbowasm_mir_backend TurboWasm::Component Salts::TinyTest)
+    set_target_properties(turbowasm_mir_component_host_task_test PROPERTIES FOLDER "tests/component")
+    add_test(NAME turbowasm_mir_component_host_task_test COMMAND turbowasm_mir_component_host_task_test)
+    add_executable(turbowasm_mir_component_async_options_test component_async_options_test.c)
+    target_link_libraries(turbowasm_mir_component_async_options_test PRIVATE turbowasm_mir_backend TurboWasm::Component Salts::TinyTest)
+    target_include_directories(turbowasm_mir_component_async_options_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_definitions(turbowasm_mir_component_async_options_test PRIVATE TURBOWASM_TEST_MIR=1)
+    set_target_properties(turbowasm_mir_component_async_options_test PROPERTIES FOLDER "tests/component"
+      C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    add_test(NAME turbowasm_mir_component_async_options_test COMMAND turbowasm_mir_component_async_options_test)
+    add_executable(turbowasm_mir_component_host_arguments_test component_host_arguments_test.c)
+    target_include_directories(turbowasm_mir_component_host_arguments_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_definitions(turbowasm_mir_component_host_arguments_test PRIVATE TURBOWASM_TEST_MIR=1)
+    target_link_libraries(turbowasm_mir_component_host_arguments_test PRIVATE turbowasm_mir_backend TurboWasm::Component Salts::TinyTest)
+    set_target_properties(turbowasm_mir_component_host_arguments_test PROPERTIES FOLDER "tests/component")
+    add_test(NAME turbowasm_mir_component_host_arguments_test COMMAND turbowasm_mir_component_host_arguments_test)
+    add_executable(turbowasm_mir_component_indirect_lower_test component_indirect_lower_test.c)
+    target_include_directories(turbowasm_mir_component_indirect_lower_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_definitions(turbowasm_mir_component_indirect_lower_test PRIVATE TURBOWASM_TEST_MIR=1)
+    target_link_libraries(turbowasm_mir_component_indirect_lower_test PRIVATE turbowasm_mir_backend TurboWasm::Component Salts::TinyTest)
+    add_test(NAME turbowasm_mir_component_indirect_lower_test COMMAND turbowasm_mir_component_indirect_lower_test)
+    add_executable(turbowasm_mir_component_local_lower_test component_local_lower_test.c)
+    target_include_directories(turbowasm_mir_component_local_lower_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_definitions(turbowasm_mir_component_local_lower_test PRIVATE TURBOWASM_TEST_MIR=1)
+    target_link_libraries(turbowasm_mir_component_local_lower_test PRIVATE turbowasm_mir_backend TurboWasm::Component Salts::TinyTest)
+    add_test(NAME turbowasm_mir_component_local_lower_test COMMAND turbowasm_mir_component_local_lower_test)
+    add_executable(turbowasm_mir_component_realloc_execution_test component_realloc_execution_test.c)
+    target_include_directories(turbowasm_mir_component_realloc_execution_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_definitions(turbowasm_mir_component_realloc_execution_test PRIVATE TURBOWASM_TEST_MIR=1)
+    target_link_libraries(turbowasm_mir_component_realloc_execution_test PRIVATE turbowasm_mir_backend TurboWasm::Component Salts::TinyTest)
+    add_test(NAME turbowasm_mir_component_realloc_execution_test COMMAND turbowasm_mir_component_realloc_execution_test)
+    add_executable(turbowasm_mir_component_resource_reentry_test component_resource_reentry_test.c)
+    target_include_directories(turbowasm_mir_component_resource_reentry_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_definitions(turbowasm_mir_component_resource_reentry_test PRIVATE TURBOWASM_TEST_MIR=1)
+    target_link_libraries(turbowasm_mir_component_resource_reentry_test PRIVATE turbowasm_mir_backend TurboWasm::Component Salts::TinyTest)
+    add_test(NAME turbowasm_mir_component_resource_reentry_test COMMAND turbowasm_mir_component_resource_reentry_test)
+    add_executable(turbowasm_mir_component_shutdown_host_wait_test component_shutdown_host_wait_test.c)
+    target_include_directories(turbowasm_mir_component_shutdown_host_wait_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_definitions(turbowasm_mir_component_shutdown_host_wait_test PRIVATE TURBOWASM_TEST_MIR=1)
+    target_link_libraries(turbowasm_mir_component_shutdown_host_wait_test PRIVATE turbowasm_mir_backend TurboWasm::Component Salts::TinyTest)
+    set_target_properties(turbowasm_mir_component_shutdown_host_wait_test PROPERTIES FOLDER "tests/component"
+      C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    add_test(NAME turbowasm_mir_component_shutdown_host_wait_test COMMAND turbowasm_mir_component_shutdown_host_wait_test)
+    add_executable(turbowasm_mir_component_post_return_test component_post_return_test.c)
+    target_include_directories(turbowasm_mir_component_post_return_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_definitions(turbowasm_mir_component_post_return_test PRIVATE TURBOWASM_TEST_MIR=1)
+    target_link_libraries(turbowasm_mir_component_post_return_test PRIVATE turbowasm_mir_backend TurboWasm::Component Salts::TinyTest)
+    add_test(NAME turbowasm_mir_component_post_return_test COMMAND turbowasm_mir_component_post_return_test)
+  endif()
+
+  add_executable(turbowasm_mir_vector_calls_test vector_calls_test.c)
+  target_include_directories(turbowasm_mir_vector_calls_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_vector_calls_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_vector_calls_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_vector_calls_test COMMAND turbowasm_mir_vector_calls_test)
+
+  add_executable(turbowasm_mir_numeric_test numeric_native_test.c)
+  target_include_directories(turbowasm_mir_numeric_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_numeric_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_numeric_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_numeric_test COMMAND turbowasm_mir_numeric_test)
+
+  add_executable(turbowasm_mir_simd_native_test simd_native_test.c)
+  target_include_directories(turbowasm_mir_simd_native_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_simd_native_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_simd_native_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_simd_native_test COMMAND turbowasm_mir_simd_native_test)
+
+  add_executable(turbowasm_mir_indirect_test indirect_native_test.c)
+  target_include_directories(turbowasm_mir_indirect_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_indirect_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_indirect_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_indirect_test COMMAND turbowasm_mir_indirect_test)
+
+  add_executable(turbowasm_mir_table_storage_test table_storage_test.c)
+  target_include_directories(turbowasm_mir_table_storage_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_table_storage_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_table_storage_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_table_storage_test COMMAND turbowasm_mir_table_storage_test)
+
+  add_executable(turbowasm_mir_scalar_tail_calls_test scalar_tail_calls_test.c)
+  target_include_directories(turbowasm_mir_scalar_tail_calls_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_scalar_tail_calls_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_scalar_tail_calls_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_scalar_tail_calls_test COMMAND turbowasm_mir_scalar_tail_calls_test)
+
+  add_executable(turbowasm_mir_scalar_results_test scalar_results_test.c)
+  target_include_directories(turbowasm_mir_scalar_results_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_scalar_results_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_scalar_results_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_scalar_results_test COMMAND turbowasm_mir_scalar_results_test)
+
+  add_executable(turbowasm_mir_memory64_test memory64_execution_test.c)
+  target_include_directories(turbowasm_mir_memory64_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_memory64_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_memory64_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_memory64_test COMMAND turbowasm_mir_memory64_test)
+
+  add_executable(turbowasm_mir_atomic_lowering_test atomic_lowering_test.c)
+  target_include_directories(turbowasm_mir_atomic_lowering_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_definitions(turbowasm_mir_atomic_lowering_test PRIVATE TURBOWASM_TEST_MIR=1)
+  target_link_libraries(turbowasm_mir_atomic_lowering_test PRIVATE turbowasm_mir_backend TurboWasm::Runtime Salts::TinyTest)
+  add_test(NAME turbowasm_mir_atomic_lowering_test COMMAND turbowasm_mir_atomic_lowering_test)
 endif()

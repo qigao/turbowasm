@@ -8,7 +8,7 @@
 /*
  * Private backend-neutral SIMD helper ABI.
  *
- * JIT backends keep temporary v128 values in invocation-owned salts_v128
+ * JIT backends keep temporary v128 values in invocation-owned turbowasm_v128
  * slots.  Generated code refers to slots only by compact integer index and
  * never exposes MIR/SIMDe/native vector types.
  */
@@ -23,6 +23,11 @@ int64_t turbowasm_jit_simd_copy(
     turbowasm_jit_invocation_context *context,
     int64_t out_slot,
     int64_t in_slot);
+
+int64_t turbowasm_jit_simd_value_load(turbowasm_jit_invocation_context *context,
+    int64_t slot, const turbowasm_value *value);
+int64_t turbowasm_jit_simd_value_store(turbowasm_jit_invocation_context *context,
+    int64_t slot, turbowasm_value *value);
 
 int64_t turbowasm_jit_simd_splat_i64(
     turbowasm_jit_invocation_context *context,

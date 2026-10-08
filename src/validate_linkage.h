@@ -7,6 +7,9 @@
 #include "reader.h"
 #include "validation_context.h"
 
+turbowasm_status turbowasm_read_name(
+    turbowasm_reader *reader, turbowasm_name *out);
+
 turbowasm_status turbowasm_validate_import_section(
     turbowasm_reader *section,
     turbowasm_module_summary *summary,

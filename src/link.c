@@ -623,6 +623,11 @@ turbowasm_status turbowasm_linker_bind_instance(
 
         provider_module = turbowasm_module_impl_get(
             provider_entry->instance->module);
+        if (instance->store != provider_entry->instance->store &&
+            (instance->store != NULL || provider_entry->instance->store != NULL)) {
+            result = TURBOWASM_TYPE_MISMATCH;
+            goto fail;
+        }
         if (provider_module == NULL) {
             result = TURBOWASM_LINK_ERROR;
             goto fail;
@@ -659,8 +664,8 @@ turbowasm_status turbowasm_linker_bind_instance(
                 turbowasm_validation_context_function_type(
                     &provider_module->validation,
                     export_desc->item_index);
-            if (!turbowasm_validation_func_type_equal(
-                    expected_type, actual_type)) {
+            if (!turbowasm_validation_defined_type_matches(
+                    actual_type, expected_type)) {
                 result = TURBOWASM_TYPE_MISMATCH;
                 goto fail;
             }
@@ -777,11 +782,8 @@ turbowasm_status turbowasm_linker_bind_instance(
                 &provider_module->validation.tables[
                     export_desc->item_index];
 
-            if ((expected_table->reference_type != 0x70u &&
-                 expected_table->reference_type != 0x6fu) ||
-                (actual_table->reference_type != 0x70u &&
-                 actual_table->reference_type != 0x6fu)) {
-                result = TURBOWASM_UNSUPPORTED;
+            if (expected_table->limits.table64 != actual_table->limits.table64) {
+                result = TURBOWASM_TYPE_MISMATCH;
                 goto fail;
             }
 
@@ -853,9 +855,13 @@ turbowasm_status turbowasm_linker_bind_instance(
 
             if (expected_global->mutable_value !=
                     actual_global->mutable_value ||
-                !turbowasm_validation_value_type_equal(
-                    &expected_global->semantic_type,
-                    &actual_global->semantic_type)) {
+                (expected_global->mutable_value
+                    ? !turbowasm_validation_value_type_equal(
+                        &actual_global->semantic_type,
+                        &expected_global->semantic_type)
+                    : !turbowasm_validation_value_type_matches(
+                        &actual_global->semantic_type,
+                        &expected_global->semantic_type))) {
                 result = TURBOWASM_TYPE_MISMATCH;
                 goto fail;
             }

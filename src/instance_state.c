@@ -3,6 +3,7 @@
 #include "reader.h"
 #include "validate_type.h"
 #include "runtime_alloc.h"
+#include "gc_exec.h"
 
 #include <salts/clock.h>
 
@@ -21,28 +22,30 @@ static turbowasm_value_kind turbowasm_state_kind_from_valtype(
         case 0x7bu: return TURBOWASM_VALUE_V128;
         case 0x70u: return TURBOWASM_VALUE_FUNCREF;
         case 0x6fu: return TURBOWASM_VALUE_EXTERNREF;
+        case 0x6eu: return TURBOWASM_VALUE_GCREF;
+        case 0x69u: return TURBOWASM_VALUE_EXNREF;
         default: return (turbowasm_value_kind)0;
     }
 }
 
-static salts_once_t turbowasm_sc_once = SALTS_ONCE_INIT;
-static salts_mutex_t turbowasm_sc_mutex = NULL;
+static cmeta_once_t turbowasm_sc_once = SALTS_ONCE_INIT;
+static cmeta_mutex_t turbowasm_sc_mutex = NULL;
 
 static void turbowasm_sc_mutex_init_once(void) {
-    salts_mutex_init(&turbowasm_sc_mutex);
+    cmeta_mutex_init(&turbowasm_sc_mutex);
 }
 
 static bool turbowasm_sc_lock(void) {
-    salts_once(&turbowasm_sc_once, turbowasm_sc_mutex_init_once);
+    cmeta_once(&turbowasm_sc_once, turbowasm_sc_mutex_init_once);
     if (turbowasm_sc_mutex == NULL)
         return false;
-    salts_mutex_lock(&turbowasm_sc_mutex);
+    cmeta_mutex_lock(&turbowasm_sc_mutex);
     return true;
 }
 
 static void turbowasm_sc_unlock(void) {
     if (turbowasm_sc_mutex != NULL)
-        salts_mutex_unlock(&turbowasm_sc_mutex);
+        cmeta_mutex_unlock(&turbowasm_sc_mutex);
 }
 
 turbowasm_status turbowasm_threads_sc_fence(void) {
@@ -57,6 +60,11 @@ typedef struct turbowasm_const_value_stack {
     uint32_t size;
     uint32_t capacity;
 } turbowasm_const_value_stack;
+
+static void turbowasm_trace_constant(turbowasm_store_impl *store,void *context) {
+    turbowasm_const_value_stack *stack=context;
+    turbowasm_gc_mark_values(store,stack->values,stack->size);
+}
 
 static bool turbowasm_const_value_stack_reserve(
     turbowasm_const_value_stack *stack,
@@ -127,7 +135,10 @@ static turbowasm_status turbowasm_eval_value_expr(
     turbowasm_value *out) {
     turbowasm_reader reader;
     turbowasm_const_value_stack stack = {0};
+    const turbowasm_module_impl *module = instance == NULL ? NULL : turbowasm_module_impl_get(instance->module);
+    const turbowasm_validation_context *context = module == NULL ? NULL : &module->validation;
     turbowasm_status status = TURBOWASM_OK;
+    turbowasm_gc_source source={NULL,NULL,&stack,turbowasm_trace_constant};
 
     if (expression == NULL || out == NULL ||
         expression->bytes == NULL || expression->size == 0u)
@@ -135,6 +146,10 @@ static turbowasm_status turbowasm_eval_value_expr(
 
     turbowasm_reader_init(
         &reader, expression->bytes, expression->size);
+    if(instance!=NULL) {
+        status=turbowasm_gc_source_add(instance->store,&source);
+        if(status!=TURBOWASM_OK) return status;
+    }
 
     for (;;) {
         uint8_t opcode;
@@ -281,7 +296,7 @@ static turbowasm_status turbowasm_eval_value_expr(
                     status = TURBOWASM_MALFORMED_MODULE;
                     break;
                 }
-                salts_simd_v128_load(
+                cmeta_simd_v128_load(
                     &value.as.v128.bits, bytes.cursor);
                 status = turbowasm_const_value_stack_push(
                     &stack, value);
@@ -310,7 +325,7 @@ static turbowasm_status turbowasm_eval_value_expr(
                 turbowasm_value value = {0};
 
                 status = turbowasm_validation_read_heaptype(
-                    &reader, &reference_type);
+                    &reader, context, &reference_type);
                 if (status != TURBOWASM_OK)
                     break;
                 if (reference_type.heap_kind ==
@@ -335,6 +350,11 @@ static turbowasm_status turbowasm_eval_value_expr(
                     value.kind = TURBOWASM_VALUE_EXTERNREF;
                     value.as.externref.is_null = true;
                     value.as.externref.token = 0u;
+                } else if(reference_type.carrier==0x6eu) {
+                    value.kind=TURBOWASM_VALUE_GCREF;
+                } else if(reference_type.carrier==0x69u) {
+                    value.kind=TURBOWASM_VALUE_EXNREF;
+                    value.as.exnref.is_null=true;
                 } else {
                     status = TURBOWASM_UNSUPPORTED;
                     break;
@@ -342,6 +362,16 @@ static turbowasm_status turbowasm_eval_value_expr(
 
                 status = turbowasm_const_value_stack_push(
                     &stack, value);
+                break;
+            }
+            case 0xfbu: {
+                turbowasm_gc_effect effect;
+                turbowasm_trap trap=TURBOWASM_TRAP_NONE;
+                status=turbowasm_gc_execute((turbowasm_instance_impl *)instance,
+                    &reader,stack.values,stack.size,&effect,&trap);
+                if(status!=TURBOWASM_OK) break;
+                stack.size-=effect.consumed;
+                if(effect.produces) status=turbowasm_const_value_stack_push(&stack,effect.value);
                 break;
             }
             case 0xd2u: {
@@ -377,27 +407,12 @@ static turbowasm_status turbowasm_eval_value_expr(
         }
     }
 
+    if(instance!=NULL) turbowasm_gc_source_remove(instance->store,&source);
     turbowasm_rt_free(stack.values);
     return status;
 }
 
-static turbowasm_status turbowasm_eval_i32_expr(
-    const turbowasm_instance_impl *instance,
-    const turbowasm_validation_expr_span *expression,
-    uint32_t *out) {
-    turbowasm_value value;
-    turbowasm_status status = turbowasm_eval_value_expr(
-        instance, expression, &value);
-
-    if (status != TURBOWASM_OK)
-        return status;
-    if (value.kind != TURBOWASM_VALUE_I32)
-        return TURBOWASM_MALFORMED_MODULE;
-    *out = (uint32_t)value.as.i32;
-    return TURBOWASM_OK;
-}
-
-static turbowasm_status turbowasm_eval_memory_offset_expr(
+static turbowasm_status turbowasm_eval_address_expr(
     const turbowasm_instance_impl *instance,
     const turbowasm_validation_expr_span *expression,
     uint64_t *out) {
@@ -441,7 +456,7 @@ static turbowasm_status turbowasm_eval_table_expr(
     if ((reference_type == 0x70u &&
          value.kind != TURBOWASM_VALUE_FUNCREF) ||
         (reference_type == 0x6fu &&
-         value.kind != TURBOWASM_VALUE_EXTERNREF))
+         (value.kind != TURBOWASM_VALUE_EXTERNREF && value.kind != TURBOWASM_VALUE_MANAGED_EXTERNREF)))
         return TURBOWASM_TYPE_MISMATCH;
 
     memset(out, 0, sizeof(*out));
@@ -490,9 +505,8 @@ static turbowasm_status turbowasm_allocate_globals(
             &instance->globals[index]);
         if (status != TURBOWASM_OK)
             return status;
-        if (instance->globals[index].kind !=
-            turbowasm_state_kind_from_valtype(
-                global->value_type))
+        if (!turbowasm_value_matches_semantic(instance,
+                &instance->globals[index], &global->semantic_type))
             return TURBOWASM_MALFORMED_MODULE;
     }
 
@@ -519,11 +533,11 @@ turbowasm_status turbowasm_instance_memory_storage_init(
     }
 
     if (shared) {
-        if (salts_rwlock_init(&memory->access_lock) != 0)
+        if (cmeta_rwlock_init(&memory->access_lock) != 0)
             goto out_of_memory;
         lock_initialized = true;
 
-        salts_mutex_init(&memory->waiter_mutex);
+        cmeta_mutex_init(&memory->waiter_mutex);
         if (memory->waiter_mutex == NULL)
             goto out_of_memory;
         waiter_mutex_initialized = true;
@@ -536,7 +550,7 @@ turbowasm_status turbowasm_instance_memory_storage_init(
 
         while (initialized_waiters <
                TURBOWASM_MEMORY_WAITER_CAPACITY) {
-            salts_cond_init(
+            cmeta_cond_init(
                 &waiters[initialized_waiters].condition);
             if (waiters[initialized_waiters].condition == NULL)
                 goto out_of_memory;
@@ -560,14 +574,14 @@ turbowasm_status turbowasm_instance_memory_storage_init(
 out_of_memory:
     while (initialized_waiters != 0u) {
         --initialized_waiters;
-        salts_cond_destroy(
+        cmeta_cond_destroy(
             &waiters[initialized_waiters].condition);
     }
     turbowasm_rt_free(waiters);
     if (waiter_mutex_initialized)
-        salts_mutex_destroy(&memory->waiter_mutex);
+        cmeta_mutex_destroy(&memory->waiter_mutex);
     if (lock_initialized)
-        salts_rwlock_destroy(&memory->access_lock);
+        cmeta_rwlock_destroy(&memory->access_lock);
     turbowasm_rt_free(data);
     memory->access_lock = NULL;
     memory->waiter_mutex = NULL;
@@ -590,7 +604,7 @@ void turbowasm_instance_memory_storage_destroy(
         for (index = 0u;
              index < memory->waiter_capacity;
              ++index) {
-            salts_cond_destroy(
+            cmeta_cond_destroy(
                 &memory->waiters[index].condition);
         }
     }
@@ -599,7 +613,7 @@ void turbowasm_instance_memory_storage_destroy(
     memory->waiter_capacity = 0u;
 
     if (memory->waiter_mutex_initialized)
-        salts_mutex_destroy(&memory->waiter_mutex);
+        cmeta_mutex_destroy(&memory->waiter_mutex);
     memory->waiter_mutex = NULL;
     memory->waiter_mutex_initialized = false;
 
@@ -607,7 +621,7 @@ void turbowasm_instance_memory_storage_destroy(
     memory->data = NULL;
 
     if (memory->access_lock_initialized)
-        salts_rwlock_destroy(&memory->access_lock);
+        cmeta_rwlock_destroy(&memory->access_lock);
 
     memory->access_lock = NULL;
     memory->access_lock_initialized = false;
@@ -711,6 +725,11 @@ static turbowasm_status turbowasm_table_initial_value(
         value.kind = TURBOWASM_VALUE_EXTERNREF;
         value.as.externref.is_null = true;
         value.as.externref.token = 0u;
+    } else if (source->reference_type == 0x6eu) {
+        value.kind=TURBOWASM_VALUE_GCREF;
+    } else if (source->reference_type == 0x69u) {
+        value.kind=TURBOWASM_VALUE_EXNREF;
+        value.as.exnref.is_null=true;
     } else {
         return TURBOWASM_UNSUPPORTED;
     }
@@ -718,7 +737,7 @@ static turbowasm_status turbowasm_table_initial_value(
     if ((source->reference_type == 0x70u &&
          value.kind != TURBOWASM_VALUE_FUNCREF) ||
         (source->reference_type == 0x6fu &&
-         value.kind != TURBOWASM_VALUE_EXTERNREF))
+         (value.kind != TURBOWASM_VALUE_EXTERNREF && value.kind != TURBOWASM_VALUE_MANAGED_EXTERNREF)))
         return TURBOWASM_MALFORMED_MODULE;
 
     memset(out, 0, sizeof(*out));
@@ -762,15 +781,19 @@ static turbowasm_status turbowasm_allocate_tables(
             continue;
         }
         if (source->reference_type != 0x70u &&
-            source->reference_type != 0x6fu)
+            source->reference_type != 0x6fu && source->reference_type != 0x6eu &&
+            source->reference_type != 0x69u)
             return TURBOWASM_UNSUPPORTED;
 
-        table->size = source->limits.minimum;
+        if(source->limits.minimum>UINT32_MAX) return TURBOWASM_OUT_OF_MEMORY;
+        table->size = (uint32_t)source->limits.minimum;
         table->maximum = source->limits.maximum;
         table->resource_max_elements =
             module->config.limits.max_table_elements;
         table->has_maximum = source->limits.has_maximum;
         table->reference_type = source->reference_type;
+        table->table64 = source->limits.table64;
+        table->semantic_type = source->semantic_type;
 
         if (table->resource_max_elements != 0u &&
             table->size > table->resource_max_elements)
@@ -912,7 +935,7 @@ static turbowasm_status turbowasm_apply_data_segments(
             TURBOWASM_VALIDATION_SEGMENT_ACTIVE)
             continue;
 
-        status = turbowasm_eval_memory_offset_expr(
+        status = turbowasm_eval_address_expr(
             instance, &segment->offset, &offset);
         if (status != TURBOWASM_OK)
             return status;
@@ -959,6 +982,28 @@ static turbowasm_status turbowasm_element_item_value(
         reference_type, out);
 }
 
+static turbowasm_status turbowasm_materialize_elements(turbowasm_instance_impl *instance,
+    const turbowasm_validation_context *context) {
+    uint32_t i,j;
+    if(context->element_segment_count==0u) return TURBOWASM_OK;
+    instance->element_values=turbowasm_rt_calloc(context->element_segment_count,sizeof(*instance->element_values));
+    if(instance->element_values==NULL) return TURBOWASM_OUT_OF_MEMORY;
+    for(i=0u;i<context->element_segment_count;++i) {
+        const turbowasm_validation_element_segment *segment=&context->element_segments[i];
+        if(segment->item_count==0u) continue;
+        instance->element_values[i]=turbowasm_rt_calloc(segment->item_count,sizeof(turbowasm_value));
+        if(instance->element_values[i]==NULL) return TURBOWASM_OUT_OF_MEMORY;
+        for(j=0u;j<segment->item_count;++j) {
+            turbowasm_instance_table_entry entry;
+            turbowasm_status status=turbowasm_element_item_value(instance,&segment->items[j],
+                segment->reference_type,&entry);
+            if(status!=TURBOWASM_OK) return status;
+            instance->element_values[i][j]=entry.value;
+        }
+    }
+    return TURBOWASM_OK;
+}
+
 static turbowasm_status turbowasm_apply_element_segments(
     turbowasm_instance_impl *instance,
     const turbowasm_validation_context *context) {
@@ -970,9 +1015,8 @@ static turbowasm_status turbowasm_apply_element_segments(
         const turbowasm_validation_element_segment *segment =
             &context->element_segments[segment_index];
         turbowasm_instance_table *table;
-        uint32_t offset;
+        uint64_t offset;
         uint32_t item_index;
-        uint64_t end;
         turbowasm_status status;
 
         if (segment->mode !=
@@ -988,28 +1032,19 @@ static turbowasm_status turbowasm_apply_element_segments(
         if (table->reference_type != segment->reference_type)
             return TURBOWASM_MALFORMED_MODULE;
 
-        status = turbowasm_eval_i32_expr(
+        status = turbowasm_eval_address_expr(
             instance, &segment->offset, &offset);
         if (status != TURBOWASM_OK)
             return status;
 
-        end = (uint64_t)offset + segment->item_count;
-        if (end > table->size)
+        if (offset>table->size || segment->item_count>table->size-offset)
             return TURBOWASM_TRAPPED;
 
         for (item_index = 0u;
              item_index < segment->item_count;
              ++item_index) {
-            turbowasm_instance_table_entry value;
-
-            status = turbowasm_element_item_value(
-                instance,
-                &segment->items[item_index],
-                table->reference_type,
-                &value);
-            if (status != TURBOWASM_OK)
-                return status;
-            table->entries[offset + item_index] = value;
+            table->entries[offset + item_index].value =
+                instance->element_values[segment_index][item_index];
         }
     }
 
@@ -1096,6 +1131,9 @@ turbowasm_status turbowasm_instance_state_init(
     if (status != TURBOWASM_OK)
         goto fail;
 
+    status=turbowasm_materialize_elements(instance,&module->validation);
+    if(status!=TURBOWASM_OK) goto fail;
+
     /*
      * Instantiation initializes active element segments before active data
      * segments. Side effects to imported store objects are observable even if
@@ -1105,6 +1143,12 @@ turbowasm_status turbowasm_instance_state_init(
         instance, &module->validation);
     if (status != TURBOWASM_OK)
         return status;
+
+    for(uint32_t i=0u;i<instance->element_segment_count;++i)
+        if(instance->element_segment_dropped[i]) {
+            turbowasm_rt_free(instance->element_values[i]);
+            instance->element_values[i]=NULL;
+        }
 
     status = turbowasm_apply_data_segments(
         instance, &module->validation);
@@ -1170,6 +1214,12 @@ void turbowasm_instance_state_destroy(
     instance->data_segment_dropped = NULL;
     instance->data_segment_count = 0u;
 
+    if(instance->element_values!=NULL) {
+        for(index=0u;index<instance->element_segment_count;++index)
+            turbowasm_rt_free(instance->element_values[index]);
+        turbowasm_rt_free(instance->element_values);
+        instance->element_values=NULL;
+    }
     turbowasm_rt_free(instance->element_segment_dropped);
     instance->element_segment_dropped = NULL;
     instance->element_segment_count = 0u;
@@ -1243,8 +1293,7 @@ turbowasm_status turbowasm_instance_global_set(
 
     if (!global->mutable_value)
         return TURBOWASM_TYPE_MISMATCH;
-    if (value.kind !=
-        turbowasm_state_kind_from_valtype(global->value_type))
+    if (!turbowasm_value_matches_semantic(instance,&value,&global->semantic_type))
         return TURBOWASM_TYPE_MISMATCH;
 
     instance->globals[index] = value;
@@ -1280,6 +1329,12 @@ turbowasm_instance_memory_resolve_const(
     return turbowasm_instance_memory_resolve_const(
         binding->provider,
         binding->memory_index);
+}
+
+bool turbowasm_instance_memory_same(const turbowasm_instance_impl *left, uint32_t left_index,
+    const turbowasm_instance_impl *right, uint32_t right_index) {
+    const turbowasm_instance_memory *memory = turbowasm_instance_memory_resolve_const(left, left_index);
+    return memory != NULL && memory == turbowasm_instance_memory_resolve_const(right, right_index);
 }
 
 static turbowasm_instance_memory *
@@ -1366,28 +1421,28 @@ static void turbowasm_instance_memory_rdlock(
     turbowasm_instance_memory *memory) {
     if (memory != NULL && memory->shared &&
         memory->access_lock_initialized)
-        salts_rwlock_rdlock(&memory->access_lock);
+        cmeta_rwlock_rdlock(&memory->access_lock);
 }
 
 static void turbowasm_instance_memory_rdunlock(
     turbowasm_instance_memory *memory) {
     if (memory != NULL && memory->shared &&
         memory->access_lock_initialized)
-        salts_rwlock_rdunlock(&memory->access_lock);
+        cmeta_rwlock_rdunlock(&memory->access_lock);
 }
 
 static void turbowasm_instance_memory_wrlock(
     turbowasm_instance_memory *memory) {
     if (memory != NULL && memory->shared &&
         memory->access_lock_initialized)
-        salts_rwlock_wrlock(&memory->access_lock);
+        cmeta_rwlock_wrlock(&memory->access_lock);
 }
 
 static void turbowasm_instance_memory_wrunlock(
     turbowasm_instance_memory *memory) {
     if (memory != NULL && memory->shared &&
         memory->access_lock_initialized)
-        salts_rwlock_wrunlock(&memory->access_lock);
+        cmeta_rwlock_wrunlock(&memory->access_lock);
 }
 
 turbowasm_status turbowasm_instance_memory_read_bytes(
@@ -1603,8 +1658,8 @@ static uint64_t turbowasm_atomic_width_mask(
 turbowasm_status turbowasm_instance_memory_atomic(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     const turbowasm_atomic_descriptor *descriptor,
     uint64_t value,
     uint64_t expected,
@@ -1751,8 +1806,8 @@ turbowasm_memory_waiter_acquire_slot(
 static turbowasm_status turbowasm_instance_memory_wait_internal(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     uint8_t width,
     uint64_t expected,
     int64_t timeout_ns,
@@ -1809,7 +1864,7 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
      * Registry mutex closes the notify race between the expected-value load
      * and publishing this waiter. Data lock is never held across sleeping.
      */
-    salts_mutex_lock(&memory->waiter_mutex);
+    cmeta_mutex_lock(&memory->waiter_mutex);
     turbowasm_instance_memory_wrlock(memory);
     status = turbowasm_instance_memory_storage_range(
         memory, address, offset, width, &effective);
@@ -1822,7 +1877,7 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
     turbowasm_instance_memory_wrunlock(memory);
 
     if (status != TURBOWASM_OK) {
-        salts_mutex_unlock(&memory->waiter_mutex);
+        cmeta_mutex_unlock(&memory->waiter_mutex);
         turbowasm_sc_unlock();
         if (status == TURBOWASM_TRAPPED)
             *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
@@ -1831,14 +1886,14 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
 
     if (observed !=
         (expected & turbowasm_atomic_width_mask(width))) {
-        salts_mutex_unlock(&memory->waiter_mutex);
+        cmeta_mutex_unlock(&memory->waiter_mutex);
         turbowasm_sc_unlock();
         *out_result = 1u;
         return TURBOWASM_OK;
     }
 
     if (timeout_ns == 0) {
-        salts_mutex_unlock(&memory->waiter_mutex);
+        cmeta_mutex_unlock(&memory->waiter_mutex);
         turbowasm_sc_unlock();
         *out_result = 2u;
         return TURBOWASM_OK;
@@ -1846,7 +1901,7 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
 
     waiter = turbowasm_memory_waiter_acquire_slot(memory);
     if (waiter == NULL) {
-        salts_mutex_unlock(&memory->waiter_mutex);
+        cmeta_mutex_unlock(&memory->waiter_mutex);
         turbowasm_sc_unlock();
         *trap = TURBOWASM_TRAP_TOO_MANY_WAITERS;
         return TURBOWASM_TRAPPED;
@@ -1858,7 +1913,7 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
     ++memory->waiter_count;
 
     if (timeout_ns > 0) {
-        uint64_t now = salts_hrtime();
+        uint64_t now = cmeta_hrtime();
         uint64_t timeout = (uint64_t)timeout_ns;
         deadline = UINT64_MAX - now < timeout
             ? UINT64_MAX
@@ -1885,21 +1940,21 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
         }
 
         if (timeout_ns < 0) {
-            salts_cond_wait(
+            cmeta_cond_wait(
                 &waiter->condition,
                 &memory->waiter_mutex);
             continue;
         }
 
         {
-            uint64_t now = salts_hrtime();
+            uint64_t now = cmeta_hrtime();
             uint64_t remaining;
             if (now >= deadline) {
                 wait_status = -ETIMEDOUT;
                 break;
             }
             remaining = deadline - now;
-            wait_status = salts_cond_timedwait(
+            wait_status = cmeta_cond_timedwait(
                 &waiter->condition,
                 &memory->waiter_mutex,
                 remaining);
@@ -1924,7 +1979,7 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
     waiter->address = 0u;
     if (memory->waiter_count != 0u)
         --memory->waiter_count;
-    salts_mutex_unlock(&memory->waiter_mutex);
+    cmeta_mutex_unlock(&memory->waiter_mutex);
 
     if (interrupted)
         return TURBOWASM_INTERRUPTED;
@@ -1946,8 +2001,8 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
 turbowasm_status turbowasm_instance_memory_wait(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     uint8_t width,
     uint64_t expected,
     int64_t timeout_ns,
@@ -1961,8 +2016,8 @@ turbowasm_status turbowasm_instance_memory_wait(
 turbowasm_status turbowasm_instance_memory_wait_with_interrupt(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     uint8_t width,
     uint64_t expected,
     int64_t timeout_ns,
@@ -1997,24 +2052,24 @@ void turbowasm_instance_interrupt_waiters(
             memory->waiter_mutex == NULL)
             continue;
 
-        salts_mutex_lock(&memory->waiter_mutex);
+        cmeta_mutex_lock(&memory->waiter_mutex);
         for (waiter_index = 0u;
              waiter_index < memory->waiter_capacity;
              ++waiter_index) {
             turbowasm_memory_waiter *waiter =
                 &memory->waiters[waiter_index];
             if (waiter->active)
-                salts_cond_signal(&waiter->condition);
+                cmeta_cond_signal(&waiter->condition);
         }
-        salts_mutex_unlock(&memory->waiter_mutex);
+        cmeta_mutex_unlock(&memory->waiter_mutex);
     }
 }
 
 turbowasm_status turbowasm_instance_memory_notify(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     uint32_t count,
     uint32_t *out_woken,
     turbowasm_trap *trap) {
@@ -2070,7 +2125,7 @@ turbowasm_status turbowasm_instance_memory_notify(
         return TURBOWASM_UNSUPPORTED;
     }
 
-    salts_mutex_lock(&memory->waiter_mutex);
+    cmeta_mutex_lock(&memory->waiter_mutex);
     for (index = 0u;
          index < memory->waiter_capacity &&
          woken < count;
@@ -2085,9 +2140,9 @@ turbowasm_status turbowasm_instance_memory_notify(
 
         waiter->notified = true;
         ++woken;
-        salts_cond_signal(&waiter->condition);
+        cmeta_cond_signal(&waiter->condition);
     }
-    salts_mutex_unlock(&memory->waiter_mutex);
+    cmeta_mutex_unlock(&memory->waiter_mutex);
     turbowasm_sc_unlock();
 
     *out_woken = woken;
@@ -2369,21 +2424,32 @@ static bool turbowasm_instance_funcref_owner_visible(
 
 static turbowasm_status turbowasm_value_to_table_entry(
     turbowasm_instance_impl *instance,
-    uint8_t reference_type,
+    const turbowasm_validation_value_type *semantic_type,
     turbowasm_value value,
     turbowasm_instance_table_entry *out) {
     turbowasm_instance_impl *owner;
     const turbowasm_module_impl *module;
+    uint8_t reference_type=semantic_type->carrier;
 
     if (instance == NULL || out == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     memset(out, 0, sizeof(*out));
+    if(!turbowasm_value_matches_semantic(instance,&value,semantic_type))
+        return TURBOWASM_TYPE_MISMATCH;
 
     if (reference_type == 0x6fu) {
-        if (value.kind != TURBOWASM_VALUE_EXTERNREF)
+        if ((value.kind != TURBOWASM_VALUE_EXTERNREF && value.kind != TURBOWASM_VALUE_MANAGED_EXTERNREF) ||
+            !turbowasm_gc_value_valid(instance->store,&value))
             return TURBOWASM_TYPE_MISMATCH;
         out->value = value;
+        return TURBOWASM_OK;
+    }
+
+    if(reference_type==0x6eu || reference_type==0x69u) {
+        if(value.kind!=(turbowasm_value_kind)reference_type ||
+           !turbowasm_gc_value_valid(instance->store,&value)) return TURBOWASM_TYPE_MISMATCH;
+        out->value=value;
         return TURBOWASM_OK;
     }
 
@@ -2422,7 +2488,7 @@ static turbowasm_status turbowasm_value_to_table_entry(
 turbowasm_status turbowasm_instance_table_lookup(
     const turbowasm_instance_impl *instance,
     uint32_t table_index,
-    uint32_t element_index,
+    uint64_t element_index,
     turbowasm_instance_table_entry *out) {
     const turbowasm_instance_table *table;
 
@@ -2444,7 +2510,7 @@ turbowasm_status turbowasm_instance_table_lookup(
 turbowasm_status turbowasm_instance_table_get_value(
     const turbowasm_instance_impl *instance,
     uint32_t table_index,
-    uint32_t element_index,
+    uint64_t element_index,
     turbowasm_value *out) {
     turbowasm_instance_table_entry entry;
     turbowasm_status status;
@@ -2471,7 +2537,7 @@ turbowasm_status turbowasm_instance_table_get_value(
 turbowasm_status turbowasm_instance_table_set_value(
     turbowasm_instance_impl *instance,
     uint32_t table_index,
-    uint32_t element_index,
+    uint64_t element_index,
     turbowasm_value value) {
     turbowasm_instance_table *table;
 
@@ -2489,7 +2555,7 @@ turbowasm_status turbowasm_instance_table_set_value(
         turbowasm_instance_table_entry entry;
         turbowasm_status status =
             turbowasm_value_to_table_entry(
-                instance, table->reference_type,
+                instance, &table->semantic_type,
                 value, &entry);
         if (status != TURBOWASM_OK)
             return status;
@@ -2587,7 +2653,7 @@ turbowasm_status turbowasm_instance_table_init(
     turbowasm_instance_impl *instance,
     uint32_t element_index,
     uint32_t table_index,
-    uint32_t destination,
+    uint64_t destination,
     uint32_t source,
     uint32_t length) {
     const turbowasm_module_impl *module;
@@ -2634,13 +2700,7 @@ turbowasm_status turbowasm_instance_table_init(
             return TURBOWASM_OUT_OF_MEMORY;
 
         for (index = 0u; index < length; ++index) {
-            status = turbowasm_element_item_value(
-                instance,
-                &segment->items[source + index],
-                table->reference_type,
-                &values[index]);
-            if (status != TURBOWASM_OK)
-                goto done;
+            values[index].value=instance->element_values[element_index][source+index];
         }
 
         memcpy(&table->entries[destination],
@@ -2660,16 +2720,20 @@ turbowasm_status turbowasm_instance_element_drop(
         element_index >= instance->element_segment_count)
         return TURBOWASM_INVALID_ARGUMENT;
     instance->element_segment_dropped[element_index] = 1u;
+    if(instance->element_values!=NULL) {
+        turbowasm_rt_free(instance->element_values[element_index]);
+        instance->element_values[element_index]=NULL;
+    }
     return TURBOWASM_OK;
 }
 
 turbowasm_status turbowasm_instance_table_copy(
     turbowasm_instance_impl *instance,
-    uint32_t destination_table,
-    uint32_t source_table,
-    uint32_t destination,
-    uint32_t source,
-    uint32_t length) {
+    uint64_t destination_table,
+    uint64_t source_table,
+    uint64_t destination,
+    uint64_t source,
+    uint64_t length) {
     turbowasm_instance_table *destination_object;
     turbowasm_instance_table *source_object;
 
@@ -2702,12 +2766,12 @@ turbowasm_status turbowasm_instance_table_copy(
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_instance_table_grow(
+turbowasm_status turbowasm_instance_table_grow_wide(
     turbowasm_instance_impl *instance,
     uint32_t table_index,
     turbowasm_value initial,
-    uint32_t delta,
-    uint32_t *out_previous_size) {
+    uint64_t delta,
+    uint64_t *out_previous_size) {
     turbowasm_instance_table *table;
     turbowasm_instance_table_entry entry;
     uint64_t next_size;
@@ -2727,19 +2791,23 @@ turbowasm_status turbowasm_instance_table_grow(
     {
         turbowasm_status status =
             turbowasm_value_to_table_entry(
-                instance, table->reference_type,
+                instance, &table->semantic_type,
                 initial, &entry);
         if (status != TURBOWASM_OK)
             return status;
     }
 
+    if(delta>UINT32_MAX-table->size) {
+        *out_previous_size=UINT64_MAX;
+        return TURBOWASM_OK;
+    }
     next_size = (uint64_t)table->size + delta;
     if (next_size > UINT32_MAX ||
         (table->has_maximum && next_size > table->maximum) ||
         (table->resource_max_elements != 0u &&
          next_size > table->resource_max_elements) ||
         next_size * sizeof(*grown) > (uint64_t)SIZE_MAX) {
-        *out_previous_size = UINT32_MAX;
+        *out_previous_size = UINT64_MAX;
         return TURBOWASM_OK;
     }
 
@@ -2749,7 +2817,7 @@ turbowasm_status turbowasm_instance_table_grow(
     grown = (turbowasm_instance_table_entry *)turbowasm_rt_realloc(
         table->entries, (size_t)next_size * sizeof(*grown));
     if (grown == NULL) {
-        *out_previous_size = UINT32_MAX;
+        *out_previous_size = UINT64_MAX;
         return TURBOWASM_OK;
     }
 
@@ -2758,6 +2826,16 @@ turbowasm_status turbowasm_instance_table_grow(
         table->entries[index] = entry;
     table->size = (uint32_t)next_size;
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_instance_table_grow(turbowasm_instance_impl *instance,
+    uint32_t table_index,turbowasm_value initial,uint32_t delta,uint32_t *out_previous_size) {
+    uint64_t previous;
+    turbowasm_status status;
+    if(out_previous_size==NULL) return TURBOWASM_INVALID_ARGUMENT;
+    status=turbowasm_instance_table_grow_wide(instance,table_index,initial,delta,&previous);
+    if(status==TURBOWASM_OK) *out_previous_size=previous==UINT64_MAX?UINT32_MAX:(uint32_t)previous;
+    return status;
 }
 
 turbowasm_status turbowasm_instance_table_size(
@@ -2803,9 +2881,9 @@ turbowasm_status turbowasm_instance_table_limits(
 turbowasm_status turbowasm_instance_table_fill(
     turbowasm_instance_impl *instance,
     uint32_t table_index,
-    uint32_t destination,
+    uint64_t destination,
     turbowasm_value value,
-    uint32_t length) {
+    uint64_t length) {
     turbowasm_instance_table *table;
     turbowasm_instance_table_entry entry;
     uint32_t index;
@@ -2823,7 +2901,7 @@ turbowasm_status turbowasm_instance_table_fill(
     {
         turbowasm_status status =
             turbowasm_value_to_table_entry(
-                instance, table->reference_type,
+                instance, &table->semantic_type,
                 value, &entry);
         if (status != TURBOWASM_OK)
             return status;

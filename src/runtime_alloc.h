@@ -13,4 +13,11 @@ void *turbowasm_rt_malloc(size_t size);
 void *turbowasm_rt_calloc(size_t count, size_t size);
 void *turbowasm_rt_realloc(void *pointer, size_t size);
 void turbowasm_rt_free(void *pointer);
+/* Internal immutable-allocation ownership handoff. The caller preflights every
+ * allocation and reserves owner references before installing any finalizer.
+ * Finalizers run after the allocating context's deallocator returns. */
+typedef void (*turbowasm_allocation_release_fn)(void *owner, void *context, size_t bytes);
+bool turbowasm_rt_allocation_unowned(const void *pointer);
+void turbowasm_rt_allocation_own(void *pointer, void *owner, void *context, size_t bytes,
+    turbowasm_allocation_release_fn release);
 #endif

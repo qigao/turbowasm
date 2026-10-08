@@ -128,7 +128,7 @@ int main(void) {
         0x0a, 0x2f,
         0x06,
 
-        /* f0: interpreted-only integer callee: p0 / 2 */
+        /* f0: native integer division callee: p0 / 2 */
         0x07,
         0x00,
         0x20, 0x00,
@@ -145,7 +145,7 @@ int main(void) {
         0x6a,
         0x0b,
 
-        /* f2: interpreted-only f32 callee due nop */
+        /* f2: native-eligible f32 callee containing nop. */
         0x05,
         0x00,
         0x20, 0x00,
@@ -161,7 +161,7 @@ int main(void) {
         0x94,
         0x0b,
 
-        /* f4: interpreted-only trapping callee */
+        /* f4: native-eligible trapping callee */
         0x03,
         0x00,
         0x00,
@@ -197,23 +197,23 @@ int main(void) {
     impl = turbowasm_module_impl_get(&module);
     assert(impl != NULL);
 
-    /* Prove the callees themselves remain interpreter-only. */
+    /* Division and unreachable are native-eligible. */
     callee = turbowasm_validation_context_function(
         &impl->validation, 0u);
     assert(callee != NULL);
-    assert(!backend.is_function_eligible(
+    assert(backend.is_function_eligible(
         backend.context, &impl->validation, 0u, callee));
 
     callee = turbowasm_validation_context_function(
         &impl->validation, 2u);
     assert(callee != NULL);
-    assert(!backend.is_function_eligible(
+    assert(backend.is_function_eligible(
         backend.context, &impl->validation, 2u, callee));
 
     callee = turbowasm_validation_context_function(
         &impl->validation, 4u);
     assert(callee != NULL);
-    assert(!backend.is_function_eligible(
+    assert(backend.is_function_eligible(
         backend.context, &impl->validation, 4u, callee));
 
     compile_and_compare(

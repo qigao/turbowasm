@@ -15,6 +15,29 @@ static_assert(
     std::is_standard_layout<turbowasm_component_call>::value,
     "Component call handle must remain standard-layout");
 
+static_assert(std::is_same<decltype(&turbowasm_component_host_value_destroy),
+    turbowasm_status (*)(turbowasm_component_host_value *)>::value,
+    "Component value destruction reports status");
+static_assert(std::is_standard_layout<turbowasm_component_host_variant>::value &&
+    std::is_standard_layout<turbowasm_component_host_sequence>::value &&
+    std::is_standard_layout<turbowasm_component_host_flags>::value,
+    "Composite carriers must remain C-compatible");
+
+static_assert(std::is_standard_layout<turbowasm_component_async_task>::value &&
+    std::is_standard_layout<turbowasm_component_async_transfer_result>::value &&
+    std::is_standard_layout<turbowasm_component_async_wait>::value,
+    "Async owners and snapshots must remain C-compatible");
+static_assert(std::is_same<decltype(&turbowasm_component_async_transfer_write_move),
+    turbowasm_status (*)(turbowasm_component_async_transfer *, turbowasm_component_async_endpoint *,
+        turbowasm_component_host_value *, uint32_t)>::value,
+    "Transfer move accepts public host values");
+
+auto *tw_async_write_move = &turbowasm_component_async_transfer_write_move;
+auto *tw_async_task_create = &turbowasm_component_async_task_create;
+auto *tw_async_task_resume = &turbowasm_component_async_task_resume;
+auto *tw_async_task_state = &turbowasm_component_async_task_state_get;
+auto *tw_async_shutdown = &turbowasm_component_instance_poll_shutdown;
+
 auto *tw_component_load = &turbowasm_component_load_borrowed;
 auto *tw_component_load_config =
     &turbowasm_component_load_borrowed_with_config;
@@ -25,6 +48,9 @@ auto *tw_component_instance_destroy =
     &turbowasm_component_instance_destroy;
 auto *tw_component_invoke =
     &turbowasm_component_instance_invoke;
+auto *tw_component_invoke_move = &turbowasm_component_instance_invoke_move;
+auto *tw_component_create_move = &turbowasm_component_call_create_move;
+auto *tw_component_borrow = &turbowasm_component_host_value_borrow;
 auto *tw_component_call_create =
     &turbowasm_component_call_create;
 auto *tw_component_call_destroy =
@@ -51,12 +77,23 @@ auto *tw_component_value_destroy =
     &turbowasm_component_host_value_destroy;
 
 int main() {
+    turbowasm_component_async_options options{};
+    turbowasm_component_async_transfer_result result{};
+    turbowasm_component_async_options_init(&options);
+    if (options.tasks != 64u || options.host_bytes != 16u * 1024u * 1024u ||
+        turbowasm_component_async_transfer_result_destroy(&result) != TURBOWASM_OK ||
+        tw_async_write_move == nullptr || tw_async_task_create == nullptr ||
+        tw_async_task_resume == nullptr || tw_async_task_state == nullptr || tw_async_shutdown == nullptr)
+        return 1;
     return tw_component_load == nullptr ||
            tw_component_load_config == nullptr ||
            tw_component_destroy == nullptr ||
            tw_component_instance_create == nullptr ||
            tw_component_instance_destroy == nullptr ||
            tw_component_invoke == nullptr ||
+           tw_component_invoke_move == nullptr ||
+           tw_component_create_move == nullptr ||
+           tw_component_borrow == nullptr ||
            tw_component_call_create == nullptr ||
            tw_component_call_destroy == nullptr ||
            tw_component_call_resume == nullptr ||

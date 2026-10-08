@@ -4,6 +4,7 @@
 #include <turbowasm/module.h>
 #include <turbowasm/status.h>
 #include <turbowasm/value.h>
+#include <turbowasm/store.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -27,7 +28,9 @@ typedef enum turbowasm_trap {
     TURBOWASM_TRAP_NULL_REFERENCE,
     TURBOWASM_TRAP_UNALIGNED_ATOMIC,
     TURBOWASM_TRAP_EXPECTED_SHARED_MEMORY,
-    TURBOWASM_TRAP_TOO_MANY_WAITERS
+    TURBOWASM_TRAP_TOO_MANY_WAITERS,
+    TURBOWASM_TRAP_ARRAY_OUT_OF_BOUNDS,
+    TURBOWASM_TRAP_CAST_FAILURE
 } turbowasm_trap;
 
 typedef struct turbowasm_instance {
@@ -46,7 +49,8 @@ typedef struct turbowasm_execution_options {
 } turbowasm_execution_options;
 
 /* The instance borrows an already validated module.  The module and its
- * borrowed source bytes must outlive the instance. */
+ * borrowed source bytes must outlive the instance. Modules with GC operations
+ * or composite types require create_in_store; this entry returns INVALID_ARGUMENT. */
 turbowasm_status turbowasm_instance_create(
     turbowasm_instance *instance,
     const turbowasm_module *module);
@@ -62,7 +66,32 @@ turbowasm_status turbowasm_instance_create_linked(
     const turbowasm_module *module,
     const struct turbowasm_linker *linker);
 
+/* GC instances share an explicit store, including all instance import providers.
+ * A NULL linker requires no imports.
+ * The instance must be destroyed before the store. All operations use the
+ * store's owner thread; managed values from a different store are rejected. */
+turbowasm_status turbowasm_instance_create_in_store(
+    turbowasm_instance *instance,const turbowasm_module *module,
+    const struct turbowasm_linker *linker,turbowasm_store *store);
+
 void turbowasm_instance_destroy(turbowasm_instance *instance);
+
+/* Table addresses are never truncated. Out-of-range access returns TRAPPED;
+ * invalid table indices return INVALID_ARGUMENT; set/grow reject values that
+ * do not match the table element type or GC store with TYPE_MISMATCH.
+ * Returned references are borrowed; retain managed values across collection.
+ * These functions work for table32 and table64. Dense storage has a hard
+ * UINT32_MAX element ceiling, additionally bounded by max_table_elements. */
+turbowasm_status turbowasm_instance_table_get64(const turbowasm_instance *instance,
+    uint32_t table_index,uint64_t index,turbowasm_value *out);
+turbowasm_status turbowasm_instance_table_set64(turbowasm_instance *instance,
+    uint32_t table_index,uint64_t index,turbowasm_value value);
+turbowasm_status turbowasm_instance_table_size64(const turbowasm_instance *instance,
+    uint32_t table_index,uint64_t *out_size);
+/* On success out_previous_size is the old size. A Wasm growth failure returns
+ * OK and UINT64_MAX, leaving the table unchanged (including a budget failure). */
+turbowasm_status turbowasm_instance_table_grow64(turbowasm_instance *instance,
+    uint32_t table_index,turbowasm_value initial,uint64_t delta,uint64_t *out_previous_size);
 
 const turbowasm_module *turbowasm_instance_module(
     const turbowasm_instance *instance);

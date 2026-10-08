@@ -318,7 +318,20 @@ static void test_unreachable_select_remains_polymorphic(void) {
     turbowasm_module_destroy(&module);
 }
 
+static void test_unreachable_select_result_must_be_consumed(void) {
+    static const uint8_t bytes[] = {
+        WASM_HEADER,
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+        0x03, 0x02, 0x01, 0x00,
+        0x0a, 0x06, 0x01, 0x04, 0x00, 0x00, 0x1b, 0x0b
+    };
+    turbowasm_module module = {0};
+    assert(load(bytes, sizeof(bytes), &module) == TURBOWASM_MALFORMED_MODULE);
+    assert(module.impl == NULL);
+}
+
 int main(void) {
+    test_unreachable_select_result_must_be_consumed();
     test_i32_arithmetic_result();
     test_result_type_mismatch();
     test_parameter_is_local_zero();

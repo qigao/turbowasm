@@ -12,7 +12,7 @@ static void test_manifest_is_valid_and_unique(void) {
     size_t i;
     size_t j;
 
-    assert(count == 21u);
+    assert(count == 29u);
     for (i = 0u; i < count; ++i) {
         const cmeta_function_desc *function =
             turbowasm_wasi_preview1_function_at(i);

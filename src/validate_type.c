@@ -47,6 +47,7 @@ static bool turbowasm_validation_read_s33(
 
 turbowasm_status turbowasm_validation_read_heaptype(
     turbowasm_reader *reader,
+    const turbowasm_validation_context *context,
     turbowasm_validation_value_type *out) {
     int64_t heap;
 
@@ -55,6 +56,7 @@ turbowasm_status turbowasm_validation_read_heaptype(
     if (!turbowasm_validation_read_s33(reader, &heap))
         return TURBOWASM_MALFORMED_MODULE;
 
+    out->definition = NULL;
     if (heap >= 0) {
         if ((uint64_t)heap > UINT32_MAX)
             return TURBOWASM_MALFORMED_MODULE;
@@ -62,10 +64,38 @@ turbowasm_status turbowasm_validation_read_heaptype(
         out->is_reference = true;
         out->heap_kind = TURBOWASM_VALIDATION_HEAP_TYPE_INDEX;
         out->type_index = (uint32_t)heap;
+        if (context != NULL) {
+            if (out->type_index >= context->type_count)
+                return TURBOWASM_MALFORMED_MODULE;
+            out->definition = &context->types[out->type_index];
+            if (out->definition->defined &&
+                out->definition->kind != TURBOWASM_TYPE_FUNCTION)
+                out->carrier = 0x6eu;
+        }
         return TURBOWASM_OK;
     }
 
     switch (heap) {
+        case -18: case -19: case -20: case -21: case -22: case -15:
+            out->carrier = 0x6eu;
+            out->is_reference = true;
+            out->type_index = UINT32_MAX;
+            out->heap_kind = heap == -18 ? TURBOWASM_VALIDATION_HEAP_ANY :
+                heap == -19 ? TURBOWASM_VALIDATION_HEAP_EQ :
+                heap == -20 ? TURBOWASM_VALIDATION_HEAP_I31 :
+                heap == -21 ? TURBOWASM_VALIDATION_HEAP_STRUCT :
+                heap == -22 ? TURBOWASM_VALIDATION_HEAP_ARRAY :
+                              TURBOWASM_VALIDATION_HEAP_BOTTOM;
+            return TURBOWASM_OK;
+        case -13:
+        case -14:
+            out->carrier = heap == -13 ? 0x70u : 0x6fu;
+            out->is_reference = true;
+            out->heap_kind = heap == -13
+                ? TURBOWASM_VALIDATION_HEAP_NOFUNC
+                : TURBOWASM_VALIDATION_HEAP_NOEXTERN;
+            out->type_index = UINT32_MAX;
+            return TURBOWASM_OK;
         case -16:
             out->carrier = 0x70u;
             out->is_reference = true;
@@ -91,12 +121,13 @@ turbowasm_status turbowasm_validation_read_heaptype(
             out->type_index = UINT32_MAX;
             return TURBOWASM_OK;
         default:
-            return TURBOWASM_UNSUPPORTED;
+            return TURBOWASM_MALFORMED_MODULE;
     }
 }
 
 turbowasm_status turbowasm_validation_read_reftype(
     turbowasm_reader *reader,
+    const turbowasm_validation_context *context,
     turbowasm_validation_value_type *out,
     bool *out_generalized) {
     uint8_t first;
@@ -118,20 +149,21 @@ turbowasm_status turbowasm_validation_read_reftype(
         return TURBOWASM_OK;
     }
 
-    if (first == 0x74u) {
-        out->carrier = 0x69u;
-        out->is_reference = true;
+    if ((first >= 0x6au && first <= 0x6eu) ||
+        (first >= 0x71u && first <= 0x74u)) {
+        --reader->cursor;
+        status = turbowasm_validation_read_heaptype(reader, context, out);
+        if (status != TURBOWASM_OK)
+            return status;
         out->nullable = true;
-        out->heap_kind = TURBOWASM_VALIDATION_HEAP_NOEXN;
-        out->type_index = UINT32_MAX;
         return TURBOWASM_OK;
     }
 
     if (first != 0x63u && first != 0x64u)
-        return TURBOWASM_UNSUPPORTED;
+        return TURBOWASM_MALFORMED_MODULE;
 
     out->nullable = first == 0x63u;
-    status = turbowasm_validation_read_heaptype(reader, out);
+    status = turbowasm_validation_read_heaptype(reader, context, out);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -142,6 +174,7 @@ turbowasm_status turbowasm_validation_read_reftype(
 
 turbowasm_status turbowasm_validation_read_valtype(
     turbowasm_reader *reader,
+    const turbowasm_validation_context *context,
     turbowasm_validation_value_type *out,
     bool *out_generalized) {
     uint8_t first;
@@ -164,7 +197,7 @@ turbowasm_status turbowasm_validation_read_valtype(
     }
 
     return turbowasm_validation_read_reftype(
-        reader, out, out_generalized);
+        reader, context, out, out_generalized);
 }
 
 
@@ -182,7 +215,7 @@ turbowasm_status turbowasm_validation_read_globaltype(
         return TURBOWASM_INVALID_ARGUMENT;
 
     status = turbowasm_validation_read_valtype(
-        reader, &type, &generalized);
+        reader, context, &type, &generalized);
     if (status != TURBOWASM_OK)
         return status;
 

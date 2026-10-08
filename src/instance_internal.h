@@ -10,6 +10,7 @@
 
 #include "module_internal.h"
 #include "jit_backend.h"
+#include "store_internal.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -17,12 +18,12 @@
 
 enum {
     TURBOWASM_WASM_PAGE_SIZE = 65536u,
-    TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT = 2u,
+    TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS = 2u,
     TURBOWASM_MEMORY_WAITER_CAPACITY = 64u
 };
 
 typedef struct turbowasm_memory_waiter {
-    salts_cond_t condition;
+    cmeta_cond_t condition;
     uint64_t address;
     bool active;
     bool notified;
@@ -30,8 +31,8 @@ typedef struct turbowasm_memory_waiter {
 
 typedef struct turbowasm_instance_memory {
     uint8_t *data;
-    salts_rwlock_t access_lock;
-    salts_mutex_t waiter_mutex;
+    cmeta_rwlock_t access_lock;
+    cmeta_mutex_t waiter_mutex;
     turbowasm_memory_waiter *waiters;
     uint32_t waiter_count;
     uint32_t waiter_capacity;
@@ -62,10 +63,12 @@ typedef struct turbowasm_instance_table_entry {
 typedef struct turbowasm_instance_table {
     turbowasm_instance_table_entry *entries;
     uint32_t size;
-    uint32_t maximum;
+    uint64_t maximum;
     uint32_t resource_max_elements;
     bool has_maximum;
     uint8_t reference_type;
+    bool table64;
+    turbowasm_validation_value_type semantic_type;
 } turbowasm_instance_table;
 
 typedef struct turbowasm_linked_function {
@@ -157,6 +160,9 @@ typedef struct turbowasm_jit_function_state {
 
 typedef struct turbowasm_instance_impl {
     const turbowasm_module *module;
+    turbowasm_store_impl *store;
+    struct turbowasm_instance_impl *store_next;
+    const turbowasm_validation_context *store_types;
 
     turbowasm_linked_function *linked_functions;
     uint32_t linked_function_count;
@@ -192,6 +198,7 @@ typedef struct turbowasm_instance_impl {
 
     uint8_t *element_segment_dropped;
     uint32_t element_segment_count;
+    turbowasm_value **element_values;
 
     bool jit_backend_attached;
     turbowasm_jit_backend jit_backend;
@@ -225,13 +232,34 @@ typedef struct turbowasm_jit_invocation_context {
     uint32_t tail_function_index;
     size_t tail_argument_count;
     turbowasm_value
-        tail_arguments[TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT];
+        tail_arguments[TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS];
+
+    /* Larger pending tuples belong to the enclosing Runtime dispatcher. */
+    struct turbowasm_value_stack *tail_storage;
+    turbowasm_instance_impl *tail_instance;
+
+    /* Borrowed views traced by the enclosing dispatcher's store source. */
+    const turbowasm_value *arguments;
+    size_t argument_count;
+    turbowasm_value *results;
+    size_t result_count;
+    turbowasm_value *native_values;
+    size_t native_value_count;
 
     /* Invocation-local v128 temporary frame used by helper-backed JIT
      * lowering. Nested compiled calls save/replace/restore this frame. */
-    salts_v128 *simd_slots;
+    turbowasm_v128 *simd_slots;
     uint32_t simd_slot_count;
 } turbowasm_jit_invocation_context;
+
+bool turbowasm_zero_value(uint8_t type, turbowasm_value *out);
+turbowasm_status turbowasm_reference_is_null(const turbowasm_value *value, bool *is_null);
+
+bool turbowasm_value_matches_semantic(turbowasm_instance_impl *instance,
+    const turbowasm_value *value,const turbowasm_validation_value_type *type);
+turbowasm_status turbowasm_instance_create_in_store_preserve_failure(
+    turbowasm_instance *instance,const turbowasm_module *module,
+    const turbowasm_linker *linker,turbowasm_store *store);
 
 turbowasm_status turbowasm_jit_instance_attach_backend(
     turbowasm_instance_impl *instance,
@@ -266,7 +294,19 @@ turbowasm_status turbowasm_jit_direct_call(
     size_t *result_count,
     turbowasm_trap *trap);
 
-turbowasm_status turbowasm_instance_invoke_interpreter_internal(
+enum {
+    TURBOWASM_JIT_CALL_INDIRECT = 0x11,
+    TURBOWASM_JIT_RETURN_CALL_INDIRECT = 0x13,
+    TURBOWASM_JIT_CALL_REF = 0x14,
+    TURBOWASM_JIT_RETURN_CALL_REF = 0x15
+};
+
+/* Arguments contain the expected parameter tuple followed by one selector. */
+int64_t turbowasm_jit_indirect_call(turbowasm_jit_invocation_context *context,
+    int64_t opcode, int64_t type_index, int64_t table_index,
+    const turbowasm_value *arguments, turbowasm_value *results);
+
+turbowasm_status turbowasm_instance_invoke_internal(
     turbowasm_instance_impl *instance,
     uint32_t function_index,
     const turbowasm_value *arguments,
@@ -276,6 +316,31 @@ turbowasm_status turbowasm_instance_invoke_interpreter_internal(
     size_t *result_count,
     turbowasm_trap *trap,
     turbowasm_jit_execution_control *execution);
+
+/* For a separately resumable child task, borrow only the current quantum's
+ * fuel/interrupt policy. Its retained continuation never retains this pointer. */
+turbowasm_jit_execution_control *turbowasm_host_call_control(const turbowasm_host_call *call);
+
+/* Retained-stack host adapter. Context and caller instance outlive the entry;
+ * suspension uses the existing host-call bridge, never a returned YIELDED. */
+typedef turbowasm_status (*turbowasm_host_entry_fn)(void *context,
+    turbowasm_host_call *call, turbowasm_trap *trap);
+turbowasm_status turbowasm_instance_invoke_host_entry(turbowasm_instance_impl *instance,
+    turbowasm_jit_execution_control *control, turbowasm_host_entry_fn entry,
+    void *context, turbowasm_trap *trap);
+
+/* Borrows the live host callback's control and depth until this nested call
+ * returns, including coroutine suspension. Must not outlive that callback. */
+turbowasm_status turbowasm_instance_invoke_from_host(
+    const turbowasm_host_call *call,
+    turbowasm_instance *instance,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap);
 
 turbowasm_status turbowasm_instance_state_init(
     turbowasm_instance_impl *instance,
@@ -334,6 +399,11 @@ turbowasm_status turbowasm_instance_memory_shared(
     uint32_t memory_index,
     bool *out_shared);
 
+/* Identity of the resolved mutable memory, including imported aliases. Invalid
+ * indices/instances never compare equal. No data pointer survives memory.grow. */
+bool turbowasm_instance_memory_same(const turbowasm_instance_impl *left, uint32_t left_index,
+    const turbowasm_instance_impl *right, uint32_t right_index);
+
 turbowasm_status turbowasm_instance_memory_read_bytes(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
@@ -368,8 +438,8 @@ turbowasm_status turbowasm_instance_memory_copy_bytes(
 turbowasm_status turbowasm_instance_memory_atomic(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     const turbowasm_atomic_descriptor *descriptor,
     uint64_t value,
     uint64_t expected,
@@ -380,8 +450,8 @@ turbowasm_status turbowasm_instance_memory_atomic(
 turbowasm_status turbowasm_instance_memory_wait(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     uint8_t width,
     uint64_t expected,
     int64_t timeout_ns,
@@ -391,8 +461,8 @@ turbowasm_status turbowasm_instance_memory_wait(
 turbowasm_status turbowasm_instance_memory_wait_with_interrupt(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     uint8_t width,
     uint64_t expected,
     int64_t timeout_ns,
@@ -413,13 +483,23 @@ void turbowasm_instance_interrupt_waiters(
 turbowasm_status turbowasm_instance_memory_notify(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,
-    uint32_t address,
-    uint32_t offset,
+    uint64_t address,
+    uint64_t offset,
     uint32_t count,
     uint32_t *out_woken,
     turbowasm_trap *trap);
 
 turbowasm_status turbowasm_threads_sc_fence(void);
+
+/* Shared semantic boundary for interpreter and native memory lowering. */
+turbowasm_status turbowasm_instance_memory_load_value(
+    turbowasm_instance_impl *instance, uint32_t memory_index,
+    uint64_t address, uint64_t offset, uint8_t opcode,
+    turbowasm_value *out_value, turbowasm_trap *trap);
+turbowasm_status turbowasm_instance_memory_store_value(
+    turbowasm_instance_impl *instance, uint32_t memory_index,
+    uint64_t address, uint64_t offset, uint8_t opcode,
+    turbowasm_value value, turbowasm_trap *trap);
 
 turbowasm_status turbowasm_instance_memory_bounds(
     const turbowasm_instance_impl *instance,
@@ -459,19 +539,19 @@ turbowasm_status turbowasm_instance_memory_grow(
 turbowasm_status turbowasm_instance_table_lookup(
     const turbowasm_instance_impl *instance,
     uint32_t table_index,
-    uint32_t element_index,
+    uint64_t element_index,
     turbowasm_instance_table_entry *out);
 
 turbowasm_status turbowasm_instance_table_get_value(
     const turbowasm_instance_impl *instance,
     uint32_t table_index,
-    uint32_t element_index,
+    uint64_t element_index,
     turbowasm_value *out);
 
 turbowasm_status turbowasm_instance_table_set_value(
     turbowasm_instance_impl *instance,
     uint32_t table_index,
-    uint32_t element_index,
+    uint64_t element_index,
     turbowasm_value value);
 
 turbowasm_status turbowasm_instance_memory_init(
@@ -505,7 +585,7 @@ turbowasm_status turbowasm_instance_table_init(
     turbowasm_instance_impl *instance,
     uint32_t element_index,
     uint32_t table_index,
-    uint32_t destination,
+    uint64_t destination,
     uint32_t source,
     uint32_t length);
 
@@ -515,11 +595,11 @@ turbowasm_status turbowasm_instance_element_drop(
 
 turbowasm_status turbowasm_instance_table_copy(
     turbowasm_instance_impl *instance,
-    uint32_t destination_table,
-    uint32_t source_table,
-    uint32_t destination,
-    uint32_t source,
-    uint32_t length);
+    uint64_t destination_table,
+    uint64_t source_table,
+    uint64_t destination,
+    uint64_t source,
+    uint64_t length);
 
 turbowasm_status turbowasm_instance_table_grow(
     turbowasm_instance_impl *instance,
@@ -527,6 +607,10 @@ turbowasm_status turbowasm_instance_table_grow(
     turbowasm_value initial,
     uint32_t delta,
     uint32_t *out_previous_size);
+
+turbowasm_status turbowasm_instance_table_grow_wide(
+    turbowasm_instance_impl *instance,uint32_t table_index,
+    turbowasm_value initial,uint64_t delta,uint64_t *out_previous_size);
 
 turbowasm_status turbowasm_instance_table_size(
     const turbowasm_instance_impl *instance,
@@ -541,8 +625,25 @@ turbowasm_status turbowasm_instance_table_limits(
 turbowasm_status turbowasm_instance_table_fill(
     turbowasm_instance_impl *instance,
     uint32_t table_index,
-    uint32_t destination,
+    uint64_t destination,
     turbowasm_value value,
-    uint32_t length);
+    uint64_t length);
+
+/* Private numeric bridge: at most two borrowed scalar inputs, one committed
+ * output. No allocation, callback, collection or retained reference occurs. */
+enum { TURBOWASM_JIT_NUMERIC_SAT_BASE = 0x100, TURBOWASM_JIT_NUMERIC_MAX_INPUTS = 2 };
+typedef struct turbowasm_numeric_signature {
+    uint8_t input_type, output_type, input_count;
+} turbowasm_numeric_signature;
+bool turbowasm_numeric_signature_get(uint32_t opcode, turbowasm_numeric_signature *out);
+int64_t turbowasm_jit_numeric(turbowasm_jit_invocation_context *context,
+    int64_t opcode, const turbowasm_value *arguments, turbowasm_value *result);
+
+enum { TURBOWASM_JIT_SIMD_MAX_INPUTS = 3 };
+/* The module owns code until the compiled function is destroyed. The bounded
+ * view contains one validated SIMD instruction after its 0xfd prefix. */
+int64_t turbowasm_jit_simd_instruction(turbowasm_jit_invocation_context *context,
+    const uint8_t *code, int64_t size, const turbowasm_value *arguments,
+    int64_t count, turbowasm_value *result);
 
 #endif /* TURBOWASM_INSTANCE_INTERNAL_H */

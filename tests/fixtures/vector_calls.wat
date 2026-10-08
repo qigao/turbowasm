@@ -1,0 +1,57 @@
+(module
+  (type $v (func (param v128) (result v128)))
+  (type $node (struct (field i32)))
+  (import "h" "vector" (func $host (type $v)))
+  (table (export "table") 4 funcref)
+  (elem (i32.const 0) func $identity $interpreted $host)
+  (func $identity (export "identity") (type $v) local.get 0)
+  (func $interpreted (export "interpreted") (type $v)
+    i32.const 1 i32.clz drop local.get 0)
+  (func (export "direct") (type $v) local.get 0 call $identity)
+  (func (export "tail") (type $v) local.get 0 return_call $identity)
+  (func (export "host") (type $v) local.get 0 call $host)
+  (func (export "table-call") (param v128 i32) (result v128)
+    local.get 0 local.get 1 call_indirect (type $v))
+  (func (export "tail-table") (param v128 i32) (result v128)
+    local.get 0 local.get 1 return_call_indirect (type $v))
+  (func (export "ref") (param v128 (ref null $v)) (result v128)
+    local.get 0 local.get 1 call_ref $v)
+  (func (export "tail-ref") (param v128 (ref null $v)) (result v128)
+    local.get 0 local.get 1 return_call_ref $v)
+  (func $tuple (param i32 v128 f64 externref v128 i64) (result v128 externref i64 v128 f64 i32)
+    local.get 4 local.get 3 local.get 5 local.get 1 local.get 2 local.get 0)
+  (func (export "tuple") (param i32 v128 f64 externref v128 i64) (result v128 externref i64 v128 f64 i32)
+    local.get 0 local.get 1 local.get 2 local.get 3 local.get 4 local.get 5 call $tuple)
+  (func (export "locals") (param v128) (result v128 v128) (local v128)
+    local.get 0 local.tee 1 local.get 1
+    v128.const i32x4 0 0 0 0 local.set 1)
+  (func (export "merge") (param v128 i32) (result v128)
+    local.get 1 if (result v128) local.get 0 else v128.const i32x4 0 0 0 0 end)
+  (func (export "branch") (param v128) (result v128)
+    block (result v128) local.get 0 br 0 end)
+  (func $self (export "self") (param v128 i32) (result v128 v128) (local v128)
+    local.get 1 if
+      local.get 0 local.set 2
+      local.get 0 local.get 1 i32.const 1 i32.sub return_call $self
+    end local.get 0 local.get 2)
+  (func (export "operation") (param v128) (result v128)
+    local.get 0 local.get 0 i32x4.add)
+  (func $make (export "make") (result anyref) i32.const 73 struct.new $node)
+  (func $read (export "read") (param anyref) (result i32)
+    local.get 0 ref.cast (ref $node) struct.get $node 0)
+  (func (export "live") (param v128 anyref) (result v128 anyref)
+    local.get 0 call $host local.get 1)
+  (func (export "live-native") (param v128) (result i32 v128) (local anyref v128)
+    call $make local.set 1
+    local.get 0 call $host local.set 2
+    local.get 1 call $read local.get 2)
+  (func $wide (param v128) (result v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128)
+    local.get 0 local.get 0 local.get 0 local.get 0
+    local.get 0 local.get 0 local.get 0 local.get 0
+    local.get 0 local.get 0 local.get 0 local.get 0
+    local.get 0 local.get 0 local.get 0 local.get 0)
+  (func (export "wide") (param v128) (result v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128 v128)
+    local.get 0 call $wide)
+  (func $trap (param v128) (result v128) unreachable)
+  (func (export "trap") (param v128) (result v128) local.get 0 call $trap)
+)

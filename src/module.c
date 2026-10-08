@@ -267,6 +267,20 @@ bool turbowasm_module_memory_at(
     return true;
 }
 
+bool turbowasm_module_table_at(const turbowasm_module *module,size_t index,
+    turbowasm_table_desc *out) {
+    const turbowasm_module_impl *impl=turbowasm_module_impl_get(module);
+    const turbowasm_validation_table *table;
+    if(impl==NULL || out==NULL || index>=impl->validation.table_count) return false;
+    table=&impl->validation.tables[index];
+    out->minimum=table->limits.minimum;
+    out->maximum=table->limits.maximum;
+    out->has_maximum=table->limits.has_maximum;
+    out->table64=table->limits.table64;
+    out->imported=table->imported;
+    return true;
+}
+
 
 static const turbowasm_validation_func_type *
 turbowasm_module_reflected_function_type(

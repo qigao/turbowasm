@@ -2,392 +2,69 @@ name: TurboWasm CI
 
 on:
   pull_request:
-
+  workflow_dispatch:
+    inputs:
+      salts_ci_run:
+        description: Optional Salts SDK CI run for native socket qualification
+        type: string
+        default: ''
+      skip_windows:
+        description: Qualify non-Windows platforms only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   packages: read
+  actions: read
+
+concurrency:
+  group: turbowasm-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  linux:
-    name: Linux x64
-    runs-on: ubuntu-latest
+  scope:
+    name: Select affected checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      builds: ${{ steps.select.outputs.builds }}
+      has_builds: ${{ steps.select.outputs.has_builds }}
     steps:
-      - name: Checkout TurboWasm
-        uses: actions/checkout@v4
-
-      - name: Checkout latest littlefs for optional provider qualification
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          repository: littlefs-project/littlefs
-          path: build/littlefs
-
-      - name: Guard unversioned dependency policy
-        shell: bash
-        run: python3 cmake/ci/check-unversioned-policy.py
-
-      - name: Guard Runtime portability boundary
-        shell: bash
-        run: python3 cmake/ci/check-portability-boundary.py
-
-      - name: Restore latest Salts SDK
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select native profiles
+        id: select
         shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: ./cmake/ci/restore-salts-sdk.ps1 -WithSaltsUtils
-
-      - name: Ensure Ninja
-        shell: bash
-        run: |
-          set -euxo pipefail
-          if ! command -v ninja >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y ninja-build
-          fi
-
-      - name: Configure TurboWasm
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S . -B build/turbowasm -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/turbowasm-sdk" \
-            -DTURBOWASM_BUILD_TESTS=ON \
-            -DTURBOWASM_BUILD_TOOLS=ON \
-            -DTURBOWASM_QUALIFY_WASI_ADAPTER_PLAN=ON \
-            -DTURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER=ON \
-            -DTURBOWASM_LITTLEFS_SOURCE_DIR="$GITHUB_WORKSPACE/build/littlefs"
-
-      - name: Build and test TurboWasm
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake --build build/turbowasm -j2
-          ctest --test-dir build/turbowasm --no-tests=error --output-on-failure
-
-      - name: Install TurboWasm
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake --install build/turbowasm
-          test -f "$RUNNER_TEMP/turbowasm-sdk/lib/cmake/TurboWasm/TurboWasmConfig.cmake"
-
-      - name: Qualify installed package consumer
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S tests/installed_consumer -B build/installed-consumer -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/turbowasm-sdk;$SALTS_ROOT"
-          cmake --build build/installed-consumer -j2
-          ctest --test-dir build/installed-consumer \
-            --no-tests=error --output-on-failure
-
-  windows:
-    name: Windows x64
-    runs-on: windows-2022
+          CI_EVENT: ${{ github.event_name }}
+          CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_SKIP_WINDOWS: ${{ inputs.skip_windows || false }}
+        run: ./cmake/ci/select-ci-scope.ps1 -EventName $env:CI_EVENT -BaseRef $env:CI_BASE -HeadRef $env:CI_HEAD -SkipWindows ($env:CI_SKIP_WINDOWS -eq 'true')
+  native:
+    needs: scope
+    if: needs.scope.outputs.has_builds == 'true'
+    uses: ./.github/workflows/native-build.yml
+    with:
+      builds: ${{ needs.scope.outputs.builds }}
+      salts_ci_run: ${{ inputs.salts_ci_run || '' }}
+      skip_windows: ${{ inputs.skip_windows || false }}
+  result:
+    name: CI result
+    needs: [scope, native]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - name: Checkout TurboWasm
-        uses: actions/checkout@v4
-
-      - name: Restore latest Salts SDK
-        shell: pwsh
+      - name: Require successful selected checks
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: ./cmake/ci/restore-salts-sdk.ps1 -WithSaltsUtils
-
-      - name: Ensure Ninja
-        shell: pwsh
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          HAS_BUILDS: ${{ needs.scope.outputs.has_builds }}
+          BUILD_RESULT: ${{ needs.native.result }}
         run: |
-          $ErrorActionPreference = "Stop"
-          if ($null -eq (Get-Command ninja.exe -ErrorAction SilentlyContinue)) {
-            choco install ninja -y --no-progress
-          }
-
-      - name: Resolve MSVC environment
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if ([string]::IsNullOrWhiteSpace($vsInstall)) {
-            throw "Visual Studio x64 C++ toolchain was not found"
-          }
-          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
-
-      - name: Configure, build and test TurboWasm
-        shell: cmd
-        run: |
-          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
-          if errorlevel 1 exit /b 1
-          set "PATH=%SALTS_ROOT%\bin;%PATH%"
-          cmake -S . -B build\turbowasm-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="%RUNNER_TEMP%\turbowasm-sdk-windows" -DTURBOWASM_BUILD_TESTS=ON -DTURBOWASM_BUILD_TOOLS=ON -DTURBOWASM_QUALIFY_WASI_ADAPTER_PLAN=ON -DTURBOWASM_ENABLE_MIR_JIT=OFF
-          if errorlevel 1 exit /b 1
-          cmake --build build\turbowasm-windows --parallel 2
-          if errorlevel 1 exit /b 1
-          ctest --test-dir build\turbowasm-windows --no-tests=error --output-on-failure
-          if errorlevel 1 exit /b 1
-          cmake --install build\turbowasm-windows
-          if errorlevel 1 exit /b 1
-
-      - name: Qualify installed package consumer
-        shell: cmd
-        run: |
-          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
-          if errorlevel 1 exit /b 1
-          set "PATH=%SALTS_ROOT%\bin;%RUNNER_TEMP%\turbowasm-sdk-windows\bin;%PATH%"
-          cmake -S tests\installed_consumer -B build\installed-consumer-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="%RUNNER_TEMP%\turbowasm-sdk-windows;%SALTS_ROOT%"
-          if errorlevel 1 exit /b 1
-          cmake --build build\installed-consumer-windows --parallel 2
-          if errorlevel 1 exit /b 1
-          ctest --test-dir build\installed-consumer-windows --no-tests=error --output-on-failure
-          if errorlevel 1 exit /b 1
-
-      - name: Verify Runtime export is MIR-free
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $targets = Join-Path $env:RUNNER_TEMP "turbowasm-sdk-windows\lib\cmake\TurboWasm\TurboWasmTargets.cmake"
-          if (-not (Test-Path -LiteralPath $targets -PathType Leaf)) { throw "missing $targets" }
-          $text = Get-Content -LiteralPath $targets -Raw
-          if ($text -match "MIR::MIR|mir-jit") { throw "MIR leaked into Windows Runtime export" }
-
-
-  android:
-    name: Android arm64-v8a interpreter
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout TurboWasm
-        uses: actions/checkout@v4
-
-      - name: Restore latest Android Salts SDK
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid android-arm64-v8a
-
-      - name: Ensure Android toolchain
-        shell: bash
-        run: |
-          set -euxo pipefail
-          command -v ninja >/dev/null 2>&1 || {
-            sudo apt-get update
-            sudo apt-get install -y ninja-build
-          }
-          test -n "${ANDROID_NDK_HOME:-}"
-          test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
-          test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake"
-
-      - name: Configure interpreter-first Android build
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S . -B build/turbowasm-android -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-26 \
-            -DANDROID_STL=c++_shared \
-            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/turbowasm-sdk-android" \
-            -DTURBOWASM_BUILD_TESTS=OFF \
-            -DTURBOWASM_BUILD_TOOLS=OFF \
-            -DTURBOWASM_BUILD_CONFORMANCE_RUNNER=OFF \
-            -DTURBOWASM_ENABLE_MIR_JIT=OFF \
-            -DTURBOWASM_ENABLE_CFLOW_ADAPTER=OFF \
-            -DTURBOWASM_ENABLE_NATIVE_IO_ADAPTER=OFF \
-            -DTURBOWASM_ENABLE_WASI_ADAPTER=ON \
-            -DTURBOWASM_ENABLE_WASI_THREADS_ADAPTER=OFF \
-            -DTURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER=OFF \
-            -DTURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER=ON \
-            -DTURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER=OFF
-
-      - name: Build and install Android SDK
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake --build build/turbowasm-android -j2
-          cmake --install build/turbowasm-android
-          targets="$RUNNER_TEMP/turbowasm-sdk-android/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
-          test -f "$targets"
-          grep -q 'TurboWasm::Runtime' "$targets"
-          grep -q 'TurboWasm::WASI' "$targets"
-          grep -q 'TurboWasm::WASIHostFS' "$targets"
-          ! grep -q 'TurboWasm::CFlow' "$targets"
-          ! grep -q 'TurboWasm::NativeIO' "$targets"
-          ! grep -q 'TurboWasm::WASIThreads' "$targets"
-          ! grep -q 'MIR::MIR' "$targets"
-
-      - name: Cross-compile installed Android consumers
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S tests/installed_consumer \
-            -B build/installed-consumer-android -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-26 \
-            -DANDROID_STL=c++_shared \
-            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
-            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/turbowasm-sdk-android;$SALTS_ROOT"
-          cmake --build build/installed-consumer-android -j2
-
-  linux-mir:
-    name: Linux x64 + MIR JIT
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout TurboWasm
-        uses: actions/checkout@v4
-
-      - name: Restore latest Salts SDK
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: ./cmake/ci/restore-salts-sdk.ps1
-
-      - name: Ensure Ninja
-        shell: bash
-        run: |
-          set -euxo pipefail
-          if ! command -v ninja >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y ninja-build
-          fi
-
-      - name: Configure shared vcpkg cache for MIR
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
-        with:
-          mode: read
-
-
-      - name: Restore MIR from shared cache only
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test -n "$VCPKG_CACHE_REPOSITORY_ROOT"
-          log="$RUNNER_TEMP/turbowasm-mir-cache.log"
-          mir_root="$GITHUB_WORKSPACE/build/mir-vcpkg"
-          rm -rf "$mir_root"
-          "$VCPKG_ROOT/vcpkg" install \
-            --x-manifest-root="$GITHUB_WORKSPACE/cmake/vcpkg/mir" \
-            --x-install-root="$mir_root" \
-            --triplet x64-linux \
-            --only-binarycaching 2>&1 | tee "$log"
-          ! grep -Eq '^Building mir-jit:x64-linux' "$log"
-          grep -Eq 'Restored [1-9][0-9]* package\(s\) from NuGet' "$log"
-          test -f "$mir_root/x64-linux/share/MIR/MIRConfig.cmake"
-          echo "MIR_PREFIX=$mir_root/x64-linux" >> "$GITHUB_ENV"
-
-      - name: Configure TurboWasm with MIR JIT
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S . -B build/turbowasm-mir -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$MIR_PREFIX" \
-            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/turbowasm-sdk-mir" \
-            -DTURBOWASM_BUILD_TESTS=ON \
-            -DTURBOWASM_BUILD_TOOLS=ON \
-            -DTURBOWASM_ENABLE_MIR_JIT=ON
-
-      - name: Build and test MIR JIT backend
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake --build build/turbowasm-mir -j2
-          ctest --test-dir build/turbowasm-mir \
-            --no-tests=error --output-on-failure
-          ctest --test-dir build/turbowasm-mir \
-            -R turbowasm_mir_backend_test \
-            --output-on-failure
-
-      - name: Install and verify Runtime export stays MIR-free
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake --install build/turbowasm-mir
-          targets="$RUNNER_TEMP/turbowasm-sdk-mir/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
-          test -f "$targets"
-          ! grep -q 'MIR::MIR' "$targets"
-          ! grep -q 'mir-jit' "$targets"
-
-  macos-mir:
-    name: macOS + MIR JIT
-    runs-on: macos-15
-    steps:
-      - name: Checkout TurboWasm
-        uses: actions/checkout@v4
-
-      - name: Restore latest Salts SDK
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: ./cmake/ci/restore-salts-sdk.ps1
-
-      - name: Prepare host build tools
-        shell: bash
-        run: |
-          set -euxo pipefail
-          command -v ninja >/dev/null 2>&1 || brew install ninja
-          case "$RUNNER_ARCH" in
-            X64) echo "TURBOWASM_MIR_TRIPLET=x64-osx" >> "$GITHUB_ENV" ;;
-            ARM64) echo "TURBOWASM_MIR_TRIPLET=arm64-osx" >> "$GITHUB_ENV" ;;
-            *) echo "unsupported macOS arch: $RUNNER_ARCH" >&2; exit 1 ;;
-          esac
-
-      - name: Configure shared vcpkg cache for MIR
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
-        with:
-          mode: read
-
-
-      - name: Restore MIR from shared cache only
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test -n "$VCPKG_CACHE_REPOSITORY_ROOT"
-          log="$RUNNER_TEMP/turbowasm-mir-cache.log"
-          mir_root="$GITHUB_WORKSPACE/build/mir-vcpkg"
-          rm -rf "$mir_root"
-          "$VCPKG_ROOT/vcpkg" install \
-            --x-manifest-root="$GITHUB_WORKSPACE/cmake/vcpkg/mir" \
-            --x-install-root="$mir_root" \
-            --triplet "$TURBOWASM_MIR_TRIPLET" \
-            --only-binarycaching 2>&1 | tee "$log"
-          ! grep -Eq "^Building mir-jit:$TURBOWASM_MIR_TRIPLET" "$log"
-          grep -Eq 'Restored [1-9][0-9]* package\(s\) from NuGet' "$log"
-          test -f "$mir_root/$TURBOWASM_MIR_TRIPLET/share/MIR/MIRConfig.cmake"
-          echo "MIR_PREFIX=$mir_root/$TURBOWASM_MIR_TRIPLET" >> "$GITHUB_ENV"
-
-      - name: Configure TurboWasm with MIR JIT
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S . -B build/turbowasm-mir -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$MIR_PREFIX" \
-            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/turbowasm-sdk-mir" \
-            -DTURBOWASM_BUILD_TESTS=ON \
-            -DTURBOWASM_BUILD_TOOLS=ON \
-            -DTURBOWASM_ENABLE_MIR_JIT=ON
-
-      - name: Build and test MIR JIT backend
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake --build build/turbowasm-mir -j2
-          ctest --test-dir build/turbowasm-mir \
-            --no-tests=error --output-on-failure
-          ctest --test-dir build/turbowasm-mir \
-            -R turbowasm_mir_backend_test \
-            --output-on-failure
-
-      - name: Install and verify Runtime export stays MIR-free
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake --install build/turbowasm-mir
-          targets="$RUNNER_TEMP/turbowasm-sdk-mir/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
-          test -f "$targets"
-          ! grep -q 'MIR::MIR' "$targets"
-          ! grep -q 'mir-jit' "$targets"
+          set -euo pipefail
+          test "$SCOPE_RESULT" = success
+          if [ "$HAS_BUILDS" = true ]; then test "$BUILD_RESULT" = success; fi

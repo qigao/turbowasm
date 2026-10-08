@@ -293,7 +293,8 @@ The synchronous Core-call adapter can optionally bind a C4 resource table:
   to the callee table;
 - lifting an `own<R>` result consumes an owned handle without running the
   destructor and returns the abstract representation;
-- lowering `borrow<R>` creates a transient non-owned handle;
+- lowering a foreign `borrow<R>` creates a transient non-owned handle;
+  an exec defining `R` receives the representation directly;
 - the Core call must explicitly drop every transient borrow before returning;
   otherwise the adapter cleans the leaked transient handle and returns a
   canonical trap status;
@@ -489,7 +490,7 @@ No C4 dependency is introduced into the generic C3 canonical codec.
 
 ## C6a installed façade boundary
 
-The stable synchronous scalar/string/list subset is exposed through a separate
+The synchronous host value types, including resource own/borrow, are exposed through a separate
 installed target:
 
 ```cmake
@@ -512,21 +513,95 @@ state reference, so destroying the public component handle does not invalidate
 already-created instances; the borrowed source bytes still must outlive all
 instances.
 
-The first public host-value ABI freezes only:
+The public host-value ABI supports:
 
 - bool and signed/unsigned integer scalars;
 - float32 / float64;
 - char;
 - UTF-8 string;
-- recursive list values.
+- recursive list values;
+- records and tuples, in declaration order;
+- variant, option and result, with case index and optional payload;
+- enum indices and counted flag words (one word for the MVP limit of 32 flags);
+- opaque own results and explicit move arguments, plus scoped borrow arguments.
 
-Resource own/borrow remains private until its public host ownership/identity
-contract is intentionally frozen. An export whose parameter/result tree contains
-resource values is rejected by the façade before Core execution begins.
+The [approved resource ownership contract](../ARCHITECTURE.md#component-host-values-and-resource-ownership-approved-design)
+is implemented. Resource and non-resource type exports introduce nominally
+preserving aliases; function exports introduce function aliases, including
+re-exports referenced by subsequent definitions. Type exports with explicit
+ascriptions and instance type exports remain unsupported.
 
-Input values are caller-owned and borrowed for the duration of an invocation.
-Lifted string/list results are TurboWasm-owned and released recursively with
-`turbowasm_component_host_value_destroy()`.
+Const `instance_invoke` and `call_create` accept borrow arguments and reject own
+arguments anywhere in the tree. `instance_invoke_move` and `call_create_move`
+validate the complete tree, prepare canonical handles and then clear only the
+transferred own leaves. Admission failure preserves the caller's owns; failure
+after commit does not return them. Other argument storage remains caller-owned.
+Destroying an admitted call before its first resume releases its transferred
+resources. After execution starts, guest-owned resources follow the existing
+explicit-drop contract, including when Core execution fails before result
+lifting; instance teardown does not run implicit guest destructors.
+
+An own value holds a unique opaque handle with nominal identity and originating
+instance. It must not be copied. `host_value_borrow` creates a view whose source
+must remain live until admission. Admitted loans block moving or destroying the
+source own through fuel/host-wait suspension; terminal completion and cancellation
+release them. Local resource borrows lower to their representation; imported
+borrows use temporary canonical handles that the guest must drop before return.
+The instance canonical table mediates provider resources as well, so ending a
+borrow never destroys the underlying owned capability.
+
+Returned strings, sequence arrays, variant payloads, flag words and owns belong
+to TurboWasm and are released recursively with `host_value_destroy`, which returns
+`turbowasm_status`. It preflights all loans before mutating the tree, invalidates
+owns before callbacks and continues through remaining children after a destructor
+failure. The value stays empty after such a failure and must not be retried.
+Provider cleanup failures are returned to the host; the provider remains
+responsible for recovery of any backing object its callback failed to release.
+NULL and already-cleared values succeed. Component consumers must rebuild for
+the expanded value union and changed destroy function type.
+
+Restartable calls retain the instance and its capability owner until call
+destruction. The public component and instance handles can be released after
+call creation; immutable borrowed binary bytes and allocator contexts must still
+outlive their dependent allocations. Fuel/host-wait suspension preserves the
+retained instance. Taking a completed result twice returns an error without
+modifying the first result. Result conversion uses the instance allocator,
+including when the public instance handle has already been destroyed.
+
+`tests/component_host_values_test.c` covers canonical-memory and flat composite
+roundtrips, indirect tuple parameters, nested UTF-8 strings, invalid tags and
+flag bits, allocation failure at each conversion step, repeated result moves,
+and unstarted/suspended call destruction. The fixture source is
+[`component_host_composites.wat`](../tests/fixtures/component_host_composites.wat),
+validated and compiled with wasm-tools 1.261.0. The retained type graph supplies
+one value-feature query for public admission, Core-call adapters and canonical
+import memory requirements, so nested variant strings/resources cannot drift
+between those layers.
+
+Validation on 2026-10-07 at code commit `04ae562`: Windows ASAN verified all
+138 CTest entries, including both pinned Core 3.0 suites. The initial full run
+passed 136 entries; two filesystem executables could not load their SDK DLLs
+because the invocation omitted `SALTS_ROOT` / `SALTS_UTILS_ROOT`. Restoring those
+preset inputs and rerunning the two entries passed 2/2. Component/WASI adjacent
+regressions passed 43/43. Linux x64 and macOS arm64 MIR builds each passed
+150/150 entries in [CI run 37612293763](https://github.com/qigao/turbowasm/actions/runs/37612293763).
+All five jobs succeeded, including Windows/Linux qualification with installed
+C/C++ consumers and Android cross-compilation with installed-consumer builds.
+Android executables were not run. These results validate the implemented slice,
+not full Component Model or full native MIR Core 3.0 conformance. The executable public usage example is
+[`component_main.c`](../tests/installed_consumer/component_main.c); composite
+construction examples are in
+[`component_host_values_test.c`](../tests/component_host_values_test.c).
+
+Resource ownership examples and regressions are in
+[`component_host_resources_test.c`](../tests/component_host_resources_test.c) and
+[`component_wasi_resources_test.c`](../tests/component_wasi_resources_test.c).
+They cover nominal/provenance rejection, duplicate owns, atomic move admission,
+nested own lists and results, allocation failure, partial lift cleanup, destructor
+traps/reentry, host-wait completion/cancellation and capability lifetime after
+public instance release. Their `.wat` fixtures in `tests/fixtures` are validated
+with wasm-tools 1.261.0 before embedding the generated bytes. The tests also check
+that the configured allocator returns to zero live allocations after teardown.
 
 The installed `TurboWasm::Component` library is a real façade target that
 depends publicly on `TurboWasm::Runtime`. Runtime never links back to the

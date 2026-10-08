@@ -26,4 +26,9 @@ turbowasm_status turbowasm_wasi02_exec_init(
     const turbowasm_component_binary *binary,
     const turbowasm_wasi02_exec_capabilities *capabilities);
 
+/* Shared descriptor assembly for sync and async retained instance creation. */
+turbowasm_status turbowasm_wasi02_exec_import_sets(
+    const turbowasm_wasi02_exec_capabilities *capabilities,
+    turbowasm_component_exec_imports *out_sets, size_t capacity, size_t *out_count);
+
 #endif /* TURBOWASM_WASI02_EXEC_H */

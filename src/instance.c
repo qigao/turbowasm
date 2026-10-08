@@ -9,6 +9,8 @@
 #include "simd_exec_table.h"
 #include "validate_type.h"
 #include "runtime_alloc.h"
+#include "gc_exec.h"
+#include "jit_exception_helper.h"
 
 #include <limits.h>
 #include <math.h>
@@ -25,6 +27,23 @@ typedef struct turbowasm_value_stack {
     uint32_t size;
     uint32_t capacity;
 } turbowasm_value_stack;
+
+typedef struct turbowasm_gc_frame {
+    turbowasm_value_stack *stack;
+    turbowasm_value **locals;
+    uint32_t *local_count;
+    const turbowasm_value **arguments;
+    size_t *argument_count;
+} turbowasm_gc_frame;
+
+static void turbowasm_gc_trace_frame(turbowasm_store_impl *store,void *context) {
+    turbowasm_gc_frame *frame=context;
+    turbowasm_gc_mark_values(store,frame->stack->values,frame->stack->size);
+    if(*frame->locals!=NULL)
+        turbowasm_gc_mark_values(store,*frame->locals,*frame->local_count);
+    if(*frame->arguments!=NULL)
+        turbowasm_gc_mark_values(store,*frame->arguments,*frame->argument_count);
+}
 
 static turbowasm_status turbowasm_execution_checkpoint(
     turbowasm_jit_execution_control *execution) {
@@ -117,6 +136,7 @@ static turbowasm_value_kind turbowasm_kind_from_valtype(uint8_t type) {
         case 0x7bu: return TURBOWASM_VALUE_V128;
         case 0x70u: return TURBOWASM_VALUE_FUNCREF;
         case 0x6fu: return TURBOWASM_VALUE_EXTERNREF;
+        case 0x6eu: return TURBOWASM_VALUE_GCREF;
         case 0x69u: return TURBOWASM_VALUE_EXNREF;
         default: return (turbowasm_value_kind)0;
     }
@@ -126,11 +146,93 @@ static bool turbowasm_value_matches_type(
     const turbowasm_value *value,
     uint8_t type) {
     turbowasm_value_kind kind = turbowasm_kind_from_valtype(type);
-    return value != NULL && kind != 0 && value->kind == kind;
+    return value != NULL && kind != 0 && (value->kind == kind ||
+        (kind == TURBOWASM_VALUE_EXTERNREF && value->kind == TURBOWASM_VALUE_MANAGED_EXTERNREF));
 }
 
-turbowasm_status turbowasm_jit_request_tail_call(
+turbowasm_status turbowasm_reference_is_null(
+    const turbowasm_value *value,
+    bool *is_null) {
+    switch (value->kind) {
+        case TURBOWASM_VALUE_FUNCREF:
+            *is_null = value->as.funcref.is_null;
+            return TURBOWASM_OK;
+        case TURBOWASM_VALUE_EXTERNREF:
+            *is_null = value->as.externref.is_null;
+            return TURBOWASM_OK;
+        case TURBOWASM_VALUE_EXNREF:
+            *is_null = value->as.exnref.is_null;
+            return TURBOWASM_OK;
+        case TURBOWASM_VALUE_GCREF:
+        case TURBOWASM_VALUE_MANAGED_EXTERNREF:
+            *is_null = value->as.gcref.handle == 0u;
+            return TURBOWASM_OK;
+        default:
+            return TURBOWASM_TYPE_MISMATCH;
+    }
+}
+
+bool turbowasm_value_matches_semantic(
+    turbowasm_instance_impl *instance,
+    const turbowasm_value *value,
+    const turbowasm_validation_value_type *type) {
+    bool is_null;
+    const turbowasm_module_impl *module;
+    const turbowasm_module_impl *owner_module;
+    const turbowasm_instance_impl *owner;
+
+    if (!turbowasm_value_matches_type(value, type->carrier))
+        return false;
+    if (!type->is_reference)
+        return true;
+    if ((value->kind == TURBOWASM_VALUE_GCREF || value->kind == TURBOWASM_VALUE_MANAGED_EXTERNREF) &&
+        !turbowasm_gc_value_valid(instance->store, value))
+        return false;
+    if (turbowasm_reference_is_null(value, &is_null) != TURBOWASM_OK)
+        return false;
+    if (is_null)
+        return type->nullable;
+    if (value->kind == TURBOWASM_VALUE_GCREF) {
+        turbowasm_validation_value_type actual = turbowasm_validation_value_type_legacy(0x6eu);
+        turbowasm_gc_object *object;
+        actual.nullable = false;
+        if (turbowasm_gc_is_i31(value->as.gcref))
+            actual.heap_kind = TURBOWASM_VALIDATION_HEAP_I31;
+        else {
+            object = turbowasm_gc_resolve(instance->store, value->as.gcref);
+            if (object == NULL) return false;
+            if (object->type != NULL) {
+                actual.heap_kind = TURBOWASM_VALIDATION_HEAP_TYPE_INDEX;
+                actual.definition = object->type;
+            }
+        }
+        return turbowasm_validation_value_type_matches(&actual, type);
+    }
+    if (type->heap_kind == TURBOWASM_VALIDATION_HEAP_NOFUNC ||
+        type->heap_kind == TURBOWASM_VALIDATION_HEAP_NOEXTERN ||
+        type->heap_kind == TURBOWASM_VALIDATION_HEAP_NOEXN)
+        return false;
+    if (type->heap_kind != TURBOWASM_VALIDATION_HEAP_TYPE_INDEX)
+        return true;
+
+    module = turbowasm_module_impl_get(instance->module);
+    owner = value->as.funcref.owner == NULL
+        ? instance : (const turbowasm_instance_impl *)value->as.funcref.owner;
+    owner_module = turbowasm_module_impl_get(owner->module);
+    return module != NULL && owner_module != NULL &&
+        turbowasm_validation_defined_type_matches(
+            turbowasm_validation_context_function_type(
+                &owner_module->validation, value->as.funcref.function_index),
+            type->definition!=NULL?type->definition:turbowasm_validation_context_type(
+                &module->validation, type->type_index));
+}
+
+static bool turbowasm_stack_reserve(
+    turbowasm_value_stack *stack, uint32_t required);
+
+static turbowasm_status turbowasm_jit_request_tail_target(
     turbowasm_jit_invocation_context *context,
+    turbowasm_instance_impl *target,
     uint32_t function_index,
     const turbowasm_value *arguments,
     size_t argument_count) {
@@ -138,20 +240,19 @@ turbowasm_status turbowasm_jit_request_tail_call(
     const turbowasm_validation_func_type *type;
     size_t index;
 
-    if (context == NULL || context->instance == NULL)
+    if (context == NULL || context->instance == NULL || target == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     context->tail_call_pending = false;
     context->tail_argument_count = 0u;
 
-    if (argument_count > TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT ||
-        (argument_count != 0u && arguments == NULL)) {
+    if (argument_count != 0u && arguments == NULL) {
         context->call_status = TURBOWASM_UNSUPPORTED;
         context->call_trap = TURBOWASM_TRAP_NONE;
         return TURBOWASM_UNSUPPORTED;
     }
 
-    module = turbowasm_module_impl_get(context->instance->module);
+    module = turbowasm_module_impl_get(target->module);
     if (module == NULL) {
         context->call_status = TURBOWASM_INVALID_ARGUMENT;
         context->call_trap = TURBOWASM_TRAP_NONE;
@@ -168,16 +269,38 @@ turbowasm_status turbowasm_jit_request_tail_call(
     }
 
     for (index = 0u; index < argument_count; ++index) {
-        if (!turbowasm_value_matches_type(
-                &arguments[index], type->params[index])) {
+        if (!turbowasm_value_matches_semantic(target,
+                &arguments[index], &type->param_semantics[index])) {
             context->call_status = TURBOWASM_TYPE_MISMATCH;
             context->call_trap = TURBOWASM_TRAP_NONE;
             return TURBOWASM_TYPE_MISMATCH;
         }
-        context->tail_arguments[index] = arguments[index];
+    }
+
+    /* Generated code has finished using its incoming argument view. Its rooted
+     * native cells own the outgoing values while tail storage may relocate. */
+    context->arguments = NULL;
+    context->argument_count = 0u;
+    if (argument_count > TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS) {
+        if (context->tail_storage == NULL) {
+            context->call_status = TURBOWASM_INVALID_ARGUMENT;
+            context->call_trap = TURBOWASM_TRAP_NONE;
+            return context->call_status;
+        }
+        if (!turbowasm_stack_reserve(context->tail_storage, type->param_count)) {
+            context->call_status = TURBOWASM_OUT_OF_MEMORY;
+            context->call_trap = TURBOWASM_TRAP_NONE;
+            return context->call_status;
+        }
+        memmove(context->tail_storage->values, arguments,
+            argument_count * sizeof(*arguments));
+    } else if (argument_count != 0u) {
+        memmove(context->tail_arguments, arguments,
+            argument_count * sizeof(*arguments));
     }
 
     context->tail_function_index = function_index;
+    context->tail_instance = target;
     context->tail_argument_count = argument_count;
     context->tail_call_pending = true;
     context->call_status = TURBOWASM_OK;
@@ -185,7 +308,15 @@ turbowasm_status turbowasm_jit_request_tail_call(
     return TURBOWASM_OK;
 }
 
-static bool turbowasm_zero_value(uint8_t type, turbowasm_value *out) {
+turbowasm_status turbowasm_jit_request_tail_call(
+    turbowasm_jit_invocation_context *context, uint32_t function_index,
+    const turbowasm_value *arguments, size_t argument_count) {
+    return turbowasm_jit_request_tail_target(context,
+        context == NULL ? NULL : context->instance,
+        function_index, arguments, argument_count);
+}
+
+bool turbowasm_zero_value(uint8_t type, turbowasm_value *out) {
     turbowasm_value_kind kind;
 
     if (out == NULL)
@@ -425,13 +556,13 @@ static turbowasm_status turbowasm_exec_read_block_signature(
         return TURBOWASM_OK;
     }
 
-    if (turbowasm_exec_valtype(first) || first == 0x74u ||
+    if (turbowasm_exec_valtype(first) || (first>=0x6au && first<=0x74u) ||
         first == 0x63u || first == 0x64u) {
         turbowasm_validation_value_type type;
         bool generalized = false;
         turbowasm_status status =
             turbowasm_validation_read_valtype(
-                reader, &type, &generalized);
+                reader, context, &type, &generalized);
 
         if (status != TURBOWASM_OK)
             return status;
@@ -742,6 +873,80 @@ static turbowasm_status turbowasm_exception_create(
     instance->exceptions = exception;
     *out_exception = exception;
     return TURBOWASM_OK;
+}
+
+int64_t turbowasm_jit_throw(turbowasm_jit_invocation_context *context,
+    int64_t opcode, int64_t tag, turbowasm_value *arguments, int64_t count) {
+    turbowasm_status status = TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_exception *exception = NULL;
+    const turbowasm_module_impl *module;
+    if (context == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    if (context->instance == NULL || count < 0 || count > UINT32_MAX ||
+        (count != 0 && arguments == NULL)) goto done;
+    module = turbowasm_module_impl_get(context->instance->module);
+    if (module == NULL || context->instance->pending_exception != NULL) goto done;
+    if (opcode == TURBOWASM_JIT_THROW) {
+        const turbowasm_validation_tag *desc;
+        const turbowasm_validation_func_type *type;
+        turbowasm_value_stack stack = {arguments, (uint32_t)count, (uint32_t)count};
+        if (tag < 0 || tag > UINT32_MAX) goto done;
+        desc = turbowasm_validation_context_tag(&module->validation, (uint32_t)tag);
+        if (desc == NULL) goto done;
+        type = turbowasm_validation_context_type(&module->validation, desc->type_index);
+        if (type == NULL || type->param_count != (uint32_t)count) goto done;
+        status = turbowasm_exception_create(context->instance, &module->validation,
+            (uint32_t)tag, &stack, &exception);
+        if (status != TURBOWASM_OK) goto done;
+    } else if (opcode == TURBOWASM_JIT_THROW_REF) {
+        if (count != 1 || arguments[0].kind != TURBOWASM_VALUE_EXNREF) goto done;
+        if (arguments[0].as.exnref.is_null || arguments[0].as.exnref.exception == NULL) {
+            status = TURBOWASM_TRAPPED; trap = TURBOWASM_TRAP_NULL_REFERENCE; goto done;
+        }
+        exception = (turbowasm_exception *)arguments[0].as.exnref.exception;
+    } else goto done;
+    context->instance->pending_exception = exception;
+    status = TURBOWASM_EXCEPTION;
+done:
+    context->call_status = status; context->call_trap = trap;
+    return status;
+}
+
+int64_t turbowasm_jit_catch(turbowasm_jit_invocation_context *context,
+    const turbowasm_validation_catch *clause, turbowasm_value *results, int64_t capacity) {
+    turbowasm_exception *exception;
+    turbowasm_status status = TURBOWASM_INVALID_ARGUMENT;
+    bool include_ref, all;
+    uint32_t count;
+    if (context == NULL) return -1;
+    if (context->instance == NULL || clause == NULL || capacity < 0 || capacity > UINT32_MAX ||
+        clause->kind > TURBOWASM_VALIDATION_CATCH_ALL_REF) goto fail;
+    exception = context->instance->pending_exception;
+    if (context->call_status != TURBOWASM_EXCEPTION || exception == NULL) goto fail;
+    all = clause->kind == TURBOWASM_VALIDATION_CATCH_ALL || clause->kind == TURBOWASM_VALIDATION_CATCH_ALL_REF;
+    include_ref = clause->kind == TURBOWASM_VALIDATION_CATCH_REF || clause->kind == TURBOWASM_VALIDATION_CATCH_ALL_REF;
+    if (!all) {
+        turbowasm_tag_identity identity;
+        status = turbowasm_instance_tag_identity(context->instance, clause->tag_index, &identity);
+        if (status != TURBOWASM_OK) goto fail;
+        if (!turbowasm_tag_identity_equal(identity, exception->tag)) return 0;
+    }
+    count = all ? 0 : exception->payload_count;
+    status = TURBOWASM_INVALID_ARGUMENT;
+    if ((uint64_t)count + (include_ref ? 1u : 0u) > (uint64_t)capacity ||
+        ((count != 0 || include_ref) && results == NULL)) goto fail;
+    if (count != 0) memcpy(results, exception->payload, (size_t)count * sizeof(*results));
+    if (include_ref) {
+        results[count] = (turbowasm_value){0};
+        results[count].kind = TURBOWASM_VALUE_EXNREF;
+        results[count].as.exnref.exception = exception;
+    }
+    context->instance->pending_exception = NULL;
+    context->call_status = TURBOWASM_OK; context->call_trap = TURBOWASM_TRAP_NONE;
+    return 1;
+fail:
+    context->call_status = status; context->call_trap = TURBOWASM_TRAP_NONE;
+    return -1;
 }
 
 static turbowasm_status turbowasm_exception_push_handler_values(
@@ -1122,10 +1327,63 @@ typedef struct turbowasm_exec_call_target {
     const turbowasm_validation_func_type *type;
 } turbowasm_exec_call_target;
 
-static turbowasm_status turbowasm_exec_resolve_indirect_target(
+static turbowasm_status turbowasm_resolve_ref_value(
     turbowasm_instance_impl *instance,
-    turbowasm_reader *reader,
-    turbowasm_value_stack *stack,
+    uint32_t type_index,
+    const turbowasm_value *reference,
+    turbowasm_trap *trap,
+    turbowasm_exec_call_target *target) {
+    const turbowasm_module_impl *module;
+    turbowasm_validation_value_type expected =
+        turbowasm_validation_value_type_legacy(0x70u);
+
+    if (reference == NULL || reference->kind != TURBOWASM_VALUE_FUNCREF)
+        return TURBOWASM_TYPE_MISMATCH;
+    if (reference->as.funcref.is_null) {
+        *trap = TURBOWASM_TRAP_NULL_REFERENCE;
+        return TURBOWASM_TRAPPED;
+    }
+    expected.heap_kind = TURBOWASM_VALIDATION_HEAP_TYPE_INDEX;
+    expected.type_index = type_index;
+    if (!turbowasm_value_matches_semantic(instance, reference, &expected))
+        return TURBOWASM_TYPE_MISMATCH;
+    target->instance = reference->as.funcref.owner != NULL
+        ? (turbowasm_instance_impl *)reference->as.funcref.owner : instance;
+    target->function_index = reference->as.funcref.function_index;
+    module = turbowasm_module_impl_get(target->instance->module);
+    target->type = turbowasm_validation_context_function_type(
+        &module->validation, target->function_index);
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_exec_resolve_ref_target(
+    turbowasm_instance_impl *instance, turbowasm_reader *reader,
+    turbowasm_value_stack *stack, turbowasm_trap *trap,
+    turbowasm_exec_call_target *target) {
+    uint32_t type_index;
+    turbowasm_value reference;
+    turbowasm_status status;
+    if (!turbowasm_reader_uleb32(reader, &type_index))
+        return TURBOWASM_MALFORMED_MODULE;
+    status = turbowasm_stack_pop_kind(stack, TURBOWASM_VALUE_FUNCREF, &reference);
+    return status == TURBOWASM_OK
+        ? turbowasm_resolve_ref_value(instance, type_index, &reference, trap, target)
+        : status;
+}
+
+static uint64_t turbowasm_exec_address_value(const turbowasm_value *value);
+
+static turbowasm_value_kind turbowasm_exec_table_address_kind(
+    const turbowasm_instance_impl *instance,uint32_t index) {
+    const turbowasm_module_impl *module=turbowasm_module_impl_get(instance->module);
+    if(module==NULL || index>=module->validation.table_count) return (turbowasm_value_kind)0;
+    return module->validation.tables[index].limits.table64?TURBOWASM_VALUE_I64:TURBOWASM_VALUE_I32;
+}
+
+static turbowasm_status turbowasm_resolve_indirect_value(
+    turbowasm_instance_impl *instance,
+    uint32_t type_index, uint32_t table_index,
+    const turbowasm_value *selector,
     turbowasm_trap *trap,
     turbowasm_exec_call_target *target) {
     const turbowasm_module_impl *module;
@@ -1134,36 +1392,26 @@ static turbowasm_status turbowasm_exec_resolve_indirect_target(
     const turbowasm_module_impl *target_module;
     turbowasm_instance_impl *target_instance;
     turbowasm_instance_table_entry entry;
-    turbowasm_value selector;
-    uint32_t type_index;
-    uint32_t table_index;
     turbowasm_status status;
 
-    if (instance == NULL || reader == NULL ||
-        stack == NULL || trap == NULL || target == NULL)
+    if (instance == NULL || selector == NULL || trap == NULL || target == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
     module = turbowasm_module_impl_get(instance->module);
     if (module == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    if (!turbowasm_reader_uleb32(reader, &type_index) ||
-        !turbowasm_reader_uleb32(reader, &table_index))
-        return TURBOWASM_MALFORMED_MODULE;
-
     expected_type = turbowasm_validation_context_type(
         &module->validation, type_index);
     if (expected_type == NULL || !expected_type->defined)
         return TURBOWASM_MALFORMED_MODULE;
 
-    status = turbowasm_stack_pop_kind(
-        stack, TURBOWASM_VALUE_I32, &selector);
-    if (status != TURBOWASM_OK)
-        return status;
+    if (selector->kind != turbowasm_exec_table_address_kind(instance, table_index))
+        return TURBOWASM_TYPE_MISMATCH;
 
     status = turbowasm_instance_table_lookup(
         instance, table_index,
-        (uint32_t)selector.as.i32, &entry);
+        turbowasm_exec_address_value(selector), &entry);
     if (status == TURBOWASM_TRAPPED) {
         *trap = TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS;
         return TURBOWASM_TRAPPED;
@@ -1190,8 +1438,8 @@ static turbowasm_status turbowasm_exec_resolve_indirect_target(
     actual_type = turbowasm_validation_context_function_type(
         &target_module->validation,
         entry.value.as.funcref.function_index);
-    if (!turbowasm_validation_func_type_equal(
-            expected_type, actual_type)) {
+    if (!turbowasm_validation_defined_type_matches(
+            actual_type, expected_type)) {
         *trap = TURBOWASM_TRAP_INDIRECT_CALL_TYPE_MISMATCH;
         return TURBOWASM_TRAPPED;
     }
@@ -1202,18 +1450,39 @@ static turbowasm_status turbowasm_exec_resolve_indirect_target(
     return TURBOWASM_OK;
 }
 
+static turbowasm_status turbowasm_exec_resolve_indirect_target(
+    turbowasm_instance_impl *instance, turbowasm_reader *reader,
+    turbowasm_value_stack *stack, turbowasm_trap *trap,
+    turbowasm_exec_call_target *target) {
+    uint32_t type_index, table_index;
+    turbowasm_value selector;
+    turbowasm_status status;
+    if (!turbowasm_reader_uleb32(reader, &type_index) ||
+        !turbowasm_reader_uleb32(reader, &table_index))
+        return TURBOWASM_MALFORMED_MODULE;
+    status = turbowasm_stack_pop_kind(stack,
+        turbowasm_exec_table_address_kind(instance, table_index), &selector);
+    return status == TURBOWASM_OK
+        ? turbowasm_resolve_indirect_value(instance, type_index, table_index,
+            &selector, trap, target) : status;
+}
+
 static turbowasm_status turbowasm_exec_indirect_call(
     turbowasm_instance_impl *instance,
     turbowasm_reader *reader,
     turbowasm_value_stack *stack,
     turbowasm_trap *trap,
     turbowasm_jit_execution_control *execution,
-    uint32_t depth) {
+    uint32_t depth,
+    bool by_reference) {
     turbowasm_exec_call_target target = {0};
     turbowasm_status status;
 
-    status = turbowasm_exec_resolve_indirect_target(
-        instance, reader, stack, trap, &target);
+    status = by_reference
+        ? turbowasm_exec_resolve_ref_target(
+            instance, reader, stack, trap, &target)
+        : turbowasm_exec_resolve_indirect_target(
+            instance, reader, stack, trap, &target);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -2336,6 +2605,11 @@ static turbowasm_status turbowasm_exec_f32_binary(
             out.as.f32 = turbowasm_f32_minmax(
                 left.as.f32, right.as.f32, true);
             break;
+        case 0x98u:
+            out.as.f32 = turbowasm_f32_from_bits(
+                (turbowasm_f32_to_bits(left.as.f32) & UINT32_C(0x7fffffff)) |
+                (turbowasm_f32_to_bits(right.as.f32) & UINT32_C(0x80000000)));
+            break;
         default: return TURBOWASM_UNSUPPORTED;
     }
     return turbowasm_stack_push(stack, out);
@@ -2369,6 +2643,11 @@ static turbowasm_status turbowasm_exec_f64_binary(
         case 0xa5u:
             out.as.f64 = turbowasm_f64_minmax(
                 left.as.f64, right.as.f64, true);
+            break;
+        case 0xa6u:
+            out.as.f64 = turbowasm_f64_from_bits(
+                (turbowasm_f64_to_bits(left.as.f64) & UINT64_C(0x7fffffffffffffff)) |
+                (turbowasm_f64_to_bits(right.as.f64) & UINT64_C(0x8000000000000000)));
             break;
         default: return TURBOWASM_UNSUPPORTED;
     }
@@ -2483,31 +2762,16 @@ static turbowasm_status turbowasm_exec_read_indexed_memarg(
     return TURBOWASM_OK;
 }
 
-static turbowasm_status turbowasm_exec_memory_load(
-    turbowasm_instance_impl *instance,
-    turbowasm_reader *reader,
-    turbowasm_value_stack *stack,
-    turbowasm_trap *trap,
-    uint8_t opcode) {
-    turbowasm_value address;
+turbowasm_status turbowasm_instance_memory_load_value(
+    turbowasm_instance_impl *instance, uint32_t memory_index,
+    uint64_t address, uint64_t offset, uint8_t opcode,
+    turbowasm_value *out_value, turbowasm_trap *trap) {
     turbowasm_value out = {0};
-    uint32_t memory_index;
-    uint64_t offset;
-    turbowasm_value_kind address_kind;
     uint8_t shared_bytes[8] = {0};
     uint8_t *p;
     size_t width;
     bool shared = false;
     turbowasm_status status;
-
-    status = turbowasm_exec_read_indexed_memarg(
-        instance, reader, &memory_index, &offset, &address_kind);
-    if (status != TURBOWASM_OK)
-        return status;
-    status = turbowasm_stack_pop_kind(
-        stack, address_kind, &address);
-    if (status != TURBOWASM_OK)
-        return status;
 
     switch (opcode) {
         case 0x28u: width = 4u; break;
@@ -2530,13 +2794,13 @@ static turbowasm_status turbowasm_exec_memory_load(
     if (shared) {
         status = turbowasm_instance_memory_read_bytes(
             instance, memory_index,
-            turbowasm_exec_address_value(&address),
+            address,
             offset, shared_bytes, width);
         p = shared_bytes;
     } else {
         status = turbowasm_instance_memory_bounds(
             instance, memory_index,
-            turbowasm_exec_address_value(&address),
+            address,
             offset, width, &p);
     }
     if (status == TURBOWASM_TRAPPED) {
@@ -2613,31 +2877,39 @@ static turbowasm_status turbowasm_exec_memory_load(
             return TURBOWASM_UNSUPPORTED;
     }
 
-    return turbowasm_stack_push(stack, out);
+    *out_value = out;
+    return TURBOWASM_OK;
 }
 
-static turbowasm_status turbowasm_exec_memory_store(
-    turbowasm_instance_impl *instance,
-    turbowasm_reader *reader,
-    turbowasm_value_stack *stack,
-    turbowasm_trap *trap,
-    uint8_t opcode) {
-    turbowasm_value value;
-    turbowasm_value address;
-    turbowasm_value_kind expected;
+static turbowasm_status turbowasm_exec_memory_load(
+    turbowasm_instance_impl *instance, turbowasm_reader *reader,
+    turbowasm_value_stack *stack, turbowasm_trap *trap, uint8_t opcode) {
+    turbowasm_value address, out;
     uint32_t memory_index;
     uint64_t offset;
     turbowasm_value_kind address_kind;
+    turbowasm_status status = turbowasm_exec_read_indexed_memarg(
+        instance, reader, &memory_index, &offset, &address_kind);
+    if (status != TURBOWASM_OK)
+        return status;
+    status = turbowasm_stack_pop_kind(stack, address_kind, &address);
+    if (status != TURBOWASM_OK)
+        return status;
+    status = turbowasm_instance_memory_load_value(instance, memory_index,
+        turbowasm_exec_address_value(&address), offset, opcode, &out, trap);
+    return status == TURBOWASM_OK ? turbowasm_stack_push(stack, out) : status;
+}
+
+turbowasm_status turbowasm_instance_memory_store_value(
+    turbowasm_instance_impl *instance, uint32_t memory_index,
+    uint64_t address, uint64_t offset, uint8_t opcode,
+    turbowasm_value value, turbowasm_trap *trap) {
+    turbowasm_value_kind expected;
     uint8_t shared_bytes[8] = {0};
     uint8_t *p;
     size_t width;
     bool shared = false;
     turbowasm_status status;
-
-    status = turbowasm_exec_read_indexed_memarg(
-        instance, reader, &memory_index, &offset, &address_kind);
-    if (status != TURBOWASM_OK)
-        return status;
 
     switch (opcode) {
         case 0x36u: expected = TURBOWASM_VALUE_I32; width = 4u; break;
@@ -2657,13 +2929,8 @@ static turbowasm_status turbowasm_exec_memory_store(
             return TURBOWASM_UNSUPPORTED;
     }
 
-    status = turbowasm_stack_pop_kind(stack, expected, &value);
-    if (status != TURBOWASM_OK)
-        return status;
-    status = turbowasm_stack_pop_kind(
-        stack, address_kind, &address);
-    if (status != TURBOWASM_OK)
-        return status;
+    if (value.kind != expected)
+        return TURBOWASM_TYPE_MISMATCH;
 
     status = turbowasm_instance_memory_shared(
         instance, memory_index, &shared);
@@ -2675,7 +2942,7 @@ static turbowasm_status turbowasm_exec_memory_store(
     } else {
         status = turbowasm_instance_memory_bounds(
             instance, memory_index,
-            turbowasm_exec_address_value(&address),
+            address,
             offset, width, &p);
         if (status == TURBOWASM_TRAPPED) {
             *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
@@ -2726,7 +2993,7 @@ static turbowasm_status turbowasm_exec_memory_store(
     if (shared) {
         status = turbowasm_instance_memory_write_bytes(
             instance, memory_index,
-            turbowasm_exec_address_value(&address),
+            address,
             offset, shared_bytes, width);
         if (status == TURBOWASM_TRAPPED) {
             *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
@@ -2737,6 +3004,27 @@ static turbowasm_status turbowasm_exec_memory_store(
     }
 
     return TURBOWASM_OK;
+}
+
+static turbowasm_status turbowasm_exec_memory_store(
+    turbowasm_instance_impl *instance, turbowasm_reader *reader,
+    turbowasm_value_stack *stack, turbowasm_trap *trap, uint8_t opcode) {
+    turbowasm_value address, value;
+    uint32_t memory_index;
+    uint64_t offset;
+    turbowasm_value_kind address_kind;
+    turbowasm_status status = turbowasm_exec_read_indexed_memarg(
+        instance, reader, &memory_index, &offset, &address_kind);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (stack->size == 0u)
+        return TURBOWASM_TYPE_MISMATCH;
+    value = stack->values[--stack->size];
+    status = turbowasm_stack_pop_kind(stack, address_kind, &address);
+    if (status != TURBOWASM_OK)
+        return status;
+    return turbowasm_instance_memory_store_value(instance, memory_index,
+        turbowasm_exec_address_value(&address), offset, opcode, value, trap);
 }
 
 static turbowasm_status turbowasm_exec_memory_size_or_grow(
@@ -2877,50 +3165,112 @@ static turbowasm_status turbowasm_exec_trunc_sat(
     return turbowasm_stack_push(stack, out);
 }
 
+bool turbowasm_numeric_signature_get(uint32_t opcode, turbowasm_numeric_signature *out) {
+    static const uint8_t conversion_types[][2] = {
+        {0x7e, 0x7f}, /* a7: wrap */
+        {0x7d, 0x7f}, {0x7d, 0x7f}, {0x7c, 0x7f}, {0x7c, 0x7f},
+        {0x7f, 0x7e}, {0x7f, 0x7e},
+        {0x7d, 0x7e}, {0x7d, 0x7e}, {0x7c, 0x7e}, {0x7c, 0x7e},
+        {0x7f, 0x7d}, {0x7f, 0x7d}, {0x7e, 0x7d}, {0x7e, 0x7d},
+        {0x7c, 0x7d},
+        {0x7f, 0x7c}, {0x7f, 0x7c}, {0x7e, 0x7c}, {0x7e, 0x7c},
+        {0x7d, 0x7c},
+        {0x7d, 0x7f}, {0x7c, 0x7e}, {0x7f, 0x7d}, {0x7e, 0x7c},
+        {0x7f, 0x7f}, {0x7f, 0x7f}, {0x7e, 0x7e}, {0x7e, 0x7e}, {0x7e, 0x7e}
+    };
+    turbowasm_numeric_signature signature = {0};
+    if (out == NULL) return false;
+    if (opcode >= TURBOWASM_JIT_NUMERIC_SAT_BASE && opcode < TURBOWASM_JIT_NUMERIC_SAT_BASE + 8u) {
+        uint32_t subopcode = opcode - TURBOWASM_JIT_NUMERIC_SAT_BASE;
+        signature.input_type = (subopcode & 2u) == 0u ? 0x7du : 0x7cu;
+        signature.output_type = subopcode < 4u ? 0x7fu : 0x7eu;
+        signature.input_count = 1u;
+    } else if (opcode >= 0x45u && opcode <= 0xc4u) {
+        signature.input_count = 2u;
+        if (opcode <= 0x4fu) {
+            signature.input_type = signature.output_type = 0x7fu;
+            if (opcode == 0x45u) signature.input_count = 1u;
+        } else if (opcode <= 0x5au) {
+            signature.input_type = 0x7eu; signature.output_type = 0x7fu;
+            if (opcode == 0x50u) signature.input_count = 1u;
+        } else if (opcode <= 0x66u) {
+            signature.input_type = opcode <= 0x60u ? 0x7du : 0x7cu;
+            signature.output_type = 0x7fu;
+        } else if (opcode <= 0x78u) {
+            signature.input_type = signature.output_type = 0x7fu;
+            if (opcode <= 0x69u) signature.input_count = 1u;
+        } else if (opcode <= 0x8au) {
+            signature.input_type = signature.output_type = 0x7eu;
+            if (opcode <= 0x7bu) signature.input_count = 1u;
+        } else if (opcode <= 0xa6u) {
+            signature.input_type = signature.output_type = opcode <= 0x98u ? 0x7du : 0x7cu;
+            if (opcode <= 0x91u || (opcode >= 0x99u && opcode <= 0x9fu)) signature.input_count = 1u;
+        } else {
+            signature.input_count = 1u;
+            signature.input_type = conversion_types[opcode - 0xa7u][0];
+            signature.output_type = conversion_types[opcode - 0xa7u][1];
+        }
+    } else return false;
+    *out = signature;
+    return true;
+}
+
+int64_t turbowasm_jit_numeric(turbowasm_jit_invocation_context *context,
+    int64_t opcode, const turbowasm_value *arguments, turbowasm_value *result) {
+    turbowasm_value values[TURBOWASM_JIT_NUMERIC_MAX_INPUTS] = {0};
+    turbowasm_numeric_signature signature;
+    turbowasm_value_stack stack = {values, 0u, TURBOWASM_JIT_NUMERIC_MAX_INPUTS};
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_status status;
+    if (context == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    if (arguments == NULL || result == NULL) status = TURBOWASM_INVALID_ARGUMENT;
+    else if (opcode < 0 || (uint64_t)opcode > UINT32_MAX ||
+        !turbowasm_numeric_signature_get((uint32_t)opcode, &signature)) status = TURBOWASM_UNSUPPORTED;
+    else {
+        memcpy(values, arguments, signature.input_count * sizeof(*values));
+        stack.size = signature.input_count;
+        /* Every primitive consumes one/two values before pushing one, so the
+         * borrowed fixed stack never grows or reaches an allocator. */
+        if (opcode >= TURBOWASM_JIT_NUMERIC_SAT_BASE)
+            status = turbowasm_exec_trunc_sat((uint32_t)opcode - TURBOWASM_JIT_NUMERIC_SAT_BASE, &stack);
+        else if (opcode <= 0x4f) status = turbowasm_exec_i32_test_or_compare((uint8_t)opcode, &stack);
+        else if (opcode <= 0x5a) status = turbowasm_exec_i64_test_or_compare((uint8_t)opcode, &stack);
+        else if (opcode <= 0x60) status = turbowasm_exec_f32_compare((uint8_t)opcode, &stack);
+        else if (opcode <= 0x66) status = turbowasm_exec_f64_compare((uint8_t)opcode, &stack);
+        else if (opcode <= 0x69) status = turbowasm_exec_i32_unary((uint8_t)opcode, &stack);
+        else if (opcode <= 0x78) status = turbowasm_exec_i32_binary((uint8_t)opcode, &stack, &trap);
+        else if (opcode <= 0x7b) status = turbowasm_exec_i64_unary((uint8_t)opcode, &stack);
+        else if (opcode <= 0x8a) status = turbowasm_exec_i64_binary((uint8_t)opcode, &stack, &trap);
+        else if (opcode <= 0x91) status = turbowasm_exec_f32_unary((uint8_t)opcode, &stack);
+        else if (opcode <= 0x98) status = turbowasm_exec_f32_binary((uint8_t)opcode, &stack);
+        else if (opcode <= 0x9f) status = turbowasm_exec_f64_unary((uint8_t)opcode, &stack);
+        else if (opcode <= 0xa6) status = turbowasm_exec_f64_binary((uint8_t)opcode, &stack);
+        else if ((opcode >= 0xa8 && opcode <= 0xab) || (opcode >= 0xae && opcode <= 0xb1))
+            status = turbowasm_exec_trapping_conversion((uint8_t)opcode, &stack, &trap);
+        else status = turbowasm_exec_nontrapping_conversion((uint8_t)opcode, &stack);
+        if (status == TURBOWASM_OK) {
+            if (stack.size != 1u) status = TURBOWASM_TYPE_MISMATCH;
+            else *result = values[0];
+        }
+    }
+    context->call_status = status; context->call_trap = trap;
+    return status;
+}
+
 static turbowasm_status turbowasm_exec_atomic_memarg_alignment(
+    const turbowasm_instance_impl *instance,
     turbowasm_reader *reader,
     uint32_t required_alignment,
     uint32_t *out_memory_index,
-    uint32_t *out_offset) {
+    uint64_t *out_offset,
+    turbowasm_value_kind *out_address_kind) {
+    turbowasm_reader peek = *reader;
     uint32_t flags;
-    uint32_t memory_index = 0u;
-    uint32_t offset;
-    uint32_t alignment;
-
-    if (reader == NULL ||
-        out_memory_index == NULL || out_offset == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    if (!turbowasm_reader_uleb32(reader, &flags) ||
-        flags >= UINT32_C(0x80))
+    if (!turbowasm_reader_uleb32(&peek, &flags) ||
+        (flags & UINT32_C(0x3f)) != required_alignment)
         return TURBOWASM_MALFORMED_MODULE;
-
-    if ((flags & UINT32_C(0x40)) != 0u &&
-        !turbowasm_reader_uleb32(reader, &memory_index))
-        return TURBOWASM_MALFORMED_MODULE;
-
-    if (!turbowasm_reader_uleb32(reader, &offset))
-        return TURBOWASM_MALFORMED_MODULE;
-
-    alignment = flags & UINT32_C(0x3f);
-    if (alignment != required_alignment)
-        return TURBOWASM_MALFORMED_MODULE;
-
-    *out_memory_index = memory_index;
-    *out_offset = offset;
-    return TURBOWASM_OK;
-}
-
-static turbowasm_status turbowasm_exec_atomic_memarg(
-    turbowasm_reader *reader,
-    const turbowasm_atomic_descriptor *descriptor,
-    uint32_t *out_memory_index,
-    uint32_t *out_offset) {
-    if (descriptor == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-    return turbowasm_exec_atomic_memarg_alignment(
-        reader, descriptor->alignment_log2,
-        out_memory_index, out_offset);
+    return turbowasm_exec_read_indexed_memarg(
+        instance, reader, out_memory_index, out_offset, out_address_kind);
 }
 
 static uint64_t turbowasm_atomic_value_bits(
@@ -2974,7 +3324,8 @@ static turbowasm_status turbowasm_exec_atomic(
     turbowasm_value second = {0};
     uint32_t subopcode;
     uint32_t memory_index;
-    uint32_t offset;
+    uint64_t offset;
+    turbowasm_value_kind address_kind;
     uint64_t value = 0u;
     uint64_t expected = 0u;
     uint64_t replacement = 0u;
@@ -2995,7 +3346,7 @@ static turbowasm_status turbowasm_exec_atomic(
             uint32_t woken = 0u;
 
             status = turbowasm_exec_atomic_memarg_alignment(
-                reader, 2u, &memory_index, &offset);
+                instance, reader, 2u, &memory_index, &offset, &address_kind);
             if (status != TURBOWASM_OK)
                 return status;
 
@@ -3004,7 +3355,7 @@ static turbowasm_status turbowasm_exec_atomic(
             if (status != TURBOWASM_OK)
                 return status;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &address);
+                stack, address_kind, &address);
             if (status != TURBOWASM_OK)
                 return status;
 
@@ -3030,7 +3381,7 @@ static turbowasm_status turbowasm_exec_atomic(
             uint32_t expected32 = 0u;
 
             status = turbowasm_exec_atomic_memarg_alignment(
-                reader, 2u, &memory_index, &offset);
+                instance, reader, 2u, &memory_index, &offset, &address_kind);
             if (status != TURBOWASM_OK)
                 return status;
 
@@ -3044,7 +3395,7 @@ static turbowasm_status turbowasm_exec_atomic(
             if (status != TURBOWASM_OK)
                 return status;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &address);
+                stack, address_kind, &address);
             if (status != TURBOWASM_OK)
                 return status;
 
@@ -3083,7 +3434,7 @@ static turbowasm_status turbowasm_exec_atomic(
             uint64_t expected64 = 0u;
 
             status = turbowasm_exec_atomic_memarg_alignment(
-                reader, 3u, &memory_index, &offset);
+                instance, reader, 3u, &memory_index, &offset, &address_kind);
             if (status != TURBOWASM_OK)
                 return status;
 
@@ -3097,7 +3448,7 @@ static turbowasm_status turbowasm_exec_atomic(
             if (status != TURBOWASM_OK)
                 return status;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &address);
+                stack, address_kind, &address);
             if (status != TURBOWASM_OK)
                 return status;
 
@@ -3145,8 +3496,9 @@ static turbowasm_status turbowasm_exec_atomic(
     if (descriptor == NULL)
         return TURBOWASM_UNSUPPORTED;
 
-    status = turbowasm_exec_atomic_memarg(
-        reader, descriptor, &memory_index, &offset);
+    status = turbowasm_exec_atomic_memarg_alignment(
+        instance, reader, descriptor->alignment_log2,
+        &memory_index, &offset, &address_kind);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -3157,7 +3509,7 @@ static turbowasm_status turbowasm_exec_atomic(
     switch (descriptor->kind) {
         case TURBOWASM_ATOMIC_LOAD:
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &address);
+                stack, address_kind, &address);
             if (status != TURBOWASM_OK)
                 return status;
             break;
@@ -3169,7 +3521,7 @@ static turbowasm_status turbowasm_exec_atomic(
             if (status != TURBOWASM_OK)
                 return status;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &address);
+                stack, address_kind, &address);
             if (status != TURBOWASM_OK)
                 return status;
             value = turbowasm_atomic_value_bits(
@@ -3186,7 +3538,7 @@ static turbowasm_status turbowasm_exec_atomic(
             if (status != TURBOWASM_OK)
                 return status;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &address);
+                stack, address_kind, &address);
             if (status != TURBOWASM_OK)
                 return status;
             expected = turbowasm_atomic_value_bits(
@@ -3380,12 +3732,12 @@ static turbowasm_status turbowasm_exec_fc(
                 stack, TURBOWASM_VALUE_I32, &source);
             if (status != TURBOWASM_OK) return status;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &destination);
+                stack, turbowasm_exec_table_address_kind(instance,table_index), &destination);
             if (status != TURBOWASM_OK) return status;
 
             status = turbowasm_instance_table_init(
                 instance, element_index, table_index,
-                (uint32_t)destination.as.i32,
+                turbowasm_exec_address_value(&destination),
                 (uint32_t)source.as.i32,
                 (uint32_t)length.as.i32);
             return turbowasm_exec_bulk_trap(
@@ -3416,21 +3768,23 @@ static turbowasm_status turbowasm_exec_fc(
                 return TURBOWASM_MALFORMED_MODULE;
 
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &length);
+                stack, turbowasm_exec_table_address_kind(instance,destination_table)==TURBOWASM_VALUE_I64 &&
+                    turbowasm_exec_table_address_kind(instance,source_table)==TURBOWASM_VALUE_I64
+                    ?TURBOWASM_VALUE_I64:TURBOWASM_VALUE_I32, &length);
             if (status != TURBOWASM_OK) return status;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &source);
+                stack, turbowasm_exec_table_address_kind(instance,source_table), &source);
             if (status != TURBOWASM_OK) return status;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &destination);
+                stack, turbowasm_exec_table_address_kind(instance,destination_table), &destination);
             if (status != TURBOWASM_OK) return status;
 
             status = turbowasm_instance_table_copy(
                 instance,
                 destination_table, source_table,
-                (uint32_t)destination.as.i32,
-                (uint32_t)source.as.i32,
-                (uint32_t)length.as.i32);
+                turbowasm_exec_address_value(&destination),
+                turbowasm_exec_address_value(&source),
+                turbowasm_exec_address_value(&length));
             return turbowasm_exec_bulk_trap(
                 status, trap,
                 TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS);
@@ -3438,7 +3792,7 @@ static turbowasm_status turbowasm_exec_fc(
 
         case 15u: { /* table.grow */
             uint32_t table_index;
-            uint32_t previous_size;
+            uint64_t previous_size;
             turbowasm_value delta;
             turbowasm_value initial;
             turbowasm_value result = {0};
@@ -3447,23 +3801,22 @@ static turbowasm_status turbowasm_exec_fc(
                     reader, &table_index))
                 return TURBOWASM_MALFORMED_MODULE;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &delta);
+                stack, turbowasm_exec_table_address_kind(instance,table_index), &delta);
             if (status != TURBOWASM_OK) return status;
             status = turbowasm_stack_pop(
                 stack, &initial);
             if (status != TURBOWASM_OK) return status;
 
-            status = turbowasm_instance_table_grow(
+            status = turbowasm_instance_table_grow_wide(
                 instance, table_index, initial,
-                (uint32_t)delta.as.i32,
+                turbowasm_exec_address_value(&delta),
                 &previous_size);
             if (status != TURBOWASM_OK)
                 return status;
 
-            result.kind = TURBOWASM_VALUE_I32;
-            result.as.i32 = previous_size == UINT32_MAX
-                ? -1
-                : (int32_t)previous_size;
+            result.kind = turbowasm_exec_table_address_kind(instance,table_index);
+            if(result.kind==TURBOWASM_VALUE_I64) result.as.i64=previous_size==UINT64_MAX?-1:(int64_t)previous_size;
+            else result.as.i32=previous_size==UINT64_MAX?-1:(int32_t)previous_size;
             return turbowasm_stack_push(stack, result);
         }
 
@@ -3480,8 +3833,9 @@ static turbowasm_status turbowasm_exec_fc(
             if (status != TURBOWASM_OK)
                 return status;
 
-            result.kind = TURBOWASM_VALUE_I32;
-            result.as.i32 = (int32_t)size;
+            result.kind = turbowasm_exec_table_address_kind(instance,table_index);
+            if(result.kind==TURBOWASM_VALUE_I64) result.as.i64=(int64_t)size;
+            else result.as.i32=(int32_t)size;
             return turbowasm_stack_push(stack, result);
         }
 
@@ -3495,20 +3849,20 @@ static turbowasm_status turbowasm_exec_fc(
                     reader, &table_index))
                 return TURBOWASM_MALFORMED_MODULE;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &length);
+                stack, turbowasm_exec_table_address_kind(instance,table_index), &length);
             if (status != TURBOWASM_OK) return status;
             status = turbowasm_stack_pop(
                 stack, &value);
             if (status != TURBOWASM_OK) return status;
             status = turbowasm_stack_pop_kind(
-                stack, TURBOWASM_VALUE_I32, &destination);
+                stack, turbowasm_exec_table_address_kind(instance,table_index), &destination);
             if (status != TURBOWASM_OK) return status;
 
             status = turbowasm_instance_table_fill(
                 instance, table_index,
-                (uint32_t)destination.as.i32,
+                turbowasm_exec_address_value(&destination),
                 value,
-                (uint32_t)length.as.i32);
+                turbowasm_exec_address_value(&length));
             return turbowasm_exec_bulk_trap(
                 status, trap,
                 TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS);
@@ -3522,7 +3876,7 @@ static turbowasm_status turbowasm_exec_fc(
 static turbowasm_status turbowasm_exec_simd_splat(
     const turbowasm_simd_exec_descriptor *descriptor,
     turbowasm_value_stack *stack) {
-    salts_simd_scalar scalar = {0};
+    cmeta_simd_scalar scalar = {0};
     turbowasm_value input;
     turbowasm_value out = {0};
     turbowasm_status status;
@@ -3570,7 +3924,7 @@ static turbowasm_status turbowasm_exec_simd_splat(
 
     out.kind = TURBOWASM_VALUE_V128;
     out.as.v128.shape = descriptor->result_shape;
-    if (!salts_simd_splat(
+    if (!cmeta_simd_splat(
             descriptor->vector_desc,
             &out.as.v128.bits,
             scalar))
@@ -3605,9 +3959,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_unary(
+            supported = cmeta_simd_unary(
                 descriptor->vector_desc,
-                (salts_simd_unary_op)descriptor->op,
+                (cmeta_simd_unary_op)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits);
             break;
@@ -3619,9 +3973,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_binary(
+            supported = cmeta_simd_binary(
                 descriptor->vector_desc,
-                (salts_simd_binary_op)descriptor->op,
+                (cmeta_simd_binary_op)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits);
@@ -3634,9 +3988,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_compare(
+            supported = cmeta_simd_compare(
                 descriptor->vector_desc,
-                (salts_simd_compare_op)descriptor->op,
+                (cmeta_simd_compare_op)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits);
@@ -3649,9 +4003,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_shift(
+            supported = cmeta_simd_shift(
                 descriptor->vector_desc,
-                (salts_simd_shift_op)descriptor->op,
+                (cmeta_simd_shift_op)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 (uint32_t)count.as.i32);
@@ -3667,7 +4021,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_select(
+            supported = cmeta_simd_select(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
@@ -3682,9 +4036,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_saturating_binary(
+            supported = cmeta_simd_saturating_binary(
                 descriptor->vector_desc,
-                (salts_simd_saturating_op)descriptor->op,
+                (cmeta_simd_saturating_op)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits);
@@ -3694,9 +4048,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_reduce(
+            supported = cmeta_simd_reduce(
                 descriptor->vector_desc,
-                (salts_simd_reduce_op)descriptor->op,
+                (cmeta_simd_reduce_op)descriptor->op,
                 &left.as.v128.bits,
                 &reduced);
             if (supported) {
@@ -3712,7 +4066,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_narrow(
+            supported = cmeta_simd_narrow(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
@@ -3723,9 +4077,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_extend_half(
+            supported = cmeta_simd_extend_half(
                 descriptor->vector_desc,
-                (salts_simd_half)descriptor->op,
+                (cmeta_simd_half)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits);
             break;
@@ -3737,9 +4091,9 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_extmul_half(
+            supported = cmeta_simd_extmul_half(
                 descriptor->vector_desc,
-                (salts_simd_half)descriptor->op,
+                (cmeta_simd_half)descriptor->op,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits);
@@ -3749,7 +4103,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_extadd_pairwise(
+            supported = cmeta_simd_extadd_pairwise(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &left.as.v128.bits);
@@ -3762,7 +4116,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_q15mulr_sat(
+            supported = cmeta_simd_q15mulr_sat(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
@@ -3776,7 +4130,7 @@ static turbowasm_status turbowasm_exec_simd_generic(
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_V128, &left);
             if (status != TURBOWASM_OK) return status;
-            supported = salts_simd_dot_pairwise(
+            supported = cmeta_simd_dot_pairwise(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &left.as.v128.bits,
@@ -3789,11 +4143,11 @@ static turbowasm_status turbowasm_exec_simd_generic(
             if (status != TURBOWASM_OK) return status;
             if (descriptor->source_desc == NULL)
                 return TURBOWASM_UNSUPPORTED;
-            supported = salts_simd_convert(
+            supported = cmeta_simd_convert(
                 descriptor->vector_desc,
                 descriptor->source_desc,
-                (salts_simd_convert_op)descriptor->op,
-                (salts_simd_lane_policy)descriptor->lane_policy,
+                (cmeta_simd_convert_op)descriptor->op,
+                (cmeta_simd_lane_policy)descriptor->lane_policy,
                 &out.as.v128.bits,
                 &left.as.v128.bits);
             break;
@@ -3801,8 +4155,8 @@ static turbowasm_status turbowasm_exec_simd_generic(
         case TURBOWASM_SIMD_EXEC_RELAXED: {
             uint8_t arity =
                 turbowasm_relaxed_simd_arity(descriptor->opcode);
-            const salts_v128 *b = NULL;
-            const salts_v128 *third_value = NULL;
+            const cmeta_v128 *b = NULL;
+            const cmeta_v128 *third_value = NULL;
 
             if (arity == 3u) {
                 status = turbowasm_stack_pop_kind(
@@ -3864,7 +4218,7 @@ static turbowasm_status turbowasm_exec_simd_memory(
     turbowasm_value address;
     turbowasm_value vector_value;
     turbowasm_value out = {0};
-    salts_simd_scalar scalar = {0};
+    cmeta_simd_scalar scalar = {0};
     uint8_t shared_bytes[16] = {0};
     uint8_t *memory;
     turbowasm_status status;
@@ -3932,7 +4286,7 @@ static turbowasm_status turbowasm_exec_simd_memory(
         return status;
 
     if (descriptor->kind == TURBOWASM_SIMD_EXEC_MEMORY_STORE_LANE) {
-        supported = salts_simd_extract_lane(
+        supported = cmeta_simd_extract_lane(
             descriptor->vector_desc,
             &vector_value.as.v128.bits,
             lane, &scalar);
@@ -3978,21 +4332,21 @@ static turbowasm_status turbowasm_exec_simd_memory(
 
     switch (descriptor->kind) {
         case TURBOWASM_SIMD_EXEC_MEMORY_EXTEND:
-            supported = salts_simd_load_extend(
+            supported = cmeta_simd_load_extend(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 memory);
             break;
 
         case TURBOWASM_SIMD_EXEC_MEMORY_SPLAT:
-            supported = salts_simd_load_splat(
+            supported = cmeta_simd_load_splat(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 memory);
             break;
 
         case TURBOWASM_SIMD_EXEC_MEMORY_ZERO:
-            supported = salts_simd_load_zero(
+            supported = cmeta_simd_load_zero(
                 (uint16_t)(descriptor->memory_width * 8u),
                 &out.as.v128.bits,
                 memory);
@@ -4016,7 +4370,7 @@ static turbowasm_status turbowasm_exec_simd_memory(
                     return TURBOWASM_MALFORMED_MODULE;
             }
 
-            supported = salts_simd_replace_lane(
+            supported = cmeta_simd_replace_lane(
                 descriptor->vector_desc,
                 &out.as.v128.bits,
                 &vector_value.as.v128.bits,
@@ -4048,7 +4402,7 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
     turbowasm_value right;
     turbowasm_value scalar_value;
     turbowasm_value out = {0};
-    salts_simd_scalar scalar = {0};
+    cmeta_simd_scalar scalar = {0};
     uint8_t lane;
     turbowasm_status status;
     bool supported;
@@ -4078,7 +4432,7 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
 
         out.kind = TURBOWASM_VALUE_V128;
         out.as.v128.shape = descriptor->result_shape;
-        if (!salts_simd_shuffle_bytes(
+        if (!cmeta_simd_shuffle_bytes(
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits,
@@ -4099,7 +4453,7 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
 
         out.kind = TURBOWASM_VALUE_V128;
         out.as.v128.shape = descriptor->result_shape;
-        if (!salts_simd_swizzle_bytes(
+        if (!cmeta_simd_swizzle_bytes(
                 &out.as.v128.bits,
                 &left.as.v128.bits,
                 &right.as.v128.bits))
@@ -4119,7 +4473,7 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
         if (status != TURBOWASM_OK)
             return status;
 
-        supported = salts_simd_extract_lane(
+        supported = cmeta_simd_extract_lane(
             descriptor->vector_desc,
             &left.as.v128.bits,
             lane, &scalar);
@@ -4216,7 +4570,7 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
 
     out.kind = TURBOWASM_VALUE_V128;
     out.as.v128.shape = descriptor->result_shape;
-    supported = salts_simd_replace_lane(
+    supported = cmeta_simd_replace_lane(
         descriptor->vector_desc,
         &out.as.v128.bits,
         &left.as.v128.bits,
@@ -4286,7 +4640,7 @@ static turbowasm_status turbowasm_exec_simd(
 
             out.kind = TURBOWASM_VALUE_V128;
             out.as.v128.shape = TURBOWASM_V128_RAW;
-            salts_simd_v128_load(&out.as.v128.bits, source);
+            cmeta_simd_v128_load(&out.as.v128.bits, source);
             return turbowasm_stack_push(stack, out);
         }
 
@@ -4333,7 +4687,7 @@ static turbowasm_status turbowasm_exec_simd(
                     return status;
             }
 
-            salts_simd_v128_store(
+            cmeta_simd_v128_store(
                 destination, &value.as.v128.bits);
 
             if (shared) {
@@ -4360,7 +4714,7 @@ static turbowasm_status turbowasm_exec_simd(
 
             out.kind = TURBOWASM_VALUE_V128;
             out.as.v128.shape = TURBOWASM_V128_RAW;
-            salts_simd_v128_load(
+            cmeta_simd_v128_load(
                 &out.as.v128.bits, bytes.cursor);
             return turbowasm_stack_push(stack, out);
         }
@@ -4383,10 +4737,100 @@ static turbowasm_status turbowasm_exec_simd(
 }
 
 
+int64_t turbowasm_jit_simd_instruction(turbowasm_jit_invocation_context *context,
+    const uint8_t *code, int64_t size, const turbowasm_value *arguments,
+    int64_t count, turbowasm_value *result) {
+    turbowasm_value values[TURBOWASM_JIT_SIMD_MAX_INPUTS + 1u] = {0};
+    turbowasm_value_stack stack = {values, 0u, TURBOWASM_JIT_SIMD_MAX_INPUTS + 1u};
+    turbowasm_reader reader;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_status status;
+    if (context == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    if (context->instance == NULL || code == NULL || size <= 0 ||
+        (uint64_t)size > SIZE_MAX || count < 0 || count > TURBOWASM_JIT_SIMD_MAX_INPUTS ||
+        (count != 0 && arguments == NULL) || result == NULL) status = TURBOWASM_INVALID_ARGUMENT;
+    else {
+        if (count != 0) memcpy(values, arguments, (size_t)count * sizeof(*values));
+        stack.size = (uint32_t)count;
+        turbowasm_reader_init(&reader, code, (size_t)size);
+        status = turbowasm_exec_simd(context->instance, &reader, &stack, &trap);
+        if (status == TURBOWASM_OK) {
+            if (turbowasm_reader_remaining(&reader) != 0u || stack.size > 1u)
+                status = TURBOWASM_MALFORMED_MODULE;
+            else if (stack.size == 1u) *result = values[0];
+        }
+    }
+    context->call_status = status; context->call_trap = trap;
+    return status;
+}
+
 typedef struct turbowasm_host_call_impl {
     turbowasm_instance caller;
     turbowasm_jit_execution_control *execution;
+    uint32_t depth;
 } turbowasm_host_call_impl;
+
+turbowasm_status turbowasm_instance_invoke_host_entry(turbowasm_instance_impl *instance,
+    turbowasm_jit_execution_control *control, turbowasm_host_entry_fn entry,
+    void *context, turbowasm_trap *trap) {
+    turbowasm_host_call_impl impl = {0};
+    turbowasm_host_call call = {0};
+    turbowasm_status status;
+    if (instance == NULL || control == NULL || entry == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    impl.caller.impl = instance; impl.execution = control;
+    call.impl = &impl;
+    status = entry(context, &call, trap);
+    return status == TURBOWASM_YIELDED ? TURBOWASM_INVALID_ARGUMENT : status;
+}
+
+turbowasm_jit_execution_control *turbowasm_host_call_control(const turbowasm_host_call *call) {
+    const turbowasm_host_call_impl *impl = call != NULL ? call->impl : NULL;
+    return impl != NULL ? impl->execution : NULL;
+}
+
+turbowasm_status turbowasm_instance_invoke_from_host(
+    const turbowasm_host_call *call,
+    turbowasm_instance *instance,
+    uint32_t function_index,
+    const turbowasm_value *arguments,
+    size_t argument_count,
+    turbowasm_value *results,
+    size_t result_capacity,
+    size_t *result_count,
+    turbowasm_trap *trap) {
+    const turbowasm_host_call_impl *parent;
+    turbowasm_instance_impl *impl;
+    const turbowasm_module_impl *module;
+    turbowasm_runtime_scope scope;
+    turbowasm_status status;
+
+    if (call == NULL || call->impl == NULL ||
+        instance == NULL || instance->impl == NULL ||
+        result_count == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    *result_count = 0u;
+    *trap = TURBOWASM_TRAP_NONE;
+    parent = (const turbowasm_host_call_impl *)call->impl;
+    impl = (turbowasm_instance_impl *)instance->impl;
+    if (impl->store != NULL && !turbowasm_store_is_owner(impl->store))
+        return TURBOWASM_INVALID_ARGUMENT;
+    module = turbowasm_module_impl_get(impl->module);
+    if (module == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (parent->depth >= TURBOWASM_EXEC_MAX_CALL_DEPTH - 1u) {
+        *trap = TURBOWASM_TRAP_CALL_STACK_EXHAUSTED;
+        return TURBOWASM_TRAPPED;
+    }
+    impl->pending_exception = NULL;
+    scope = turbowasm_runtime_scope_enter(&module->config);
+    status = turbowasm_dispatch_function(
+        impl, function_index, arguments, argument_count,
+        results, result_capacity, result_count, trap,
+        parent->execution, parent->depth + 1u);
+    turbowasm_runtime_scope_leave(scope);
+    return status;
+}
 
 turbowasm_instance *turbowasm_host_call_instance(
     turbowasm_host_call *call) {
@@ -4507,6 +4951,7 @@ static turbowasm_status turbowasm_exec_host_function(
     const turbowasm_linked_function *binding,
     const turbowasm_validation_func_type *type,
     turbowasm_jit_execution_control *execution,
+    uint32_t depth,
     const turbowasm_value *arguments,
     size_t argument_count,
     turbowasm_value *results,
@@ -4531,8 +4976,8 @@ static turbowasm_status turbowasm_exec_host_function(
         return TURBOWASM_INVALID_ARGUMENT;
 
     for (index = 0u; index < type->param_count; ++index) {
-        if (!turbowasm_value_matches_type(
-                &arguments[index], type->params[index]))
+        if (!turbowasm_value_matches_semantic(
+                instance, &arguments[index], &type->param_semantics[index]))
             return TURBOWASM_TYPE_MISMATCH;
     }
 
@@ -4540,6 +4985,7 @@ static turbowasm_status turbowasm_exec_host_function(
     *trap = TURBOWASM_TRAP_NONE;
     call_impl.caller.impl = instance;
     call_impl.execution = execution;
+    call_impl.depth = depth;
     call.impl = &call_impl;
 
     status = binding->host_function(
@@ -4562,8 +5008,8 @@ static turbowasm_status turbowasm_exec_host_function(
         return TURBOWASM_TYPE_MISMATCH;
 
     for (index = 0u; index < type->result_count; ++index) {
-        if (!turbowasm_value_matches_type(
-                &results[index], type->results[index]))
+        if (!turbowasm_value_matches_semantic(
+                instance, &results[index], &type->result_semantics[index]))
             return TURBOWASM_TYPE_MISMATCH;
     }
 
@@ -4596,6 +5042,9 @@ static turbowasm_status turbowasm_exec_function(
     bool finished = false;
     bool returned = false;
     bool tail_reentered = false;
+    uint32_t gc_local_count = 0u;
+    turbowasm_gc_frame gc_frame={&stack,&locals,&gc_local_count,&arguments,&argument_count};
+    turbowasm_gc_source gc_source={NULL,execution,&gc_frame,turbowasm_gc_trace_frame};
 
     if (instance == NULL || result_count == NULL || trap == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -4604,6 +5053,10 @@ static turbowasm_status turbowasm_exec_function(
         *trap = TURBOWASM_TRAP_CALL_STACK_EXHAUSTED;
         return TURBOWASM_TRAPPED;
     }
+    if(instance->store!=NULL && !turbowasm_store_is_owner(instance->store))
+        return TURBOWASM_INVALID_ARGUMENT;
+    status=turbowasm_gc_source_add(instance->store,&gc_source);
+    if(status!=TURBOWASM_OK) return status;
 
 restart_frame:
     status = TURBOWASM_OK;
@@ -4641,6 +5094,7 @@ restart_frame:
                 binding,
                 type,
                 execution,
+                depth,
                 arguments,
                 argument_count,
                 results,
@@ -4691,8 +5145,8 @@ restart_frame:
     }
 
     for (index = 0u; index < type->param_count; ++index) {
-        if (!turbowasm_value_matches_type(
-                &arguments[index], type->params[index])) {
+        if (!turbowasm_value_matches_semantic(
+                instance, &arguments[index], &type->param_semantics[index])) {
             status = TURBOWASM_TYPE_MISMATCH;
             goto done;
         }
@@ -4707,6 +5161,7 @@ restart_frame:
         }
     }
 
+    gc_local_count=function->local_count;
     for (index = 0u; index < function->local_count; ++index) {
         if (!turbowasm_zero_value(function->local_types[index],
                                   &locals[index])) {
@@ -4995,8 +5450,10 @@ restart_frame:
                     goto done;
                 break;
             case 0x11u: /* call_indirect */
+            case 0x14u: /* call_ref */
                 status = turbowasm_exec_indirect_call(
-                    instance, &reader, &stack, trap, execution, depth);
+                    instance, &reader, &stack, trap, execution, depth,
+                    opcode == 0x14u);
                 if (status == TURBOWASM_EXCEPTION) {
                     status = turbowasm_exec_handle_pending_exception(
                         instance, &stack, &controls, &reader, function,
@@ -5043,12 +5500,16 @@ restart_frame:
                 tail_reentered = true;
                 goto restart_frame;
             }
-            case 0x13u: { /* return_call_indirect */
+            case 0x13u: /* return_call_indirect */
+            case 0x15u: { /* return_call_ref */
                 turbowasm_exec_call_target target = {0};
                 turbowasm_value *next_arguments = NULL;
 
-                status = turbowasm_exec_resolve_indirect_target(
-                    instance, &reader, &stack, trap, &target);
+                status = opcode == 0x15u
+                    ? turbowasm_exec_resolve_ref_target(
+                        instance, &reader, &stack, trap, &target)
+                    : turbowasm_exec_resolve_indirect_target(
+                        instance, &reader, &stack, trap, &target);
                 if (status != TURBOWASM_OK)
                     goto done;
 
@@ -5127,7 +5588,7 @@ restart_frame:
                 }
 
                 status = turbowasm_validation_read_valtype(
-                    &reader, &type, &generalized);
+                    &reader, context, &type, &generalized);
                 if (status != TURBOWASM_OK)
                     goto done;
                 if (type.heap_kind ==
@@ -5287,13 +5748,13 @@ restart_frame:
 
                 if (opcode == 0x25u) {
                     status = turbowasm_stack_pop_kind(
-                        &stack, TURBOWASM_VALUE_I32,
+                        &stack, turbowasm_exec_table_address_kind(instance,table_index),
                         &element_index);
                     if (status != TURBOWASM_OK)
                         goto done;
                     status = turbowasm_instance_table_get_value(
                         instance, table_index,
-                        (uint32_t)element_index.as.i32,
+                        turbowasm_exec_address_value(&element_index),
                         &value);
                     if (status == TURBOWASM_TRAPPED) {
                         *trap = TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS;
@@ -5309,13 +5770,13 @@ restart_frame:
                     if (status != TURBOWASM_OK)
                         goto done;
                     status = turbowasm_stack_pop_kind(
-                        &stack, TURBOWASM_VALUE_I32,
+                        &stack, turbowasm_exec_table_address_kind(instance,table_index),
                         &element_index);
                     if (status != TURBOWASM_OK)
                         goto done;
                     status = turbowasm_instance_table_set_value(
                         instance, table_index,
-                        (uint32_t)element_index.as.i32,
+                        turbowasm_exec_address_value(&element_index),
                         value);
                     if (status == TURBOWASM_TRAPPED) {
                         *trap = TURBOWASM_TRAP_TABLE_OUT_OF_BOUNDS;
@@ -5491,7 +5952,7 @@ restart_frame:
                 break;
 
             case 0x92u: case 0x93u: case 0x94u: case 0x95u:
-            case 0x96u: case 0x97u:
+            case 0x96u: case 0x97u: case 0x98u:
                 status = turbowasm_exec_f32_binary(
                     opcode, &stack);
                 if (status != TURBOWASM_OK) goto done;
@@ -5505,7 +5966,7 @@ restart_frame:
                 break;
 
             case 0xa0u: case 0xa1u: case 0xa2u: case 0xa3u:
-            case 0xa4u: case 0xa5u:
+            case 0xa4u: case 0xa5u: case 0xa6u:
                 status = turbowasm_exec_f64_binary(
                     opcode, &stack);
                 if (status != TURBOWASM_OK) goto done;
@@ -5539,7 +6000,7 @@ restart_frame:
                 turbowasm_value out = {0};
 
                 status = turbowasm_validation_read_heaptype(
-                    &reader, &reference_type);
+                    &reader, context, &reference_type);
                 if (status != TURBOWASM_OK)
                     goto done;
                 if (reference_type.heap_kind ==
@@ -5558,6 +6019,8 @@ restart_frame:
                     out.kind = TURBOWASM_VALUE_EXTERNREF;
                     out.as.externref.is_null = true;
                     out.as.externref.token = 0u;
+                } else if (reference_type.carrier == 0x6eu) {
+                    out.kind = TURBOWASM_VALUE_GCREF;
                 } else if (reference_type.carrier == 0x69u) {
                     out.kind = TURBOWASM_VALUE_EXNREF;
                     out.as.exnref.is_null = true;
@@ -5576,25 +6039,17 @@ restart_frame:
             case 0xd1u: { /* ref.is_null */
                 turbowasm_value reference;
                 turbowasm_value out = {0};
+                bool is_null;
 
                 status = turbowasm_stack_pop(&stack, &reference);
                 if (status != TURBOWASM_OK)
                     goto done;
 
                 out.kind = TURBOWASM_VALUE_I32;
-                if (reference.kind == TURBOWASM_VALUE_FUNCREF) {
-                    out.as.i32 =
-                        reference.as.funcref.is_null ? 1 : 0;
-                } else if (reference.kind == TURBOWASM_VALUE_EXTERNREF) {
-                    out.as.i32 =
-                        reference.as.externref.is_null ? 1 : 0;
-                } else if (reference.kind == TURBOWASM_VALUE_EXNREF) {
-                    out.as.i32 =
-                        reference.as.exnref.is_null ? 1 : 0;
-                } else {
-                    status = TURBOWASM_TYPE_MISMATCH;
+                status = turbowasm_reference_is_null(&reference, &is_null);
+                if (status != TURBOWASM_OK)
                     goto done;
-                }
+                out.as.i32 = is_null ? 1 : 0;
 
                 status = turbowasm_stack_push(&stack, out);
                 if (status != TURBOWASM_OK)
@@ -5602,6 +6057,42 @@ restart_frame:
                 break;
             }
 
+            case 0xd4u: /* ref.as_non_null */
+            case 0xd5u: /* br_on_null */
+            case 0xd6u: { /* br_on_non_null */
+                turbowasm_value reference;
+                uint32_t branch_depth = 0u;
+                bool is_null;
+                bool take_branch;
+
+                if (opcode != 0xd4u &&
+                    !turbowasm_reader_uleb32(&reader, &branch_depth)) {
+                    status = TURBOWASM_MALFORMED_MODULE;
+                    goto done;
+                }
+                status = turbowasm_stack_pop(&stack, &reference);
+                if (status != TURBOWASM_OK) goto done;
+                status = turbowasm_reference_is_null(&reference, &is_null);
+                if (status != TURBOWASM_OK) goto done;
+                if (opcode == 0xd4u && is_null) {
+                    *trap = TURBOWASM_TRAP_NULL_REFERENCE;
+                    status = TURBOWASM_TRAPPED;
+                    goto done;
+                }
+                if (!is_null) {
+                    status = turbowasm_stack_push(&stack, reference);
+                    if (status != TURBOWASM_OK) goto done;
+                }
+                take_branch = (opcode == 0xd5u && is_null) ||
+                    (opcode == 0xd6u && !is_null);
+                if (take_branch) {
+                    status = turbowasm_exec_branch(
+                        &stack, &controls, &reader, function,
+                        branch_depth, &finished, &returned);
+                    if (status != TURBOWASM_OK) goto done;
+                }
+                break;
+            }
             case 0xd2u: { /* ref.func */
                 uint32_t function_ref;
                 turbowasm_value out = {0};
@@ -5623,6 +6114,29 @@ restart_frame:
                 break;
             }
 
+            case 0xd3u: {
+                turbowasm_value a={0},b,out={0};
+                status=turbowasm_stack_pop_kind(&stack,TURBOWASM_VALUE_GCREF,&b);
+                if(status==TURBOWASM_OK) status=turbowasm_stack_pop_kind(&stack,TURBOWASM_VALUE_GCREF,&a);
+                if(status!=TURBOWASM_OK) goto done;
+                out.kind=TURBOWASM_VALUE_I32;
+                out.as.i32=turbowasm_gc_equal(instance->store,a.as.gcref,b.as.gcref)?1:0;
+                status=turbowasm_stack_push(&stack,out);
+                if(status!=TURBOWASM_OK) goto done;
+                break;
+            }
+            case 0xfbu: {
+                turbowasm_gc_effect effect;
+                status=turbowasm_gc_execute(instance,&reader,stack.values,stack.size,&effect,trap);
+                if(status!=TURBOWASM_OK) goto done;
+                stack.size-=effect.consumed;
+                if(effect.produces) status=turbowasm_stack_push(&stack,effect.value);
+                if(status==TURBOWASM_OK && effect.branches)
+                    status=turbowasm_exec_branch(&stack,&controls,&reader,function,
+                        effect.label,&finished,&returned);
+                if(status!=TURBOWASM_OK) goto done;
+                break;
+            }
             case 0xfcu:
                 status = turbowasm_exec_fc(
                     instance, &reader, &stack, trap);
@@ -5667,8 +6181,8 @@ restart_frame:
             &stack, &results[index]);
         if (status != TURBOWASM_OK)
             goto done;
-        if (!turbowasm_value_matches_type(
-                &results[index], type->results[index])) {
+        if (!turbowasm_value_matches_semantic(
+                instance, &results[index], &type->result_semantics[index])) {
             status = TURBOWASM_TYPE_MISMATCH;
             goto done;
         }
@@ -5688,6 +6202,7 @@ done:
             status = transfer_status;
     }
 
+    turbowasm_gc_source_remove(entry_instance->store,&gc_source);
     turbowasm_rt_free(owned_arguments);
     turbowasm_rt_free(locals);
     turbowasm_rt_free(stack.values);
@@ -5695,7 +6210,7 @@ done:
     return status;
 }
 
-turbowasm_status turbowasm_instance_invoke_interpreter_internal(
+turbowasm_status turbowasm_instance_invoke_internal(
     turbowasm_instance_impl *instance,
     uint32_t function_index,
     const turbowasm_value *arguments,
@@ -5708,7 +6223,7 @@ turbowasm_status turbowasm_instance_invoke_interpreter_internal(
     if (instance == NULL || result_count == NULL || trap == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    return turbowasm_exec_function(
+    return turbowasm_dispatch_function(
         instance,
         function_index,
         arguments,
@@ -5854,6 +6369,19 @@ static void turbowasm_jit_artifact_try_store(
     turbowasm_rt_free(bytes);
 }
 
+static void turbowasm_jit_trace_frame(turbowasm_store_impl *store, void *opaque) {
+    const turbowasm_jit_invocation_context *context = opaque;
+    turbowasm_gc_mark_values(store, context->arguments, context->argument_count);
+    turbowasm_gc_mark_values(store, context->native_values, context->native_value_count);
+    turbowasm_gc_mark_values(store, context->results, context->result_count);
+    if (context->tail_call_pending) {
+        const turbowasm_value *values = context->tail_argument_count >
+            TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS
+            ? context->tail_storage->values : context->tail_arguments;
+        turbowasm_gc_mark_values(store, values, context->tail_argument_count);
+    }
+}
+
 static turbowasm_status turbowasm_dispatch_function(
     turbowasm_instance_impl *instance,
     uint32_t function_index,
@@ -5868,24 +6396,64 @@ static turbowasm_status turbowasm_dispatch_function(
     const turbowasm_module_impl *module;
     const turbowasm_validation_function *function;
     turbowasm_jit_function_state *entry;
-    turbowasm_value tail_arguments[TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT];
+    turbowasm_value tail_arguments[TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS];
+    turbowasm_value_stack tail_storage = {0};
+    turbowasm_instance_impl *entry_instance = instance;
+    turbowasm_store_impl *root_store = NULL;
     turbowasm_status status;
+    turbowasm_jit_invocation_context context = {
+        instance, execution, depth, TURBOWASM_OK, TURBOWASM_TRAP_NONE};
+    turbowasm_gc_source source = {NULL, execution, &context, turbowasm_jit_trace_frame};
+    bool rooted = false;
+    bool tail_reentered = false;
 
     if (instance == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+    if (depth >= TURBOWASM_EXEC_MAX_CALL_DEPTH) {
+        *result_count = 0u;
+        *trap = TURBOWASM_TRAP_CALL_STACK_EXHAUSTED;
+        return TURBOWASM_TRAPPED;
+    }
 
 dispatch_again:
+    if (rooted && root_store != instance->store) {
+        turbowasm_gc_source_remove(root_store, &source);
+        rooted = false;
+    }
+    context.instance = instance;
+    context.tail_instance = NULL;
+    context.arguments = arguments;
+    context.argument_count = argument_count;
+    context.results = results;
+    context.result_count = 0u;
+    context.tail_call_pending = false;
+    if (tail_reentered) {
+        /* An imported alias must not add an interpreter wrapper frame to a
+         * tail chain. Resolve its borrowed provider before entering any tier. */
+        module = turbowasm_module_impl_get(instance->module);
+        function = module == NULL ? NULL : turbowasm_validation_context_function(
+            &module->validation, function_index);
+        if (function == NULL) {
+            status = TURBOWASM_INVALID_ARGUMENT;
+            goto done;
+        }
+        if (function->imported && function_index < instance->linked_function_count) {
+            const turbowasm_linked_function *binding = &instance->linked_functions[function_index];
+            if (binding->host_function == NULL && binding->provider != NULL) {
+                instance = binding->provider;
+                function_index = binding->function_index;
+                goto dispatch_again;
+            }
+        }
+    }
     if (!instance->jit_backend_attached ||
         instance->jit_functions == NULL ||
         function_index >= instance->jit_function_count ||
         (execution != NULL &&
-         !instance->jit_backend.supports_execution_control)) {
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
+         (!instance->jit_backend.supports_execution_control ||
+          (execution->suspend != NULL &&
+           !instance->jit_backend.supports_resumable_execution)))) {
+        goto interpret;
     }
 
     entry = &instance->jit_functions[function_index];
@@ -5894,52 +6462,20 @@ dispatch_again:
         goto invoke_compiled;
 
     if (entry->state == TURBOWASM_JIT_INTERPRET_ONLY) {
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
+        goto interpret;
     }
 
     if (entry->call_count != UINT32_MAX)
         ++entry->call_count;
 
     if (entry->call_count < instance->jit_hot_threshold) {
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
+        goto interpret;
     }
 
     module = turbowasm_module_impl_get(instance->module);
     if (module == NULL) {
         entry->state = TURBOWASM_JIT_INTERPRET_ONLY;
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
-    }
-
-    {
-        uint32_t memory_index;
-        for (memory_index = 0u;
-             memory_index < module->validation.memory_count;
-             ++memory_index) {
-            if (module->validation.memories[memory_index].memory64) {
-                entry->state = TURBOWASM_JIT_INTERPRET_ONLY;
-                return turbowasm_exec_function(
-                    instance, function_index,
-                    arguments, argument_count,
-                    results, result_capacity,
-                    result_count, trap,
-                    execution, depth);
-            }
-        }
+        goto interpret;
     }
 
     function = turbowasm_validation_context_function(
@@ -5951,12 +6487,7 @@ dispatch_again:
             function_index,
             function)) {
         entry->state = TURBOWASM_JIT_INTERPRET_ONLY;
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
+        goto interpret;
     }
 
     if (turbowasm_jit_artifact_try_restore(
@@ -5980,12 +6511,7 @@ dispatch_again:
                 &entry->compiled);
         }
         entry->state = TURBOWASM_JIT_INTERPRET_ONLY;
-        return turbowasm_exec_function(
-            instance, function_index,
-            arguments, argument_count,
-            results, result_capacity,
-            result_count, trap,
-            execution, depth);
+        goto interpret;
     }
 
     entry->state = TURBOWASM_JIT_COMPILED;
@@ -5994,11 +6520,16 @@ dispatch_again:
 
 invoke_compiled:
     {
-        turbowasm_jit_invocation_context context = {
-            instance, execution, depth,
-            TURBOWASM_OK, TURBOWASM_TRAP_NONE
-        };
-
+        if (!rooted && instance->store != NULL) {
+            status = turbowasm_gc_source_add(instance->store, &source);
+            if (status != TURBOWASM_OK)
+                goto done;
+            rooted = true;
+            root_store = instance->store;
+        }
+        context.call_status = TURBOWASM_OK;
+        context.call_trap = TURBOWASM_TRAP_NONE;
+        context.tail_storage = &tail_storage;
         status = instance->jit_backend.invoke(
             &entry->compiled,
             &context,
@@ -6007,13 +6538,15 @@ invoke_compiled:
             result_count, trap);
         if (status != TURBOWASM_OK ||
             !context.tail_call_pending)
-            return status;
+            goto done;
 
-        if (context.tail_argument_count >
-                TURBOWASM_JIT_TAIL_ARGUMENT_LIMIT)
-            return TURBOWASM_UNSUPPORTED;
-
-        if (context.tail_argument_count != 0u) {
+        if (context.tail_argument_count > TURBOWASM_JIT_TAIL_INLINE_ARGUMENTS) {
+            if (context.tail_argument_count > tail_storage.capacity) {
+                status = TURBOWASM_INVALID_ARGUMENT;
+                goto done;
+            }
+            arguments = tail_storage.values;
+        } else if (context.tail_argument_count != 0u) {
             memcpy(
                 tail_arguments,
                 context.tail_arguments,
@@ -6025,7 +6558,10 @@ invoke_compiled:
         }
 
         function_index = context.tail_function_index;
+        if (context.tail_instance != NULL)
+            instance = context.tail_instance;
         argument_count = context.tail_argument_count;
+        tail_reentered = true;
         if (result_count != NULL)
             *result_count = 0u;
         if (trap != NULL)
@@ -6038,6 +6574,28 @@ invoke_compiled:
          */
         goto dispatch_again;
     }
+
+interpret:
+    if (rooted) {
+        turbowasm_gc_source_remove(root_store, &source);
+        rooted = false;
+    }
+    status = turbowasm_exec_function(instance, function_index,
+        arguments, argument_count, results, result_capacity,
+        result_count, trap, execution, depth);
+done:
+    if (status == TURBOWASM_EXCEPTION && entry_instance != instance) {
+        turbowasm_status transfer = turbowasm_exception_transfer_pending(entry_instance, instance);
+        if (transfer != TURBOWASM_OK)
+            status = transfer;
+    }
+    context.arguments = NULL;
+    context.argument_count = 0u;
+    context.tail_call_pending = false;
+    turbowasm_rt_free(tail_storage.values);
+    if (rooted)
+        turbowasm_gc_source_remove(root_store, &source);
+    return status;
 }
 
 turbowasm_status turbowasm_jit_instance_attach_backend_with_cache(
@@ -6216,6 +6774,68 @@ turbowasm_status turbowasm_jit_direct_call(
         context->depth + 1u);
 }
 
+int64_t turbowasm_jit_indirect_call(turbowasm_jit_invocation_context *context,
+    int64_t opcode, int64_t type_index, int64_t table_index,
+    const turbowasm_value *arguments, turbowasm_value *results) {
+    const turbowasm_module_impl *module;
+    const turbowasm_validation_func_type *expected;
+    turbowasm_exec_call_target target = {0};
+    turbowasm_status status = TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    size_t count = 0u, index;
+    bool by_reference, tail;
+    if (context == NULL)
+        return status;
+    if (context->instance == NULL || type_index < 0 || type_index > UINT32_MAX ||
+        table_index < 0 || table_index > UINT32_MAX || arguments == NULL)
+        goto done;
+    switch (opcode) {
+        case TURBOWASM_JIT_CALL_INDIRECT: by_reference = false; tail = false; break;
+        case TURBOWASM_JIT_RETURN_CALL_INDIRECT: by_reference = false; tail = true; break;
+        case TURBOWASM_JIT_CALL_REF: by_reference = true; tail = false; break;
+        case TURBOWASM_JIT_RETURN_CALL_REF: by_reference = true; tail = true; break;
+        default: status = TURBOWASM_UNSUPPORTED; goto done;
+    }
+    module = turbowasm_module_impl_get(context->instance->module);
+    expected = module == NULL ? NULL : turbowasm_validation_context_type(
+        &module->validation, (uint32_t)type_index);
+    if (expected == NULL || !expected->defined ||
+        (!tail && expected->result_count != 0u && results == NULL))
+        goto done;
+    status = by_reference
+        ? turbowasm_resolve_ref_value(context->instance, (uint32_t)type_index,
+            &arguments[expected->param_count], &trap, &target)
+        : turbowasm_resolve_indirect_value(context->instance, (uint32_t)type_index,
+            (uint32_t)table_index, &arguments[expected->param_count], &trap, &target);
+    if (status != TURBOWASM_OK)
+        goto done;
+    if (tail) {
+        status = turbowasm_jit_request_tail_target(context, target.instance,
+            target.function_index, arguments, expected->param_count);
+        goto done;
+    }
+    status = turbowasm_dispatch_function(target.instance, target.function_index,
+        arguments, expected->param_count, results, expected->result_count,
+        &count, &trap, context->execution, context->depth + 1u);
+    if (status == TURBOWASM_EXCEPTION) {
+        turbowasm_status transfer = turbowasm_exception_transfer_pending(context->instance, target.instance);
+        if (transfer != TURBOWASM_OK)
+            status = transfer;
+    }
+    if (status == TURBOWASM_OK) {
+        if (count != expected->result_count)
+            status = TURBOWASM_TYPE_MISMATCH;
+        for (index = 0u; status == TURBOWASM_OK && index < count; ++index)
+            if (!turbowasm_value_matches_semantic(context->instance,
+                    &results[index], &expected->result_semantics[index]))
+                status = TURBOWASM_TYPE_MISMATCH;
+    }
+done:
+    context->call_status = status;
+    context->call_trap = trap;
+    return status;
+}
+
 static void turbowasm_instance_exception_destroy_all(
     turbowasm_instance_impl *impl) {
     turbowasm_exception *exception;
@@ -6239,6 +6859,7 @@ static void turbowasm_instance_dispose_unpublished(
     if (impl == NULL)
         return;
 
+    turbowasm_store_detach(impl);
     turbowasm_jit_instance_detach_backend(impl);
     turbowasm_instance_exception_destroy_all(impl);
     turbowasm_instance_state_destroy(impl);
@@ -6294,7 +6915,8 @@ static turbowasm_status turbowasm_instance_create_internal(
     const turbowasm_module *module,
     const turbowasm_linker *linker,
     bool resolve_imports,
-    bool preserve_failed_instance) {
+    bool preserve_failed_instance,
+    turbowasm_store_impl *store) {
     const turbowasm_module_impl *module_impl;
     turbowasm_instance_impl *impl;
     turbowasm_status status;
@@ -6307,7 +6929,7 @@ static turbowasm_status turbowasm_instance_create_internal(
         return TURBOWASM_INVALID_ARGUMENT;
 
     module_impl = turbowasm_module_impl_get(module);
-    if (module_impl == NULL)
+    if (module_impl == NULL || (store == NULL && module_impl->validation.requires_store))
         return TURBOWASM_INVALID_ARGUMENT;
 
     {
@@ -6321,6 +6943,15 @@ static turbowasm_status turbowasm_instance_create_internal(
             return TURBOWASM_OUT_OF_MEMORY;
         }
         impl->module = module;
+
+        if (store != NULL) {
+            status = turbowasm_store_attach(store, impl);
+            if (status != TURBOWASM_OK) {
+                turbowasm_runtime_scope_leave(scope);
+                turbowasm_instance_dispose_unpublished(impl);
+                return status;
+            }
+        }
 
         if (resolve_imports) {
             status = turbowasm_linker_bind_instance(
@@ -6375,7 +7006,7 @@ turbowasm_status turbowasm_instance_create(
     turbowasm_instance *instance,
     const turbowasm_module *module) {
     return turbowasm_instance_create_internal(
-        instance, module, NULL, false, false);
+        instance, module, NULL, false, false, NULL);
 }
 
 turbowasm_status turbowasm_instance_create_linked(
@@ -6383,7 +7014,7 @@ turbowasm_status turbowasm_instance_create_linked(
     const turbowasm_module *module,
     const struct turbowasm_linker *linker) {
     return turbowasm_instance_create_internal(
-        instance, module, linker, true, false);
+        instance, module, linker, true, false, NULL);
 }
 
 turbowasm_status turbowasm_instance_create_linked_preserve_failure(
@@ -6391,7 +7022,25 @@ turbowasm_status turbowasm_instance_create_linked_preserve_failure(
     const turbowasm_module *module,
     const struct turbowasm_linker *linker) {
     return turbowasm_instance_create_internal(
-        instance, module, linker, true, true);
+        instance, module, linker, true, true, NULL);
+}
+
+turbowasm_status turbowasm_instance_create_in_store(
+    turbowasm_instance *instance,const turbowasm_module *module,
+    const turbowasm_linker *linker,turbowasm_store *store) {
+    if(store==NULL || !turbowasm_store_is_owner(store->impl))
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_instance_create_internal(instance,module,linker,
+        linker!=NULL,false,store->impl);
+}
+
+turbowasm_status turbowasm_instance_create_in_store_preserve_failure(
+    turbowasm_instance *instance,const turbowasm_module *module,
+    const turbowasm_linker *linker,turbowasm_store *store) {
+    if(store==NULL || !turbowasm_store_is_owner(store->impl))
+        return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_instance_create_internal(instance,module,linker,
+        linker!=NULL,true,store->impl);
 }
 
 turbowasm_status turbowasm_instance_create_sibling_internal(
@@ -6407,6 +7056,8 @@ turbowasm_status turbowasm_instance_create_sibling_internal(
         return TURBOWASM_INVALID_ARGUMENT;
 
     parent_impl = (const turbowasm_instance_impl *)parent->impl;
+    if (parent_impl->store != NULL)
+        return TURBOWASM_UNSUPPORTED;
     if (parent_impl->module == NULL ||
         parent_impl->module->impl == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -6461,6 +7112,7 @@ void turbowasm_instance_destroy(turbowasm_instance *instance) {
     if (instance == NULL || instance->impl == NULL)
         return;
     impl = (turbowasm_instance_impl *)instance->impl;
+    turbowasm_store_detach(impl);
     turbowasm_jit_instance_detach_backend(impl);
     turbowasm_instance_exception_destroy_all(impl);
     turbowasm_instance_state_destroy(impl);
@@ -6491,6 +7143,43 @@ const turbowasm_module *turbowasm_instance_module(
         return NULL;
     impl = (const turbowasm_instance_impl *)instance->impl;
     return impl->module;
+}
+
+static turbowasm_instance_impl *turbowasm_table_api_instance(const turbowasm_instance *instance) {
+    turbowasm_instance_impl *impl=instance==NULL?NULL:instance->impl;
+    return impl!=NULL && (impl->store==NULL || turbowasm_store_is_owner(impl->store))?impl:NULL;
+}
+
+turbowasm_status turbowasm_instance_table_get64(const turbowasm_instance *instance,
+    uint32_t table_index,uint64_t index,turbowasm_value *out) {
+    return turbowasm_instance_table_get_value(turbowasm_table_api_instance(instance),table_index,index,out);
+}
+
+turbowasm_status turbowasm_instance_table_set64(turbowasm_instance *instance,
+    uint32_t table_index,uint64_t index,turbowasm_value value) {
+    return turbowasm_instance_table_set_value(turbowasm_table_api_instance(instance),table_index,index,value);
+}
+
+turbowasm_status turbowasm_instance_table_size64(const turbowasm_instance *instance,
+    uint32_t table_index,uint64_t *out_size) {
+    uint32_t size;
+    turbowasm_status status;
+    if(out_size==NULL) return TURBOWASM_INVALID_ARGUMENT;
+    status=turbowasm_instance_table_size(turbowasm_table_api_instance(instance),table_index,&size);
+    if(status==TURBOWASM_OK) *out_size=size;
+    return status;
+}
+
+turbowasm_status turbowasm_instance_table_grow64(turbowasm_instance *instance,
+    uint32_t table_index,turbowasm_value initial,uint64_t delta,uint64_t *out_previous_size) {
+    turbowasm_instance_impl *impl=turbowasm_table_api_instance(instance);
+    turbowasm_runtime_scope scope;
+    turbowasm_status status;
+    if(impl==NULL) return TURBOWASM_INVALID_ARGUMENT;
+    scope=turbowasm_runtime_scope_enter(&turbowasm_module_impl_get(impl->module)->config);
+    status=turbowasm_instance_table_grow_wide(impl,table_index,initial,delta,out_previous_size);
+    turbowasm_runtime_scope_leave(scope);
+    return status;
 }
 
 turbowasm_status turbowasm_instance_invoke(
@@ -6544,6 +7233,8 @@ turbowasm_status turbowasm_instance_invoke_with_options(
     }
 
     impl = (turbowasm_instance_impl *)instance->impl;
+    if (impl->store != NULL && !turbowasm_store_is_owner(impl->store))
+        return TURBOWASM_INVALID_ARGUMENT;
     impl->pending_exception = NULL;
 
     {
@@ -6592,6 +7283,10 @@ const char *turbowasm_trap_string(turbowasm_trap trap) {
             return "invalid_conversion_to_integer";
         case TURBOWASM_TRAP_NULL_REFERENCE:
             return "null_reference";
+        case TURBOWASM_TRAP_ARRAY_OUT_OF_BOUNDS:
+            return "array_out_of_bounds";
+        case TURBOWASM_TRAP_CAST_FAILURE:
+            return "cast_failure";
         default: return "unknown";
     }
 }

@@ -771,6 +771,75 @@ static const turbowasm_wasi02_function_desc instance_network_functions[] = {
     {"instance-network", NULL, 0u, &type_socket_network}
 };
 
+static const turbowasm_wasi02_type_desc type_udp_socket = {TURBOWASM_WASI02_TYPE_RESOURCE, "udp-socket", {.resource = {"wasi:sockets", "udp", TW_WASI02_V028, "udp-socket"}}};
+static const turbowasm_wasi02_type_desc type_incoming_datagram_stream = {TURBOWASM_WASI02_TYPE_RESOURCE, "incoming-datagram-stream", {.resource = {"wasi:sockets", "udp", TW_WASI02_V028, "incoming-datagram-stream"}}};
+static const turbowasm_wasi02_type_desc type_outgoing_datagram_stream = {TURBOWASM_WASI02_TYPE_RESOURCE, "outgoing-datagram-stream", {.resource = {"wasi:sockets", "udp", TW_WASI02_V028, "outgoing-datagram-stream"}}};
+static const turbowasm_wasi02_type_desc type_resolve_stream = {TURBOWASM_WASI02_TYPE_RESOURCE, "resolve-address-stream", {.resource = {"wasi:sockets", "ip-name-lookup", TW_WASI02_V028, "resolve-address-stream"}}};
+static const turbowasm_wasi02_variant_case ip_address_cases[] = {{"ipv4", &type_ipv4_address}, {"ipv6", &type_ipv6_address}};
+static const turbowasm_wasi02_type_desc type_ip_address = {TURBOWASM_WASI02_TYPE_VARIANT, "ip-address", {.variant = {ip_address_cases, 2}}};
+static const turbowasm_wasi02_type_desc type_option_socket_address = {TURBOWASM_WASI02_TYPE_OPTION, NULL, {.option = {&type_ip_socket_address}}};
+static const turbowasm_wasi02_type_desc type_option_ip_address = {TURBOWASM_WASI02_TYPE_OPTION, NULL, {.option = {&type_ip_address}}};
+static const turbowasm_wasi02_record_field incoming_datagram_fields[] = {{"data", &type_list_u8}, {"remote-address", &type_ip_socket_address}};
+static const turbowasm_wasi02_type_desc type_incoming_datagram = {TURBOWASM_WASI02_TYPE_RECORD, "incoming-datagram", {.record = {incoming_datagram_fields, 2}}};
+static const turbowasm_wasi02_type_desc type_list_incoming_datagram = {TURBOWASM_WASI02_TYPE_LIST, NULL, {.list = {&type_incoming_datagram}}};
+static const turbowasm_wasi02_record_field outgoing_datagram_fields[] = {{"data", &type_list_u8}, {"remote-address", &type_option_socket_address}};
+static const turbowasm_wasi02_type_desc type_outgoing_datagram = {TURBOWASM_WASI02_TYPE_RECORD, "outgoing-datagram", {.record = {outgoing_datagram_fields, 2}}};
+static const turbowasm_wasi02_type_desc type_list_outgoing_datagram = {TURBOWASM_WASI02_TYPE_LIST, NULL, {.list = {&type_outgoing_datagram}}};
+static const turbowasm_wasi02_type_desc *const udp_pair_elements[] = {&type_incoming_datagram_stream, &type_outgoing_datagram_stream};
+static const turbowasm_wasi02_type_desc type_udp_pair = {TURBOWASM_WASI02_TYPE_TUPLE, NULL, {.tuple = {udp_pair_elements, 2}}};
+static const turbowasm_wasi02_type_desc type_network_result_udp_socket = {TURBOWASM_WASI02_TYPE_RESULT, NULL, {.result = {&type_udp_socket, &type_network_error_code}}};
+static const turbowasm_wasi02_type_desc type_network_result_udp_pair = {TURBOWASM_WASI02_TYPE_RESULT, NULL, {.result = {&type_udp_pair, &type_network_error_code}}};
+static const turbowasm_wasi02_type_desc type_network_result_datagrams = {TURBOWASM_WASI02_TYPE_RESULT, NULL, {.result = {&type_list_incoming_datagram, &type_network_error_code}}};
+static const turbowasm_wasi02_type_desc type_network_result_resolve_stream = {TURBOWASM_WASI02_TYPE_RESULT, NULL, {.result = {&type_resolve_stream, &type_network_error_code}}};
+static const turbowasm_wasi02_type_desc type_network_result_next_ip = {TURBOWASM_WASI02_TYPE_RESULT, NULL, {.result = {&type_option_ip_address, &type_network_error_code}}};
+static const turbowasm_wasi02_param_desc udp_0_params[] = {{"self", &type_udp_socket}, {"network", &type_socket_network}, {"local-address", &type_ip_socket_address}};
+static const turbowasm_wasi02_param_desc udp_1_params[] = {{"self", &type_udp_socket}};
+static const turbowasm_wasi02_param_desc udp_2_params[] = {{"self", &type_udp_socket}, {"remote-address", &type_option_socket_address}};
+static const turbowasm_wasi02_param_desc udp_3_params[] = {{"self", &type_udp_socket}};
+static const turbowasm_wasi02_param_desc udp_4_params[] = {{"self", &type_udp_socket}};
+static const turbowasm_wasi02_param_desc udp_5_params[] = {{"self", &type_udp_socket}};
+static const turbowasm_wasi02_param_desc udp_6_params[] = {{"self", &type_udp_socket}};
+static const turbowasm_wasi02_param_desc udp_7_params[] = {{"self", &type_udp_socket}};
+static const turbowasm_wasi02_param_desc udp_8_params[] = {{"self", &type_udp_socket}};
+static const turbowasm_wasi02_param_desc udp_9_params[] = {{"self", &type_udp_socket}};
+static const turbowasm_wasi02_param_desc udp_10_params[] = {{"self", &type_udp_socket}, {"value", &type_u8}};
+static const turbowasm_wasi02_param_desc udp_11_params[] = {{"self", &type_udp_socket}, {"value", &type_u64}};
+static const turbowasm_wasi02_param_desc udp_12_params[] = {{"self", &type_udp_socket}, {"value", &type_u64}};
+static const turbowasm_wasi02_param_desc udp_13_params[] = {{"self", &type_incoming_datagram_stream}, {"max-results", &type_u64}};
+static const turbowasm_wasi02_param_desc udp_14_params[] = {{"self", &type_incoming_datagram_stream}};
+static const turbowasm_wasi02_param_desc udp_15_params[] = {{"self", &type_outgoing_datagram_stream}};
+static const turbowasm_wasi02_param_desc udp_16_params[] = {{"self", &type_outgoing_datagram_stream}, {"datagrams", &type_list_outgoing_datagram}};
+static const turbowasm_wasi02_param_desc udp_17_params[] = {{"self", &type_outgoing_datagram_stream}};
+static const turbowasm_wasi02_param_desc lookup_0_params[] = {{"network", &type_socket_network}, {"name", &type_string}};
+static const turbowasm_wasi02_param_desc lookup_1_params[] = {{"self", &type_resolve_stream}};
+static const turbowasm_wasi02_param_desc lookup_2_params[] = {{"self", &type_resolve_stream}};
+static const turbowasm_wasi02_function_desc udp_functions[] = {
+    {"[method]udp-socket.start-bind", udp_0_params, 3, &type_network_result_unit},
+    {"[method]udp-socket.finish-bind", udp_1_params, 1, &type_network_result_unit},
+    {"[method]udp-socket.stream", udp_2_params, 2, &type_network_result_udp_pair},
+    {"[method]udp-socket.local-address", udp_3_params, 1, &type_network_result_socket_address},
+    {"[method]udp-socket.remote-address", udp_4_params, 1, &type_network_result_socket_address},
+    {"[method]udp-socket.address-family", udp_5_params, 1, &type_ip_address_family},
+    {"[method]udp-socket.unicast-hop-limit", udp_6_params, 1, &type_network_result_u8},
+    {"[method]udp-socket.receive-buffer-size", udp_7_params, 1, &type_network_result_u64},
+    {"[method]udp-socket.send-buffer-size", udp_8_params, 1, &type_network_result_u64},
+    {"[method]udp-socket.subscribe", udp_9_params, 1, &type_pollable},
+    {"[method]udp-socket.set-unicast-hop-limit", udp_10_params, 2, &type_network_result_unit},
+    {"[method]udp-socket.set-receive-buffer-size", udp_11_params, 2, &type_network_result_unit},
+    {"[method]udp-socket.set-send-buffer-size", udp_12_params, 2, &type_network_result_unit},
+    {"[method]incoming-datagram-stream.receive", udp_13_params, 2, &type_network_result_datagrams},
+    {"[method]incoming-datagram-stream.subscribe", udp_14_params, 1, &type_pollable},
+    {"[method]outgoing-datagram-stream.check-send", udp_15_params, 1, &type_network_result_u64},
+    {"[method]outgoing-datagram-stream.send", udp_16_params, 2, &type_network_result_u64},
+    {"[method]outgoing-datagram-stream.subscribe", udp_17_params, 1, &type_pollable},
+};
+static const turbowasm_wasi02_function_desc lookup_functions[] = {
+    {"resolve-addresses", lookup_0_params, 2, &type_network_result_resolve_stream},
+    {"[method]resolve-address-stream.resolve-next-address", lookup_1_params, 1, &type_network_result_next_ip},
+    {"[method]resolve-address-stream.subscribe", lookup_2_params, 1, &type_pollable},
+};
+static const turbowasm_wasi02_function_desc udp_create_functions[] = {{"create-udp-socket", tcp_create_params, 1, &type_network_result_udp_socket}};
+
 static const turbowasm_wasi02_interface_desc interfaces[] = {
     {
         "wasi:clocks", "wall-clock", TW_WASI02_V028,
@@ -885,7 +954,13 @@ static const turbowasm_wasi02_interface_desc interfaces[] = {
         "https://github.com/WebAssembly/wasi-sockets",
         "85f0c064f5b9ea2faa3c65b1a80b870119c0fc7f",
         instance_network_functions, 1u
-    }
+    },
+    {"wasi:sockets", "ip-name-lookup", TW_WASI02_V028, "https://github.com/WebAssembly/wasi-sockets",
+     "85f0c064f5b9ea2faa3c65b1a80b870119c0fc7f", lookup_functions, 3},
+    {"wasi:sockets", "udp-create-socket", TW_WASI02_V028, "https://github.com/WebAssembly/wasi-sockets",
+     "85f0c064f5b9ea2faa3c65b1a80b870119c0fc7f", udp_create_functions, 1},
+    {"wasi:sockets", "udp", TW_WASI02_V028, "https://github.com/WebAssembly/wasi-sockets",
+     "85f0c064f5b9ea2faa3c65b1a80b870119c0fc7f", udp_functions, 18},
 };
 
 size_t turbowasm_wasi02_interface_count(void) {

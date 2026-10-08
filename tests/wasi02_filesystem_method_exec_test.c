@@ -94,7 +94,7 @@ static void build_consumer_module(bytebuf *out) {
     put_core_header(out);
 
     /* type 0: mkdir(i32 handle, i32 ptr, i32 len, i32 outptr) -> () */
-    put_uleb(&section, 2u);
+    put_uleb(&section, 3u);
     put_u8(&section, 0x60u);
     put_uleb(&section, 4u);
     put_u8(&section, 0x7fu);
@@ -108,10 +108,15 @@ static void build_consumer_module(bytebuf *out) {
     put_u8(&section, 0x7fu);
     put_uleb(&section, 1u);
     put_u8(&section, 0x7fu);
+    /* type 2: drop(i32 handle) -> () */
+    put_u8(&section, 0x60u);
+    put_uleb(&section, 1u);
+    put_u8(&section, 0x7fu);
+    put_uleb(&section, 0u);
     put_section(out, 1u, &section);
 
     section.size = 0u;
-    put_uleb(&section, 2u);
+    put_uleb(&section, 3u);
     put_name(&section, "m");
     put_name(&section, "mem");
     put_u8(&section, 0x02u);
@@ -121,6 +126,10 @@ static void build_consumer_module(bytebuf *out) {
     put_name(&section, "mkdir");
     put_u8(&section, 0x00u);
     put_uleb(&section, 0u);
+    put_name(&section, "p");
+    put_name(&section, "drop");
+    put_u8(&section, 0x00u);
+    put_uleb(&section, 2u);
     put_section(out, 2u, &section);
 
     section.size = 0u;
@@ -132,7 +141,7 @@ static void build_consumer_module(bytebuf *out) {
     put_uleb(&section, 1u);
     put_name(&section, "run");
     put_u8(&section, 0x00u);
-    put_uleb(&section, 1u);
+    put_uleb(&section, 2u);
     put_section(out, 7u, &section);
 
     /*
@@ -149,6 +158,9 @@ static void build_consumer_module(bytebuf *out) {
     put_u8(&body, 0x41u); put_u8(&body, 0x01u);
     put_u8(&body, 0x41u); put_u8(&body, 0x08u);
     put_u8(&body, 0x10u); put_u8(&body, 0x00u);
+    /* Return the transient canonical borrow before completing the call. */
+    put_u8(&body, 0x20u); put_u8(&body, 0x00u);
+    put_u8(&body, 0x10u); put_u8(&body, 0x01u);
     put_u8(&body, 0x41u); put_u8(&body, 0x08u);
     put_u8(&body, 0x2du); put_u8(&body, 0x00u); put_u8(&body, 0x00u);
     put_u8(&body, 0x0bu);
@@ -287,14 +299,24 @@ static void build_method_component(bytebuf *out) {
     put_uleb(&s, 0u);
     put_section(out, 8u, &s);
 
-    /* inline core instance 1 exports lowered method as "mkdir" */
+    /* canon resource.drop descriptor -> core func 1 */
+    s.size = 0u;
+    put_uleb(&s, 1u);
+    put_u8(&s, 0x03u);
+    put_uleb(&s, 1u);
+    put_section(out, 8u, &s);
+
+    /* inline core instance 1 exports method and borrow release */
     s.size = 0u;
     put_uleb(&s, 1u);
     put_u8(&s, 0x01u);
-    put_uleb(&s, 1u);
+    put_uleb(&s, 2u);
     put_name(&s, "mkdir");
     put_u8(&s, 0x00u);
     put_uleb(&s, 0u);
+    put_name(&s, "drop");
+    put_u8(&s, 0x00u);
+    put_uleb(&s, 1u);
     put_section(out, 2u, &s);
 
     /* instantiate consumer module 1 -> core instance 2 */
@@ -311,7 +333,7 @@ static void build_method_component(bytebuf *out) {
     put_uleb(&s, 1u);
     put_section(out, 2u, &s);
 
-    /* alias core consumer run -> core func 1 */
+    /* alias core consumer run -> core func 2 */
     s.size = 0u;
     put_uleb(&s, 1u);
     put_u8(&s, 0x00u);
@@ -339,7 +361,7 @@ static void build_method_component(bytebuf *out) {
     put_uleb(&s, 1u);
     put_u8(&s, 0x00u);
     put_u8(&s, 0x00u);
-    put_uleb(&s, 1u);
+    put_uleb(&s, 2u);
     put_uleb(&s, 0u);
     put_uleb(&s, 3u);
     put_section(out, 8u, &s);

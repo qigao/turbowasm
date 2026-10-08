@@ -19,7 +19,7 @@ static turbowasm_status parse(const uint8_t *bytes,
 
     turbowasm_reader_init(&reader, bytes, size);
     status = turbowasm_validation_read_valtype(
-        &reader, type, generalized);
+        &reader, NULL, type, generalized);
     if (status == TURBOWASM_OK)
         assert(turbowasm_reader_remaining(&reader) == 0u);
     return status;
@@ -220,13 +220,15 @@ static void test_general_reference_local_semantics(void) {
     assert(module.impl == NULL);
 }
 
-static void test_unsupported_heap_type_stays_explicit(void) {
+static void test_gc_abstract_heap_type(void) {
     static const uint8_t anyref[] = {0x63, 0x6e};
     turbowasm_validation_value_type type;
     bool generalized = false;
 
     assert(parse(anyref, sizeof(anyref), &type, &generalized) ==
-           TURBOWASM_UNSUPPORTED);
+           TURBOWASM_OK);
+    assert(type.heap_kind == TURBOWASM_VALIDATION_HEAP_ANY);
+    assert(type.is_reference && type.nullable);
 }
 
 int main(void) {
@@ -235,6 +237,6 @@ int main(void) {
     test_legacy_function_type_retains_semantics();
     test_general_reference_global_retains_semantics();
     test_general_reference_local_semantics();
-    test_unsupported_heap_type_stays_explicit();
+    test_gc_abstract_heap_type();
     return 0;
 }

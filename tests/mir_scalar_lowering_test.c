@@ -139,7 +139,7 @@ int main(void) {
         0x7c,
         0x0b,
 
-        /* f2: validated, but nop is outside #73 eligibility */
+        /* f2: nop preserves the scalar result */
         0x05,
         0x00,
         0x41, 0x01,
@@ -150,9 +150,6 @@ int main(void) {
     turbowasm_module module = {0};
     turbowasm_instance instance = {0};
     turbowasm_jit_backend backend = {0};
-    const turbowasm_module_impl *impl;
-    const turbowasm_validation_function *unsupported;
-    turbowasm_compiled_function compiled = {0};
 
     assert(turbowasm_module_load_borrowed(
                &module, bytes, sizeof(bytes)) == TURBOWASM_OK);
@@ -168,23 +165,9 @@ int main(void) {
         &backend, &module, &instance,
         1u, TURBOWASM_VALUE_I64);
 
-    impl = turbowasm_module_impl_get(&module);
-    assert(impl != NULL);
-    unsupported = turbowasm_validation_context_function(
-        &impl->validation, 2u);
-    assert(unsupported != NULL);
-    assert(!backend.is_function_eligible(
-        backend.context,
-        &impl->validation,
-        2u,
-        unsupported));
-    assert(backend.compile_function(
-               backend.context,
-               &impl->validation,
-               2u,
-               unsupported,
-               &compiled) == TURBOWASM_UNSUPPORTED);
-    assert(compiled.impl == NULL);
+    compare_function(
+        &backend, &module, &instance,
+        2u, TURBOWASM_VALUE_I32);
 
     backend.destroy_backend(backend.context);
     backend.context = NULL;

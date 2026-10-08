@@ -1,0 +1,11 @@
+(module
+  (memory (import "p" "mem") i64 1 2 shared)
+  (func (export "add") (result i64)
+    i64.const 0 i64.const 1 i64.atomic.rmw.add)
+  (func (export "load") (result i64) i64.const 0 i64.atomic.load)
+  (func (export "wait") (result i32)
+    i64.const 8 i32.const 0 i64.const 5000000000 memory.atomic.wait32)
+  (func (export "notify") (result i32)
+    i64.const 8 i32.const 1 memory.atomic.notify)
+  (func (export "grow") (result i64) i64.const 1 memory.grow)
+)

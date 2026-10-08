@@ -1,49 +1,30 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
+
+include(CMakeOptions.cmake)
 
 project(TurboWasm LANGUAGES C CXX)
+
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(CTest)
+include(cmake/Sanitizers.cmake)
 
-option(TURBOWASM_BUILD_TOOLS "Build TurboWasm command-line tools" ON)
-option(TURBOWASM_BUILD_TESTS "Build TurboWasm tests" ON)
-option(TURBOWASM_BUILD_CONFORMANCE_RUNNER
-  "Build the non-installed WebAssembly spec conformance runner" OFF)
-option(TURBOWASM_ENABLE_MIR_JIT "Enable optional MIR JIT backend" OFF)
-option(TURBOWASM_ENABLE_COMPONENT
-  "Build installed synchronous Component Model façade" ON)
-option(TURBOWASM_ENABLE_WASI02_ADAPTER
-  "Build experimental WASI 0.2 typed Component capability layer" ON)
-option(TURBOWASM_ENABLE_WASI02_CNET_ADAPTER
-  "Build optional released-Salts CNet WASI 0.2 TCP control-plane provider" ON)
-option(TURBOWASM_ENABLE_CFLOW_ADAPTER "Build optional CFlow execution adapter" ON)
-option(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER
-  "Build optional Salts NativeIO host-wait adapter" ON)
-option(TURBOWASM_ENABLE_WASI_ADAPTER
-  "Build optional WASI Preview1 capability adapter" ON)
-option(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN
-  "Regenerate the checked Preview1 adapter plan with SaltsUtils tooling" OFF)
-option(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER
-  "Build optional legacy WASI Preview1 threads adapter" ON)
-option(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER
-  "Build optional WASI Preview1 NativeIO fd adapter" ON)
-option(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER
-  "Build optional Salts-backed WASI filesystem provider" ON)
-option(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER
-  "Build optional littlefs-backed WASI filesystem provider" OFF)
-set(TURBOWASM_LITTLEFS_SOURCE_DIR "" CACHE PATH
-  "Path to an externally acquired littlefs source checkout")
-
-if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
+if(NOT DEFINED ENV{SALTS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
   message(FATAL_ERROR "SALTS_ROOT must point at an installed Salts SDK")
 endif()
 
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTS_ROOT_PATH)
+unset(Salts_DIR CACHE)
+unset(Salts_DIR)
 find_package(Salts CONFIG REQUIRED
   PATHS "${SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
+
+include(cmake/SaltsCompilerOptions.cmake)
+turbowasm_normalize_salts_c11_atomics()
 
 if(NOT TARGET Salts::CMeta)
   message(FATAL_ERROR
@@ -66,18 +47,37 @@ if(NOT TARGET Salts::Platform)
 endif()
 
 add_library(turbowasm
+  src/store.c
+  src/gc_exec.c
   src/artifact.c
   src/atomic.c
   src/component_binary.c
+  src/component_async_state.c
+  src/component_task.c
+  src/component_subtask.c
+  src/component_async_call.c
+  src/component_task_builtin.c
+  src/component_waitable.c
+  src/component_endpoint.c
+  src/component_endpoint_builtin.c
+  src/component_buffer.c
   src/component_canonical.c
+  src/component_string.c
   src/component_core_call.c
   src/component_exec.c
+  src/component_exec_async.c
+  src/component_exec_async_resource.c
   src/component_resource.c
   src/component_resource_binding.c
   src/component_type_graph.c
+  src/component_type_view.c
   src/execution.c
   src/instance.c
   src/instance_state.c
+  src/jit_reference_helper.c
+  src/jit_gc_helper.c
+  src/jit_table_helper.c
+  src/jit_memory_helper.c
   src/jit_simd_helper.c
   src/link.c
   src/module.c
@@ -91,6 +91,7 @@ add_library(turbowasm
   src/value.c
   src/validation_context.c
   src/validate.c
+  src/validate_composite.c
   src/validate_data.c
   src/validate_element.c
   src/validate_instr.c
@@ -105,6 +106,8 @@ set_target_properties(turbowasm PROPERTIES
   POSITION_INDEPENDENT_CODE ON)
 
 target_compile_features(turbowasm PUBLIC c_std_11)
+target_compile_definitions(turbowasm PRIVATE
+  TURBOWASM_TYPE_DEPENDENCY_LIMIT=${TURBOWASM_TYPE_DEPENDENCY_LIMIT})
 target_include_directories(turbowasm
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -118,7 +121,12 @@ endif()
 
 if(TURBOWASM_ENABLE_COMPONENT)
   add_library(turbowasm_component
-    src/component_api.c)
+    src/component_api.c
+    src/component_async_api.c
+    src/component_host_task.c
+    src/component_host_shutdown.c
+    src/component_host_transfer.c
+    src/component_host_endpoint.c)
   add_library(TurboWasm::Component ALIAS turbowasm_component)
   set_target_properties(turbowasm_component PROPERTIES
     EXPORT_NAME Component)
@@ -270,7 +278,8 @@ if(TARGET turbowasm_wasi02_core AND
   # S2 typed sockets state/provider contract. Keep this backend-neutral:
   # CNet/NativeIO integration belongs to #393.
   add_library(turbowasm_wasi02_sockets_core STATIC
-    src/wasi02_sockets.c)
+    src/wasi02_sockets.c
+    src/wasi02_network.c)
   target_compile_features(turbowasm_wasi02_sockets_core PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_sockets_core
     PRIVATE
@@ -427,6 +436,7 @@ if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
     src/wasi02_poll.c
     src/wasi02_streams.c
     src/wasi02_sockets.c
+    src/wasi02_network.c
     src/wasi02_exec.c)
 
   if(TARGET TurboWasm::WASI)
@@ -467,18 +477,76 @@ if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
   endif()
 endif()
 
+if(TARGET turbowasm_wasi02)
+  add_library(turbowasm_wasi02_io STATIC src/wasi02_io.c)
+  add_library(TurboWasm::WASI02IO ALIAS turbowasm_wasi02_io)
+  set_target_properties(turbowasm_wasi02_io PROPERTIES EXPORT_NAME WASI02IO)
+  target_compile_features(turbowasm_wasi02_io PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02_io PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  target_link_libraries(turbowasm_wasi02_io PUBLIC turbowasm_wasi02 PRIVATE Salts::Core)
+  if(TARGET turbowasm_wasi02_cnet_core)
+    target_link_libraries(turbowasm_wasi02_cnet_core PRIVATE turbowasm_wasi02_io)
+  endif()
+endif()
+
+if(TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND)
+  if(NOT TARGET TurboWasm::WASI02IO OR NOT TARGET Salts::CNet)
+    message(FATAL_ERROR "WASI02 socket backend requires WASI02IO and Salts::CNet")
+  endif()
+  include(CheckCSourceCompiles)
+  set(CMAKE_REQUIRED_LIBRARIES Salts::CNet)
+  unset(TURBOWASM_CNET_DIRECTIONAL_EOF CACHE)
+  check_c_source_compiles("#include <cnet/cnet.h>
+    int main(void) { cnet_client c = {0}; cnet_connection r = {0};
+      return cnet_connection_preserve_send_on_eof(&c, r); }"
+    TURBOWASM_CNET_DIRECTIONAL_EOF)
+  unset(TURBOWASM_CNET_DATAGRAM_LOOKUP CACHE)
+  check_c_source_compiles("#include <cnet/name_lookup.h>
+    #if !defined(CNET_DATAGRAM_SOCKET_CONTROL_VERSION) || !defined(CNET_NAME_LOOKUP_API_VERSION)
+    #error required socket capabilities missing
+    #endif
+    int main(void) { cnet_datagram d = {0}; cnet_name_lookup l = {0};
+      return cnet_datagram_pause_receive(&d) + cnet_name_lookup_advance(&l); }"
+    TURBOWASM_CNET_DATAGRAM_LOOKUP)
+  unset(CMAKE_REQUIRED_LIBRARIES)
+  if(NOT TURBOWASM_CNET_DATAGRAM_LOOKUP)
+    message(FATAL_ERROR "WASI02 native sockets require a Salts SDK with datagram socket control and public name lookup")
+  endif()
+  if(NOT TURBOWASM_CNET_DIRECTIONAL_EOF)
+    message(FATAL_ERROR "WASI02 native TCP requires a Salts SDK with cnet_connection_preserve_send_on_eof; the selected SDK cannot satisfy directional WASI streams")
+  endif()
+  add_library(turbowasm_wasi02_cnet STATIC src/wasi02_cnet.c)
+  add_library(TurboWasm::WASI02CNet ALIAS turbowasm_wasi02_cnet)
+  set_target_properties(turbowasm_wasi02_cnet PROPERTIES EXPORT_NAME WASI02CNet)
+  target_compile_definitions(turbowasm_wasi02_cnet PRIVATE TURBOWASM_WASI02_NATIVE_TCP=1)
+  target_compile_features(turbowasm_wasi02_cnet PUBLIC c_std_11)
+  target_include_directories(turbowasm_wasi02_cnet PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_link_libraries(turbowasm_wasi02_cnet PUBLIC TurboWasm::WASI02IO Salts::CNet)
+endif()
+
+if(TARGET turbowasm_wasi AND TARGET turbowasm_wasi02_cnet)
+  add_library(turbowasm_wasi_cnet INTERFACE)
+  add_library(TurboWasm::WASICNet ALIAS turbowasm_wasi_cnet)
+  set_target_properties(turbowasm_wasi_cnet PROPERTIES EXPORT_NAME WASICNet)
+  target_link_libraries(turbowasm_wasi_cnet INTERFACE TurboWasm::WASI TurboWasm::WASI02CNet)
+  install(TARGETS turbowasm_wasi_cnet EXPORT TurboWasmTargets)
+endif()
+
 if(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN)
   if(NOT TURBOWASM_ENABLE_WASI_ADAPTER)
     message(FATAL_ERROR
       "Preview1 adapter-plan qualification requires TURBOWASM_ENABLE_WASI_ADAPTER")
   endif()
   if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR
-     "$ENV{SALTS_UTILS_ROOT}" STREQUAL "")
+     NOT IS_DIRECTORY "$ENV{SALTS_UTILS_ROOT}")
     message(FATAL_ERROR
       "SALTS_UTILS_ROOT must point at an installed SaltsUtils SDK for adapter-plan qualification")
   endif()
 
   file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" SALTS_UTILS_ROOT_PATH)
+  unset(SaltsUtils_DIR CACHE)
+  unset(SaltsUtils_DIR)
   find_package(SaltsUtils CONFIG REQUIRED
     PATHS "${SALTS_UTILS_ROOT_PATH}"
     NO_DEFAULT_PATH
@@ -648,7 +716,7 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
 
   if(MSVC)
     target_compile_options(turbowasm_wasi_threads PRIVATE
-      /W4 /experimental:c11atomics)
+      /W4 -experimental:c11atomics)
   else()
     target_compile_options(turbowasm_wasi_threads PRIVATE
       -Wall -Wextra -Wpedantic)
@@ -736,6 +804,15 @@ if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+if(TARGET turbowasm_wasi02_io)
+  install(TARGETS turbowasm_wasi02_io EXPORT TurboWasmTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
+if(TARGET turbowasm_wasi02_cnet)
+  install(TARGETS turbowasm_wasi02_cnet EXPORT TurboWasmTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif()
 
 if(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)

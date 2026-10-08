@@ -1,4 +1,5 @@
 #include "component_canonical.h"
+#include "component_string.h"
 
 #include "instance_internal.h"
 #include "module_internal.h"
@@ -12,8 +13,37 @@ enum {
     TURBOWASM_COMPONENT_CANONICAL_MAX_DEPTH = 64u
 };
 
-#define TURBOWASM_COMPONENT_MAX_STRING_BYTE_LENGTH \
-    (UINT64_C(1) << 28u) - UINT64_C(1)
+static bool endpoint_value_kind(turbowasm_component_type_kind kind) {
+    return kind == TURBOWASM_COMPONENT_TYPE_FUTURE || kind == TURBOWASM_COMPONENT_TYPE_STREAM;
+}
+
+static bool handle_value_kind(turbowasm_component_type_kind kind) {
+    return kind == TURBOWASM_COMPONENT_TYPE_OWN || kind == TURBOWASM_COMPONENT_TYPE_BORROW ||
+        endpoint_value_kind(kind);
+}
+
+static turbowasm_status lift_handle(const turbowasm_component_canonical_memory *memory,
+    turbowasm_component_type_kind kind, const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref, uint32_t handle, turbowasm_component_value *out) {
+    turbowasm_component_resource_lift_fn lift;
+    void *context;
+    if (memory == NULL) return TURBOWASM_UNSUPPORTED;
+    lift = endpoint_value_kind(kind) ? memory->endpoint_lift : memory->resource_lift;
+    context = endpoint_value_kind(kind) ? memory->endpoint_context : memory->resource_context;
+    return lift != NULL ? lift(context, graph, ref, handle, out) : TURBOWASM_UNSUPPORTED;
+}
+
+static turbowasm_status lower_handle(const turbowasm_component_canonical_memory *memory,
+    turbowasm_component_type_kind kind, const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref, const turbowasm_component_value *value, uint32_t *out_handle) {
+    turbowasm_component_resource_lower_fn lower;
+    void *context;
+    if (memory == NULL) return TURBOWASM_UNSUPPORTED;
+    lower = endpoint_value_kind(kind) ? memory->endpoint_lower : memory->resource_lower;
+    context = endpoint_value_kind(kind) ? memory->endpoint_context : memory->resource_context;
+    return lower != NULL ? lower(context, graph, ref, value, out_handle) : TURBOWASM_UNSUPPORTED;
+}
+
 #define TURBOWASM_COMPONENT_MAX_LIST_BYTE_LENGTH \
     (UINT64_C(1) << 28u) - UINT64_C(1)
 
@@ -396,6 +426,12 @@ static turbowasm_status canonical_layout_inner(
             return TURBOWASM_OK;
         }
 
+        case TURBOWASM_COMPONENT_TYPE_FUTURE:
+        case TURBOWASM_COMPONENT_TYPE_STREAM:
+            out->alignment = 4u;
+            out->size = 4u;
+            return TURBOWASM_OK;
+
         case TURBOWASM_COMPONENT_TYPE_RESOURCE:
         case TURBOWASM_COMPONENT_TYPE_FUNCTION:
         case TURBOWASM_COMPONENT_TYPE_INSTANCE:
@@ -414,6 +450,51 @@ turbowasm_status turbowasm_component_canonical_layout(
     turbowasm_component_layout *out) {
     return canonical_layout_inner(
         graph, ref, pointer_type, 0u, out);
+}
+
+turbowasm_status turbowasm_component_canonical_parameter_layout(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_layout *out) {
+    const turbowasm_component_type *function;
+    uint64_t offset = 0u;
+    uint64_t maximum_alignment = 1u;
+    uint32_t i;
+
+    if (graph == NULL || out == NULL || !pointer_type_valid(pointer_type))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    function = turbowasm_component_type_graph_get(
+        graph, function_type);
+    if (function == NULL ||
+        function->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
+        return TURBOWASM_MALFORMED_MODULE;
+
+    for (i = 0u; i < function->as.function.param_count; ++i) {
+        turbowasm_component_layout layout;
+        turbowasm_status status =
+            turbowasm_component_canonical_layout(
+                graph,
+                function->as.function.params[i],
+                pointer_type,
+                &layout);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (!align_up_u64(offset, layout.alignment, &offset))
+            return TURBOWASM_OUT_OF_MEMORY;
+        if (layout.size > UINT64_MAX - offset)
+            return TURBOWASM_OUT_OF_MEMORY;
+        offset += layout.size;
+        if (layout.alignment > maximum_alignment)
+            maximum_alignment = layout.alignment;
+    }
+
+    if (!align_up_u64(offset, maximum_alignment, &offset))
+        return TURBOWASM_OUT_OF_MEMORY;
+    out->alignment = maximum_alignment;
+    out->size = offset;
+    return TURBOWASM_OK;
 }
 
 static bool append_flat_capped(
@@ -474,6 +555,8 @@ static turbowasm_status canonical_flatten_type_inner(
         case TURBOWASM_COMPONENT_TYPE_S32:
         case TURBOWASM_COMPONENT_TYPE_U32:
         case TURBOWASM_COMPONENT_TYPE_CHAR:
+        case TURBOWASM_COMPONENT_TYPE_FUTURE:
+        case TURBOWASM_COMPONENT_TYPE_STREAM:
             out->types[0] = TURBOWASM_COMPONENT_FLAT_I32;
             out->count = 1u;
             return TURBOWASM_OK;
@@ -658,38 +741,19 @@ static turbowasm_status append_flat_type(
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_component_canonical_flatten_function(
+static turbowasm_status flatten_parameters(
     const turbowasm_component_type_graph *graph,
-    turbowasm_component_type_id function_type,
+    const turbowasm_component_type_ref *params, uint32_t param_count,
     turbowasm_component_pointer_type pointer_type,
-    turbowasm_component_canonical_context context,
+    uint32_t max_flat_params,
     turbowasm_component_flat_signature *out) {
-    const turbowasm_component_type *function;
     uint64_t raw_param_count = 0u;
     uint32_t i;
     turbowasm_component_flat_type_list flat;
     turbowasm_status status;
-
-    if (graph == NULL || out == NULL ||
-        !pointer_type_valid(pointer_type) ||
-        (context != TURBOWASM_COMPONENT_CANONICAL_LIFT &&
-         context != TURBOWASM_COMPONENT_CANONICAL_LOWER))
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    function = turbowasm_component_type_graph_get(
-        graph, function_type);
-    if (function == NULL ||
-        function->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION)
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    memset(out, 0, sizeof(*out));
-
-    for (i = 0u; i < function->as.function.param_count; ++i) {
+    for (i = 0u; i < param_count; ++i) {
         status = turbowasm_component_canonical_flatten_type(
-            graph,
-            function->as.function.params[i],
-            pointer_type,
-            &flat);
+            graph, params[i], pointer_type, &flat);
         if (status != TURBOWASM_OK)
             return status;
         raw_param_count += flat.count;
@@ -697,20 +761,14 @@ turbowasm_status turbowasm_component_canonical_flatten_function(
             return TURBOWASM_UNSUPPORTED;
     }
 
-    if (raw_param_count >
-        TURBOWASM_COMPONENT_MAX_FLAT_PARAMS) {
+    if (raw_param_count > max_flat_params) {
         out->params[0] = pointer_flat_type(pointer_type);
         out->param_count = 1u;
         out->params_indirect = true;
     } else {
-        for (i = 0u;
-             i < function->as.function.param_count;
-             ++i) {
+        for (i = 0u; i < param_count; ++i) {
             status = turbowasm_component_canonical_flatten_type(
-                graph,
-                function->as.function.params[i],
-                pointer_type,
-                &flat);
+                graph, params[i], pointer_type, &flat);
             if (status != TURBOWASM_OK)
                 return status;
             status = append_flat_type(
@@ -723,123 +781,99 @@ turbowasm_status turbowasm_component_canonical_flatten_function(
         }
     }
 
-    if (!function->as.function.has_result)
-        return TURBOWASM_OK;
-
-    status = turbowasm_component_canonical_flatten_type(
-        graph,
-        function->as.function.result,
-        pointer_type,
-        &flat);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    if (flat.count <= TURBOWASM_COMPONENT_MAX_FLAT_RESULTS) {
-        out->results[0] = flat.types[0];
-        out->result_count = flat.count;
-        return TURBOWASM_OK;
-    }
-
-    out->results_indirect = true;
-    if (context == TURBOWASM_COMPONENT_CANONICAL_LIFT) {
-        out->results[0] = pointer_flat_type(pointer_type);
-        out->result_count = 1u;
-    } else {
-        if (out->param_count >=
-            TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS)
-            return TURBOWASM_UNSUPPORTED;
-        out->params[out->param_count++] =
-            pointer_flat_type(pointer_type);
-        out->result_count = 0u;
-    }
-
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_component_canonical_flatten_function_abi(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_canonical_context context,
+    turbowasm_component_canonical_abi abi,
+    turbowasm_component_flat_signature *out) {
+    const turbowasm_component_type *function;
+    turbowasm_component_flat_signature signature = {0};
+    turbowasm_component_flat_type_list result = {0};
+    turbowasm_status status;
+    uint32_t max_params;
+    if (graph == NULL || out == NULL || !pointer_type_valid(pointer_type) ||
+        (context != TURBOWASM_COMPONENT_CANONICAL_LIFT && context != TURBOWASM_COMPONENT_CANONICAL_LOWER) ||
+        (abi != TURBOWASM_COMPONENT_ABI_SYNC && abi != TURBOWASM_COMPONENT_ABI_ASYNC &&
+         abi != TURBOWASM_COMPONENT_ABI_ASYNC_CALLBACK) ||
+        (abi == TURBOWASM_COMPONENT_ABI_ASYNC_CALLBACK && context != TURBOWASM_COMPONENT_CANONICAL_LIFT))
+        return TURBOWASM_INVALID_ARGUMENT;
+    function = turbowasm_component_type_graph_get(graph, function_type);
+    if (function == NULL || function->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
+        (function->as.function.param_count != 0u && function->as.function.params == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+    max_params = abi != TURBOWASM_COMPONENT_ABI_SYNC && context == TURBOWASM_COMPONENT_CANONICAL_LOWER
+        ? TURBOWASM_COMPONENT_MAX_FLAT_ASYNC_PARAMS : TURBOWASM_COMPONENT_MAX_FLAT_PARAMS;
+    status = flatten_parameters(graph, function->as.function.params, function->as.function.param_count,
+        pointer_type, max_params, &signature);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (function->as.function.has_result) {
+        status = turbowasm_component_canonical_flatten_type(graph, function->as.function.result, pointer_type, &result);
+        if (status != TURBOWASM_OK) return status;
+    }
+    if (abi != TURBOWASM_COMPONENT_ABI_SYNC) {
+        if (context == TURBOWASM_COMPONENT_CANONICAL_LOWER) {
+            if (result.count != 0u) {
+                signature.params[signature.param_count++] = pointer_flat_type(pointer_type);
+                signature.results_indirect = true;
+            }
+            signature.results[0] = TURBOWASM_COMPONENT_FLAT_I32;
+            signature.result_count = 1u;
+        } else if (abi == TURBOWASM_COMPONENT_ABI_ASYNC_CALLBACK) {
+            signature.results[0] = TURBOWASM_COMPONENT_FLAT_I32;
+            signature.result_count = 1u;
+        }
+    } else if (result.count <= TURBOWASM_COMPONENT_MAX_FLAT_RESULTS) {
+        signature.results[0] = result.types[0];
+        signature.result_count = result.count;
+    } else {
+        signature.results_indirect = true;
+        if (context == TURBOWASM_COMPONENT_CANONICAL_LIFT) {
+            signature.results[0] = pointer_flat_type(pointer_type);
+            signature.result_count = 1u;
+        } else {
+            if (signature.param_count >= TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS)
+                return TURBOWASM_UNSUPPORTED;
+            signature.params[signature.param_count++] = pointer_flat_type(pointer_type);
+        }
+    }
+    *out = signature;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_canonical_flatten_function(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_canonical_context context,
+    turbowasm_component_flat_signature *out) {
+    return turbowasm_component_canonical_flatten_function_abi(graph, function_type, pointer_type,
+        context, TURBOWASM_COMPONENT_ABI_SYNC, out);
+}
+
+turbowasm_status turbowasm_component_canonical_flatten_task_return(
+    const turbowasm_component_type_graph *graph, bool has_result,
+    turbowasm_component_type_ref result, turbowasm_component_pointer_type pointer_type,
+    turbowasm_component_flat_signature *out) {
+    turbowasm_component_flat_signature signature = {0};
+    turbowasm_status status;
+    if (graph == NULL || out == NULL || !pointer_type_valid(pointer_type))
+        return TURBOWASM_INVALID_ARGUMENT;
+    status = flatten_parameters(graph, &result, has_result ? 1u : 0u,
+        pointer_type, TURBOWASM_COMPONENT_MAX_FLAT_PARAMS, &signature);
+    if (status == TURBOWASM_OK) *out = signature;
+    return status;
+}
 
 static bool unicode_scalar_valid(uint32_t value) {
     return value <= UINT32_C(0x10ffff) &&
            !(value >= UINT32_C(0xd800) &&
              value <= UINT32_C(0xdfff));
-}
-
-static bool utf8_bytes_valid(const uint8_t *bytes, size_t size) {
-    size_t i = 0u;
-
-    if (size != 0u && bytes == NULL)
-        return false;
-
-    while (i < size) {
-        uint8_t a = bytes[i++];
-
-        if (a < UINT8_C(0x80))
-            continue;
-        if (a >= UINT8_C(0xc2) && a <= UINT8_C(0xdf)) {
-            if (i >= size ||
-                (bytes[i] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            ++i;
-            continue;
-        }
-        if (a == UINT8_C(0xe0)) {
-            if (i + 1u >= size ||
-                bytes[i] < UINT8_C(0xa0) ||
-                bytes[i] > UINT8_C(0xbf) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 2u;
-            continue;
-        }
-        if ((a >= UINT8_C(0xe1) && a <= UINT8_C(0xec)) ||
-            (a >= UINT8_C(0xee) && a <= UINT8_C(0xef))) {
-            if (i + 1u >= size ||
-                (bytes[i] & UINT8_C(0xc0)) != UINT8_C(0x80) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 2u;
-            continue;
-        }
-        if (a == UINT8_C(0xed)) {
-            if (i + 1u >= size ||
-                bytes[i] < UINT8_C(0x80) ||
-                bytes[i] > UINT8_C(0x9f) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 2u;
-            continue;
-        }
-        if (a == UINT8_C(0xf0)) {
-            if (i + 2u >= size ||
-                bytes[i] < UINT8_C(0x90) ||
-                bytes[i] > UINT8_C(0xbf) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80) ||
-                (bytes[i + 2u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 3u;
-            continue;
-        }
-        if (a >= UINT8_C(0xf1) && a <= UINT8_C(0xf3)) {
-            if (i + 2u >= size ||
-                (bytes[i] & UINT8_C(0xc0)) != UINT8_C(0x80) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80) ||
-                (bytes[i + 2u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 3u;
-            continue;
-        }
-        if (a == UINT8_C(0xf4)) {
-            if (i + 2u >= size ||
-                bytes[i] < UINT8_C(0x80) ||
-                bytes[i] > UINT8_C(0x8f) ||
-                (bytes[i + 1u] & UINT8_C(0xc0)) != UINT8_C(0x80) ||
-                (bytes[i + 2u] & UINT8_C(0xc0)) != UINT8_C(0x80))
-                return false;
-            i += 3u;
-            continue;
-        }
-        return false;
-    }
-    return true;
 }
 
 static uint64_t read_le(const uint8_t *bytes, size_t width) {
@@ -865,7 +899,7 @@ static turbowasm_status canonical_memory_validate(
     if (memory == NULL || memory->instance == NULL ||
         memory->instance->impl == NULL || out_instance == NULL ||
         !pointer_type_valid(memory->pointer_type) ||
-        memory->string_encoding != TURBOWASM_COMPONENT_STRING_UTF8)
+        !turbowasm_component_string_encoding_valid(memory->string_encoding))
         return TURBOWASM_INVALID_ARGUMENT;
 
     module = turbowasm_instance_module(memory->instance);
@@ -880,6 +914,31 @@ static turbowasm_status canonical_memory_validate(
 
     *out_instance = (turbowasm_instance_impl *)memory->instance->impl;
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_canonical_validate_range(
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref type,
+    const turbowasm_component_canonical_memory *memory,
+    uint64_t address, uint32_t count, uint64_t *out_stride) {
+    turbowasm_component_layout layout;
+    turbowasm_instance_impl *instance;
+    turbowasm_status status;
+    uint64_t size;
+    uint8_t *range = NULL;
+    if (count == 0u || out_stride == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    status = canonical_memory_validate(memory, &instance);
+    if (status != TURBOWASM_OK) return status;
+    status = turbowasm_component_canonical_layout(graph, type, memory->pointer_type, &layout);
+    if (status != TURBOWASM_OK) return status;
+    if (layout.alignment == 0u || address % layout.alignment != 0u ||
+        layout.size > UINT64_MAX / count ||
+        (memory->pointer_type == TURBOWASM_COMPONENT_POINTER_I32 && address > UINT32_MAX))
+        return TURBOWASM_TRAPPED;
+    size = layout.size * count;
+    if (size > SIZE_MAX || address > UINT64_MAX - size) return TURBOWASM_TRAPPED;
+    status = turbowasm_instance_memory_bounds(instance, memory->memory_index, address, 0u, (size_t)size, &range);
+    if (status == TURBOWASM_OK) *out_stride = layout.size;
+    return status;
 }
 
 static turbowasm_status read_memory(
@@ -1145,63 +1204,58 @@ static turbowasm_status lower_value_inner(
     uint32_t depth,
     const turbowasm_component_value *value);
 
-static void destroy_value_sequence(
+static turbowasm_status destroy_value_sequence(
     turbowasm_component_value_list *sequence) {
     uint64_t i;
-
-    if (sequence == NULL)
-        return;
-    for (i = 0u; i < sequence->count; ++i)
-        turbowasm_component_value_destroy(&sequence->items[i]);
+    turbowasm_status first = TURBOWASM_OK;
+    for (i = 0u; i < sequence->count; ++i) {
+        turbowasm_status status = turbowasm_component_value_destroy(&sequence->items[i]);
+        if (first == TURBOWASM_OK)
+            first = status;
+    }
     turbowasm_rt_free(sequence->items);
-    sequence->items = NULL;
-    sequence->count = 0u;
+    return first;
 }
 
-void turbowasm_component_value_destroy(
+turbowasm_status turbowasm_component_value_destroy(
     turbowasm_component_value *value) {
+    turbowasm_component_value owned;
+    turbowasm_component_value *payload = NULL;
+    turbowasm_status status = TURBOWASM_OK;
     if (value == NULL)
-        return;
-
-    switch (value->kind) {
-        case TURBOWASM_COMPONENT_TYPE_STRING:
-            turbowasm_rt_free(value->as.string.data);
-            break;
-        case TURBOWASM_COMPONENT_TYPE_LIST:
-            destroy_value_sequence(&value->as.list);
-            break;
-        case TURBOWASM_COMPONENT_TYPE_RECORD:
-            destroy_value_sequence(&value->as.record);
-            break;
-        case TURBOWASM_COMPONENT_TYPE_TUPLE:
-            destroy_value_sequence(&value->as.tuple);
-            break;
-        case TURBOWASM_COMPONENT_TYPE_VARIANT:
-            if (value->as.variant.payload != NULL) {
-                turbowasm_component_value_destroy(
-                    value->as.variant.payload);
-                turbowasm_rt_free(value->as.variant.payload);
-            }
-            break;
-        case TURBOWASM_COMPONENT_TYPE_OPTION:
-            if (value->as.option.payload != NULL) {
-                turbowasm_component_value_destroy(
-                    value->as.option.payload);
-                turbowasm_rt_free(value->as.option.payload);
-            }
-            break;
-        case TURBOWASM_COMPONENT_TYPE_RESULT:
-            if (value->as.result.payload != NULL) {
-                turbowasm_component_value_destroy(
-                    value->as.result.payload);
-                turbowasm_rt_free(value->as.result.payload);
-            }
-            break;
-        default:
-            break;
-    }
-
+        return TURBOWASM_OK;
+    owned = *value;
+    /* Invalidate before a resource destructor can re-enter the host boundary. */
     memset(value, 0, sizeof(*value));
+    switch (owned.kind) {
+        case TURBOWASM_COMPONENT_TYPE_STRING:
+            turbowasm_rt_free(owned.as.string.data); break;
+        case TURBOWASM_COMPONENT_TYPE_LIST:
+            return destroy_value_sequence(&owned.as.list);
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+            return destroy_value_sequence(&owned.as.record);
+        case TURBOWASM_COMPONENT_TYPE_TUPLE:
+            return destroy_value_sequence(&owned.as.tuple);
+        case TURBOWASM_COMPONENT_TYPE_VARIANT:
+            payload = owned.as.variant.payload; break;
+        case TURBOWASM_COMPONENT_TYPE_OPTION:
+            payload = owned.as.option.payload; break;
+        case TURBOWASM_COMPONENT_TYPE_RESULT:
+            payload = owned.as.result.payload; break;
+        case TURBOWASM_COMPONENT_TYPE_OWN:
+        case TURBOWASM_COMPONENT_TYPE_BORROW:
+        case TURBOWASM_COMPONENT_TYPE_FUTURE:
+        case TURBOWASM_COMPONENT_TYPE_STREAM:
+            if (owned.release != NULL)
+                return owned.release(owned.release_context);
+            break;
+        default: break;
+    }
+    if (payload != NULL) {
+        status = turbowasm_component_value_destroy(payload);
+        turbowasm_rt_free(payload);
+    }
+    return status;
 }
 
 static turbowasm_status lift_scalar(
@@ -1369,43 +1423,15 @@ static turbowasm_status lift_string_range(
     uint64_t pointer,
     uint64_t length,
     turbowasm_component_value *out) {
+    turbowasm_component_owned_string string = {0};
     turbowasm_status status;
-    uint8_t *copy = NULL;
-
-    if (length > TURBOWASM_COMPONENT_MAX_STRING_BYTE_LENGTH ||
-        length > (uint64_t)SIZE_MAX)
-        return TURBOWASM_TRAPPED;
-
-    {
-        uint8_t *range = NULL;
-        status = turbowasm_instance_memory_bounds(
-            instance, memory->memory_index,
-            pointer, 0u, (size_t)length, &range);
-        if (status != TURBOWASM_OK)
-            return status;
-    }
-
-    if (length != 0u) {
-        copy = (uint8_t *)turbowasm_rt_malloc((size_t)length);
-        if (copy == NULL)
-            return TURBOWASM_OUT_OF_MEMORY;
-        status = read_memory(
-            instance, memory->memory_index,
-            pointer, copy, (size_t)length);
-        if (status != TURBOWASM_OK) {
-            turbowasm_rt_free(copy);
-            return status;
-        }
-        if (!utf8_bytes_valid(copy, (size_t)length)) {
-            turbowasm_rt_free(copy);
-            return TURBOWASM_TRAPPED;
-        }
-    }
-
+    (void)instance;
+    status = turbowasm_component_string_lift(memory, pointer, length, &string);
+    if (status != TURBOWASM_OK)
+        return status;
     memset(out, 0, sizeof(*out));
     out->kind = TURBOWASM_COMPONENT_TYPE_STRING;
-    out->as.string.data = copy;
-    out->as.string.size = (size_t)length;
+    out->as.string = string;
     return TURBOWASM_OK;
 }
 
@@ -1439,34 +1465,10 @@ static turbowasm_status lower_string_range(
     const turbowasm_component_value *value,
     uint64_t *out_pointer,
     uint64_t *out_length) {
-    uint64_t pointer = 0u;
-    turbowasm_status status;
-
-    if (value == NULL || out_pointer == NULL || out_length == NULL ||
-        value->kind != TURBOWASM_COMPONENT_TYPE_STRING)
+    (void)instance;
+    if (value == NULL || value->kind != TURBOWASM_COMPONENT_TYPE_STRING)
         return TURBOWASM_TYPE_MISMATCH;
-    if (value->as.string.size >
-            TURBOWASM_COMPONENT_MAX_STRING_BYTE_LENGTH ||
-        !utf8_bytes_valid(
-            value->as.string.data, value->as.string.size))
-        return TURBOWASM_INVALID_ARGUMENT;
-
-    status = guest_allocate(
-        memory, 1u, (uint64_t)value->as.string.size, &pointer);
-    if (status != TURBOWASM_OK)
-        return status;
-
-    if (value->as.string.size != 0u) {
-        status = write_memory(
-            instance, memory->memory_index, pointer,
-            value->as.string.data, value->as.string.size);
-        if (status != TURBOWASM_OK)
-            return status;
-    }
-
-    *out_pointer = pointer;
-    *out_length = (uint64_t)value->as.string.size;
-    return TURBOWASM_OK;
+    return turbowasm_component_string_lower(memory, &value->as.string, out_pointer, out_length);
 }
 
 static turbowasm_status lower_string(
@@ -2074,22 +2076,17 @@ static turbowasm_status lift_value_inner(
             type, kind, instance, memory->memory_index,
             address, out);
 
-    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
-        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+    if (handle_value_kind(kind)) {
         uint8_t bytes[4] = {0};
         uint32_t handle;
 
-        if (memory->resource_lift == NULL)
-            return TURBOWASM_UNSUPPORTED;
         status = read_memory(
             instance, memory->memory_index,
             address, bytes, sizeof(bytes));
         if (status != TURBOWASM_OK)
             return status;
         handle = (uint32_t)read_le(bytes, sizeof(bytes));
-        return memory->resource_lift(
-            memory->resource_context,
-            graph, ref, handle, out);
+        return lift_handle(memory, kind, graph, ref, handle, out);
     }
 
     return TURBOWASM_UNSUPPORTED;
@@ -2145,16 +2142,11 @@ static turbowasm_status lower_value_inner(
             type, kind, instance, memory->memory_index,
             address, value);
 
-    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
-        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+    if (handle_value_kind(kind)) {
         uint8_t bytes[4] = {0};
         uint32_t handle;
 
-        if (memory->resource_lower == NULL)
-            return TURBOWASM_UNSUPPORTED;
-        status = memory->resource_lower(
-            memory->resource_context,
-            graph, ref, value, &handle);
+        status = lower_handle(memory, kind, graph, ref, value, &handle);
         if (status != TURBOWASM_OK)
             return status;
         write_le(bytes, sizeof(bytes), handle);
@@ -3026,16 +3018,11 @@ static turbowasm_status lower_flat_value_inner(
         return status;
     }
 
-    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
-        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+    if (handle_value_kind(kind)) {
         uint32_t handle;
         if (out_capacity < 1u)
             return TURBOWASM_INVALID_ARGUMENT;
-        if (memory == NULL || memory->resource_lower == NULL)
-            return TURBOWASM_UNSUPPORTED;
-        status = memory->resource_lower(
-            memory->resource_context,
-            graph, ref, value, &handle);
+        status = lower_handle(memory, kind, graph, ref, value, &handle);
         if (status != TURBOWASM_OK)
             return status;
         out[0].kind = TURBOWASM_VALUE_I32;
@@ -3101,18 +3088,11 @@ static turbowasm_status lift_flat_value_inner(
             type, kind, &values[0], out);
     }
 
-    if (kind == TURBOWASM_COMPONENT_TYPE_OWN ||
-        kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
+    if (handle_value_kind(kind)) {
         if (value_count != 1u ||
             values[0].kind != TURBOWASM_VALUE_I32)
             return TURBOWASM_TYPE_MISMATCH;
-        if (memory == NULL || memory->resource_lift == NULL)
-            return TURBOWASM_UNSUPPORTED;
-        return memory->resource_lift(
-            memory->resource_context,
-            graph, ref,
-            (uint32_t)values[0].as.i32,
-            out);
+        return lift_handle(memory, kind, graph, ref, (uint32_t)values[0].as.i32, out);
     }
 
     return TURBOWASM_UNSUPPORTED;
@@ -3270,4 +3250,158 @@ turbowasm_status turbowasm_component_canonical_lower_value(
     return lower_value_inner(
         graph, type, memory, instance,
         address, 0u, value);
+}
+
+static turbowasm_status transfer_parameter_tuple(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_canonical_memory *memory,
+    uint64_t address, const turbowasm_component_value *inputs,
+    turbowasm_component_value *outputs) {
+    const turbowasm_component_type *function;
+    turbowasm_component_layout tuple;
+    turbowasm_instance_impl *instance;
+    turbowasm_status status;
+    uint8_t *range = NULL;
+    uint64_t offset = 0u;
+    uint32_t i;
+    if (graph == NULL || (inputs == NULL) == (outputs == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+    status = canonical_memory_validate(memory, &instance);
+    if (status != TURBOWASM_OK) return status;
+    status = turbowasm_component_canonical_parameter_layout(
+        graph, function_type, memory->pointer_type, &tuple);
+    if (status != TURBOWASM_OK) return status;
+    if (tuple.alignment == 0u || address % tuple.alignment != 0u ||
+        tuple.size > (uint64_t)SIZE_MAX ||
+        (memory->pointer_type == TURBOWASM_COMPONENT_POINTER_I32 && address > UINT32_MAX))
+        return TURBOWASM_TRAPPED;
+    status = turbowasm_instance_memory_bounds(instance, memory->memory_index,
+        address, 0u, (size_t)tuple.size, &range);
+    if (status != TURBOWASM_OK) return status;
+    function = turbowasm_component_type_graph_get(graph, function_type);
+    for (i = 0u; i < function->as.function.param_count; ++i) {
+        turbowasm_component_layout field;
+        status = turbowasm_component_canonical_layout(graph,
+            function->as.function.params[i], memory->pointer_type, &field);
+        if (status != TURBOWASM_OK) return status;
+        if (!align_up_u64(offset, field.alignment, &offset))
+            return TURBOWASM_OUT_OF_MEMORY;
+        status = inputs != NULL
+            ? turbowasm_component_canonical_lower_value(graph, function->as.function.params[i],
+                memory, address + offset, &inputs[i])
+            : turbowasm_component_canonical_lift_value(graph, function->as.function.params[i],
+                memory, address + offset, &outputs[i]);
+        if (status != TURBOWASM_OK) return status;
+        offset += field.size;
+    }
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_canonical_lift_parameters(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_canonical_memory *memory,
+    uint64_t address, turbowasm_component_value *out) {
+    return transfer_parameter_tuple(graph, function_type, memory, address, NULL, out);
+}
+
+turbowasm_status turbowasm_component_canonical_lower_parameters(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id function_type,
+    const turbowasm_component_canonical_memory *memory,
+    uint64_t address, const turbowasm_component_value *values) {
+    return transfer_parameter_tuple(graph, function_type, memory, address, values, NULL);
+}
+
+static turbowasm_status validate_host_value(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref ref,
+    const turbowasm_component_value *value, uint32_t depth) {
+    const turbowasm_component_type *type;
+    turbowasm_component_type_kind kind;
+    const turbowasm_component_value_list *sequence = NULL;
+    const turbowasm_component_value_variant *variant = NULL;
+    turbowasm_status status;
+    uint64_t i, count = 0u;
+    if (value == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (depth >= TURBOWASM_COMPONENT_CANONICAL_MAX_DEPTH)
+        return TURBOWASM_TRAPPED;
+    status = resolved_kind(graph, ref, &kind, &type);
+    if (status != TURBOWASM_OK)
+        return status;
+    if (kind != value->kind)
+        return TURBOWASM_TYPE_MISMATCH;
+    if (kind >= TURBOWASM_COMPONENT_TYPE_BOOL && kind <= TURBOWASM_COMPONENT_TYPE_CHAR) {
+        turbowasm_value ignored;
+        return lower_flat_scalar(kind, value, &ignored);
+    }
+    switch (kind) {
+        case TURBOWASM_COMPONENT_TYPE_STRING:
+            return turbowasm_component_string_validate(&value->as.string);
+        case TURBOWASM_COMPONENT_TYPE_FUTURE:
+        case TURBOWASM_COMPONENT_TYPE_STREAM:
+            return value->as.endpoint.owner != NULL && value->as.endpoint.owner->endpoint != NULL && value->release != NULL &&
+                turbowasm_component_value_type_equal(graph, ref,
+                    value->as.endpoint.graph, value->as.endpoint.type)
+                ? TURBOWASM_OK : TURBOWASM_TYPE_MISMATCH;
+        case TURBOWASM_COMPONENT_TYPE_LIST:
+            sequence = &value->as.list;
+            count = sequence->count;
+            break;
+        case TURBOWASM_COMPONENT_TYPE_RECORD:
+            sequence = &value->as.record; count = type->as.record.count; break;
+        case TURBOWASM_COMPONENT_TYPE_TUPLE:
+            sequence = &value->as.tuple; count = type->as.tuple.count; break;
+        case TURBOWASM_COMPONENT_TYPE_VARIANT: variant = &value->as.variant; break;
+        case TURBOWASM_COMPONENT_TYPE_OPTION: variant = &value->as.option; break;
+        case TURBOWASM_COMPONENT_TYPE_RESULT: variant = &value->as.result; break;
+        case TURBOWASM_COMPONENT_TYPE_ENUM:
+            return value->as.enum_index < type->as.enumeration.count
+                ? TURBOWASM_OK : TURBOWASM_INVALID_ARGUMENT;
+        case TURBOWASM_COMPONENT_TYPE_FLAGS:
+            return (value->as.flags & ~flags_valid_mask(type->as.flags.count)) == 0u
+                ? TURBOWASM_OK : TURBOWASM_INVALID_ARGUMENT;
+        case TURBOWASM_COMPONENT_TYPE_OWN:
+        case TURBOWASM_COMPONENT_TYPE_BORROW: {
+            const turbowasm_component_type *resource = turbowasm_component_resource_definition(
+                graph, type->as.handle.resource_type);
+            if (resource == NULL || (value->resource_instance_key != NULL
+                ? resource->as.resource.instance_key != value->resource_instance_key
+                : value->resource_identity != 0u && resource->as.resource.identity != value->resource_identity))
+                return TURBOWASM_TYPE_MISMATCH;
+            return TURBOWASM_OK;
+        }
+        default: return TURBOWASM_UNSUPPORTED;
+    }
+    if (sequence != NULL) {
+        if (count != sequence->count || (count != 0u && sequence->items == NULL))
+            return TURBOWASM_TYPE_MISMATCH;
+        for (i = 0u; i < count; ++i) {
+            turbowasm_component_type_ref child = kind == TURBOWASM_COMPONENT_TYPE_LIST
+                ? type->as.list.element_type : composite_sequence_ref(type, kind, (uint32_t)i);
+            status = validate_host_value(graph, child, &sequence->items[i], depth + 1u);
+            if (status != TURBOWASM_OK)
+                return status;
+        }
+    } else if (variant != NULL) {
+        bool has_payload;
+        turbowasm_component_type_ref payload = {0};
+        status = variant_case_ref(type, kind, variant->case_index, &has_payload, &payload);
+        if (status != TURBOWASM_OK)
+            return status;
+        if (has_payload != (variant->payload != NULL))
+            return TURBOWASM_TYPE_MISMATCH;
+        if (has_payload)
+            return validate_host_value(graph, payload, variant->payload, depth + 1u);
+    }
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_canonical_validate_value(
+    const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref type,
+    const turbowasm_component_value *value) {
+    return validate_host_value(graph, type, value, 0u);
 }

@@ -21,7 +21,10 @@ typedef enum turbowasm_value_kind {
     TURBOWASM_VALUE_V128 = 0x7b,
     TURBOWASM_VALUE_FUNCREF = 0x70,
     TURBOWASM_VALUE_EXTERNREF = 0x6f,
-    TURBOWASM_VALUE_EXNREF = 0x69
+    TURBOWASM_VALUE_GCREF = 0x6e,
+    TURBOWASM_VALUE_EXNREF = 0x69,
+    /* extern.convert_any preserves a managed identity in the gcref member. */
+    TURBOWASM_VALUE_MANAGED_EXTERNREF = 0x100
 } turbowasm_value_kind;
 
 /* Wasm binary typing stops at v128.  The validated TurboWasm IR may refine the
@@ -46,7 +49,7 @@ typedef enum turbowasm_v128_shape {
 } turbowasm_v128_shape;
 
 typedef struct turbowasm_v128 {
-    salts_v128 bits;
+    cmeta_v128 bits;
     turbowasm_v128_shape shape;
 } turbowasm_v128;
 
@@ -85,6 +88,14 @@ typedef struct turbowasm_exnref {
     const void *exception;
 } turbowasm_exnref;
 
+/* Opaque store-local generation checked identity. Zero handle denotes null.
+ * Runtime values are borrowed until the next collection; use a root to retain.
+ * The bit representation is private and must not be manufactured by callers. */
+typedef struct turbowasm_gcref {
+    const void *store;
+    uint64_t handle;
+} turbowasm_gcref;
+
 typedef struct turbowasm_value {
     turbowasm_value_kind kind;
     union {
@@ -96,6 +107,7 @@ typedef struct turbowasm_value {
         turbowasm_funcref funcref;
         turbowasm_externref externref;
         turbowasm_exnref exnref;
+        turbowasm_gcref gcref;
     } as;
 } turbowasm_value;
 

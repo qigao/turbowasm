@@ -13,6 +13,8 @@
 
 typedef struct turbowasm_wasi02_poll {
     turbowasm_wasi02_poll_provider provider;
+    void (*wait_done)(void *context, uintptr_t operation_token);
+    void *wait_done_context;
     turbowasm_component_resource_table resources;
     uint64_t pollable_identity;
     bool pollable_identity_bound;
@@ -35,6 +37,11 @@ turbowasm_status turbowasm_wasi02_pollable_new(
 turbowasm_status turbowasm_wasi02_pollable_drop(
     turbowasm_wasi02_poll *poll,
     uint32_t resource);
+
+/* Canonical destruction consumes the logical handle even if its provider fails.
+ * The direct drop operation above keeps its existing retryable contract. */
+turbowasm_status turbowasm_wasi02_pollable_release(
+    turbowasm_wasi02_poll *poll, uint32_t resource);
 
 turbowasm_status turbowasm_wasi02_pollable_ready(
     turbowasm_wasi02_poll *poll,

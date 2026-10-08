@@ -86,7 +86,7 @@ static bool turbowasm_utf8_valid(const uint8_t *bytes, size_t size) {
     return true;
 }
 
-static turbowasm_status turbowasm_read_name(
+turbowasm_status turbowasm_read_name(
     turbowasm_reader *reader,
     turbowasm_name *out) {
     uint32_t size;
@@ -111,22 +111,32 @@ static turbowasm_status turbowasm_read_limits(
     uint32_t maximum_bound,
     turbowasm_validation_limits *out) {
     uint8_t flags;
-    uint32_t minimum;
-    uint32_t maximum = 0u;
+    uint64_t minimum;
+    uint64_t maximum = 0u;
 
     if (!turbowasm_reader_u8(reader, &flags))
         return TURBOWASM_MALFORMED_MODULE;
-    if (flags != 0x00u && flags != 0x01u)
-        return TURBOWASM_UNSUPPORTED;
-
-    if (!turbowasm_reader_uleb32(reader, &minimum))
+    if ((flags & ~0x05u) != 0u)
         return TURBOWASM_MALFORMED_MODULE;
+
+    if ((flags & 0x04u) != 0u) {
+        if (!turbowasm_reader_uleb64(reader,&minimum)) return TURBOWASM_MALFORMED_MODULE;
+    } else {
+        uint32_t value;
+        if (!turbowasm_reader_uleb32(reader,&value)) return TURBOWASM_MALFORMED_MODULE;
+        minimum=value;
+    }
     if (maximum_bound != UINT32_MAX && minimum > maximum_bound)
         return TURBOWASM_MALFORMED_MODULE;
 
-    if (flags == 0x01u) {
-        if (!turbowasm_reader_uleb32(reader, &maximum))
-            return TURBOWASM_MALFORMED_MODULE;
+    if ((flags & 0x01u) != 0u) {
+        if ((flags & 0x04u) != 0u) {
+            if (!turbowasm_reader_uleb64(reader,&maximum)) return TURBOWASM_MALFORMED_MODULE;
+        } else {
+            uint32_t value;
+            if (!turbowasm_reader_uleb32(reader,&value)) return TURBOWASM_MALFORMED_MODULE;
+            maximum=value;
+        }
         if (maximum < minimum)
             return TURBOWASM_MALFORMED_MODULE;
         if (maximum_bound != UINT32_MAX && maximum > maximum_bound)
@@ -136,7 +146,8 @@ static turbowasm_status turbowasm_read_limits(
     if (out != NULL) {
         out->minimum = minimum;
         out->maximum = maximum;
-        out->has_maximum = flags == 0x01u;
+        out->has_maximum = (flags & 0x01u) != 0u;
+        out->table64 = (flags & 0x04u) != 0u;
     }
     return TURBOWASM_OK;
 }
@@ -151,7 +162,7 @@ static turbowasm_status turbowasm_read_table_type(
     turbowasm_status status;
 
     status = turbowasm_validation_read_reftype(
-        reader, &reference_type, &generalized);
+        reader, context, &reference_type, &generalized);
     if (status != TURBOWASM_OK)
         return status;
 
@@ -188,14 +199,12 @@ static turbowasm_status turbowasm_read_memory_type(
     if (!turbowasm_reader_u8(reader, &flags))
         return TURBOWASM_MALFORMED_MODULE;
     if ((flags & (uint8_t)~0x0fu) != 0u)
-        return TURBOWASM_UNSUPPORTED;
+        return TURBOWASM_MALFORMED_MODULE;
 
     has_maximum = (flags & 0x01u) != 0u;
     shared = (flags & 0x02u) != 0u;
     memory64 = (flags & 0x04u) != 0u;
 
-    if (shared && memory64)
-        return TURBOWASM_UNSUPPORTED;
     if (shared && !has_maximum)
         return TURBOWASM_MALFORMED_MODULE;
 
@@ -278,7 +287,8 @@ static turbowasm_status turbowasm_read_tag_type(
         return TURBOWASM_MALFORMED_MODULE;
 
     type = turbowasm_validation_context_type(context, type_index);
-    if (type == NULL || !type->defined || type->result_count != 0u)
+    if (type == NULL || !type->defined || type->kind != TURBOWASM_TYPE_FUNCTION ||
+        type->result_count != 0u)
         return TURBOWASM_MALFORMED_MODULE;
 
     if (out_type_index != NULL)
@@ -327,7 +337,8 @@ turbowasm_status turbowasm_validate_import_section(
             case 0x00u:
                 if (!turbowasm_reader_uleb32(section, &type_index))
                     return TURBOWASM_MALFORMED_MODULE;
-                if (type_index >= summary->type_count)
+                if (type_index >= summary->type_count ||
+                    context->types[type_index].kind != TURBOWASM_TYPE_FUNCTION)
                     return TURBOWASM_MALFORMED_MODULE;
                 import_desc.item_index =
                     summary->imported_function_count;
@@ -397,7 +408,7 @@ turbowasm_status turbowasm_validate_import_section(
                 break;
             }
             default:
-                return TURBOWASM_UNSUPPORTED;
+                return TURBOWASM_MALFORMED_MODULE;
         }
 
         if (!turbowasm_validation_context_append_import(
@@ -625,7 +636,7 @@ turbowasm_status turbowasm_validate_export_section(
             !turbowasm_reader_uleb32(section, &item_index))
             return TURBOWASM_MALFORMED_MODULE;
         if (kind > 0x04u)
-            return TURBOWASM_UNSUPPORTED;
+            return TURBOWASM_MALFORMED_MODULE;
         if (!turbowasm_export_index_valid(
                 kind, item_index, summary))
             return TURBOWASM_MALFORMED_MODULE;

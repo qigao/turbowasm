@@ -21,6 +21,7 @@ static void compare_float_function(
     turbowasm_instance *instance,
     uint32_t function_index,
     const turbowasm_value *argument,
+    size_t argument_count,
     turbowasm_value_kind expected_kind) {
     const turbowasm_module_impl *impl =
         turbowasm_module_impl_get(module);
@@ -52,7 +53,7 @@ static void compare_float_function(
 
     assert(turbowasm_instance_invoke(
                instance, function_index,
-               argument, 1u,
+               argument, argument_count,
                &interpreted, 1u,
                &interpreted_count,
                &interpreted_trap) == TURBOWASM_OK);
@@ -71,7 +72,7 @@ static void compare_float_function(
     assert(backend->invoke(
                &compiled,
                &jit_context,
-               argument, 1u,
+               argument, argument_count,
                &generated, 1u,
                &generated_count,
                &generated_trap) == TURBOWASM_OK);
@@ -92,7 +93,7 @@ static void compare_float_function(
     assert(backend->invoke(
                &compiled,
                &jit_context,
-               argument, 1u,
+               argument, argument_count,
                &generated, 1u,
                &generated_count,
                &generated_trap) ==
@@ -143,7 +144,7 @@ int main(void) {
         0xa0,
         0x0b,
 
-        /* f2: valid Wasm but two float params exceed #78 ABI boundary */
+        /* f2: two float parameters use the array argument boundary. */
         0x04,
         0x00,
         0x20, 0x00,
@@ -173,28 +174,18 @@ int main(void) {
 
     compare_float_function(
         &backend, &module, &instance,
-        0u, &f32_arg, TURBOWASM_VALUE_F32);
+        0u, &f32_arg, 1u, TURBOWASM_VALUE_F32);
     compare_float_function(
         &backend, &module, &instance,
-        1u, &f64_arg, TURBOWASM_VALUE_F64);
+        1u, &f64_arg, 1u, TURBOWASM_VALUE_F64);
 
     impl = turbowasm_module_impl_get(&module);
     assert(impl != NULL);
-    unsupported = turbowasm_validation_context_function(
-        &impl->validation, 2u);
-    assert(unsupported != NULL);
-    assert(!backend.is_function_eligible(
-        backend.context,
-        &impl->validation,
-        2u,
-        unsupported));
-    assert(backend.compile_function(
-               backend.context,
-               &impl->validation,
-               2u,
-               unsupported,
-               &compiled) == TURBOWASM_UNSUPPORTED);
-    assert(compiled.impl == NULL);
+    {
+        turbowasm_value args[2] = {f32_arg, f32_arg};
+        compare_float_function(&backend, &module, &instance,
+            2u, args, 2u, TURBOWASM_VALUE_F32);
+    }
 
     /* Native floating bridge rejects a mismatched argument kind. */
     unsupported = turbowasm_validation_context_function(
