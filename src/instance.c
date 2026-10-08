@@ -4770,6 +4770,20 @@ typedef struct turbowasm_host_call_impl {
     uint32_t depth;
 } turbowasm_host_call_impl;
 
+turbowasm_status turbowasm_instance_invoke_host_entry(turbowasm_instance_impl *instance,
+    turbowasm_jit_execution_control *control, turbowasm_host_entry_fn entry,
+    void *context, turbowasm_trap *trap) {
+    turbowasm_host_call_impl impl = {0};
+    turbowasm_host_call call = {0};
+    turbowasm_status status;
+    if (instance == NULL || control == NULL || entry == NULL || trap == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    impl.caller.impl = instance; impl.execution = control;
+    call.impl = &impl;
+    status = entry(context, &call, trap);
+    return status == TURBOWASM_YIELDED ? TURBOWASM_INVALID_ARGUMENT : status;
+}
+
 turbowasm_jit_execution_control *turbowasm_host_call_control(const turbowasm_host_call *call) {
     const turbowasm_host_call_impl *impl = call != NULL ? call->impl : NULL;
     return impl != NULL ? impl->execution : NULL;

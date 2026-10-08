@@ -19,6 +19,12 @@ typedef turbowasm_status (*turbowasm_execution_prepare_fn)(
     void *context, turbowasm_value *arguments, size_t argument_count,
     turbowasm_jit_execution_control *control, turbowasm_trap *trap);
 
+/* Internal host-task entry using the same coroutine/control/lifetime as Core
+ * execution. It borrows instance/context, has no raw parameters or results and
+ * permits prepare/completion hooks. Public Core execution admission is unchanged. */
+turbowasm_status turbowasm_execution_create_host_entry(turbowasm_execution *execution,
+    turbowasm_instance *instance, turbowasm_host_entry_fn entry, void *context);
+
 turbowasm_status turbowasm_execution_set_prepare(turbowasm_execution *execution,
     turbowasm_execution_prepare_fn prepare, void *context);
 

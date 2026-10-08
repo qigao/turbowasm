@@ -36,6 +36,8 @@ typedef struct turbowasm_execution_impl {
     void *prepare_context;
     turbowasm_execution_completion_fn completion;
     void *completion_context;
+    turbowasm_host_entry_fn host_entry;
+    void *host_context;
     coro_t *coroutine;
 
     uint64_t next_host_wait_generation;
@@ -191,7 +193,10 @@ static void turbowasm_execution_entry(coro_t *co, void *arg) {
         ? execution->prepare(execution->prepare_context, execution->arguments,
             execution->argument_count, &execution->control, &execution->trap)
         : TURBOWASM_OK;
-    if (status == TURBOWASM_OK) status = turbowasm_instance_invoke_internal(
+    if (status == TURBOWASM_OK && execution->host_entry != NULL)
+        status = turbowasm_instance_invoke_host_entry(execution->instance, &execution->control,
+            execution->host_entry, execution->host_context, &execution->trap);
+    else if (status == TURBOWASM_OK) status = turbowasm_instance_invoke_internal(
         execution->instance,
         execution->function_index,
         execution->arguments,
@@ -252,15 +257,15 @@ turbowasm_status turbowasm_execution_set_prepare(turbowasm_execution *execution,
     return TURBOWASM_OK;
 }
 
-turbowasm_status turbowasm_execution_create(
+static turbowasm_status execution_create(
     turbowasm_execution *execution,
     turbowasm_instance *instance,
     uint32_t function_index,
     const turbowasm_value *arguments,
-    size_t argument_count) {
+    size_t argument_count, turbowasm_host_entry_fn host_entry, void *host_context) {
     turbowasm_instance_impl *instance_impl;
     const turbowasm_module_impl *module;
-    const turbowasm_validation_func_type *type;
+    const turbowasm_validation_func_type *type = NULL;
     turbowasm_execution_impl *impl;
     coro_opts_t opts = coro_OPTS_DEFAULT;
 
@@ -276,12 +281,12 @@ turbowasm_status turbowasm_execution_create(
     if (module == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    type = turbowasm_validation_context_function_type(
-        &module->validation, function_index);
-    if (type == NULL || !type->defined ||
-        argument_count != type->param_count)
-        return TURBOWASM_INVALID_ARGUMENT;
-    if (instance_impl->store != NULL) {
+    if (host_entry == NULL) {
+        type = turbowasm_validation_context_function_type(&module->validation, function_index);
+        if (type == NULL || !type->defined || argument_count != type->param_count)
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
+    if (type != NULL && instance_impl->store != NULL) {
         size_t index;
         for (index = 0u; index < argument_count; ++index)
             if (!turbowasm_value_matches_semantic(instance_impl, &arguments[index],
@@ -290,7 +295,7 @@ turbowasm_status turbowasm_execution_create(
     }
 
     if (argument_count > SIZE_MAX / sizeof(*arguments) ||
-        type->result_count > SIZE_MAX / sizeof(turbowasm_value))
+        (type != NULL && type->result_count > SIZE_MAX / sizeof(turbowasm_value)))
         return TURBOWASM_OUT_OF_MEMORY;
 
     {
@@ -315,7 +320,7 @@ turbowasm_status turbowasm_execution_create(
             argument_count * sizeof(*impl->arguments));
     }
 
-    impl->result_capacity = type->result_count;
+    impl->result_capacity = type != NULL ? type->result_count : 0u;
     if (impl->result_capacity != 0u) {
         impl->results = (turbowasm_value *)turbowasm_rt_calloc(
             impl->result_capacity, sizeof(*impl->results));
@@ -324,6 +329,7 @@ turbowasm_status turbowasm_execution_create(
     }
 
     impl->instance = instance_impl;
+    impl->host_entry = host_entry; impl->host_context = host_context;
     impl->function_index = function_index;
     impl->argument_count = argument_count;
     impl->trap = TURBOWASM_TRAP_NONE;
@@ -359,6 +365,18 @@ out_of_memory:
         turbowasm_runtime_scope_leave(scope);
         return TURBOWASM_OUT_OF_MEMORY;
     }
+}
+
+turbowasm_status turbowasm_execution_create(
+    turbowasm_execution *execution, turbowasm_instance *instance, uint32_t function_index,
+    const turbowasm_value *arguments, size_t argument_count) {
+    return execution_create(execution, instance, function_index, arguments, argument_count, NULL, NULL);
+}
+
+turbowasm_status turbowasm_execution_create_host_entry(turbowasm_execution *execution,
+    turbowasm_instance *instance, turbowasm_host_entry_fn entry, void *context) {
+    if (entry == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    return execution_create(execution, instance, 0u, NULL, 0u, entry, context);
 }
 
 void turbowasm_execution_destroy(turbowasm_execution *execution) {

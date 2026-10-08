@@ -44,6 +44,12 @@ typedef turbowasm_status (*turbowasm_component_task_resolve_fn)(
     void *context, turbowasm_component_value *result, bool cancelled);
 typedef void (*turbowasm_component_task_abandon_fn)(void *context, turbowasm_status status);
 
+/* Internal stackful host task. Runs once after prepare, with this task active.
+ * It may use host_wait and nested Core calls, then explicitly return/cancel the
+ * task. Context remains borrowed until execution ends; no raw YIELDED return. */
+typedef turbowasm_status (*turbowasm_component_task_host_entry_fn)(void *context,
+    turbowasm_component_task *task, turbowasm_host_call *call);
+
 typedef struct turbowasm_component_task_binding {
     const turbowasm_component_type_graph *graph;
     turbowasm_component_type_id function_type;
@@ -57,6 +63,8 @@ typedef struct turbowasm_component_task_binding {
     turbowasm_component_task_resolve_fn resolve;
     turbowasm_component_task_abandon_fn abandon;
     void *caller_context;
+    turbowasm_component_task_host_entry_fn host_entry;
+    void *host_context;
 } turbowasm_component_task_binding;
 
 typedef enum turbowasm_component_task_phase {

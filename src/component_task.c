@@ -111,10 +111,16 @@ turbowasm_status turbowasm_component_task_binding_validate(
     type = turbowasm_component_type_graph_get(binding->graph, binding->function_type);
     if (type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION || !type->as.function.is_async)
         return TURBOWASM_TYPE_MISMATCH;
+    if (binding->host_entry != NULL && (binding->callback_instance != NULL ||
+        turbowasm_instance_module(binding->instance) == NULL)) return TURBOWASM_INVALID_ARGUMENT;
     status = turbowasm_component_canonical_flatten_function_abi(binding->graph, binding->function_type,
         binding->memory.pointer_type, TURBOWASM_COMPONENT_CANONICAL_LIFT,
         binding->callback_instance ? TURBOWASM_COMPONENT_ABI_ASYNC_CALLBACK : TURBOWASM_COMPONENT_ABI_ASYNC, &signature);
     if (status != TURBOWASM_OK) return status;
+    if (binding->host_entry != NULL) {
+        memset(out, 0, sizeof(*out));
+        return TURBOWASM_OK;
+    }
     if (!signature_matches(binding->instance, binding->function_index, &signature))
         return TURBOWASM_TYPE_MISMATCH;
     if (binding->callback_instance != NULL) {
@@ -244,6 +250,13 @@ static turbowasm_status prepare_core(void *context, turbowasm_value *reserved, s
     return TURBOWASM_OK;
 }
 
+static turbowasm_status run_host_entry(void *context, turbowasm_host_call *call, turbowasm_trap *trap) {
+    turbowasm_component_task *task = context;
+    turbowasm_status status = task->binding.host_entry(task->binding.host_context, task, call);
+    if (task->trap != TURBOWASM_TRAP_NONE) *trap = task->trap;
+    return status;
+}
+
 static turbowasm_status start_core(turbowasm_component_task *task) {
     turbowasm_value arguments[TURBOWASM_COMPONENT_MAX_LOWERED_PARAMS] = {0};
     turbowasm_status status;
@@ -253,8 +266,10 @@ static turbowasm_status start_core(turbowasm_component_task *task) {
     for (i = 0u; i < task->signature.param_count; ++i)
         arguments[i].kind = flat_kind(task->signature.params[i]);
     task->core_instance = task->binding.instance;
-    status = turbowasm_execution_create(&task->core, task->core_instance,
-        task->binding.function_index, arguments, task->signature.param_count);
+    status = task->binding.host_entry != NULL
+        ? turbowasm_execution_create_host_entry(&task->core, task->core_instance, run_host_entry, task)
+        : turbowasm_execution_create(&task->core, task->core_instance,
+            task->binding.function_index, arguments, task->signature.param_count);
     if (status == TURBOWASM_OK)
         status = turbowasm_execution_set_prepare(&task->core, prepare_core, task);
     return status;

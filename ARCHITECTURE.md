@@ -686,6 +686,32 @@ task and waitable state, endpoint transfers, then public host integration and
 installed C/C++ consumers. Private future/stream type metadata can be tested
 before runtime integration; the synchronous feature predicate and binary loader
 continue to reject them until their complete execution path is available.
+
+Private host-task execution reuses Runtime's resumable coroutine, execution
+control and host-wait generation checks. An internal host-entry execution borrows
+an existing Core instance for its allocator/store and caller memory; it constructs
+the ordinary host-call view on that retained stack. No synthetic Wasm trampoline
+or separate coroutine scheduler is introduced. Host code may wait through the
+existing bridge and invoke Core with the same fuel, interruption and depth
+accounting. Returning YIELDED directly is invalid: suspension must preserve the
+callback stack. Forced destruction resumes the wait with INTERRUPTED and requires
+the callback to unwind its temporary owners.
+
+A private Component host-task binding has a stackful host entry instead of a
+Core function/callback pair. Its preparation runs once after backpressure clears;
+the host explicitly returns a typed canonical result or acknowledges delivered
+cancellation through the existing task boundary. Successful entry exit without
+either terminal action traps. Cancel-before-entry runs no callback, while an
+external I/O wait remains owned by that adapter until real completion. The task,
+binding context and instance remain stable through Core exit and caller delivery.
+These internal entries do not open public async loading or expose a partial host
+API; import routing and public owners integrate with the same task machinery.
+`component_task_test` covers host-entry backpressure, one-time preparation,
+generation-checked I/O waits, cancel-before-entry and explicit cancellation
+acknowledgement, destruction before/after result publication, nested Core fuel
+and interruption, exception-to-trap conversion, invalid callback exits and every
+Runtime allocation failure. The Windows ASan task suite passes 64 cases and
+7,581 assertions; the same suite is registered with the native MIR backend.
 Qualification must cover scalar/composite/own payloads, unit futures, nested
 endpoints, memory32/64, partial transfers, all cancellation phases, event ordering,
 backpressure, capacity exhaustion, allocation failure, traps and exactly-once

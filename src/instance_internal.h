@@ -321,6 +321,14 @@ turbowasm_status turbowasm_instance_invoke_internal(
  * fuel/interrupt policy. Its retained continuation never retains this pointer. */
 turbowasm_jit_execution_control *turbowasm_host_call_control(const turbowasm_host_call *call);
 
+/* Retained-stack host adapter. Context and caller instance outlive the entry;
+ * suspension uses the existing host-call bridge, never a returned YIELDED. */
+typedef turbowasm_status (*turbowasm_host_entry_fn)(void *context,
+    turbowasm_host_call *call, turbowasm_trap *trap);
+turbowasm_status turbowasm_instance_invoke_host_entry(turbowasm_instance_impl *instance,
+    turbowasm_jit_execution_control *control, turbowasm_host_entry_fn entry,
+    void *context, turbowasm_trap *trap);
+
 /* Borrows the live host callback's control and depth until this nested call
  * returns, including coroutine suspension. Must not outlive that callback. */
 turbowasm_status turbowasm_instance_invoke_from_host(

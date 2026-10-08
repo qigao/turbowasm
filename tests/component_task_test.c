@@ -52,6 +52,15 @@ static const char *prepare_realloc_entry;
 static unsigned prepare_realloc_calls, prepare_completed;
 static bool prepare_interrupt;
 static bool prepare_wrong_kind, prepare_wrong_count;
+typedef enum host_task_operation {
+    HOST_TASK_RETURN, HOST_TASK_WAIT, HOST_TASK_CANCEL, HOST_TASK_RETURN_WAIT,
+    HOST_TASK_NESTED, HOST_TASK_RAW_YIELD, HOST_TASK_NO_RETURN
+} host_task_operation;
+static struct {
+    host_task_operation operation;
+    const char *core_entry;
+    unsigned started, exited, interrupted;
+} host_task;
 
 static turbowasm_status subtask_prepare(void *context, turbowasm_component_task *task,
     turbowasm_value *arguments, size_t capacity, size_t *out_count);
@@ -331,6 +340,53 @@ static void create_prepared_string(unsigned wide, const char *realloc_entry) {
     check_equal(turbowasm_component_task_create(&tasks[0], &domain, &b), TURBOWASM_OK);
 }
 
+static turbowasm_status host_task_entry(void *context, turbowasm_component_task *task,
+    turbowasm_host_call *call) {
+    turbowasm_component_value value = {0};
+    turbowasm_status status = TURBOWASM_OK;
+    uint32_t *retained;
+    check_true(context == &host_task); check_true(task->domain->active == task);
+    check_true(turbowasm_host_call_instance(call)->impl == instance.impl);
+    check_true(turbowasm_host_call_can_wait(call));
+    ++host_task.started;
+    retained = turbowasm_rt_malloc(sizeof(*retained));
+    if (retained == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    *retained = 42;
+    if (host_task.operation == HOST_TASK_RAW_YIELD) status = TURBOWASM_YIELDED;
+    else if (host_task.operation == HOST_TASK_NESTED) {
+        turbowasm_value arguments[4] = {0}, output = {0};
+        size_t i, count = 0;
+        for (i = 0; i < 4; ++i) arguments[i].kind = TURBOWASM_VALUE_I32;
+        status = turbowasm_instance_invoke_from_host(call, &instance,
+            function_index(host_task.core_entry), arguments, 4, &output, 1, &count, &task->trap);
+        if (status == TURBOWASM_OK) { check_equal(count, 1u); check_equal(output.as.i32, 256); }
+    } else if (host_task.operation == HOST_TASK_WAIT || host_task.operation == HOST_TASK_CANCEL)
+        status = wait_now(call);
+    if (status == TURBOWASM_OK && host_task.operation == HOST_TASK_CANCEL)
+        status = turbowasm_component_task_cancel(task->domain);
+    else if (status == TURBOWASM_OK && host_task.operation != HOST_TASK_NO_RETURN) {
+        value.kind = TURBOWASM_COMPONENT_TYPE_U32; value.as.u32 = *retained;
+        status = turbowasm_component_task_return(task->domain, &value);
+        if (status == TURBOWASM_OK && host_task.operation == HOST_TASK_RETURN_WAIT) status = wait_now(call);
+    }
+    if (status == TURBOWASM_INTERRUPTED) ++host_task.interrupted;
+    ++host_task.exited;
+    turbowasm_rt_free(retained);
+    return status;
+}
+
+static turbowasm_component_task_binding host_task_binding(void) {
+    turbowasm_component_task_binding b = binding("no-return", NULL, false);
+    /* No artificial Core export is needed for the host task entry. */
+    b.function_index = UINT32_MAX; b.host_entry = host_task_entry; b.host_context = &host_task;
+    return b;
+}
+
+static void create_host_task(void) {
+    turbowasm_component_task_binding b = host_task_binding();
+    check_equal(turbowasm_component_task_create(&tasks[0], &domain, &b), TURBOWASM_OK);
+}
+
 spec("private async Component Core task execution") {
     before_each() {
         static const turbowasm_value_kind i32s[] = {TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I32};
@@ -355,6 +411,7 @@ spec("private async Component Core task execution") {
         lower_failure = release_failure = check_release_reentry = check_cancel_pin = prepare_failure = false;
         prepare_realloc_entry = NULL; prepare_realloc_calls = prepare_completed = 0; prepare_interrupt = false;
         prepare_wrong_kind = prepare_wrong_count = false;
+        memset(&host_task, 0, sizeof(host_task));
         memset(builtins, 0, sizeof(builtins));
         entry_word = 1; callback_word = 0; prepared_argument = 42;
         entered = callbacks = prepared = wait_started = wait_resumed = wait_interrupted = 0;
@@ -429,6 +486,151 @@ spec("private async Component Core task execution") {
         turbowasm_instance_destroy(&instance); turbowasm_linker_destroy(&linker); turbowasm_module_destroy(&module);
         turbowasm_component_binary_destroy(&builtin_binary);
         turbowasm_runtime_scope_leave(scope); check_equal(live, 0u);
+    }
+
+    it("starts a host task only after backpressure clears and prepares it once") {
+        create_host_task();
+        check_equal(turbowasm_component_task_backpressure(&domain, true), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(prepared, 0u); check_equal(host_task.started, 0u);
+        check_equal(turbowasm_component_task_backpressure(&domain, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_take_result(&tasks[0], &result), TURBOWASM_OK);
+        check_equal(result.as.u32, 42u); check_equal(host_task.started, 1u); check_equal(host_task.exited, 1u);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(prepared, 1u); check_equal(host_task.started, 1u);
+    }
+
+    it("keeps the host callback stack across real I/O waits without accepting stale completions") {
+        turbowasm_host_wait wait, stale;
+        host_task.operation = HOST_TASK_WAIT; create_host_task();
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_execution_yield_reason_get(&tasks[0].core), TURBOWASM_YIELD_HOST_WAIT);
+        check_true(turbowasm_execution_pending_host_wait(&tasks[0].core, &wait));
+        stale = wait; ++stale.generation;
+        check_equal(turbowasm_execution_complete_host_wait(&tasks[0].core, stale, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(host_task.started, 1u); check_equal(host_task.exited, 0u); check_equal(wait_resumed, 0u);
+        check_equal(turbowasm_execution_complete_host_wait(&tasks[0].core, wait, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(tasks[0].result.as.u32, 42u); check_equal(prepared, 1u); check_equal(host_task.exited, 1u);
+    }
+
+    it("cancels host admission without invoking or preparing the callback") {
+        create_host_task();
+        check_equal(turbowasm_component_task_request_cancel(&tasks[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_equal(tasks[0].phase, TURBOWASM_COMPONENT_TASK_CANCELLED);
+        check_equal(turbowasm_component_task_take_result(&tasks[0], &result), TURBOWASM_INTERRUPTED);
+        check_equal(host_task.started, 0u); check_equal(prepared, 0u);
+    }
+
+    it("leaves host I/O owned by its adapter until completion and explicit cancellation acknowledgement") {
+        host_task.operation = HOST_TASK_CANCEL; deliver_on_wait = true; create_host_task();
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_task_request_cancel(&tasks[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+        check_false(tasks[0].cancellation_delivered); check_equal(wait_resumed, 0u);
+        complete_wait(0);
+        check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_OK);
+        check_true(tasks[0].cancellation_delivered); check_equal(tasks[0].phase, TURBOWASM_COMPONENT_TASK_CANCELLED);
+        check_equal(host_task.started, 1u); check_equal(host_task.exited, 1u);
+    }
+
+    it("unwinds retained host owners on destruction before or after result publication") {
+        unsigned published;
+        size_t baseline = live;
+        for (published = 0; published < 2; ++published) {
+            host_task.operation = published ? HOST_TASK_RETURN_WAIT : HOST_TASK_WAIT;
+            create_host_task();
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);
+            check_equal(turbowasm_component_task_take_result(&tasks[0], &result),
+                published ? TURBOWASM_OK : TURBOWASM_YIELDED);
+            if (published) check_equal(result.as.u32, 42u);
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+            check_equal(wait_interrupted, published + 1u); check_equal(host_task.interrupted, published + 1u);
+            check_equal(host_task.exited, published + 1u); check_equal(domain.count, 0u); check_null(domain.active);
+            check_equal(live, baseline);
+        }
+    }
+
+    it("meters nested Wasm on the host task continuation without replaying host code") {
+        unsigned i;
+        turbowasm_execution_options options = {0};
+        options.has_fuel_limit = true; options.fuel = 8;
+        host_task.operation = HOST_TASK_NESTED; host_task.core_entry = "prepare-realloc32";
+        create_host_task();
+        for (i = 0; i < 200; ++i) {
+            turbowasm_status status = turbowasm_component_task_resume(&tasks[0], &options);
+            if (status == TURBOWASM_OK) break;
+            check_equal(status, TURBOWASM_YIELDED);
+            check_equal(turbowasm_execution_yield_reason_get(&tasks[0].core), TURBOWASM_YIELD_FUEL);
+            check_equal(host_task.started, 1u); check_equal(host_task.exited, 0u);
+        }
+        check_greater(i, 0u); check_less(i, 200u); check_equal(host_task.exited, 1u);
+        check_equal(tasks[0].result.as.u32, 42u); compiled("prepare-realloc32");
+        check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        options.has_fuel_limit = false; options.should_interrupt = interrupt_prepare; prepare_interrupt = true;
+        create_host_task();
+        check_equal(turbowasm_component_task_resume(&tasks[0], &options), TURBOWASM_YIELDED);
+        check_equal(turbowasm_execution_yield_reason_get(&tasks[0].core), TURBOWASM_YIELD_INTERRUPTION);
+        check_equal(host_task.started, 2u); check_equal(host_task.exited, 1u);
+        prepare_interrupt = false;
+        check_equal(turbowasm_component_task_resume(&tasks[0], &options), TURBOWASM_OK);
+        check_equal(host_task.started, 2u); check_equal(host_task.exited, 2u);
+        check_equal(tasks[0].result.as.u32, 42u);
+    }
+
+    it("propagates nested Wasm traps and contains exceptions at the Component host boundary") {
+        unsigned i;
+        const char *entries[] = {"prepare-realloc-trap", "prepare-realloc-throw"};
+        host_task.operation = HOST_TASK_NESTED;
+        for (i = 0; i < 2; ++i) {
+            host_task.core_entry = entries[i]; create_host_task();
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_TRAPPED);
+            check_equal(tasks[0].trap, TURBOWASM_TRAP_UNREACHABLE); check_equal(tasks[0].result.kind, 0);
+            check_null(((turbowasm_instance_impl *)instance.impl)->pending_exception);
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+            check_equal(host_task.exited, i + 1u);
+        }
+    }
+
+    it("rejects raw host yields and successful exits without a terminal task action") {
+        unsigned i;
+        for (i = 0; i < 2; ++i) {
+            host_task.operation = i ? HOST_TASK_NO_RETURN : HOST_TASK_RAW_YIELD;
+            create_host_task();
+            check_equal(turbowasm_component_task_resume(&tasks[0], NULL),
+                i ? TURBOWASM_TRAPPED : TURBOWASM_INVALID_ARGUMENT);
+            check_greater_equal(tasks[0].state, TURBOWASM_EXECUTION_COMPLETED);
+            check_equal(tasks[0].result.kind, 0);
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+        }
+    }
+
+    it("reclaims every failed host execution allocation without publishing a partial result") {
+        unsigned n;
+        bool succeeded = false;
+        size_t baseline = live;
+        for (n = 0; n < 32; ++n) {
+            turbowasm_status status;
+            create_host_task(); allowance = n;
+            status = turbowasm_component_task_resume(&tasks[0], NULL);
+            allowance = SIZE_MAX;
+            if (status == TURBOWASM_OK) { succeeded = true; check_equal(tasks[0].result.as.u32, 42u); }
+            else { check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_equal(tasks[0].result.kind, 0); }
+            check_equal(turbowasm_component_task_destroy(&tasks[0]), TURBOWASM_OK);
+            check_equal(live, baseline); check_equal(domain.count, 0u);
+            if (succeeded) break;
+        }
+        check_true(succeeded); check_greater(n, 1u);
+    }
+
+    it("rejects mixing host task entries with a Core callback before task admission") {
+        turbowasm_component_task_binding b = host_task_binding();
+        b.callback_instance = &instance; b.callback_index = function_index("callback");
+        check_equal(turbowasm_component_task_create(&tasks[0], &domain, &b), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(domain.count, 0u); check_null(tasks[0].domain);
     }
 
     it("publishes scoped borrow handles atomically and rejects counter overflow") {
