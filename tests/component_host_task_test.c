@@ -1309,7 +1309,7 @@ spec("Retained Component host task owners") {
         check_equal(turbowasm_component_endpoint_codec_rollback(&endpoint_codec), TURBOWASM_OK);
         check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
         check_equal(impl->host_activity, 0u); check_equal(budget.used, used);
-        check_equal(turbowasm_component_host_endpoint_view(&host_ends[0]), reader);
+        check_equal((const void *)turbowasm_component_host_endpoint_view(&host_ends[0]), (const void *)reader);
         check_false(reader->closed); check_not_null(reader->peer);
     }
     it("returns an admitted endpoint tail to a fresh host owner without closing it") {
@@ -1326,9 +1326,9 @@ spec("Retained Component host task owners") {
         check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], impl, &endpoint_value, &budget), TURBOWASM_OUT_OF_MEMORY);
         allocations.fail_at = 0u;
         check_null(host_ends[2].impl); check_equal(budget.used, used);
-        check_equal(turbowasm_component_endpoint_value_get(&endpoint_value), reader);
+        check_equal((const void *)turbowasm_component_endpoint_value_get(&endpoint_value), (const void *)reader);
         check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], impl, &endpoint_value, &budget), TURBOWASM_OK);
-        check_equal(turbowasm_component_host_endpoint_view(&host_ends[2]), reader);
+        check_equal((const void *)turbowasm_component_host_endpoint_view(&host_ends[2]), (const void *)reader);
         check_false(reader->closed); check_equal(impl->host_activity, 0u); check_equal(budget.used, used);
     }
     it("retires committed unpublished host ownership once when its task input is discarded") {
@@ -1362,8 +1362,8 @@ spec("Retained Component host task owners") {
         check_equal(turbowasm_component_host_endpoint_move_commit(&host_ends[0], &endpoint_value), TURBOWASM_OK);
         check_equal(turbowasm_component_endpoint_codec_commit(&endpoint_codec), TURBOWASM_OK);
         check_null(host_ends[0].impl); check_equal(budget.used, used / 2u); check_equal(impl->host_activity, 0u);
-        check_equal(turbowasm_component_endpoint_get(&impl->exec.resource_table, handle,
-            TURBOWASM_COMPONENT_HANDLE_FUTURE_READ), reader);
+        check_equal((const void *)turbowasm_component_endpoint_get(&impl->exec.resource_table, handle,
+            TURBOWASM_COMPONENT_HANDLE_FUTURE_READ), (const void *)reader);
         turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
         check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
         check_false(reader->closed);
@@ -1382,7 +1382,7 @@ spec("Retained Component host task owners") {
             &endpoint_move_admitted), TURBOWASM_OUT_OF_MEMORY);
         allocations.fail_at = 0u;
         check_equal(endpoint_value.kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
-        check_equal(turbowasm_component_host_endpoint_view(&host_ends[0]), reader);
+        check_equal((const void *)turbowasm_component_host_endpoint_view(&host_ends[0]), (const void *)reader);
         check_equal(budget.used, used); check_equal(allocations.live, live); check_equal(impl->host_activity, 0u);
         check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[0], &endpoint_value,
             &endpoint_move_admitted), TURBOWASM_OK);
@@ -1413,7 +1413,7 @@ spec("Retained Component host task owners") {
             &endpoint_move_admitted), TURBOWASM_INVALID_ARGUMENT);
         check_false(endpoint_admit_on_allocate); check_true(endpoint_move_admitted);
         check_equal(endpoint_value.kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
-        check_equal(turbowasm_component_host_endpoint_view(&host_ends[0]), reader);
+        check_equal((const void *)turbowasm_component_host_endpoint_view(&host_ends[0]), (const void *)reader);
         check_null(reader->value_owner); check_false(reader->closed);
         check_equal(budget.used, used); check_equal(allocations.live, live); check_equal(impl->host_activity, 0u);
     }
@@ -1450,7 +1450,7 @@ spec("Retained Component host task owners") {
             &endpoint_move_admitted), TURBOWASM_OK);
         check_null(instance.impl); check_null(component.impl); check_false(close_on_allocate);
         check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
-        check_equal(turbowasm_component_host_endpoint_view(&host_ends[0]), reader);
+        check_equal((const void *)turbowasm_component_host_endpoint_view(&host_ends[0]), (const void *)reader);
         check_false(reader->closed);
         check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[0]), TURBOWASM_OK);
         check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_OK);
