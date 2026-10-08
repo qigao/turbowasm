@@ -1280,11 +1280,11 @@ turbowasm_status turbowasm_component_load_borrowed(
         component, bytes, size, NULL);
 }
 
-turbowasm_status turbowasm_component_load_borrowed_with_config(
+static turbowasm_status component_load(
     turbowasm_component *component,
     const uint8_t *bytes,
     size_t size,
-    const turbowasm_runtime_config *config) {
+    const turbowasm_runtime_config *config, bool async_metadata) {
     turbowasm_runtime_config normalized;
     turbowasm_runtime_scope scope;
     turbowasm_component_public_impl *impl;
@@ -1303,8 +1303,9 @@ turbowasm_status turbowasm_component_load_borrowed_with_config(
     if (impl == NULL)
         return TURBOWASM_OUT_OF_MEMORY;
 
-    status = turbowasm_component_binary_load_with_config(
-        &impl->binary, bytes, size, &normalized);
+    status = async_metadata
+        ? turbowasm_component_binary_decode_async_metadata(&impl->binary, bytes, size, &normalized)
+        : turbowasm_component_binary_load_with_config(&impl->binary, bytes, size, &normalized);
     if (status != TURBOWASM_OK) {
         scope = turbowasm_runtime_scope_enter(&normalized);
         turbowasm_rt_free(impl);
@@ -1380,6 +1381,16 @@ static turbowasm_status component_instance_create(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_component_load_borrowed_with_config(turbowasm_component *component,
+    const uint8_t *bytes, size_t size, const turbowasm_runtime_config *config) {
+    return component_load(component, bytes, size, config, false);
+}
+
+turbowasm_status turbowasm_component_load_async_private(turbowasm_component *component,
+    const uint8_t *bytes, size_t size, const turbowasm_runtime_config *config) {
+    return component_load(component, bytes, size, config, true);
+}
+
 turbowasm_status turbowasm_component_instance_create(
     turbowasm_component_instance *instance, const turbowasm_component *component) {
     return component_instance_create(instance, component, NULL);
@@ -1433,6 +1444,13 @@ void turbowasm_component_instance_destroy(
         return;
     impl = turbowasm_component_instance_public_impl_get(instance);
     instance->impl = NULL;
+    component_instance_release(impl);
+}
+
+bool turbowasm_component_instance_public_impl_retain(turbowasm_component_instance_public_impl *impl) {
+    return component_instance_retain(impl);
+}
+void turbowasm_component_instance_public_impl_release(turbowasm_component_instance_public_impl *impl) {
     component_instance_release(impl);
 }
 

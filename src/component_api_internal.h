@@ -47,6 +47,13 @@ bool turbowasm_component_public_impl_retain(
 void turbowasm_component_public_impl_release(
     turbowasm_component_public_impl *impl);
 
+bool turbowasm_component_instance_public_impl_retain(turbowasm_component_instance_public_impl *impl);
+void turbowasm_component_instance_public_impl_release(turbowasm_component_instance_public_impl *impl);
+
+/* Private retained loader for async host-boundary integration and its tests. */
+turbowasm_status turbowasm_component_load_async_private(turbowasm_component *component,
+    const uint8_t *bytes, size_t size, const turbowasm_runtime_config *config);
+
 /* Private constructor used while the public async boundary is being completed.
  * The ordinary loader and public instance constructor retain their async gate. */
 turbowasm_status turbowasm_component_instance_create_async_private(
@@ -107,5 +114,28 @@ turbowasm_status turbowasm_component_host_result_prepare(
 turbowasm_status turbowasm_component_host_result_take(
     turbowasm_component_host_result *owner, turbowasm_component_host_value *out);
 turbowasm_status turbowasm_component_host_result_destroy(turbowasm_component_host_result *owner);
+
+typedef struct turbowasm_component_host_task { void *impl; } turbowasm_component_host_task;
+/* Private async root owner. Name/inputs are needed only during creation.
+ * Successful creation consumes move inputs; failure keeps them intact. Budget
+ * and source binary bytes outlive the owner. All operations run on the instance
+ * owner thread. Endpoint host-value integration is still private work. */
+turbowasm_status turbowasm_component_host_task_create(turbowasm_component_host_task *owner,
+    turbowasm_component_instance_public_impl *instance, turbowasm_name name,
+    const turbowasm_component_host_value *arguments, size_t count, bool move,
+    turbowasm_component_host_budget *budget);
+turbowasm_status turbowasm_component_host_task_resume(turbowasm_component_host_task *owner,
+    const turbowasm_execution_options *options);
+turbowasm_status turbowasm_component_host_task_request_cancel(turbowasm_component_host_task *owner);
+/* Borrowed runtime view for state/host-wait progress, never for direct mutation
+ * or destruction of the task. Invalidated when the owner is destroyed. */
+const turbowasm_component_task *turbowasm_component_host_task_view(const turbowasm_component_host_task *owner);
+/* Complete Core exit is required. Allocation/byte failure keeps the result for
+ * retry. Result/count outputs are changed only on successful delivery. */
+turbowasm_status turbowasm_component_host_task_take_result(turbowasm_component_host_task *owner,
+    turbowasm_component_host_value *out, size_t *count);
+/* Live/reentrant owners reject destruction unchanged. Completed owners are
+ * freed despite a destructor error; the primary guest error takes precedence. */
+turbowasm_status turbowasm_component_host_task_destroy(turbowasm_component_host_task *owner);
 
 #endif /* TURBOWASM_COMPONENT_API_INTERNAL_H */

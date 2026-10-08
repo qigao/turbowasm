@@ -779,6 +779,32 @@ Commit `73e1137` passes all five [native CI jobs](https://github.com/qigao/turbo
 Linux MIR 207/207 in 1.94 s and macOS MIR 207/207 in 2.73 s, including the
 host result cases under interpreted and compiled callers/resource destructors.
 
+The private host task owner joins export lookup, deferred argument admission and
+terminal result promotion. Creation validates the async lift and reserves task
+and byte capacity before consuming host own inputs. A stable per-task parameter
+codec and copied realloc context run on the existing retained Runtime stack;
+realloc uses that task's execution control. Lower reservations roll back before
+any argument storage is released. Backpressure postpones preparation, while
+cancellation remains a request until the task's terminal acknowledgement.
+Host result delivery requires both canonical resolution and completed Core
+execution. Promotion failure retains the canonical result for retry; unit
+results are delivered once with count zero. Borrowed input storage remains held
+through delivery. Destroy rejects live or reentrant owners without mutation,
+then releases the Runtime task before parameters/results and instance retention.
+Cleanup continues after destructor errors and preserves the primary guest error.
+This owner remains private while endpoint host values and transfers are joined;
+the public binary loader and synchronous instance constructor keep their gates.
+The formal host-task fixture covers memory32/64 strings, indirect parameters,
+own round trips, borrowed input retention, callback cancellation, noncancellable
+yield, post-return traps, quota reuse, allocation rollback, interruption-poll
+reentry and destructor failure. A later string realloc trap rolls back an earlier
+own reservation without publishing or dropping it twice. Result byte-quota
+exhaustion leaves output/count intact and retries after another task releases its
+reservation, without changing the budget limit. Windows ASan passes 22 cases and
+10,651 assertions; related Component/WASI/Runtime regression passes 86/86 in
+8.67 s. The MIR variant requires compiled export/callback and resource destructor
+bodies; native qualification of this owner is pending.
+
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
 an existing Core instance for its allocator/store and caller memory; it constructs

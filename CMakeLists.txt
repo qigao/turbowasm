@@ -117,7 +117,8 @@ endif()
 
 if(TURBOWASM_ENABLE_COMPONENT)
   add_library(turbowasm_component
-    src/component_api.c)
+    src/component_api.c
+    src/component_host_task.c)
   add_library(TurboWasm::Component ALIAS turbowasm_component)
   set_target_properties(turbowasm_component PROPERTIES
     EXPORT_NAME Component)
