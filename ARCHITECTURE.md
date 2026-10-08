@@ -943,6 +943,11 @@ and both public instances. Windows ASan passes 54 cases and 35,658 assertions;
 related Component/WASI/Runtime regression passes 86/86 in 8.48 s. This qualifies
 the private canonical storage boundary; public host snapshots/result publication,
 explicit public options and shutdown remain required.
+Commit `4347cd0` passes all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37731018209):
+Linux MIR 209/209 in 1.81 s and macOS MIR 209/209 in 2.74 s, including compiled
+guest string writers for both memory widths and foreign Core readers of owned
+host transfers.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
