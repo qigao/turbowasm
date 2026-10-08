@@ -5,9 +5,13 @@ on:
   workflow_dispatch:
     inputs:
       salts_ci_run:
-        description: Optional successful Salts SDK CI run for native socket qualification
+        description: Optional Salts SDK CI run for native socket qualification
         type: string
         default: ''
+      skip_windows:
+        description: Qualify non-Windows platforms only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,7 +42,8 @@ jobs:
           CI_EVENT: ${{ github.event_name }}
           CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: ./cmake/ci/select-ci-scope.ps1 -EventName $env:CI_EVENT -BaseRef $env:CI_BASE -HeadRef $env:CI_HEAD
+          CI_SKIP_WINDOWS: ${{ inputs.skip_windows || false }}
+        run: ./cmake/ci/select-ci-scope.ps1 -EventName $env:CI_EVENT -BaseRef $env:CI_BASE -HeadRef $env:CI_HEAD -SkipWindows ($env:CI_SKIP_WINDOWS -eq 'true')
   native:
     needs: scope
     if: needs.scope.outputs.has_builds == 'true'
@@ -46,6 +51,7 @@ jobs:
     with:
       builds: ${{ needs.scope.outputs.builds }}
       salts_ci_run: ${{ inputs.salts_ci_run || '' }}
+      skip_windows: ${{ inputs.skip_windows || false }}
   result:
     name: CI result
     needs: [scope, native]

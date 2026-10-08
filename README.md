@@ -217,6 +217,11 @@ For branch SDK qualification, dispatch TurboWasm CI with `salts_ci_run` set to
 a successful Salts SDK preparation run. CI verifies the artifact's source
 commit, enables the socket target, builds the full native matrix and runs the
 existing installed-package tests. Ordinary CI continues selecting published SDKs.
+Set `skip_windows=true` for an explicitly partial qualification of Linux,
+macOS and Android. In that mode, each prerequisite Salts platform job must
+have completed successfully and its SDK source commit must match the run;
+an unfinished Windows job does not block those platforms. The CI summary
+records the omission, and this run does not qualify Windows.
 
 ## Native WASI 0.2 UDP and DNS
 
@@ -360,7 +365,7 @@ cache action, matching its compiler/SDK contract.
 
 CI and native SDK releases share `.github/workflows/native-build.yml` and use
 `ci-*-user` presets. `cmake/ci/select-ci-scope.ps1` owns the platform matrix:
-code changes and manual CI runs select all five qualification profiles;
+code changes and manual CI runs select all five qualification profiles by default;
 prose-only PRs skip native builds and still report `CI result`. SDK preparation
 selects the four shipping platforms from the same definitions. Manual SDK runs
 build package artifacts; publication remains restricted to release tags.

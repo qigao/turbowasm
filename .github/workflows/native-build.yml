@@ -12,6 +12,9 @@ on:
       salts_ci_run:
         type: string
         default: ''
+      skip_windows:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -112,12 +115,25 @@ jobs:
         shell: pwsh
         env:
           SALTS_CI_RUN: ${{ inputs.salts_ci_run }}
+          SKIP_WINDOWS: ${{ inputs.skip_windows || false }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:SALTS_CI_RUN -notmatch '^[1-9][0-9]+$') { throw 'Salts CI run must be a positive run ID' }
           $run = gh api "repos/qigao/salts/actions/runs/$env:SALTS_CI_RUN" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Cannot read Salts prerequisite run' }
-          if ($run.status -ne 'completed' -or $run.conclusion -ne 'success') { throw 'Salts prerequisite run must have succeeded' }
+          if ($env:SKIP_WINDOWS -ne 'true' -and ($run.status -ne 'completed' -or $run.conclusion -ne 'success')) { throw 'Salts prerequisite run must have succeeded' }
+          $profile = switch ($env:TURBOWASM_SDK_RID) {
+            'linux-x64' { 'linux-release' }
+            'windows-x64' { 'windows-release' }
+            'macos-arm64' { 'macos-release' }
+            'android-arm64-v8a' { 'android-arm64-v8a-release' }
+            default { throw 'Unsupported Salts prerequisite platform' }
+          }
+          if ($env:SKIP_WINDOWS -eq 'true' -and $profile -eq 'windows-release') { throw 'Windows cannot be selected when its qualification is omitted' }
+          $jobs = gh api "repos/qigao/salts/actions/runs/$env:SALTS_CI_RUN/jobs?filter=latest&per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $jobs.total_count -gt 100) { throw 'Cannot enumerate Salts prerequisite jobs' }
+          $matching = @($jobs.jobs | Where-Object { $_.name -eq "native / $profile" })
+          if ($matching.Count -ne 1 -or $matching[0].status -ne 'completed' -or $matching[0].conclusion -ne 'success') { throw "Salts prerequisite platform $profile must have succeeded" }
           $artifact = if ($env:TURBOWASM_SDK_RID -eq 'macos-arm64') { 'salts-sdk-macos' } else { "salts-sdk-$env:TURBOWASM_SDK_RID" }
           "artifact=$artifact" >> $env:GITHUB_OUTPUT
           "SALTS_PREREQUISITE_COMMIT=$($run.head_sha)" >> $env:GITHUB_ENV
@@ -129,7 +145,7 @@ jobs:
           github-token: ${{ github.token }}
           name: ${{ steps.prerequisite.outputs.artifact }}
           path: build/salts-prerequisite-sdk
-      - name: Admit native TCP prerequisite SDK
+      - name: Admit native socket prerequisite SDK
         if: inputs.salts_ci_run != ''
         shell: pwsh
         run: |

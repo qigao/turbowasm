@@ -3,7 +3,8 @@ param(
     [string]$EventName,
     [AllowEmptyString()][string]$BaseRef,
     [Parameter(Mandatory)][string]$HeadRef,
-    [ValidateSet('ci', 'sdk')][string]$Profile = 'ci'
+    [ValidateSet('ci', 'sdk')][string]$Profile = 'ci',
+    [bool]$SkipWindows = $false
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -36,6 +37,7 @@ $profiles = @(
 $builds = @()
 if ($selected) {
     foreach ($profileEntry in $profiles) {
+        if ($SkipWindows -and $profileEntry.family -eq 'windows') { continue }
         if ($Profile -eq 'sdk' -and -not $profileEntry.ContainsKey('sdk_preset')) { continue }
         $entry = $profileEntry.Clone()
         if ($Profile -eq 'sdk') {
@@ -55,6 +57,9 @@ if ($env:GITHUB_OUTPUT) {
     Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "has_builds=$($builds.Count -gt 0)".ToLowerInvariant()
 }
 if ($env:GITHUB_STEP_SUMMARY) {
+    if ($SkipWindows) {
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value 'Windows qualification explicitly omitted for this run.'
+    }
     Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "| Profile | Preset | SDK |`n|---|---|---|"
     foreach ($entry in $builds) {
         Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "| $($entry.id) | $($entry.preset) | $($entry.rid) |"
