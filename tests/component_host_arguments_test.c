@@ -1194,6 +1194,33 @@ spec("Deferred Component host argument ownership") {
         check_equal(budget.used, used); check_null(result_owners[0].impl);
         check_equal(value->kind, TURBOWASM_COMPONENT_TYPE_OWN); check_equal(drops(), 0u);
     }
+    it("charges synchronous composite results atomically and retains a detached string on an async instance") {
+        uint8_t text[] = {'a', 'b', 0, 'c'};
+        host_value fields[2] = {number(42), {.kind = TURBOWASM_COMPONENT_HOST_STRING,
+            .as.string = {text, sizeof(text)}}};
+        host_value tuple = {.kind = TURBOWASM_COMPONENT_HOST_TUPLE, .as.tuple = {fields, 2u}};
+        turbowasm_component_async_options options = {2u, 8u, 1u, 2u * sizeof(host_value) + sizeof(text) - 1u};
+        turbowasm_component_instance_public_impl *impl;
+        turbowasm_trap trap; size_t count;
+        turbowasm_component_instance_destroy(&instances[0]);
+        check_equal(turbowasm_component_instance_create_async_with_options(&instances[0], &components[0], &options), TURBOWASM_OK);
+        impl = turbowasm_component_instance_public_impl_get(&instances[0]); attach(0u);
+        check_equal(turbowasm_component_instance_invoke(&instances[0], name_span("flat-tuple"), &tuple, 1u,
+            &delivered, 1u, &count, &trap), TURBOWASM_OUT_OF_MEMORY);
+        check_equal((int)delivered.kind, 0); check_equal(impl->host_budget.used, (size_t)0);
+        turbowasm_component_instance_destroy(&instances[0]); ++options.host_bytes;
+        check_equal(turbowasm_component_instance_create_async_with_options(&instances[0], &components[0], &options), TURBOWASM_OK);
+        impl = turbowasm_component_instance_public_impl_get(&instances[0]); attach(0u);
+        check_equal(turbowasm_component_instance_invoke(&instances[0], name_span("flat-tuple"), &tuple, 1u,
+            &delivered, 1u, &count, &trap), TURBOWASM_OK);
+        check_equal(impl->host_budget.used, options.host_bytes);
+        resources[0] = delivered.as.tuple.items[1]; memset(&delivered.as.tuple.items[1], 0, sizeof(host_value));
+        check_equal(turbowasm_component_host_value_destroy(&delivered), TURBOWASM_OK);
+        check_equal(impl->host_budget.used, sizeof(text));
+        turbowasm_component_instance_destroy(&instances[0]); turbowasm_component_destroy(&components[0]);
+        check_equal(resources[0].as.string.data, text, sizeof(text));
+        check_equal(turbowasm_component_host_value_destroy(&resources[0]), TURBOWASM_OK);
+    }
     it("charges a non-null zero-length returned string until its allocator release") {
         turbowasm_component_exec_async_limits limits = {2u, 8u};
         turbowasm_component_instance_public_impl *impl;
