@@ -1024,6 +1024,11 @@ task exits; shutdown cancels, acknowledges and releases both leases before
 completion. Windows ASan passes 81 cases and 55,422 assertions; the related
 Component/WASI/Runtime regression passes 86/86 in 20.20 s. Imported host-wait
 destructors and nested Component provider integration remain unqualified.
+Commit `8bac9a9` passes all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37737071175):
+Linux MIR 209/209 in 2.55 s and macOS MIR 209/209 in 4.02 s, including compiled
+guest destructor suspension and memory32/memory64 codec-lease shutdown. This
+qualifies private drain; the public async boundary remains closed.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows

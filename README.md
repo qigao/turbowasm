@@ -257,10 +257,15 @@ prose-only PRs skip native builds and still report `CI result`. SDK preparation
 selects the four shipping platforms from the same definitions. Manual SDK runs
 build package artifacts; publication remains restricted to release tags.
 The shared workflow uses Mozilla's [sccache Action](https://github.com/mozilla-actions/sccache-action)
-for C/C++ compiler caching, with a separate GitHub Actions cache namespace per
-profile and hit/miss statistics in each job. The compiler launcher comes from
+for C/C++ compiler caching. `actions/cache` restores and saves a bounded 1 GiB
+local cache per OS, architecture and preset, with independent writer keys and
+hit/miss statistics in each job. This avoids the per-object GHA backend writes
+that failed during full-graph qualification. The compiler launcher comes from
 the CI environment through the user presets; ordinary local builds do not
 require sccache. vcpkg binary caching remains independent.
+With sccache 0.18.0, some MSVC C11 compilations remain uncached because its
+argument parser does not accept the required `/experimental:c11atomics` option;
+the SDK's compilation contract is retained.
 CI restores the latest published SDK on every run and
 builds the complete selected graph. The published package remains Runtime +
 Component only; MIR remains outside the installed Runtime link interface.
