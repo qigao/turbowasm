@@ -23,6 +23,9 @@ find_package(Salts CONFIG REQUIRED
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
 
+include(cmake/SaltsCompilerOptions.cmake)
+turbowasm_normalize_salts_c11_atomics()
+
 if(NOT TARGET Salts::CMeta)
   message(FATAL_ERROR
     "TurboWasm requires a Salts SDK that exports Salts::CMeta")
@@ -653,7 +656,7 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
 
   if(MSVC)
     target_compile_options(turbowasm_wasi_threads PRIVATE
-      /W4 /experimental:c11atomics)
+      /W4 -experimental:c11atomics)
   else()
     target_compile_options(turbowasm_wasi_threads PRIVATE
       -Wall -Wextra -Wpedantic)

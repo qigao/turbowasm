@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project(TurboWasmInstalledConsumer LANGUAGES C CXX)
 
 include(CTest)
+include(../../cmake/SaltsCompilerOptions.cmake)
 
 foreach(_dependency IN ITEMS Salts TurboWasm)
   if(_dependency STREQUAL "Salts")
@@ -18,6 +19,8 @@ foreach(_dependency IN ITEMS Salts TurboWasm)
   find_package(${_dependency} CONFIG REQUIRED
     PATHS "${_root}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 endforeach()
+
+turbowasm_normalize_salts_c11_atomics()
 
 add_executable(turbowasm_installed_consumer main.c)
 target_link_libraries(turbowasm_installed_consumer PRIVATE TurboWasm::Runtime)

@@ -263,9 +263,13 @@ hit/miss statistics in each job. This avoids the per-object GHA backend writes
 that failed during full-graph qualification. The compiler launcher comes from
 the CI environment through the user presets; ordinary local builds do not
 require sccache. vcpkg binary caching remains independent.
-With sccache 0.18.0, some MSVC C11 compilations remain uncached because its
-argument parser does not accept the required `/experimental:c11atomics` option;
-the SDK's compilation contract is retained.
+For published Salts SDKs, including 2.2.0, the build and installed-package tests
+normalize the imported `/experimental:c11atomics` option to MSVC's equivalent
+`-experimental:c11atomics` spelling. sccache 0.18.0 treats the unrecognized slash
+spelling as an input file, while retaining the dash spelling as an argument.
+The SDK's C-only condition and atomics semantics are preserved; SDK files are
+unchanged. Remove this normalization when the minimum supported Salts SDK
+exports the corrected spelling.
 CI restores the latest published SDK on every run and
 builds the complete selected graph. The published package remains Runtime +
 Component only; MIR remains outside the installed Runtime link interface.
