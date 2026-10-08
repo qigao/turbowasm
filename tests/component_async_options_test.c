@@ -471,6 +471,26 @@ spec("Instance-owned Component async options") {
         check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[1]), TURBOWASM_OK);
         check_equal(impl->host_budget.used, (size_t)0);
     }
+    it("charges synchronous owned results on the async instance and returns quota only on destruction") {
+        turbowasm_component_host_value rep = {.kind = TURBOWASM_COMPONENT_HOST_S32, .as.s32 = 42};
+        turbowasm_component_call call = {0};
+        turbowasm_component_host_value result = {0};
+        turbowasm_trap trap;
+        size_t count, charge, limit;
+        check_equal(turbowasm_component_instance_invoke(&instance, name("make"), &rep, 1u, &output, 1u, &count, &trap), TURBOWASM_OK);
+        charge = impl->host_budget.used; check_greater(charge, (size_t)0);
+        limit = impl->host_budget.limit; impl->host_budget.limit = charge;
+        check_equal(turbowasm_component_instance_invoke(&instance, name("make"), &rep, 1u, &result, 1u, &count, &trap), TURBOWASM_OUT_OF_MEMORY);
+        check_equal((int)result.kind, 0); check_equal(impl->host_budget.used, charge); check_equal(impl->resource_count, 1u);
+        impl->host_budget.limit = limit;
+        check_equal(turbowasm_component_host_value_destroy(&output), TURBOWASM_OK); check_equal(impl->host_budget.used, (size_t)0);
+        check_equal(turbowasm_component_call_create(&call, &instance, name("make"), &rep, 1u), TURBOWASM_OK);
+        check_equal(turbowasm_component_call_resume(&call, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_call_take_result(&call, &output), TURBOWASM_OK);
+        check_equal(impl->host_budget.used, charge);
+        turbowasm_component_call_destroy(&call);
+        check_equal(impl->host_budget.used, charge);
+    }
     it("initializes finite independent defaults and copies options before allocator reentry") {
         turbowasm_component_async_options options;
         turbowasm_component_async_options_init_private(&options);

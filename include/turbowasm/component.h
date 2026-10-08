@@ -315,7 +315,8 @@ typedef struct turbowasm_component_async_options {
 /* Defaults: 64 tasks, 4096 handles, 64 transfers, 16 MiB logical host storage.
  * Limits are finite/nonzero, copied before callbacks. Charges survive terminal
  * notification and value delivery until actual owner/allocation destruction;
- * non-null empty strings cost one byte. NULL is a no-op. */
+ * non-null empty strings cost one byte. Returned storage from synchronous
+ * exports on this instance shares the same quota. NULL is a no-op. */
 void turbowasm_component_async_options_init(
     turbowasm_component_async_options *options);
 

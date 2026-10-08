@@ -1007,6 +1007,59 @@ static void commit_result_allocation(component_result_build *build, void *alloca
     build->allocation_bytes += bytes;
 }
 
+/* Synchronous exports are also callable on an async instance. Reuse the same
+ * allocation authority so their returned storage cannot escape its byte quota.
+ * These trees are already converted, but remain private until charging commits. */
+static turbowasm_status sync_result_storage(turbowasm_component_host_value *value,
+    component_result_build *build, size_t *bytes, size_t limit, bool commit) {
+    const turbowasm_component_host_sequence *sequence = public_sequence(value);
+    const turbowasm_component_host_variant *variant = public_variant(value);
+    void *allocation = NULL;
+    size_t count = 0u, stride = 1u, i;
+    turbowasm_status status;
+    if (sequence != NULL) { allocation = sequence->items; count = sequence->count; stride = sizeof(*sequence->items); }
+    else if (variant != NULL) { allocation = variant->payload; count = allocation != NULL; stride = sizeof(*variant->payload); }
+    else if (value->kind == TURBOWASM_COMPONENT_HOST_STRING) {
+        allocation = value->as.string.data; count = value->as.string.size;
+        if (allocation != NULL && count == 0u) count = 1u;
+    } else if (value->kind == TURBOWASM_COMPONENT_HOST_FLAGS) {
+        allocation = value->as.flags.words; count = value->as.flags.word_count; stride = sizeof(uint32_t);
+    } else if (value->kind == TURBOWASM_COMPONENT_HOST_OWN) {
+        allocation = value->as.own; count = 1u; stride = sizeof(*value->as.own);
+    }
+    status = argument_size_add(bytes, count, stride, limit);
+    if (status != TURBOWASM_OK) return status;
+    if (commit) commit_result_allocation(build, allocation, count * stride);
+    if (sequence != NULL) {
+        for (i = 0u; i < sequence->count; ++i) {
+            status = sync_result_storage(&sequence->items[i], build, bytes, limit, commit);
+            if (status != TURBOWASM_OK) return status;
+        }
+    } else if (variant != NULL && variant->payload != NULL)
+        return sync_result_storage(variant->payload, build, bytes, limit, commit);
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status charge_sync_result(turbowasm_component_instance_public_impl *instance,
+    turbowasm_component_host_value *value) {
+    component_result_build build = {0};
+    size_t bytes = 0u, committed = 0u;
+    turbowasm_status status;
+    if (!instance->host_budget_owned) return TURBOWASM_OK;
+    build.instance = instance; build.budget = &instance->host_budget;
+    status = sync_result_storage(value, &build, &bytes, build.budget->limit - build.budget->used, false);
+    if (status == TURBOWASM_OK) status = retain_result_allocations(value, &build);
+    if (status != TURBOWASM_OK) {
+        while (build.allocation_refs != 0u) { --build.allocation_refs; component_instance_release(instance); }
+        return status;
+    }
+    build.budget->used += bytes;
+    /* The preflight validated this exclusive tree; installation invokes no
+     * allocation or callbacks and cannot exceed the exact reservation. */
+    (void)sync_result_storage(value, &build, &committed, bytes, true);
+    return TURBOWASM_OK;
+}
+
 /* Staging owns only new wrappers/nodes. Strings and canonical obligations still
  * belong to the unchanged source until the complete tree is committed. */
 static void discard_staged_result(turbowasm_component_host_value *value) {
@@ -1984,6 +2037,7 @@ static turbowasm_status component_instance_invoke(
     if (has_result) {
         status = internal_to_public(
             &internal_result, &public_result, 0u);
+        if (status == TURBOWASM_OK) status = charge_sync_result(impl, &public_result);
         if (status != TURBOWASM_OK)
             goto done;
         *result = public_result;
@@ -2310,6 +2364,7 @@ turbowasm_status turbowasm_component_call_take_result(
         &impl->instance->component->binary.config);
     status = internal_to_public(
         &internal_result, out_result, 0u);
+    if (status == TURBOWASM_OK) status = charge_sync_result(impl->instance, out_result);
     if (internal_result.kind !=
         TURBOWASM_COMPONENT_TYPE_UNDEFINED)
         turbowasm_component_value_destroy(

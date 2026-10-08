@@ -749,7 +749,7 @@ Tasks/handles/transfers retain their quota until their actual retirement, not
 merely until terminal notification. The constructor owns one stable byte budget;
 callers neither pass nor mutate it.
 
-Host storage covers owner bodies, snapshots, copied payloads and retained result
+Host storage covers async owner bodies, snapshots, copied payloads and retained result
 allocations. Successful publication transfers each remaining reservation to
 the returned allocation/resource/endpoint owner until its actual destruction or
 subsequent move. It must not return the charge merely because a task or transfer
@@ -759,6 +759,12 @@ returned string/composite/resource storage and direct endpoint-body ownership.
 Each allocation retains the instance/budget and releases its charge after the
 allocator's deallocation callback. Detached subtrees therefore remain charged
 independently, without a public ownership field or parallel value registry.
+Synchronous exports invoked on an async instance use the same finalizers for
+their returned storage; invoking a synchronous export cannot bypass the retained
+result quota. Existing synchronous instances retain their original Runtime
+allocation contract. Whole-tree output charging commits before public delivery;
+quota failure discards unpublished synchronous results through their actual
+cleanup authority.
 
 An async-capable instance may also run synchronous exports through the existing
 sync APIs. Async-typed exports require `async_task`; the sync APIs return
@@ -1246,8 +1252,13 @@ handoff now retires those references before the canonical cells can be freed.
 Public wait/shutdown suspension tests exercise actual imported I/O, stale
 continuations and delayed destructor failure. The installed C/C++ tests pass
 16/16 and exercise public typed endpoint round trips, tasks, transfer batches,
-shutdown and C++ linkage/layout. Full native CI qualification of this installed
-surface is pending. Post-admission copy failures are
+shutdown and C++ linkage/layout. Commit `86561c4` passes all five
+[native CI profiles](https://github.com/qigao/turbowasm/actions/runs/37764949070):
+Windows 172/172 plus 16 installed tests, Linux MIR 213/213 in 3.30 s and macOS
+MIR 213/213 in 3.67 s. Android builds the full configured graph and installed
+consumers without a host execution claim. This qualifies the installed host
+surface; nested providers and WASI-specific async constructors remain separate.
+Post-admission copy failures are
 reported by the accepted transfer, preserving its received prefix and unsent tail.
 
 The release gate is formal behavioral coverage of scalar/composite/own/borrow
