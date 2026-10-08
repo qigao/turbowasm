@@ -905,7 +905,7 @@ spec("Deferred Component host argument ownership") {
         check_equal(result.kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
         check_greater(budget.used, (size_t)0); check_equal(resource_codec.exec->async_resource_owners, 1u);
         check_equal(turbowasm_component_host_result_take(&result_owners[0], &resources[0]), TURBOWASM_OK);
-        check_greater(budget.used, (size_t)0);
+        check_greater(budget.used, turbowasm_component_exec_resource_adopt_size());
         check_equal(prepare_async(0u, "consume", resources, 1u, true), TURBOWASM_OK);
         check_equal(resource_codec.exec->async_resource_owners, 2u);
         check_equal(turbowasm_component_host_arguments_commit(&owners[0]), TURBOWASM_OK);
@@ -1193,6 +1193,26 @@ spec("Deferred Component host argument ownership") {
             function->as.function.result, (turbowasm_component_value *)value, &budget), TURBOWASM_INVALID_ARGUMENT);
         check_equal(budget.used, used); check_null(result_owners[0].impl);
         check_equal(value->kind, TURBOWASM_COMPONENT_TYPE_OWN); check_equal(drops(), 0u);
+    }
+    it("charges a non-null zero-length returned string until its allocator release") {
+        turbowasm_component_exec_async_limits limits = {2u, 8u};
+        turbowasm_component_instance_public_impl *impl;
+        turbowasm_runtime_scope scope;
+        turbowasm_component_type_ref type = {TURBOWASM_COMPONENT_TYPE_REF_INLINE,
+            {.inline_type = TURBOWASM_COMPONENT_TYPE_STRING}};
+        turbowasm_component_instance_destroy(&instances[0]);
+        check_equal(turbowasm_component_instance_create_async_private(&instances[0], &components[0], &limits), TURBOWASM_OK);
+        impl = turbowasm_component_instance_public_impl_get(&instances[0]);
+        scope = turbowasm_runtime_scope_enter(&impl->exec.binary->config);
+        result.kind = TURBOWASM_COMPONENT_TYPE_STRING; result.as.string.data = turbowasm_rt_malloc(0u);
+        turbowasm_runtime_scope_leave(scope); check_not_null(result.as.string.data);
+        check_equal(turbowasm_component_host_result_prepare(&result_owners[0], impl,
+            &impl->exec.binary->type_graph, type, &result, &budget), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_result_take(&result_owners[0], &delivered), TURBOWASM_OK);
+        check_equal(delivered.as.string.size, (size_t)0); check_equal(budget.used, (size_t)1);
+        turbowasm_component_instance_destroy(&instances[0]); turbowasm_component_destroy(&components[0]);
+        check_equal(turbowasm_component_host_value_destroy(&delivered), TURBOWASM_OK);
+        check_equal(budget.used, (size_t)0);
     }
     it("rolls back every nested result allocation without moving strings or flag storage") {
         size_t failure, live;

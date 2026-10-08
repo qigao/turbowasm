@@ -25,11 +25,28 @@ static turbowasm_component_host_value output;
 static turbowasm_component_host_value compound_cells[3];
 static size_t allocation_calls, live_allocations, fail_at;
 static bool close_loader;
+static bool probe_admission;
+static unsigned admission_probes;
 static turbowasm_component_async_options *mutate_options;
 
 static void *allocate(void *context, size_t size) {
     void *p;
     (void)context; ++allocation_calls;
+    if (probe_admission) {
+        turbowasm_component_async_task task = {0};
+        turbowasm_component_async_transfer transfer = {0};
+        turbowasm_component_host_value value = {0};
+        probe_admission = false; ++admission_probes;
+        check_equal(turbowasm_component_async_task_create(&task, &instance, name("answer"), NULL, 0u), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_async_task_resume(&tasks[0], NULL), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_async_transfer_read(&transfer, &ends[0][0], 1u, 0u), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_async_endpoint_from_value(&ends[1][0], &compound_cells[2]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_async_endpoint_into_value(&ends[1][1], &value), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_value_destroy(&compound_cells[1]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_value_destroy(&compound_cells[2]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_instance_request_shutdown(&instance), TURBOWASM_INVALID_ARGUMENT);
+        check_null(task.impl); check_null(transfer.impl); check_equal((int)value.kind, 0);
+    }
     if (mutate_options != NULL) {
         memset(mutate_options, 0, sizeof(*mutate_options)); mutate_options = NULL;
     }
@@ -113,7 +130,7 @@ spec("Instance-owned Component async options") {
     before_each() {
         turbowasm_runtime_config config;
         turbowasm_component_async_options options = {2u, 8u, 1u, 16384u};
-        close_loader = false; mutate_options = NULL; fail_at = 0u;
+        close_loader = false; mutate_options = NULL; fail_at = 0u; probe_admission = false; admission_probes = 0u;
         turbowasm_runtime_config_init(&config);
         config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
         check_equal(turbowasm_component_load_async_private(&component, component_host_tasks_bytes,
@@ -122,7 +139,7 @@ spec("Instance-owned Component async options") {
     }
     after_each() {
         unsigned i;
-        close_loader = false; mutate_options = NULL; fail_at = 0u;
+        close_loader = false; mutate_options = NULL; fail_at = 0u; probe_admission = false;
         for (i = 0u; i < OWNER_COUNT; ++i) {
             const turbowasm_component_task *view = turbowasm_component_host_task_view(&tasks[i]);
             if (view != NULL && view->state < TURBOWASM_EXECUTION_COMPLETED)
@@ -385,10 +402,12 @@ spec("Instance-owned Component async options") {
         check_equal(turbowasm_component_async_endpoint_pair_create(&ends[0][0], &ends[0][1], &instance, type), TURBOWASM_OK);
         check_equal(turbowasm_component_async_endpoint_pair_create(&ends[1][0], &ends[1][1], &instance, future), TURBOWASM_OK);
         check_equal(turbowasm_component_async_endpoint_into_value(&ends[1][0], &compound_cells[2]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_task_create(&tasks[0], &instance, name("answer"), NULL, 0u), TURBOWASM_OK);
         resource = compound_cells[1].as.own; reader = compound_cells[2].as.future.impl; writer = ends[0][1].impl;
         used = impl->host_budget.used; live = live_allocations; refs = impl->ref_count;
         check_equal(turbowasm_component_async_transfer_write(&transfers[1], &ends[0][1], &tuple, 1u), TURBOWASM_INVALID_ARGUMENT);
         for (failure = 1u; failure < 64u; ++failure) {
+            probe_admission = true;
             fail_at = allocation_calls + failure;
             turbowasm_status status = turbowasm_component_async_transfer_write_move(&transfers[1], &ends[0][1], &tuple, 1u);
             fail_at = 0u;
@@ -399,6 +418,7 @@ spec("Instance-owned Component async options") {
             check_equal(live_allocations, live); check_equal((size_t)impl->ref_count, refs);
         }
         check_true(admitted); check_greater(failure, 2u);
+        check_greater(admission_probes, 2u);
         check_equal((int)compound_cells[1].kind, 0); check_equal((int)compound_cells[2].kind, 0); check_null(ends[0][1].impl);
         text[0] = 'z';
         check_equal(turbowasm_component_async_transfer_read(&transfers[0], &ends[0][0], 1u, 4096u), TURBOWASM_OK);
@@ -414,6 +434,41 @@ spec("Instance-owned Component async options") {
         check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[0]), TURBOWASM_OK);
         check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[1]), TURBOWASM_OK);
         check_equal(turbowasm_component_async_endpoint_destroy(&ends[1][1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_task_request_cancel(&tasks[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_task_request_cancel(&tasks[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_task_destroy(&tasks[0]), TURBOWASM_OK);
+        check_equal(impl->host_budget.used, (size_t)0);
+    }
+    it("reports copy exhaustion on accepted transfers and returns the complete unsent text tail") {
+        turbowasm_component_async_options options = {2u, 16u, 2u, 65536u};
+        turbowasm_component_type_token type;
+        uint8_t text[] = {'a', 0, 'b'};
+        turbowasm_component_host_value value = {.kind = TURBOWASM_COMPONENT_HOST_STRING,
+            .as.string = {text, sizeof(text)}};
+        turbowasm_component_async_transfer_state state;
+        configure(&options);
+        check_equal(turbowasm_component_instance_parameter_type(&instance, name("echo-text-stream"), 0u, &type), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_pair_create(&ends[0][0], &ends[0][1], &instance, type), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_read(&transfers[0], &ends[0][0], 1u, 0u), TURBOWASM_OK);
+        /* The value snapshot commits successfully; the peer's byte allowance
+         * then rejects the actual copy. Both accepted owners remain reclaimable. */
+        check_equal(turbowasm_component_async_transfer_write(&transfers[1], &ends[0][1], &value, 1u), TURBOWASM_OK);
+        check_null(ends[0][1].impl);
+        check_equal(turbowasm_component_async_transfer_poll(&transfers[0]), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(turbowasm_component_async_transfer_poll(&transfers[1]), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(turbowasm_component_async_transfer_state_get(&transfers[1], &state), TURBOWASM_OK);
+        check_true(state.terminal); check_equal(state.outcome, TURBOWASM_COMPONENT_ASYNC_TRANSFER_FAILED);
+        check_equal(state.progress, 0u);
+        check_equal(turbowasm_component_async_transfer_take_result(&transfers[0], &public_results[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_take_result(&transfers[1], &public_results[1]), TURBOWASM_OK);
+        check_equal(public_results[0].logical_count, 0u); check_equal(public_results[1].logical_count, 1u);
+        check_equal(public_results[1].values.as.list.items[0].as.string.size, sizeof(text));
+        check_equal(public_results[1].values.as.list.items[0].as.string.data, text, sizeof(text));
+        check_equal(turbowasm_component_async_transfer_destroy(&transfers[0]), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(turbowasm_component_async_transfer_destroy(&transfers[1]), TURBOWASM_OUT_OF_MEMORY);
+        check_null(transfers[0].impl); check_null(transfers[1].impl);
+        check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[1]), TURBOWASM_OK);
         check_equal(impl->host_budget.used, (size_t)0);
     }
     it("initializes finite independent defaults and copies options before allocator reentry") {

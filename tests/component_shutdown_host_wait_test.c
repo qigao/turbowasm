@@ -114,12 +114,12 @@ static turbowasm_status wait_host(void *opaque, turbowasm_host_call *call,
     *trap = TURBOWASM_TRAP_NONE; return TURBOWASM_OK;
 }
 static void create(unsigned index) {
-    turbowasm_component_exec_async_limits limits = {1u, 8u};
+    turbowasm_component_async_options options = {1u, 8u, 1u, 16384u};
     turbowasm_component_exec_imports imports = {0};
     wait_context *context = &contexts[index];
     imports.context = context; imports.can_bind = can_bind; imports.invoke = wait_host;
-    check_equal(turbowasm_component_instance_create_async_with_import_sets_private(&context->instance,
-        &component, &limits, &imports, 1u), TURBOWASM_OK);
+    check_equal(turbowasm_component_instance_create_async_with_options_private(&context->instance,
+        &component, &options, &imports, 1u), TURBOWASM_OK);
     context->impl = turbowasm_component_instance_public_impl_get(&context->instance);
 #ifdef TURBOWASM_TEST_MIR
     {
@@ -194,6 +194,29 @@ spec("Component shutdown destructor host waits") {
             check_null(context->instance.impl);
         }
         turbowasm_component_destroy(&component); check_equal(live_allocations, (size_t)0);
+    }
+    it("authenticates public shutdown waits and publishes destructor failure only at terminal completion") {
+        wait_context *context = &contexts[0];
+        turbowasm_component_async_wait first = {0}, wrong;
+        turbowasm_component_async_shutdown_state state;
+        size_t calls;
+        make(context);
+        check_equal(turbowasm_component_instance_request_shutdown(&context->instance), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown(&context->instance, NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_instance_shutdown_state_get(&context->instance, &state), TURBOWASM_OK);
+        check_true(state.requested); check_false(state.complete);
+        check_equal(state.wait_reason, TURBOWASM_COMPONENT_ASYNC_WAIT_HOST_IO);
+        check_true(turbowasm_component_instance_shutdown_pending_host_wait(&context->instance, &first));
+        wrong = first; ++wrong.continuation;
+        check_equal(turbowasm_component_instance_shutdown_complete_host_wait(&context->instance, wrong, 0), TURBOWASM_INVALID_ARGUMENT);
+        calls = allocation_calls;
+        check_equal(turbowasm_component_instance_shutdown_complete_host_wait(&context->instance, first, 0), TURBOWASM_OK);
+        check_equal(allocation_calls, calls); check_equal(context->completed, 0u);
+        check_equal(turbowasm_component_instance_shutdown_complete_host_wait(&context->instance, first, 0), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_instance_poll_shutdown(&context->instance, NULL), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_instance_shutdown_state_get(&context->instance, &state), TURBOWASM_OK);
+        check_true(state.complete); check_equal(state.status, TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_instance_poll_shutdown(&context->instance, NULL), TURBOWASM_TRAPPED);
     }
     it("keeps an imported destructor and instance alive until real host completion") {
         wait_context *context = &contexts[0];

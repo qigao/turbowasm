@@ -184,7 +184,7 @@ turbowasm_status turbowasm_component_async_task_state_get(const turbowasm_compon
     turbowasm_component_async_task_state state = {0};
     turbowasm_component_task_host_wait wait;
     if (impl == NULL || out == NULL || impl->driving || impl->instance->shutdown_driving ||
-        impl->task.domain->active != NULL || impl->task.domain->auxiliary != NULL)
+        impl->instance->host_activity != 0u || impl->task.domain->active != NULL || impl->instance->exec.async_driving)
         return TURBOWASM_INVALID_ARGUMENT;
     task = &impl->task;
     state.execution = task->state; state.terminal = task->state >= TURBOWASM_EXECUTION_COMPLETED;
@@ -229,7 +229,8 @@ turbowasm_status turbowasm_component_host_task_resume(turbowasm_component_host_t
     const turbowasm_execution_options *options) {
     component_host_task_impl *impl = owner != NULL ? owner->impl : NULL;
     turbowasm_status status;
-    if (impl == NULL || impl->driving || impl->instance->shutdown_driving) return TURBOWASM_INVALID_ARGUMENT;
+    if (impl == NULL || impl->driving || impl->instance->shutdown_driving || impl->instance->host_activity != 0u)
+        return TURBOWASM_INVALID_ARGUMENT;
     impl->driving = true;
     status = turbowasm_component_task_resume(&impl->task, options);
     impl->driving = false;

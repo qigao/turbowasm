@@ -1,6 +1,7 @@
 #include <turbowasm/component.h>
 
 #include "component_api_internal.h"
+#include "component_endpoint_builtin.h"
 #include "component_host_endpoint_internal.h"
 #include "component_type_graph.h"
 #include "runtime_alloc.h"
@@ -11,6 +12,7 @@
 
 static bool component_instance_retain(turbowasm_component_instance_public_impl *impl);
 static void component_instance_release(turbowasm_component_instance_public_impl *impl);
+static turbowasm_status destroy_host_value(turbowasm_component_host_value *value, bool internal);
 static bool pair_instance_retain(void *owner) { return component_instance_retain(owner); }
 static void pair_instance_release(void *owner) { component_instance_release(owner); }
 
@@ -1295,7 +1297,8 @@ static turbowasm_status result_storage_size(turbowasm_component_instance_public_
     } else if (value->kind == TURBOWASM_COMPONENT_TYPE_STRING) {
         if (value->as.string.size > SIZE_MAX ||
             (value->as.string.size != 0u && value->as.string.data == NULL)) return TURBOWASM_INVALID_ARGUMENT;
-        return argument_size_add(size, (size_t)value->as.string.size, 1u, limit);
+        return argument_size_add(size, value->as.string.data != NULL && value->as.string.size == 0u
+            ? 1u : (size_t)value->as.string.size, 1u, limit);
     } else if (value->kind == TURBOWASM_COMPONENT_TYPE_FLAGS) {
         return argument_size_add(size, COMPONENT_PUBLIC_FLAGS_WORDS, sizeof(uint32_t), limit);
     } else if (value->kind == TURBOWASM_COMPONENT_TYPE_OWN) {
@@ -1338,7 +1341,9 @@ static void commit_staged_result(turbowasm_component_value *source,
         turbowasm_rt_free(variant->payload);
     } else if (source->kind == TURBOWASM_COMPONENT_TYPE_OWN) {
         turbowasm_component_host_resource *owner = value->as.own;
-        commit_result_allocation(build, owner, sizeof(*owner));
+        /* The public wrapper owns its canonical adopted resource as well.
+         * Their joint reservation survives result delivery until both retire. */
+        commit_result_allocation(build, owner, sizeof(*owner) + turbowasm_component_exec_resource_adopt_size());
         owner->next = owner->instance->resources;
         owner->instance->resources = owner; ++owner->instance->resource_count;
     } else if (public_endpoint(value) != NULL) {
@@ -1349,7 +1354,8 @@ static void commit_staged_result(turbowasm_component_value *source,
         impl->endpoint->value_owner = NULL;
         turbowasm_component_host_endpoint_register(impl);
     } else if (value->kind == TURBOWASM_COMPONENT_HOST_STRING) {
-        commit_result_allocation(build, value->as.string.data, value->as.string.size);
+        commit_result_allocation(build, value->as.string.data,
+            value->as.string.size == 0u ? 1u : value->as.string.size);
     } else if (value->kind == TURBOWASM_COMPONENT_HOST_FLAGS) {
         commit_result_allocation(build, value->as.flags.words, value->as.flags.word_count * sizeof(uint32_t));
     }
@@ -1470,7 +1476,7 @@ turbowasm_status turbowasm_component_host_result_destroy(turbowasm_component_hos
     if (impl->driving || !turbowasm_component_host_activity_enter(impl->instance, false))
         return TURBOWASM_INVALID_ARGUMENT;
     impl->driving = true;
-    status = turbowasm_component_host_value_destroy(&impl->value);
+    status = destroy_host_value(&impl->value, true);
     impl->driving = false;
     if ((int)impl->value.kind == 0) host_result_forget(owner);
     else turbowasm_component_host_activity_leave(impl->instance);
@@ -1479,8 +1485,11 @@ turbowasm_status turbowasm_component_host_result_destroy(turbowasm_component_hos
 
 static turbowasm_status check_destroy_owner(
     const turbowasm_component_host_value *value, void *context) {
-    (void)context;
+    bool internal = context != NULL && *(const bool *)context;
     if (public_endpoint(value) != NULL) {
+        const component_host_endpoint_impl *body = public_endpoint(value)->impl;
+        if (!internal && body != NULL && body->instance->host_budget_owned && body->instance->host_activity != 0u)
+            return TURBOWASM_INVALID_ARGUMENT;
         const turbowasm_component_endpoint *end = turbowasm_component_host_endpoint_view(public_endpoint(value));
         if (end == NULL || !end->readable ||
             end->waitable.state.endpoint.future != (value->kind == TURBOWASM_COMPONENT_HOST_FUTURE) ||
@@ -1488,6 +1497,9 @@ static turbowasm_status check_destroy_owner(
     }
     if (value->kind == TURBOWASM_COMPONENT_HOST_OWN &&
         (value->as.own == NULL || value->as.own->loans != 0u || value->as.own->busy))
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!internal && value->kind == TURBOWASM_COMPONENT_HOST_OWN &&
+        value->as.own->instance->host_budget_owned && value->as.own->instance->host_activity != 0u)
         return TURBOWASM_INVALID_ARGUMENT;
     return TURBOWASM_OK;
 }
@@ -1557,10 +1569,9 @@ turbowasm_status turbowasm_component_host_value_destroy_locked(turbowasm_compone
     return destroy_public_value(value);
 }
 
-turbowasm_status turbowasm_component_host_value_destroy(
-    turbowasm_component_host_value *value) {
+static turbowasm_status destroy_host_value(turbowasm_component_host_value *value, bool internal) {
     bool lock = true;
-    turbowasm_status status = visit_public_resources(value, 0u, check_destroy_owner, NULL);
+    turbowasm_status status = visit_public_resources(value, 0u, check_destroy_owner, &internal);
     if (status != TURBOWASM_OK)
         return status;
     status = visit_public_resources(value, 0u, mark_destroy_owner, &lock);
@@ -1570,6 +1581,10 @@ turbowasm_status turbowasm_component_host_value_destroy(
         return status;
     }
     return destroy_public_value(value);
+}
+
+turbowasm_status turbowasm_component_host_value_destroy(turbowasm_component_host_value *value) {
+    return destroy_host_value(value, false);
 }
 
 turbowasm_status turbowasm_component_host_value_borrow(
@@ -1808,8 +1823,8 @@ void turbowasm_component_instance_destroy(
     if (instance == NULL)
         return;
     impl = turbowasm_component_instance_public_impl_get(instance);
-    /* The private shutdown caller must still be able to drive guest cleanup.
-     * Ordinary instances never enter this state while public async is gated. */
+    /* Explicit shutdown keeps its public carrier available to drive remaining
+     * guest cleanup and host completion until the drain reaches terminal state. */
     if (impl != NULL && impl->admission_closed && !impl->shutdown_complete) return;
     instance->impl = NULL;
     component_instance_release(impl);
@@ -1927,7 +1942,8 @@ static turbowasm_status component_instance_invoke(
         return TURBOWASM_INVALID_ARGUMENT;
 
     impl = turbowasm_component_instance_public_impl_get(instance);
-    if (impl == NULL || impl->component == NULL || impl->admission_closed || impl->shutdown_driving)
+    if (impl == NULL || impl->component == NULL || impl->admission_closed || impl->shutdown_driving ||
+        (impl->host_budget_owned && impl->host_activity != 0u))
         return TURBOWASM_INVALID_ARGUMENT;
 
     if (!public_export_result_type(
@@ -1984,7 +2000,7 @@ done:
     if (internal_result.kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED)
         turbowasm_component_value_destroy(&internal_result);
 
-    turbowasm_component_host_value_destroy(&public_result);
+    destroy_host_value(&public_result, true);
     admission_destroy(&admission);
     turbowasm_runtime_scope_leave(scope);
     turbowasm_component_host_activity_leave(impl);
@@ -2060,7 +2076,8 @@ static turbowasm_status component_call_create(
     instance_impl =
         turbowasm_component_instance_public_impl_get(instance);
     if (instance_impl == NULL || instance_impl->component == NULL ||
-        instance_impl->admission_closed || instance_impl->shutdown_driving)
+        instance_impl->admission_closed || instance_impl->shutdown_driving ||
+        (instance_impl->host_budget_owned && instance_impl->host_activity != 0u))
         return TURBOWASM_INVALID_ARGUMENT;
 
     if (!public_export_result_type(
@@ -2168,7 +2185,7 @@ turbowasm_status turbowasm_component_call_resume(
     turbowasm_status status;
     turbowasm_execution_state state;
     turbowasm_runtime_scope scope;
-    if (impl == NULL)
+    if (impl == NULL || (impl->instance->host_budget_owned && impl->instance->host_activity != 0u))
         return TURBOWASM_INVALID_ARGUMENT;
     state = turbowasm_component_exec_call_state_get(&impl->call);
     if (state != TURBOWASM_EXECUTION_READY && state != TURBOWASM_EXECUTION_YIELDED)
@@ -2298,8 +2315,7 @@ turbowasm_status turbowasm_component_call_take_result(
         turbowasm_component_value_destroy(
             &internal_result);
     if (status != TURBOWASM_OK)
-        turbowasm_component_host_value_destroy(
-            out_result);
+        destroy_host_value(out_result, true);
     turbowasm_runtime_scope_leave(scope);
     turbowasm_component_host_activity_leave(impl->instance);
     return status;

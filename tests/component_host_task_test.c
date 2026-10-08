@@ -832,6 +832,34 @@ spec("Retained Component host task owners") {
         check_equal(turbowasm_component_instance_create(&sync, &component), TURBOWASM_UNSUPPORTED);
         check_null(sync.impl);
     }
+    it("authenticates the public wait ticket across real entry and callback I/O") {
+        turbowasm_component_async_wait entry = {0}, callback = {0}, wrong;
+        turbowasm_component_async_task_state state;
+        size_t attempts;
+        use_io_fixture(); check_equal(create(0u, "callback-root", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_async_task_state_get(&owners[0], &state), TURBOWASM_OK);
+        check_equal(state.wait_reason, TURBOWASM_COMPONENT_ASYNC_WAIT_HOST_IO); check_false(state.terminal);
+        check_true(turbowasm_component_async_task_pending_host_wait(&owners[0], &entry));
+        wrong = entry; ++wrong.continuation;
+        check_equal(turbowasm_component_async_task_complete_host_wait(&owners[0], wrong, 7), TURBOWASM_INVALID_ARGUMENT);
+        wrong = entry; wrong.owner = &owners[0];
+        check_equal(turbowasm_component_async_task_complete_host_wait(&owners[0], wrong, 7), TURBOWASM_INVALID_ARGUMENT);
+        attempts = allocations.attempts;
+        check_equal(turbowasm_component_async_task_complete_host_wait(&owners[0], entry, 7), TURBOWASM_OK);
+        check_equal(allocations.attempts, attempts); check_equal(io_completed, 0u);
+        check_equal(turbowasm_component_async_task_complete_host_wait(&owners[0], entry, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_async_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_async_task_resume(&owners[0], NULL), TURBOWASM_YIELDED);
+        check_true(turbowasm_component_async_task_pending_host_wait(&owners[0], &callback));
+        check_greater(callback.continuation, entry.continuation);
+        check_equal(turbowasm_component_async_task_complete_host_wait(&owners[0], entry, 7), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_async_task_complete_host_wait(&owners[0], callback, 7), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_task_resume(&owners[0], NULL), TURBOWASM_OK);
+        compiled(0u); take(0u, 42u); check_equal(io_completed, 2u);
+        check_equal(turbowasm_component_async_task_state_get(&owners[0], &state), TURBOWASM_OK);
+        check_true(state.terminal); check_true(state.result_taken);
+    }
     it("authenticates real imported I/O across the retained root and callback executions") {
         turbowasm_component_task_host_wait entry, callback;
         use_io_fixture(); check_equal(create(0u, "callback-root", NULL, 0u, false), TURBOWASM_OK);

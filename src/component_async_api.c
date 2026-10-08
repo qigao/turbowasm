@@ -1,8 +1,7 @@
 #include "component_host_endpoint_internal.h"
 #include <string.h>
 
-/* The joined façade stays privately declared until all transfer adapters and
- * installed-consumer qualification are ready. Owners reuse the same bodies. */
+/* The public façade reuses existing task, endpoint and transfer owners. */
 static turbowasm_component_instance_public_impl *async_instance(
     const turbowasm_component_instance *instance) {
     turbowasm_component_instance_public_impl *impl = turbowasm_component_instance_public_impl_get(instance);
@@ -160,14 +159,14 @@ turbowasm_status turbowasm_component_async_task_create(turbowasm_component_async
     turbowasm_component_instance *instance, turbowasm_name name,
     const turbowasm_component_host_value *arguments, size_t count) {
     turbowasm_component_instance_public_impl *impl = async_instance(instance);
-    return impl != NULL ? turbowasm_component_host_task_create(task, impl, name, arguments, count, false,
+    return impl != NULL && impl->host_activity == 0u ? turbowasm_component_host_task_create(task, impl, name, arguments, count, false,
         &impl->host_budget) : TURBOWASM_INVALID_ARGUMENT;
 }
 turbowasm_status turbowasm_component_async_task_create_move(turbowasm_component_async_task *task,
     turbowasm_component_instance *instance, turbowasm_name name,
     turbowasm_component_host_value *arguments, size_t count) {
     turbowasm_component_instance_public_impl *impl = async_instance(instance);
-    return impl != NULL ? turbowasm_component_host_task_create(task, impl, name, arguments, count, true,
+    return impl != NULL && impl->host_activity == 0u ? turbowasm_component_host_task_create(task, impl, name, arguments, count, true,
         &impl->host_budget) : TURBOWASM_INVALID_ARGUMENT;
 }
 turbowasm_status turbowasm_component_async_task_resume(turbowasm_component_async_task *task,
@@ -179,6 +178,10 @@ turbowasm_status turbowasm_component_async_task_resume(turbowasm_component_async
     return status;
 }
 turbowasm_status turbowasm_component_async_task_request_cancel(turbowasm_component_async_task *task) {
+    turbowasm_component_async_task_state state;
+    turbowasm_status status = turbowasm_component_async_task_state_get(task, &state);
+    if (status != TURBOWASM_OK) return status;
+    if (state.terminal || state.cancellation_requested) return TURBOWASM_OK;
     return turbowasm_component_host_task_request_cancel(task);
 }
 turbowasm_status turbowasm_component_async_task_take_result(turbowasm_component_async_task *task,
@@ -233,7 +236,9 @@ turbowasm_status turbowasm_component_async_endpoint_state_get(const turbowasm_co
 turbowasm_status turbowasm_component_async_endpoint_into_value(turbowasm_component_async_endpoint *reader,
     turbowasm_component_host_value *out) {
     const turbowasm_component_endpoint *end = turbowasm_component_host_endpoint_view(reader);
+    const component_host_endpoint_impl *body = reader != NULL ? reader->impl : NULL;
     if (out == NULL || (int)out->kind != 0 || (void *)out == (void *)reader || end == NULL || !end->readable ||
+        body->instance->host_activity != 0u ||
         !turbowasm_component_host_endpoint_destroy_ready(reader)) return TURBOWASM_INVALID_ARGUMENT;
     out->kind = end->waitable.state.endpoint.future ? TURBOWASM_COMPONENT_HOST_FUTURE : TURBOWASM_COMPONENT_HOST_STREAM;
     if (end->waitable.state.endpoint.future) out->as.future = *reader; else out->as.stream = *reader;
@@ -249,6 +254,7 @@ turbowasm_status turbowasm_component_async_endpoint_from_value(turbowasm_compone
     else return TURBOWASM_TYPE_MISMATCH;
     end = turbowasm_component_host_endpoint_view(carrier);
     if (reader == carrier || end == NULL || !end->readable ||
+        ((component_host_endpoint_impl *)carrier->impl)->instance->host_activity != 0u ||
         end->waitable.state.endpoint.future != (source->kind == TURBOWASM_COMPONENT_HOST_FUTURE) ||
         !turbowasm_component_host_endpoint_destroy_ready(carrier)) return TURBOWASM_INVALID_ARGUMENT;
     *reader = *carrier; memset(source, 0, sizeof(*source)); return TURBOWASM_OK;
@@ -256,6 +262,8 @@ turbowasm_status turbowasm_component_async_endpoint_from_value(turbowasm_compone
 turbowasm_status turbowasm_component_async_endpoint_destroy(turbowasm_component_async_endpoint *endpoint) {
     if (endpoint == NULL) return TURBOWASM_INVALID_ARGUMENT;
     if (endpoint->impl == NULL) return TURBOWASM_OK;
+    if (((component_host_endpoint_impl *)endpoint->impl)->instance->host_activity != 0u)
+        return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_component_host_endpoint_destroy_ready(endpoint)) return TURBOWASM_INVALID_ARGUMENT;
     return turbowasm_component_host_endpoint_destroy(endpoint);
 }
@@ -266,7 +274,8 @@ turbowasm_status turbowasm_component_async_transfer_result_destroy(turbowasm_com
     turbowasm_status status, cleanup;
     if (result == NULL) return TURBOWASM_INVALID_ARGUMENT;
     body = result->endpoint.impl;
-    if (body != NULL && !turbowasm_component_host_endpoint_destroy_ready(&result->endpoint))
+    if (body != NULL && (body->instance->host_activity != 0u ||
+        !turbowasm_component_host_endpoint_destroy_ready(&result->endpoint)))
         return TURBOWASM_INVALID_ARGUMENT;
     status = turbowasm_component_host_value_destroy_preflight(&result->values);
     if (status != TURBOWASM_OK) return status;
@@ -298,7 +307,7 @@ turbowasm_status turbowasm_component_instance_shutdown_state_get(const turbowasm
     turbowasm_component_async_shutdown_state state = {0};
     turbowasm_yield_reason reason;
     if (impl == NULL || out == NULL || impl->shutdown_driving || impl->host_activity != 0u ||
-        impl->exec.task_domain.active != NULL || impl->exec.task_domain.auxiliary != NULL)
+        impl->exec.task_domain.active != NULL || impl->exec.async_driving)
         return TURBOWASM_INVALID_ARGUMENT;
     state.requested = impl->admission_closed; state.complete = impl->shutdown_complete;
     state.status = state.complete ? impl->shutdown_status : TURBOWASM_YIELDED;

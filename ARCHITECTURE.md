@@ -671,12 +671,12 @@ addition. Explicit and implicit guest backpressure use the same bounded pending
 task state and preserve queued admission order; they do not create a worker pool
 or an unbounded event queue. No new logging subsystem is required.
 
-### Public async C interface proposal
+### Public async C interface
 
-This proposal makes the approved host boundary concrete. The declarations below
-are a design for the installed `turbowasm/component.h`, not an assertion that
-these functions are implemented or exported. Keep the ordinary synchronous
-loader/constructor contract and add explicit async admission. Private canonical
+The approved host boundary is implemented in the installed
+`turbowasm/component.h`. The declarations below describe that public interface.
+The ordinary synchronous loader/constructor contract is preserved, with explicit
+async admission. Private canonical
 types, handle tables, buffers, task pointers and budget objects never appear in
 the public signatures. The implementation continues to use the existing
 Component owners and type graph as its authorities.
@@ -1223,7 +1223,7 @@ the complete joined surface. This document is reviewable while implementation
 continues. Revert the new adapter/header additions and retain the explicit async
 gate if qualification fails; no serialized data migration is introduced.
 
-Required implementation work includes authenticated public type queries and
+The joined implementation includes authenticated public type queries and
 state snapshots; all-or-nothing host task/transfer value conversion; reservation
 handoff through returned string/composite/resource/endpoint destruction; atomic
 transfer result delivery; public wait-ticket adapters; and options/shutdown
@@ -1233,8 +1233,8 @@ boundary and the same generative resource view, not expose private imports or
 replace missing providers with successful stubs. WASI-specific constructors must
 eventually compose their capability owners with the async options/lifecycle.
 
-The joined declarations and adapters are currently staged privately in
-`src/component_async_api.h`. Windows ASan qualification passes the formal host
+The joined declarations are in `include/turbowasm/component.h`; adapters reuse
+the private owner bodies. Windows ASan qualification passes the formal host
 task, argument/result and options/adapter targets, including actual memory32/64
 guest echoes of mixed string/own/future values, detached-string charging, typed
 and unit futures, partial transfers, repeated cancellation and exhaustive
@@ -1243,8 +1243,11 @@ returned allocations charged until destruction. Async tasks use the transfer
 type predicate; synchronous calls retain their existing type gate. A composite
 transfer test exposed stale admission references after result promotion; payload
 handoff now retires those references before the canonical cells can be freed.
-Remaining qualification includes public wait/shutdown suspension adapters,
-installed C/C++ consumers and Linux/macOS MIR. Post-admission copy failures are
+Public wait/shutdown suspension tests exercise actual imported I/O, stale
+continuations and delayed destructor failure. The installed C/C++ tests pass
+16/16 and exercise public typed endpoint round trips, tasks, transfer batches,
+shutdown and C++ linkage/layout. Full native CI qualification of this installed
+surface is pending. Post-admission copy failures are
 reported by the accepted transfer, preserving its received prefix and unsent tail.
 
 The release gate is formal behavioral coverage of scalar/composite/own/borrow
@@ -1287,7 +1290,7 @@ Commit `3883644` passes all five
 [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37744041741):
 Linux MIR 213/213 in 3.22 s and macOS MIR 213/213 in 2.88 s, including both
 interpreted and compiled instance-options suites. This qualifies private quota
-ownership and constructor retention; the public async host boundary remains gated.
+ownership and constructor retention before the public adapters above were joined.
 
 Task host-wait tickets borrow the stable task and its live instance domain. They
 carry both the domain-assigned task generation and the generation of the current
@@ -1303,8 +1306,8 @@ thread, execute no guest code, preserve outputs on failure, and reject reentry,
 foreign tasks and Component builtin waits. Only the task driver completes builtin
 waits. External host I/O retains its existing completion/cancellation authority;
 requesting Component cancellation does not acknowledge or complete that I/O.
-This private adapter is part of public async integration, whose loader gate stays
-closed until host values, endpoint/transfer ownership and public APIs are joined.
+The public wait adapter above uses this authentication and the same retained
+host values, endpoint/transfer ownership and task state.
 Formal `component_task_test` cases exercise entry-to-callback and repeated-callback
 Runtime token collisions, sibling tasks, reused task storage, repeated waits in
 one execution, duplicate completion, reentry, builtin isolation and nonwrapping
@@ -1318,7 +1321,7 @@ and callbacks. Commit `70293a3` passes all five
 with restored Salts 3.0.0: Linux MIR 213/213 in 1.88 s, macOS MIR 213/213 in
 4.09 s, and Windows 172 main tests in 3.20 s plus 16 installed-package tests in
 0.20 s. This qualifies task/host-owner wait authentication, including real
-compiled callback suspension; full public async admission remains gated.
+compiled callback suspension before the joined public surface was installed.
 
 Future/stream host-value leaves carry an opaque readable endpoint owner by value.
 The carrier is unique: copying it does not create ownership. Argument admission
@@ -1334,8 +1337,8 @@ reservation from result staging to the new endpoint owners; it survives result
 delivery and returns only when the endpoint is moved/published or destroyed.
 The source and destination trees are exclusive throughout admission/promotion.
 Host-value destruction preflights and freezes every owned leaf before releasing
-any; a busy endpoint rejects the whole destruction unchanged. Public async
-loading remains closed during integration of the full task/transfer surface.
+any; a busy endpoint rejects the whole destruction unchanged. Explicit public
+async loading uses this complete task/transfer host-value boundary.
 
 The private endpoint argument adapter now separates preparation, admission and
 guest publication. Preparation allocates an authentic canonical owner record,
@@ -1380,7 +1383,7 @@ tests. The MIR suites include actual compiled task-body assertions. The new
 address assertions explicitly use TinyTest's `const void *` trait on every
 compiler; they do not rely on implicit pointer-to-integer conversion.
 This supplies transactional endpoint ownership for the remaining whole-tree
-host-value conversion; public async values and owners remain under integration.
+host-value conversion, now joined to public async values and opaque owners.
 
 Alternatives rejected: treating a fuel yield as async completion loses task
 state; detached threads violate instance affinity; implicitly cloning endpoints
@@ -1484,8 +1487,8 @@ conversion/wrapper allocation failures, duplicate owners, busy lower reservation
 wrong nominal types and instances, malformed budgets and storage overflow.
 Windows ASan passes 48 cases and 56,209 assertions; the related
 Component/WASI/Runtime graph passes 85/85 in 9.39 s. Resource and composite
-result promotion remains private until the public async task and endpoint
-boundary is complete; future/stream results still require that endpoint owner.
+result promotion remains an internal implementation behind the public task and
+transfer adapters; future/stream leaves use the endpoint owner described above.
 Commit `73e1137` passes all five [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37722176124):
 Linux MIR 207/207 in 1.94 s and macOS MIR 207/207 in 2.73 s, including the
 host result cases under interpreted and compiled callers/resource destructors.
@@ -1503,8 +1506,8 @@ results are delivered once with count zero. Borrowed input storage remains held
 through delivery. Destroy rejects live or reentrant owners without mutation,
 then releases the Runtime task before parameters/results and instance retention.
 Cleanup continues after destructor errors and preserves the primary guest error.
-This owner remains private while endpoint host values and transfers are joined;
-the public binary loader and synchronous instance constructor keep their gates.
+This owner implements the opaque public async task. The ordinary synchronous
+loader and instance constructor preserve their original async rejection gates.
 The formal host-task fixture covers memory32/64 strings, indirect parameters,
 own round trips, borrowed input retention, callback cancellation, noncancellable
 yield, post-return traps, quota reuse, allocation rollback, interruption-poll

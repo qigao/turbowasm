@@ -2,7 +2,6 @@
 #define TURBOWASM_COMPONENT_API_INTERNAL_H
 
 #include <turbowasm/component.h>
-#include "component_async_api.h"
 
 #include "component_binary.h"
 #include "component_exec.h"

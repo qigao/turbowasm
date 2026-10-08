@@ -68,7 +68,7 @@ frame unwinds. Each instance/backend retains one execution owner,
 while distinct instances can import the same shared backing. Native MIR
 memory64 verification passed the Linux and macOS MIR test profiles; see the
 [qualification record](tests/conformance/README.md). The Windows MIR dependency
-is not supported. The synchronous Component Model subset is exposed separately
+is not supported. The Component Model host API is exposed separately
 through the optional `TurboWasm::Component` façade; it does not enter the
 `TurboWasm::Runtime` public ABI. WASI 0.2 remains a separate capability layer
 tracked by Runtime v2 (#301). The interpreter supports GC and all table64
@@ -110,8 +110,16 @@ Local-function canonical lowering shares these adapters and resource ownership
 rules, including aliases, Core start calls, nested composite values and string
 conversion across memory32/memory64. Large parameter tuples use the canonical
 indirect ABI with aligned, checked memory access and a separate result pointer.
-The full async/future/stream surface and broader WASI 0.2 interfaces remain work
-in progress; the Component Model is not yet complete.
+The Component host API also exposes explicit async loading, bounded instances,
+task driving and cancellation, authenticated host-wait completion, typed
+future/stream endpoint moves, transfer results and cooperative shutdown.
+See [component.h](include/turbowasm/component.h) for the ownership/error contract
+and [the async interface](ARCHITECTURE.md#public-async-c-interface) for examples.
+Async tasks and transfers consume owned leaves only through explicit move entry
+points; returned storage remains charged until actual destruction. Existing
+synchronous admission retains its behavior. Component provider linking, nested
+instantiation and broader WASI 0.2 integration remain incomplete; the Component
+Model is not yet complete.
 
 MIR admits the complete helper-backed SIMD instruction set, including shuffle,
 lane extraction/replacement, extending/splat/zero loads and lane loads/stores.

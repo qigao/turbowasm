@@ -333,7 +333,8 @@ turbowasm_status turbowasm_component_host_transfer_destroy(turbowasm_component_h
 turbowasm_status turbowasm_component_async_transfer_read(turbowasm_component_async_transfer *owner,
     turbowasm_component_async_endpoint *reader, uint32_t count, size_t bytes) {
     component_host_endpoint_impl *body = reader != NULL ? reader->impl : NULL;
-    if (body == NULL || !body->instance->host_budget_owned) return TURBOWASM_INVALID_ARGUMENT;
+    if (body == NULL || !body->instance->host_budget_owned || body->instance->host_activity != 0u)
+        return TURBOWASM_INVALID_ARGUMENT;
     return turbowasm_component_host_transfer_read(owner, reader, count, bytes, &body->instance->host_budget, NULL);
 }
 static turbowasm_status write_host_values(turbowasm_component_async_transfer *owner,
@@ -344,7 +345,8 @@ static turbowasm_status write_host_values(turbowasm_component_async_transfer *ow
     turbowasm_component_value *canonical;
     turbowasm_status status, cleanup;
     const turbowasm_component_endpoint *end;
-    if (body == NULL || body->driving || !body->instance->host_budget_owned || owner == NULL || owner->impl != NULL ||
+    if (body == NULL || body->driving || !body->instance->host_budget_owned || body->instance->host_activity != 0u ||
+        owner == NULL || owner->impl != NULL ||
         (void *)owner == (void *)writer || count > TURBOWASM_COMPONENT_COPY_MAX_LENGTH) return TURBOWASM_INVALID_ARGUMENT;
     end = body->endpoint;
     if (end->readable || (end->waitable.state.endpoint.future && count != 1u)) return TURBOWASM_INVALID_ARGUMENT;
@@ -432,6 +434,12 @@ turbowasm_status turbowasm_component_async_transfer_take_result(turbowasm_compon
         if (status == TURBOWASM_OK) status = turbowasm_component_host_result_take(&impl->result, &result.values);
     }
     if (status == TURBOWASM_OK) {
+        /* The terminal batch now owns every remaining nested allocation. No
+         * later copy can use this capacity; release its old reservation after
+         * the destination has committed, while root buffer cells stay charged. */
+        impl->budget->used -= impl->payload_capacity;
+        impl->bytes -= impl->payload_capacity;
+        impl->payload_capacity = impl->payload_used = 0u;
         result.endpoint = impl->endpoint; impl->endpoint.impl = NULL;
         turbowasm_component_host_endpoint_register(result.endpoint.impl);
         result.first_index = offset; result.logical_count = count;
