@@ -272,6 +272,15 @@ Component only; MIR remains outside the installed Runtime link interface.
 Android uses the shared outer vcpkg toolchain with the NDK chainloaded, and its
 existing installed consumers are cross-compiled without running host CTest.
 
+Commit `27d6efb` passes all five profiles in both the
+[cold build](https://github.com/qigao/turbowasm/actions/runs/37738464606) and
+[cache-restored build](https://github.com/qigao/turbowasm/actions/runs/37738955984),
+with zero cache write errors. Restored Linux and macOS MIR builds each record
+300 hits and one miss and pass 209/209 tests. Windows records 196 hits, zero
+misses and 76 uncached calls; its cacheable-hit percentage excludes those calls.
+The same commit passes the four-platform
+[SDK build and packaging](https://github.com/qigao/turbowasm/actions/runs/37738470020).
+
 ## SIMD
 
 WebAssembly stores SIMD values as `v128`, but TurboWasm refines the semantic
