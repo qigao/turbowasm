@@ -695,6 +695,11 @@ carriers close, first-allocation loader closure and complete allocation rollback
 for constructors, tasks, endpoint pairs and transfers. Windows ASan passes 15
 cases and 64,155 assertions; related Component/WASI/Runtime regression passes
 88/88 in 10.54 s. The MIR variant requires actual compiled task bodies.
+Commit `3883644` passes all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37744041741):
+Linux MIR 213/213 in 3.22 s and macOS MIR 213/213 in 2.88 s, including both
+interpreted and compiled instance-options suites. This qualifies private quota
+ownership and constructor retention; the public async host boundary remains gated.
 
 Alternatives rejected: treating a fuel yield as async completion loses task
 state; detached threads violate instance affinity; implicitly cloning endpoints
