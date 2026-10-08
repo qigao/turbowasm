@@ -822,8 +822,10 @@ reject guest creation at that shared quota, verify invalid/allocation-failed
 admission leaves outputs empty, reuse closed storage, and move a host reader
 through the canonical codec into actual Core memory32/64 reads while its host
 writer completes the rendezvous. Windows ASan passes 19 cases and 3,507
-assertions; the related regression passes 86/86 in 9.15 s. Native qualification
-of the shared host/guest factory is pending.
+assertions; the related regression passes 86/86 in 9.15 s. Commit `91f7958`
+passes all five [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37724771608):
+Linux MIR 209/209 in 3.02 s and macOS MIR 209/209 in 2.82 s, including compiled
+Core memory32/64 rendezvous with the host writer.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
