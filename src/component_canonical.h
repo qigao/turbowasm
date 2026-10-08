@@ -152,6 +152,8 @@ struct turbowasm_component_value {
     turbowasm_component_value_release_fn release;
     void *release_context;
     uint64_t resource_identity;
+    /* Private instantiated identity; its resource owner retains the type view. */
+    const void *resource_instance_key;
 };
 
 typedef turbowasm_status (*turbowasm_component_realloc_fn)(
@@ -313,7 +315,8 @@ turbowasm_status turbowasm_component_canonical_lower_value(
     const turbowasm_component_value *value);
 
 /* Pure admission validation: no guest calls, writes, allocations or transfers.
- * A nonzero resource_identity additionally checks a host-provided nominal ID. */
+ * A resource instance key checks runtime identity when present; otherwise a
+ * nonzero resource_identity checks a host-provided nominal declaration ID. */
 turbowasm_status turbowasm_component_canonical_validate_value(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref type,

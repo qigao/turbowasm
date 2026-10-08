@@ -18,7 +18,7 @@ static bool inline_kind(turbowasm_component_type_kind kind) {
 static bool value_type_features(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
-    uint32_t depth, bool allow_async, bool inspect_payloads, uint32_t *features);
+    uint32_t depth, bool allow_async, bool inspect_payloads, bool imported, uint32_t *features);
 
 turbowasm_component_type_ref turbowasm_component_type_ref_indexed(
     turbowasm_component_type_id id) {
@@ -708,7 +708,7 @@ bool turbowasm_component_type_graph_validate(
                 }
                 if (type->as.async_value.has_payload &&
                     (!value_type_features(graph, type->as.async_value.payload,
-                        1u, true, false, &payload_features) ||
+                        1u, true, false, false, &payload_features) ||
                      type_ref_contains_borrow(
                         graph, type->as.async_value.payload, 0u)))
                     return false;
@@ -973,7 +973,7 @@ const cmeta_type_desc *turbowasm_component_scalar_cmeta_type(
 static bool value_type_features(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref,
-    uint32_t depth, bool allow_async, bool inspect_payloads, uint32_t *features) {
+    uint32_t depth, bool allow_async, bool inspect_payloads, bool imported, uint32_t *features) {
     const turbowasm_component_type *type;
     turbowasm_component_type_kind kind;
     uint32_t i;
@@ -1007,7 +1007,7 @@ static bool value_type_features(
          * its handle; it does not encode the endpoint's future elements. */
         return allow_async && (!type->as.async_value.has_payload ||
             value_type_features(graph, type->as.async_value.payload,
-                depth + 1u, true, inspect_payloads, inspect_payloads ? features : &payload_features));
+                depth + 1u, true, inspect_payloads, imported, inspect_payloads ? features : &payload_features));
     }
 
     if (type->kind == TURBOWASM_COMPONENT_TYPE_STRING ||
@@ -1016,6 +1016,12 @@ static bool value_type_features(
     if (type->kind == TURBOWASM_COMPONENT_TYPE_OWN ||
         type->kind == TURBOWASM_COMPONENT_TYPE_BORROW) {
         *features |= TURBOWASM_COMPONENT_VALUE_RESOURCES;
+        if (imported) {
+            const turbowasm_component_type *resource =
+                turbowasm_component_resource_definition(graph, type->as.handle.resource_type);
+            return type->kind == TURBOWASM_COMPONENT_TYPE_OWN && resource != NULL &&
+                resource->as.resource.instance_key != NULL;
+        }
         return true;
     }
     if (type->kind >= TURBOWASM_COMPONENT_TYPE_BOOL &&
@@ -1023,35 +1029,35 @@ static bool value_type_features(
         return true;
     if (type->kind == TURBOWASM_COMPONENT_TYPE_LIST)
         return value_type_features(
-            graph, type->as.list.element_type, depth + 1u, allow_async, inspect_payloads, features);
+            graph, type->as.list.element_type, depth + 1u, allow_async, inspect_payloads, imported, features);
     switch (type->kind) {
         case TURBOWASM_COMPONENT_TYPE_RECORD:
             for (i = 0u; i < type->as.record.count; ++i)
                 if (!value_type_features(graph,
-                        type->as.record.fields[i].type, depth + 1u, allow_async, inspect_payloads, features))
+                        type->as.record.fields[i].type, depth + 1u, allow_async, inspect_payloads, imported, features))
                     return false;
             return true;
         case TURBOWASM_COMPONENT_TYPE_TUPLE:
             for (i = 0u; i < type->as.tuple.count; ++i)
                 if (!value_type_features(graph,
-                        type->as.tuple.elements[i], depth + 1u, allow_async, inspect_payloads, features))
+                        type->as.tuple.elements[i], depth + 1u, allow_async, inspect_payloads, imported, features))
                     return false;
             return true;
         case TURBOWASM_COMPONENT_TYPE_VARIANT:
             for (i = 0u; i < type->as.variant.count; ++i)
                 if (type->as.variant.cases[i].has_payload &&
                     !value_type_features(graph,
-                        type->as.variant.cases[i].payload, depth + 1u, allow_async, inspect_payloads, features))
+                        type->as.variant.cases[i].payload, depth + 1u, allow_async, inspect_payloads, imported, features))
                     return false;
             return true;
         case TURBOWASM_COMPONENT_TYPE_OPTION:
             return value_type_features(graph,
-                type->as.option.payload, depth + 1u, allow_async, inspect_payloads, features);
+                type->as.option.payload, depth + 1u, allow_async, inspect_payloads, imported, features);
         case TURBOWASM_COMPONENT_TYPE_RESULT:
             return (!type->as.result.has_ok || value_type_features(
-                        graph, type->as.result.ok, depth + 1u, allow_async, inspect_payloads, features)) &&
+                        graph, type->as.result.ok, depth + 1u, allow_async, inspect_payloads, imported, features)) &&
                    (!type->as.result.has_error || value_type_features(
-                        graph, type->as.result.error, depth + 1u, allow_async, inspect_payloads, features));
+                        graph, type->as.result.error, depth + 1u, allow_async, inspect_payloads, imported, features));
         case TURBOWASM_COMPONENT_TYPE_ENUM:
         case TURBOWASM_COMPONENT_TYPE_FLAGS:
             return true;
@@ -1065,7 +1071,7 @@ bool turbowasm_component_value_type_features(
     turbowasm_component_type_ref ref,
     uint32_t *out_features) {
     uint32_t features = 0u;
-    if (out_features == NULL || !value_type_features(graph, ref, 0u, false, false, &features))
+    if (out_features == NULL || !value_type_features(graph, ref, 0u, false, false, false, &features))
         return false;
     *out_features = features;
     return true;
@@ -1075,7 +1081,7 @@ bool turbowasm_component_transfer_type_features(
     const turbowasm_component_type_graph *graph,
     turbowasm_component_type_ref ref, uint32_t *out_features) {
     uint32_t features = 0u;
-    if (out_features == NULL || !value_type_features(graph, ref, 0u, true, false, &features))
+    if (out_features == NULL || !value_type_features(graph, ref, 0u, true, false, false, &features))
         return false;
     *out_features = features;
     return true;
@@ -1084,8 +1090,14 @@ bool turbowasm_component_transfer_type_features(
 bool turbowasm_component_value_type_resource_free(
     const turbowasm_component_type_graph *graph, turbowasm_component_type_ref ref) {
     uint32_t features = 0u;
-    return value_type_features(graph, ref, 0u, true, true, &features) &&
+    return value_type_features(graph, ref, 0u, true, true, false, &features) &&
         (features & TURBOWASM_COMPONENT_VALUE_RESOURCES) == 0u;
+}
+
+bool turbowasm_component_value_type_async_importable(
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref ref) {
+    uint32_t features = 0u;
+    return value_type_features(graph, ref, 0u, true, true, true, &features);
 }
 
 const turbowasm_component_type *turbowasm_component_resource_definition(

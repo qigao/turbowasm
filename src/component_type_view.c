@@ -98,3 +98,19 @@ void turbowasm_component_type_view_destroy(turbowasm_component_type_view *view) 
     turbowasm_rt_free(view->identities);
     turbowasm_rt_free(view);
 }
+
+static void bind_graph(turbowasm_component_type_graph *graph, uint64_t declaration, const void *runtime) {
+    uint32_t i;
+    for (i = 0u; i < graph->count; ++i) {
+        turbowasm_component_type *type = &graph->types[i];
+        if (type->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE && type->as.resource.identity == declaration)
+            type->as.resource.instance_key = runtime;
+        else if (type->kind == TURBOWASM_COMPONENT_TYPE_INSTANCE && type->as.instance != NULL)
+            bind_graph(&type->as.instance->type_graph, declaration, runtime);
+    }
+}
+
+void turbowasm_component_type_view_bind(turbowasm_component_type_view *view,
+    uint64_t declaration, const void *runtime) {
+    bind_graph(&view->binary.type_graph, declaration, runtime);
+}

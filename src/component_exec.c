@@ -267,6 +267,7 @@ static turbowasm_status component_guest_realloc(
 static turbowasm_status invoke_mapped_core_function(
     turbowasm_component_exec *exec,
     turbowasm_host_call *call,
+    turbowasm_component_task *progress_task,
     uint32_t core_function_index,
     const turbowasm_value *arguments,
     size_t argument_count,
@@ -293,6 +294,10 @@ static turbowasm_status invoke_mapped_core_function(
         status = turbowasm_instance_invoke_from_host(call, instance,
             function->function_index, arguments, argument_count,
             results, result_capacity, result_count, trap);
+    else if (progress_task != NULL && !progress_task->destroying && progress_task->core.impl != NULL)
+        status = turbowasm_instance_invoke_internal(instance->impl, function->function_index,
+            arguments, argument_count, results, result_capacity, result_count, trap,
+            turbowasm_execution_control_get(&progress_task->core));
     else if (exec->task_domain.active != NULL && !exec->task_domain.active->destroying &&
              exec->task_domain.active->core.impl != NULL)
         status = turbowasm_instance_invoke_internal(instance->impl, function->function_index,
@@ -344,17 +349,18 @@ static turbowasm_status component_resource_destructor_bridge(
         saved_active = domain->active; saved_auxiliary = domain->auxiliary;
         if (saved_active == NULL || saved_active->destroying) {
             temporary.domain = domain;
-            domain->active = &temporary;
+            domain->auxiliary = &temporary;
         } else {
             memcpy(saved_context, saved_active->context_storage, sizeof(saved_context));
             memset(saved_active->context_storage, 0, sizeof(saved_active->context_storage));
+            domain->auxiliary = saved_active;
         }
         ++domain->synchronous_depth;
-        domain->auxiliary = domain->active;
     }
     status = invoke_mapped_core_function(
         resource_context->exec,
         resource_context->call,
+        resource_context->progress_task,
         resource_type->as.resource.destructor_index,
         &rep,
         1u,
@@ -379,16 +385,27 @@ static turbowasm_status component_resource_destructor_bridge(
 
 static turbowasm_status component_resource_release_from_host(
     turbowasm_component_exec *exec, uint64_t identity, turbowasm_value rep,
-    turbowasm_host_call *call) {
+    turbowasm_host_call *call, turbowasm_trap *trap) {
     uint32_t i;
+    turbowasm_component_task *progress_task;
     if (exec == NULL || exec->binary == NULL || identity == 0u)
         return TURBOWASM_INVALID_ARGUMENT;
+    progress_task = exec->task_domain.active;
+    for (;;) {
+        const turbowasm_component_resource_identity *imported =
+            turbowasm_component_exec_resource_identity(exec, identity);
+        if (imported == NULL || imported->provider == NULL) break;
+        exec = imported->provider;
+        identity = imported->provider_declaration;
+    }
     for (i = 0u; i < exec->binary->type_graph.count; ++i) {
         const turbowasm_component_type *type = &exec->binary->type_graph.types[i];
         if (type->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE &&
             type->as.resource.identity == identity && !type->as.resource.identity_alias) {
             turbowasm_component_exec_resource_context context = {exec, i};
             context.call = call;
+            context.progress_task = progress_task;
+            context.trap = trap;
             if (!type->as.resource.has_destructor)
                 return TURBOWASM_OK;
             return component_resource_destructor_bridge(&context, identity, rep);
@@ -401,12 +418,25 @@ static turbowasm_status component_resource_release_from_host(
 
 turbowasm_status turbowasm_component_exec_resource_release(
     turbowasm_component_exec *exec, uint64_t identity, turbowasm_value rep) {
-    return component_resource_release_from_host(exec, identity, rep, NULL);
+    return component_resource_release_from_host(exec, identity, rep, NULL, NULL);
 }
 
 static turbowasm_status component_external_destructor(
     void *context, uint64_t identity, turbowasm_value rep) {
-    return turbowasm_component_exec_resource_release(context, identity, rep);
+    turbowasm_component_exec_resource_context *resource_context = context;
+    return component_resource_release_from_host(resource_context->exec, identity, rep,
+        resource_context->call, resource_context->trap);
+}
+
+static bool component_resource_drop_available(const turbowasm_component_exec *exec, uint32_t resource_type) {
+    const turbowasm_component_type *type;
+    const turbowasm_component_resource_identity *identity;
+    if (exec == NULL || exec->binary == NULL) return false;
+    if (exec->imports.resource_drop != NULL) return true;
+    type = turbowasm_component_type_graph_get(&exec->binary->type_graph, resource_type);
+    if (type == NULL || type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE) return false;
+    identity = turbowasm_component_exec_resource_identity(exec, type->as.resource.identity);
+    return identity != NULL && identity->provider != NULL;
 }
 
 typedef struct component_import_resource_loan {
@@ -431,7 +461,7 @@ static turbowasm_status component_import_resource_release(void *context) {
             status = turbowasm_component_resource_take_owned(&loan->exec->resource_table,
                 loan->staged_handle, loan->identity, &loan->rep);
         if (status == TURBOWASM_OK)
-            status = component_resource_release_from_host(loan->exec, loan->identity, loan->rep, loan->call);
+            status = component_resource_release_from_host(loan->exec, loan->identity, loan->rep, loan->call, NULL);
     }
     turbowasm_rt_free(loan);
     return status;
@@ -598,7 +628,7 @@ static turbowasm_status component_local_result_owner(void *context,
     loan = turbowasm_rt_calloc(1u, sizeof(*loan));
     if (loan == NULL) {
         (void)component_resource_release_from_host(local->exec, value->resource_identity,
-            value->as.resource_rep, local->call);
+            value->as.resource_rep, local->call, NULL);
         memset(value, 0, sizeof(*value));
         return TURBOWASM_OUT_OF_MEMORY;
     }
@@ -684,10 +714,11 @@ static turbowasm_status component_resource_builtin_host(
 
     if (builtin_context->external) {
         const turbowasm_component_type *resource_type;
+        turbowasm_component_exec_resource_context resource_context = {0};
 
         if (builtin_context->exec == NULL ||
             builtin_context->exec->binary == NULL ||
-            builtin_context->exec->imports.resource_drop == NULL ||
+            !component_resource_drop_available(builtin_context->exec, builtin_context->resource_type) ||
             builtin_context->resource_type >=
                 builtin_context->exec->binary->type_graph.count ||
             builtin_context->kind !=
@@ -704,11 +735,14 @@ static turbowasm_status component_resource_builtin_host(
             resource_type->kind != TURBOWASM_COMPONENT_TYPE_RESOURCE)
             return TURBOWASM_MALFORMED_MODULE;
 
+        resource_context.exec = builtin_context->exec;
+        resource_context.call = call;
+        resource_context.trap = trap;
         return turbowasm_component_resource_drop(
             &builtin_context->exec->resource_table,
             (uint32_t)arguments[0].as.i32,
             resource_type->as.resource.identity,
-            component_external_destructor, builtin_context->exec);
+            component_external_destructor, &resource_context);
     }
 
     if (builtin_context->binding == NULL ||
@@ -799,7 +833,7 @@ static bool resource_builtin_host_type(
         if (context->kind !=
                 TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP ||
             context->exec == NULL ||
-            context->exec->imports.resource_drop == NULL)
+            !component_resource_drop_available(context->exec, context->resource_type))
             return false;
         out->params = i32_param;
         out->param_count = 1u;
@@ -1462,7 +1496,7 @@ static turbowasm_status initialize_resource_state(
 
             if (builtin->kind !=
                     TURBOWASM_COMPONENT_RESOURCE_BUILTIN_DROP ||
-                exec->imports.resource_drop == NULL)
+                !component_resource_drop_available(exec, builtin->resource_type))
                 return TURBOWASM_UNSUPPORTED;
 
             builtin_context->exec = exec;
@@ -2247,6 +2281,7 @@ static void destroy_partial(
     turbowasm_rt_free(exec->core_functions);
     turbowasm_rt_free(exec->core_instances);
     turbowasm_rt_free(exec->core_modules);
+    turbowasm_component_exec_resource_imports_destroy(exec);
     turbowasm_component_type_view_destroy(exec->type_view);
     memset(exec, 0, sizeof(*exec));
 }
@@ -2820,6 +2855,10 @@ static turbowasm_status initialize_exec(
         exec, import_sets, import_set_count);
     if (status != TURBOWASM_OK)
         goto fail;
+    if (limits != NULL) {
+        status = turbowasm_component_exec_resource_imports_init(exec);
+        if (status != TURBOWASM_OK) goto fail;
+    }
 
     if (binary->core_module_count != 0u) {
         if ((size_t)binary->core_module_count >

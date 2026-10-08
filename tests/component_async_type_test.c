@@ -55,6 +55,20 @@ spec("private Component future and stream types") {
         turbowasm_component_type_graph_destroy(&other_graph);
     }
 
+    it("admits only bound own resources throughout imported value trees") {
+        uint32_t i; int identity = 0;
+        check_true(turbowasm_component_type_graph_allocate(&graph, 10u));
+        check_true(turbowasm_component_type_graph_define_resource(&graph, 0u, 1u));
+        check_true(turbowasm_component_type_graph_define_handle(&graph, 1u, TURBOWASM_COMPONENT_TYPE_OWN, 0u));
+        for (i = 0u; i < sizeof(wrappers) / sizeof(wrappers[0]); ++i)
+            check_true(define_wrapper(&graph, i + 2u, wrappers[i], indexed(i + 1u)));
+        check_false(turbowasm_component_value_type_async_importable(&graph, indexed(9u)));
+        graph.types[0].as.resource.instance_key = &identity;
+        for (i = 1u; i < 10u; ++i) check_true(turbowasm_component_value_type_async_importable(&graph, indexed(i)));
+        graph.types[1].kind = TURBOWASM_COMPONENT_TYPE_BORROW;
+        for (i = 1u; i < 10u; ++i) check_false(turbowasm_component_value_type_async_importable(&graph, indexed(i)));
+    }
+
     it("distinguishes endpoint carrier features from nominal resource payloads at every nesting layer") {
         uint32_t i, features;
         check_true(turbowasm_component_type_graph_allocate(&graph, 12u));

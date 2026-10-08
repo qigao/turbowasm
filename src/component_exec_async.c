@@ -40,7 +40,7 @@ turbowasm_status turbowasm_component_exec_async_bind(
         a = result ? source->as.function.result : source->as.function.params[i];
         b = result ? target->as.function.result : target->as.function.params[i];
         if (!turbowasm_component_value_type_equal(lower->graph, a, binding->graph, b)) return TURBOWASM_TYPE_MISMATCH;
-        if (!turbowasm_component_value_type_resource_free(lower->graph, a)) return TURBOWASM_UNSUPPORTED;
+        if (!turbowasm_component_value_type_async_importable(lower->graph, a)) return TURBOWASM_UNSUPPORTED;
         if (result) break;
     }
     if (provider->async_import_owners == UINT32_MAX) return TURBOWASM_OUT_OF_MEMORY;

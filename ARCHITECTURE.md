@@ -990,11 +990,44 @@ would create competing type-comparison rules. The instance view instead preserve
 the existing nominal equality and canonical value checks. This adds bounded
 metadata allocations during instantiation; it does not copy guest memory or
 create a second runtime type system. The source binary must still outlive the
-exec. Imported equivalence classes will be mapped to their provider's retained
-tokens before binding resource-bearing calls; until then those imports remain
-closed. Rollback destroys only view-owned nodes/headers/tokens and leaves the
+exec. Imported equivalence classes are mapped to their provider's retained
+tokens before binding resource-bearing calls. Rollback destroys only
+view-owned nodes/headers/tokens and leaves the
 decoded metadata untouched. Synchronous public admission retains its current
 contracts while this private integration is completed.
+
+Private async resource imports resolve each imported resource export explicitly
+to an already initialized provider and its resource type. A consumer binds all
+aliases of that declaration to the provider's instance key and retains the
+provider once per imported equivalence class. Conflicting or ambiguous mappings
+fail initialization; partial construction releases every acquired reference.
+Mappings are immutable after initialization, bounded by decoded resource count,
+and use the same exclusive execution owner as calls and resource tables. Provider
+chains are acyclic because a resolver can only return an initialized instance.
+Provider references retire after the consumer's tasks, handles and lifted owners.
+
+Own values carry a private instance key in addition to their declaration ID.
+Canonical validation compares the key when present; destination tables continue
+to use their own declaration IDs. Lower reserves destination slots, then commits
+the whole batch without allocation or callbacks. Failure rolls back reservations
+and preserves uncommitted owners. Imported owned handles keep the representation
+unchanged and route final destruction to the retained provider, including through
+another importing instance. Runtime identity never crosses a serialized/public
+boundary. Host capability values without an instance key retain their existing
+nominal-ID checks. This avoids renumbering adapter IDs or using one global table.
+Guest resource.drop forwards the caller's execution control and trap destination
+through the provider chain. Destructors use the existing fresh synchronous context,
+can retain their native stack across fuel/interruption yields, and restore provider
+task/context guards when the caller finishes or unwinds. Host value destruction
+uses the active source task's control when one exists; quiescent host cleanup keeps
+its existing non-suspending behavior.
+
+This private admission stage permits owned resource transfers only. Borrowed
+resource parameters across instance imports remain rejected until callee borrow
+handles, transitive lending and forced-abort scope retirement are connected;
+existing same-instance borrowing is unchanged. Public async admission stays
+closed. Rollback can close imported resource admission and discard all instance
+views without migrating decoded data or changing the synchronous public ABI.
 
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and

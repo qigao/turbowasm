@@ -67,6 +67,7 @@ typedef struct turbowasm_component_exec_resource_context {
     uint32_t resource_type;
     turbowasm_host_call *call;
     turbowasm_trap *trap;
+    turbowasm_component_task *progress_task;
 } turbowasm_component_exec_resource_context;
 
 typedef struct turbowasm_component_exec_resource_builtin_context {
@@ -126,6 +127,11 @@ typedef struct turbowasm_component_exec_imports {
         turbowasm_component_name instance_name, turbowasm_component_name function_name,
         const turbowasm_component_type_graph *graph, turbowasm_component_type_id function_type,
         struct turbowasm_component_exec **provider, uint32_t *adapter_index);
+    /* Optional private resource resolver. TYPE_MISMATCH means not claimed;
+     * success returns a root resource type in an initialized async provider. */
+    turbowasm_status (*resource_target)(void *context,
+        turbowasm_component_name instance_name, turbowasm_component_name resource_name,
+        struct turbowasm_component_exec **provider, uint32_t *resource_type);
 } turbowasm_component_exec_imports;
 
 typedef struct turbowasm_component_exec_canon_lower_context {

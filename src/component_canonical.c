@@ -3367,8 +3367,9 @@ static turbowasm_status validate_host_value(
         case TURBOWASM_COMPONENT_TYPE_BORROW: {
             const turbowasm_component_type *resource = turbowasm_component_resource_definition(
                 graph, type->as.handle.resource_type);
-            if (resource == NULL || (value->resource_identity != 0u &&
-                resource->as.resource.identity != value->resource_identity))
+            if (resource == NULL || (value->resource_instance_key != NULL
+                ? resource->as.resource.instance_key != value->resource_instance_key
+                : value->resource_identity != 0u && resource->as.resource.identity != value->resource_identity))
                 return TURBOWASM_TYPE_MISMATCH;
             return TURBOWASM_OK;
         }

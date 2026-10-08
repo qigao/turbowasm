@@ -1380,8 +1380,30 @@ type-view suite passes 5 cases and 4,171 assertions under Windows ASan, includin
 every allocation failure through view creation and Core instantiation, retained
 source metadata, and actual endpoint admission across two instances of one binary.
 Related regression passed 83/83 targets in 6.14 seconds before the final added
-constructor failure sweep; that additional case passed separately. Native
-qualification of the instance-view change is pending.
+constructor failure sweep; that additional case passed separately. At `7b836b2`,
+Linux x64 MIR passed 203/203 targets in 2.78 seconds and macOS arm64 MIR passed
+203/203 in 6.34 seconds, including the type-view suite in 0.05/0.07 seconds.
+All five jobs passed in the
+[native run](https://github.com/qigao/turbowasm/actions/runs/37707338136).
+
+Private resource import resolution now retains initialized providers and maps
+consumer aliases to their runtime resource identities before function binding.
+Owned values, including resources alongside strings, cross instance tables with
+different declaration IDs. Imported destruction follows the provider chain and
+shares the guest caller's fuel/interruption control and trap destination. A
+foreign destructor's temporary synchronous context blocks sibling task entry
+without marking the provider as executing between resumes. Public async entry
+points and imported borrow scopes remain closed.
+
+The new `component_async_resource_import.wat` fixture passes wasm-tools 1.261.0
+validation and exercises the existing resource provider through real canonical
+imports. Windows ASan passed 13 cases with 2,267 assertions: own round trips,
+host result retention, memory32/memory64 mixed transfers, transitive provider
+lifetimes, ambiguous/mismatched providers, table quota rejection, suspended
+result rollback, fuel-suspended destructor completion/unwind, destructor traps,
+and allocation failures throughout construction and transfers. Related regression
+passed 84/84 targets in 7.03 seconds. The MIR variant requires compiled caller,
+provider and destructor handles; native qualification of this change is pending.
 
 Async host capability callbacks, cross-instance resource borrowing and payload
 conversion, nested Component instantiation, public task/endpoint owners, synchronous

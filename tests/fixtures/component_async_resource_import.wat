@@ -1,0 +1,96 @@
+(component
+  (import "provider" (instance $provider
+    (export "resource" (type $r (sub resource)))
+    (type $make (func async (result (own $r))))
+    (type $echo (func async (param "x" (own $r)) (result (own $r))))
+    (type $pair (tuple (own $r) string))
+    (type $text (func async (param "x" $pair) (result $pair)))
+    (export "resource-result" (func (type $make)))
+    (export "resource-own-child" (func (type $echo)))
+    (export "resource-text-child" (func (type $text)))))
+  (alias export $provider "resource" (type $r))
+  (export $resource "resource" (type $r))
+  (alias export $provider "resource-result" (func $make))
+  (alias export $provider "resource-own-child" (func $echo))
+  (alias export $provider "resource-text-child" (func $text))
+  (type $number (func async (result u32)))
+  (type $own-result (func async (result (own $resource))))
+  (type $own-echo (func async (param "x" (own $resource)) (result (own $resource))))
+  (type $pair (tuple (own $resource) string))
+  (type $text-echo (func async (param "x" $pair) (result $pair)))
+  (core module $memory
+    (memory (export "memory") 1) (data (i32.const 0) "hello")
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32) (local $n i32)
+      i32.const 30 local.set $n
+      loop $loop local.get $n i32.const 1 i32.sub local.tee $n br_if $loop end
+      i32.const 1024))
+  (core instance $memory (instantiate $memory))
+  (alias core export $memory "memory" (core memory $memory))
+  (alias core export $memory "realloc" (core func $realloc))
+  (core func $make (canon lower (func $make) async (memory $memory)))
+  (core func $echo (canon lower (func $echo) async (memory $memory)))
+  (core func $text (canon lower (func $text) async (memory $memory) (realloc $realloc)))
+  (core func $drop (canon resource.drop $resource))
+  (core func $return (canon task.return (result u32) (memory $memory)))
+  (core func $own-return (canon task.return (result (own $resource)) (memory $memory)))
+  (core func $text-return (canon task.return (result $pair) (memory $memory)))
+  (core func $new-set (canon waitable-set.new))
+  (core func $drop-set (canon waitable-set.drop))
+  (core func $wait (canon waitable-set.wait (memory $memory)))
+  (core func $join (canon waitable.join))
+  (core func $drop-sub (canon subtask.drop))
+  (core instance $a
+    (export "make" (func $make)) (export "echo" (func $echo)) (export "text" (func $text))
+    (export "drop" (func $drop)) (export "return" (func $return))
+    (export "own-return" (func $own-return)) (export "text-return" (func $text-return))
+    (export "new-set" (func $new-set)) (export "drop-set" (func $drop-set))
+    (export "wait" (func $wait)) (export "join" (func $join)) (export "drop-sub" (func $drop-sub)))
+  (core module $caller
+    (import "a" "make" (func $make (param i32) (result i32)))
+    (import "a" "echo" (func $echo (param i32 i32) (result i32)))
+    (import "a" "text" (func $text (param i32 i32 i32 i32) (result i32)))
+    (import "a" "drop" (func $drop (param i32)))
+    (import "a" "return" (func $return (param i32)))
+    (import "a" "own-return" (func $own-return (param i32)))
+    (import "a" "text-return" (func $text-return (param i32 i32 i32)))
+    (import "a" "new-set" (func $new-set (result i32)))
+    (import "a" "drop-set" (func $drop-set (param i32)))
+    (import "a" "wait" (func $wait (param i32 i32) (result i32)))
+    (import "a" "join" (func $join (param i32 i32)))
+    (import "a" "drop-sub" (func $drop-sub (param i32)))
+    (import "m" "memory" (memory 1))
+    (func $await (param $word i32) (local $sub i32) (local $set i32)
+      local.get $word i32.const 4 i32.shr_u local.tee $sub
+      if
+        call $new-set local.set $set local.get $sub local.get $set call $join
+        loop $events local.get $set i32.const 256 call $wait drop
+          i32.const 260 i32.load i32.const 2 i32.lt_u br_if $events end
+        local.get $sub call $drop-sub local.get $set call $drop-set
+      end)
+    (func $make-handle (result i32) i32.const 128 call $make call $await i32.const 128 i32.load)
+    (func (export "keep") call $make-handle call $own-return)
+    (func (export "relay") (param i32)
+      local.get 0 i32.const 128 call $echo call $await i32.const 128 i32.load call $own-return)
+    (func (export "relay-text") (param i32 i32 i32)
+      local.get 0 local.get 1 local.get 2 i32.const 128 call $text call $await
+      i32.const 128 i32.load i32.const 132 i32.load i32.const 136 i32.load call $text-return)
+    (func (export "roundtrip")
+      call $make-handle i32.const 128 call $echo call $await
+      i32.const 128 i32.load call $drop i32.const 42 call $return)
+    (func (export "text")
+      call $make-handle i32.const 0 i32.const 5 i32.const 128 call $text call $await
+      i32.const 128 i32.load call $drop
+      i32.const 132 i32.load i32.load8_u i32.const 104 i32.ne if unreachable end
+      i32.const 136 i32.load call $return))
+  (core instance $caller (instantiate $caller (with "a" (instance $a)) (with "m" (instance $memory))))
+  (alias core export $caller "keep" (core func $keep))
+  (alias core export $caller "relay" (core func $relay))
+  (alias core export $caller "relay-text" (core func $relay-text))
+  (alias core export $caller "roundtrip" (core func $roundtrip))
+  (alias core export $caller "text" (core func $text-entry))
+  (func (export "resource-result") (type $own-result) (canon lift (core func $keep) async (memory $memory)))
+  (func (export "resource-own-child") (type $own-echo) (canon lift (core func $relay) async (memory $memory)))
+  (func (export "resource-text-child") (type $text-echo) (canon lift (core func $relay-text) async (memory $memory) (realloc $realloc)))
+  (func (export "roundtrip") (type $number) (canon lift (core func $roundtrip) async (memory $memory)))
+  (func (export "text") (type $number) (canon lift (core func $text-entry) async (memory $memory)))
+)
