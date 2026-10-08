@@ -37,6 +37,9 @@ typedef struct turbowasm_component_instance_public_impl {
     turbowasm_component_host_registration *host_owners;
     uint32_t host_activity;
     bool admission_closed, shutdown_driving;
+    struct turbowasm_component_shutdown_drain *shutdown;
+    turbowasm_status shutdown_status;
+    bool shutdown_complete;
 
     /*
      * Optional capability owner retained by a specialized public instance
@@ -80,6 +83,17 @@ void turbowasm_component_host_unregister(turbowasm_component_host_registration *
  * gated until drain, options and host-value integration are complete. */
 turbowasm_status turbowasm_component_instance_request_shutdown_private(
     turbowasm_component_instance_public_impl *instance);
+/* Requires a prior shutdown request. YIELDED means owners/loans or a retained
+ * cleanup execution remain pending. Options control actual guest destructors.
+ * Poll never frees external carriers or consumes their host events. Startup
+ * failure preserves guest handles for retry; consumed cleanup failures are
+ * saved while pending and returned after all obligations drain. Completion is
+ * idempotent and closes all owner operations; Core storage stays until instance
+ * destruction. The caller keeps its public instance handle alive through this
+ * protocol. Destroy on a requested but incomplete private instance preserves
+ * the carrier, so callbacks cannot orphan a retained cleanup driver. */
+turbowasm_status turbowasm_component_instance_poll_shutdown_private(
+    turbowasm_component_instance_public_impl *instance, const turbowasm_execution_options *options);
 
 /* Private retained loader for async host-boundary integration and its tests. */
 turbowasm_status turbowasm_component_load_async_private(turbowasm_component *component,

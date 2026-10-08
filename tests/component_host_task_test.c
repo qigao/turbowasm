@@ -3,6 +3,7 @@
 #include "component_endpoint_builtin.h"
 #include "runtime_alloc.h"
 #include "fixtures/component_host_tasks.h"
+#include "fixtures/component_shutdown_core_free.h"
 #ifdef TURBOWASM_TEST_MIR
 #include "jit/mir_backend.h"
 #endif
@@ -32,6 +33,7 @@ static turbowasm_component_value transfer_inputs[OWNER_COUNT];
 static bool reenter_transfer_on_allocate;
 static const turbowasm_component_endpoint *copy_reentry_end;
 static bool shutdown_on_allocate;
+static bool shutdown_on_free;
 
 static uint32_t endpoint_type(turbowasm_component_instance_public_impl *owner, bool future) {
     const turbowasm_component_type_graph *graph = &owner->exec.binary->type_graph;
@@ -89,6 +91,8 @@ static void *allocate(void *context, size_t size) {
         bool closed = impl->admission_closed;
         shutdown_on_allocate = false;
         check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_INVALID_ARGUMENT);
+        if (impl->admission_closed)
+            check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_INVALID_ARGUMENT);
         check_equal(impl->admission_closed, closed);
     }
     if (reenter_transfer_on_allocate && transfers[0].impl != NULL &&
@@ -129,6 +133,10 @@ static void *allocate(void *context, size_t size) {
     p = malloc(size); if (p != NULL) ++allocations.live; return p;
 }
 static void deallocate(void *context, void *p) {
+    if (shutdown_on_free) {
+        shutdown_on_free = false;
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_INVALID_ARGUMENT);
+    }
     (void)context; if (p != NULL) { check_true(allocations.live != 0u); --allocations.live; } free(p);
 }
 static turbowasm_name name(const char *text) {
@@ -189,7 +197,71 @@ static void make(int32_t rep) {
     size_t count;
     check_equal(turbowasm_component_instance_invoke(&instance, name("make"), &value, 1u, &resource, 1u, &count, &trap), TURBOWASM_OK);
 }
+static turbowasm_component_core_call_adapter *sync_binding(const char *text) {
+    const turbowasm_component_binary *binary = impl->exec.binary;
+    uint32_t i;
+    for (i = 0u; i < binary->export_count; ++i) {
+        const turbowasm_component_export *item = &binary->exports[i];
+        if (item->kind == TURBOWASM_COMPONENT_EXTERN_FUNCTION && item->name.size == strlen(text) &&
+            memcmp(item->name.bytes, text, item->name.size) == 0)
+            return &impl->exec.functions[impl->exec.function_adapter_indices[item->item_index]];
+    }
+    return NULL;
+}
+static uint32_t guest_resource(int32_t rep) {
+    turbowasm_component_core_call_adapter *binding = sync_binding("make");
+    turbowasm_value argument = {.kind = TURBOWASM_VALUE_I32, .as.i32 = rep}, value;
+    turbowasm_trap trap;
+    size_t count;
+    check_not_null(binding);
+    check_equal(turbowasm_instance_invoke(binding->instance, binding->function_index,
+        &argument, 1u, &value, 1u, &count, &trap), TURBOWASM_OK);
+    check_equal(count, (size_t)1); check_equal(value.kind, TURBOWASM_VALUE_I32);
+    return (uint32_t)value.as.i32;
+}
+static uint32_t shutdown_drops(void) {
+    turbowasm_component_core_call_adapter *binding = sync_binding("drops");
+    turbowasm_value value;
+    turbowasm_trap trap;
+    size_t count;
+    check_not_null(binding);
+    check_equal(turbowasm_instance_invoke(binding->instance, binding->function_index,
+        NULL, 0u, &value, 1u, &count, &trap), TURBOWASM_OK);
+    check_equal(count, (size_t)1); check_equal(value.kind, TURBOWASM_VALUE_I32);
+#ifdef TURBOWASM_TEST_MIR
+    if (value.as.i32 != 0) {
+        const turbowasm_component_type *function = turbowasm_component_type_graph_get(
+            sync_binding("make")->graph, sync_binding("make")->function_type);
+        const turbowasm_component_type *own = turbowasm_component_type_graph_get(
+            sync_binding("make")->graph, function->as.function.result.as.indexed);
+        const turbowasm_component_type *definition = turbowasm_component_resource_definition(
+            sync_binding("make")->graph, own->as.handle.resource_type);
+        const turbowasm_component_exec_core_function *dtor = &impl->exec.core_functions[definition->as.resource.destructor_index];
+        check_equal(((turbowasm_instance_impl *)impl->exec.core_instances[dtor->instance_index].impl)->jit_functions[
+            dtor->function_index].state, TURBOWASM_JIT_COMPILED);
+    }
+#endif
+    return (uint32_t)value.as.i32;
+}
+static turbowasm_status finish_shutdown(void) {
+    turbowasm_execution_options options = {.has_fuel_limit = true, .fuel = 16u};
+    turbowasm_status status = TURBOWASM_YIELDED;
+    unsigned turns;
+    for (turns = 0u; turns < 512u && status == TURBOWASM_YIELDED && !impl->shutdown_complete; ++turns)
+        status = turbowasm_component_instance_poll_shutdown_private(impl, &options);
+    check_true(impl->shutdown_complete); check_null(impl->shutdown);
+    return status;
+}
 static bool interrupt(void *context) { (void)context; return true; }
+static bool drain_reenter(void *context) {
+    size_t *calls = context;
+    void *carrier = instance.impl;
+    ++*calls;
+    check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_INVALID_ARGUMENT);
+    check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_INVALID_ARGUMENT);
+    turbowasm_component_instance_destroy(&instance); check_true(instance.impl == carrier);
+    return false;
+}
 static bool reenter(void *context) {
     size_t *calls = context, count = 99u, used = budget.used;
     void *owner = owners[0].impl;
@@ -295,6 +367,7 @@ spec("Retained Component host task owners") {
         memset(&allocations, 0, sizeof(allocations)); budget = (turbowasm_component_host_budget){BYTE_LIMIT, 0u};
         close_on_allocate = false;
         shutdown_on_allocate = false;
+        shutdown_on_free = false;
         reenter_transfer_on_allocate = false;
         copy_reentry_end = NULL;
         turbowasm_runtime_config_init(&config);
@@ -308,6 +381,7 @@ spec("Retained Component host task owners") {
         unsigned i;
         allocations.fail_at = 0u;
         shutdown_on_allocate = false;
+        shutdown_on_free = false;
         reenter_transfer_on_allocate = false;
         copy_reentry_end = NULL;
         for (i = 0u; i < OWNER_COUNT; ++i) {
@@ -370,6 +444,7 @@ spec("Retained Component host task owners") {
         if (instance.impl != NULL) {
             check_equal(impl->host_activity, 0u);
             check_null(impl->host_owners);
+            if (impl->admission_closed && !impl->shutdown_complete) (void)finish_shutdown();
         }
         turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
         check_equal(budget.used, (size_t)0); check_equal(allocations.live, (size_t)0); impl = NULL;
@@ -406,6 +481,264 @@ spec("Retained Component host task owners") {
         check_equal(budget.used, used); check_equal(allocations.attempts, attempts);
         check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
         check_equal(turbowasm_component_host_value_destroy(&resource), TURBOWASM_OK);
+    }
+    it("requires a request and completes an empty shutdown idempotently") {
+        size_t attempts = allocations.attempts;
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_INVALID_ARGUMENT);
+        check_false(impl->admission_closed);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_OK);
+        check_true(impl->shutdown_complete); check_equal(allocations.attempts, attempts); check_equal(impl->ref_count, 1u);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+    }
+    it("keeps a requested instance carrier until all host task owners are released") {
+        void *carrier = instance.impl;
+        check_equal(create(0u, "answer", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_YIELDED);
+        turbowasm_component_instance_destroy(&instance); check_true(instance.impl == carrier);
+        check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_OK);
+        check_equal(finish_shutdown(), TURBOWASM_OK);
+        turbowasm_component_instance_destroy(&instance); check_null(instance.impl);
+    }
+    it("waits for ordinary parameter and result staging and an admitted synchronous call") {
+        turbowasm_component_host_arguments arguments = {0};
+        turbowasm_component_host_result result = {0};
+        turbowasm_component_call call = {0};
+        const turbowasm_component_task_binding *binding;
+        turbowasm_component_value value = {.kind = TURBOWASM_COMPONENT_TYPE_U32, .as.u32 = 42u};
+        turbowasm_component_type_ref u32 = turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_U32);
+        check_equal(turbowasm_component_exec_async_export(&impl->exec, name("answer").bytes, 6u, &binding), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_arguments_prepare(&arguments, impl, binding->graph, binding->function_type,
+            NULL, 0u, false, false, &budget), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_result_prepare(&result, impl, binding->graph, u32, &value, &budget), TURBOWASM_OK);
+        check_equal(turbowasm_component_call_create(&call, &instance, name("drops"), NULL, 0u), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_host_arguments_destroy(&arguments), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_host_result_take(&result, &output), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_call_resume(&call, NULL), TURBOWASM_OK);
+        turbowasm_component_call_destroy(&call);
+        check_equal(finish_shutdown(), TURBOWASM_OK); check_equal(output.as.u32, 42u);
+    }
+    it("runs local guest destructors on retained Core execution and continues siblings after a trap") {
+        turbowasm_execution_options options = {.has_fuel_limit = true, .fuel = 1u};
+        uint32_t first = guest_resource(40), failed = guest_resource(-1), last = guest_resource(42);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        shutdown_on_allocate = true;
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, &options), TURBOWASM_YIELDED);
+        check_false(shutdown_on_allocate); check_false(impl->shutdown_complete); check_not_null(impl->shutdown);
+        check_equal(impl->exec.resource_table.live_count, 2u);
+        check_equal(turbowasm_component_handle_kind_get(&impl->exec.resource_table, first), TURBOWASM_COMPONENT_HANDLE_INVALID);
+        check_equal(turbowasm_component_handle_kind_get(&impl->exec.resource_table, failed), TURBOWASM_COMPONENT_HANDLE_RESOURCE);
+        check_equal(turbowasm_component_handle_kind_get(&impl->exec.resource_table, last), TURBOWASM_COMPONENT_HANDLE_RESOURCE);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        shutdown_on_free = true;
+        check_equal(finish_shutdown(), TURBOWASM_TRAPPED); check_false(shutdown_on_free);
+        check_equal(shutdown_drops(), 3u); check_equal(impl->exec.resource_table.live_count, 0u);
+        check_equal(impl->exec.task_domain.count, 0u); check_equal(impl->ref_count, 1u);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_TRAPPED);
+        check_equal(shutdown_drops(), 3u);
+    }
+    it("keeps lent guest resources pending until their real lender releases them") {
+        uint32_t handle = guest_resource(42);
+        uint64_t identity = impl->exec.resource_table.entries[0].resource_identity;
+        check_equal(turbowasm_component_resource_lend_acquire(&impl->exec.resource_table, handle, identity), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_YIELDED);
+        check_false(impl->shutdown_complete); check_equal(shutdown_drops(), 0u);
+        check_equal(turbowasm_component_handle_kind_get(&impl->exec.resource_table, handle), TURBOWASM_COMPONENT_HANDLE_RESOURCE);
+        check_equal(turbowasm_component_resource_lend_release(&impl->exec.resource_table, handle, identity), TURBOWASM_OK);
+        check_equal(finish_shutdown(), TURBOWASM_OK); check_equal(shutdown_drops(), 1u);
+    }
+    it("keeps borrowed guest handles until their actual owner drops them") {
+        uint32_t owned = guest_resource(42), borrowed;
+        uint64_t identity = impl->exec.resource_table.entries[0].resource_identity;
+        turbowasm_value rep = {.kind = TURBOWASM_VALUE_I32, .as.i32 = 43};
+        turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(&impl->exec.binary->config);
+        check_equal(turbowasm_component_resource_new_borrowed(&impl->exec.resource_table, identity, rep, &borrowed), TURBOWASM_OK);
+        turbowasm_runtime_scope_leave(scope);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_handle_kind_get(&impl->exec.resource_table, owned), TURBOWASM_COMPONENT_HANDLE_INVALID);
+        check_equal(turbowasm_component_handle_kind_get(&impl->exec.resource_table, borrowed), TURBOWASM_COMPONENT_HANDLE_RESOURCE);
+        check_equal(shutdown_drops(), 1u);
+        check_equal(turbowasm_component_resource_drop(&impl->exec.resource_table, borrowed, identity, NULL, NULL), TURBOWASM_OK);
+        check_equal(finish_shutdown(), TURBOWASM_OK); check_equal(shutdown_drops(), 1u);
+    }
+    it("cooperatively pauses a guest destructor and resumes every obligation exactly once") {
+        uint32_t first = guest_resource(42), remaining = guest_resource(43);
+        turbowasm_execution_options options = {.should_interrupt = interrupt};
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, &options), TURBOWASM_YIELDED);
+        check_false(impl->shutdown_complete);
+        check_not_null(impl->shutdown); check_equal(impl->shutdown_status, TURBOWASM_OK);
+        check_equal(turbowasm_component_handle_kind_get(&impl->exec.resource_table, first), TURBOWASM_COMPONENT_HANDLE_INVALID);
+        check_equal(turbowasm_component_handle_kind_get(&impl->exec.resource_table, remaining), TURBOWASM_COMPONENT_HANDLE_RESOURCE);
+        check_equal(shutdown_drops(), 0u);
+        check_equal(finish_shutdown(), TURBOWASM_OK); check_equal(shutdown_drops(), 2u);
+    }
+    it("keeps an active waitable-set lease until both explicit waits release it") {
+        uint32_t set;
+        turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(&impl->exec.binary->config);
+        check_equal(turbowasm_component_task_set_new(&impl->exec.task_domain, &set), TURBOWASM_OK);
+        turbowasm_runtime_scope_leave(scope);
+        check_equal(turbowasm_component_waitable_set_wait_acquire(&impl->exec.resource_table, set), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_set_wait_acquire(&impl->exec.resource_table, set), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_waitable_set_wait_release(&impl->exec.resource_table, set), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_handle_kind_get(&impl->exec.resource_table, set), TURBOWASM_COMPONENT_HANDLE_WAITABLE_SET);
+        check_equal(turbowasm_component_waitable_set_wait_release(&impl->exec.resource_table, set), TURBOWASM_OK);
+        check_equal(finish_shutdown(), TURBOWASM_OK); check_null(impl->exec.task_domain.sets);
+    }
+    it("rejects recursive shutdown and preserves its instance carrier during guest destructor control callbacks") {
+        size_t calls = 0u;
+        turbowasm_status status;
+        turbowasm_execution_options options = {.has_fuel_limit = true, .fuel = 16u,
+            .should_interrupt = drain_reenter, .interrupt_context = &calls};
+        (void)guest_resource(42);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        status = turbowasm_component_instance_poll_shutdown_private(impl, &options);
+        if (!impl->shutdown_complete) check_equal(finish_shutdown(), TURBOWASM_OK);
+        else check_equal(status, TURBOWASM_OK);
+        check_true(calls != 0u); check_equal(shutdown_drops(), 1u);
+    }
+    it("keeps an unpublished handle reservation until its transaction rolls back") {
+        uint32_t handle;
+        unsigned token = 0u;
+        void *removed = NULL;
+        turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(&impl->exec.binary->config);
+        check_equal(turbowasm_component_handle_insert(&impl->exec.resource_table,
+            TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION, &token, &handle), TURBOWASM_OK);
+        turbowasm_runtime_scope_leave(scope);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_YIELDED);
+        check_false(impl->shutdown_complete);
+        check_equal(turbowasm_component_handle_remove(&impl->exec.resource_table, handle,
+            TURBOWASM_COMPONENT_HANDLE_RESOURCE_RESERVATION, &removed), TURBOWASM_OK);
+        check_true(removed == &token); check_equal(finish_shutdown(), TURBOWASM_OK);
+    }
+    it("drains a defined resource without a destructor in a graph with no Core instances") {
+        turbowasm_component core_free = {0}; turbowasm_component_instance local = {0};
+        turbowasm_component_instance_public_impl *target;
+        turbowasm_component_exec_async_limits limits = {1u, 4u};
+        turbowasm_runtime_scope scope;
+        uint32_t i, handle;
+        uint64_t identity = 0u;
+        turbowasm_value rep = {.kind = TURBOWASM_VALUE_I32, .as.i32 = 42};
+        check_equal(turbowasm_component_load_async_private(&core_free, component_shutdown_core_free_bytes,
+            sizeof(component_shutdown_core_free_bytes), &impl->component->binary.config), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_create_async_private(&local, &core_free, &limits), TURBOWASM_OK);
+        target = turbowasm_component_instance_public_impl_get(&local);
+        check_equal(target->exec.core_instance_count, 0u);
+        for (i = 0u; i < target->exec.binary->type_graph.count; ++i) {
+            const turbowasm_component_type *type = &target->exec.binary->type_graph.types[i];
+            if (type->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE && !type->as.resource.identity_alias)
+                identity = type->as.resource.identity;
+        }
+        check_not_equal(identity, (uint64_t)0);
+        scope = turbowasm_runtime_scope_enter(&target->exec.binary->config);
+        check_equal(turbowasm_component_resource_new_owned(&target->exec.resource_table, identity, rep, &handle), TURBOWASM_OK);
+        turbowasm_runtime_scope_leave(scope);
+        check_equal(turbowasm_component_instance_request_shutdown_private(target), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(target, NULL), TURBOWASM_OK);
+        check_true(target->shutdown_complete); check_null(target->shutdown); check_equal(target->ref_count, 1u);
+        check_equal(target->exec.resource_table.live_count, 0u);
+        turbowasm_component_instance_destroy(&local); turbowasm_component_destroy(&core_free);
+        check_null(local.impl); check_null(core_free.impl);
+    }
+    it("closes local guest endpoint handles and frees their set after membership clears") {
+        uint32_t set;
+        turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(&impl->exec.binary->config);
+        check_equal(turbowasm_component_task_set_new(&impl->exec.task_domain, &set), TURBOWASM_OK);
+        turbowasm_runtime_scope_leave(scope);
+        check_equal(open_pair(0u, false, true), TURBOWASM_OK);
+        check_equal(turbowasm_component_waitable_join(&impl->exec.resource_table, pair_ends[0][0]->waitable.handle, set), TURBOWASM_OK);
+        pair_ends[0][0] = pair_ends[0][1] = NULL;
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(finish_shutdown(), TURBOWASM_OK);
+        check_equal(impl->exec.resource_table.live_count, 0u); check_null(impl->exec.task_domain.sets);
+        check_null(impl->exec.task_domain.pairs); check_equal(impl->ref_count, 1u);
+    }
+    it("drains pending guest string-write buffer leases for memory32 and memory64 after the calling task exits") {
+        unsigned wide;
+        for (wide = 0u; wide < 2u; ++wide) {
+            turbowasm_component_host_value arguments[2];
+            static const uint8_t text[] = {'a', 'b', 'c'};
+            uint64_t handles;
+            size_t count;
+            check_equal(create(0u, "pair-text", NULL, 0u, false), TURBOWASM_OK); finish(0u);
+            check_equal(turbowasm_component_host_task_take_result(&owners[0], &output, &count), TURBOWASM_OK);
+            check_equal(output.kind, TURBOWASM_COMPONENT_HOST_U64); handles = output.as.u64;
+            check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_host_value_destroy(&output), TURBOWASM_OK);
+            arguments[0] = (turbowasm_component_host_value){.kind = TURBOWASM_COMPONENT_HOST_U32,
+                .as.u32 = (uint32_t)(handles >> 32)};
+            arguments[1] = (turbowasm_component_host_value){.kind = TURBOWASM_COMPONENT_HOST_STRING,
+                .as.string = {text, 3u}};
+            check_equal(create(0u, wide ? "write-text64" : "write-text32", arguments, 2u, false), TURBOWASM_OK);
+            finish(0u); take(0u, UINT32_MAX);
+            check_equal(turbowasm_component_host_task_destroy(&owners[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_host_value_destroy(&output), TURBOWASM_OK);
+            check_null(impl->host_owners); check_equal(impl->exec.async_buffer_owners, 1u);
+            check_equal(impl->exec.resource_table.live_count, 2u);
+            check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+            check_equal(finish_shutdown(), TURBOWASM_OK); check_equal(impl->exec.async_buffer_owners, 0u);
+            check_equal(impl->exec.resource_table.live_count, 0u); check_equal(impl->ref_count, 1u);
+            if (wide == 0u) {
+                turbowasm_component_exec_async_limits limits = {2u, 16u};
+                turbowasm_component_instance_destroy(&instance); check_null(instance.impl);
+                check_equal(turbowasm_component_instance_create_async_private(&instance, &component, &limits), TURBOWASM_OK);
+                impl = turbowasm_component_instance_public_impl_get(&instance); attach();
+            }
+        }
+    }
+    it("waits for an origin pair whose readable end has moved to a foreign instance") {
+        turbowasm_component_exec_async_limits limits = {2u, 16u};
+        turbowasm_component_instance_public_impl *target;
+        check_equal(turbowasm_component_instance_create_async_private(&destination, &component, &limits), TURBOWASM_OK);
+        target = turbowasm_component_instance_public_impl_get(&destination);
+        transfer_pair(endpoint_type(impl, false));
+        check_equal(turbowasm_component_host_endpoint_into_value(&host_ends[0], &endpoint_value), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], target, &endpoint_value, &budget), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_YIELDED);
+        check_false(impl->shutdown_complete); check_equal(impl->exec.task_domain.pair_count, 1u);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[2]), TURBOWASM_OK);
+        check_equal(finish_shutdown(), TURBOWASM_OK); check_equal(impl->ref_count, 1u);
+    }
+    it("leaves guest handles retryable after every cleanup-driver startup allocation failure") {
+        size_t failure;
+        for (failure = 1u; failure < FAILURE_LIMIT; ++failure) {
+            uint32_t handle = guest_resource(42);
+            turbowasm_status status;
+            size_t live = allocations.live;
+            check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+            allocations.fail_at = allocations.attempts + failure;
+            status = turbowasm_component_instance_poll_shutdown_private(impl, NULL); allocations.fail_at = 0u;
+            if (status == TURBOWASM_OK) { check_true(impl->shutdown_complete); break; }
+            check_equal(status, TURBOWASM_OUT_OF_MEMORY);
+            if (turbowasm_component_handle_kind_get(&impl->exec.resource_table, handle) == TURBOWASM_COMPONENT_HANDLE_RESOURCE) {
+                check_false(impl->shutdown_complete); check_null(impl->shutdown); check_equal(allocations.live, live);
+                check_equal(shutdown_drops(), 0u); check_equal(impl->ref_count, 1u);
+                check_equal(finish_shutdown(), TURBOWASM_OK); check_equal(shutdown_drops(), 1u);
+            } else {
+                check_true(impl->shutdown_complete); check_equal(impl->shutdown_status, TURBOWASM_OUT_OF_MEMORY);
+            }
+            turbowasm_component_instance_destroy(&instance); check_null(instance.impl);
+            {
+                turbowasm_component_exec_async_limits limits = {2u, 16u};
+                check_equal(turbowasm_component_instance_create_async_private(&instance, &component, &limits), TURBOWASM_OK);
+                impl = turbowasm_component_instance_public_impl_get(&instance); attach();
+            }
+        }
+        check_true(failure > 1u); check_true(failure < FAILURE_LIMIT);
     }
     it("requests cancellation of every initial host root without freeing its carrier") {
         size_t used;

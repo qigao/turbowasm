@@ -627,6 +627,7 @@ typedef struct component_host_arguments_impl {
     turbowasm_component_value *values;
     size_t count, bytes;
     turbowasm_component_host_budget *budget;
+    turbowasm_component_host_registration registration;
 } component_host_arguments_impl;
 
 static turbowasm_status argument_size_add(size_t *size, size_t count,
@@ -770,6 +771,7 @@ turbowasm_status turbowasm_component_host_arguments_prepare(
         return status;
     }
     owner->impl = impl;
+    turbowasm_component_host_register(instance, &impl->registration, impl, NULL, NULL);
     turbowasm_component_host_activity_leave(instance);
     return TURBOWASM_OK;
 }
@@ -825,6 +827,7 @@ turbowasm_status turbowasm_component_host_arguments_destroy(
     cleanup = admission_destroy(&impl->admission);
     if (status == TURBOWASM_OK) status = cleanup;
     impl->budget->used -= impl->bytes;
+    turbowasm_component_host_unregister(&impl->registration);
     turbowasm_rt_free(impl);
     turbowasm_runtime_scope_leave(scope);
     turbowasm_component_host_activity_leave(instance);
@@ -1066,6 +1069,7 @@ typedef struct component_host_result_impl {
     size_t bytes;
     turbowasm_component_host_value value;
     bool driving;
+    turbowasm_component_host_registration registration;
 } component_host_result_impl;
 
 static turbowasm_status result_storage_size(turbowasm_component_instance_public_impl *instance,
@@ -1181,6 +1185,7 @@ turbowasm_status turbowasm_component_host_result_prepare(
     commit_staged_result(source, &impl->value);
     impl->instance = instance; impl->budget = budget; impl->bytes = bytes;
     owner->impl = impl;
+    turbowasm_component_host_register(instance, &impl->registration, impl, NULL, NULL);
     turbowasm_runtime_scope_leave(scope);
     turbowasm_component_host_activity_leave(instance);
     return TURBOWASM_OK;
@@ -1191,6 +1196,7 @@ static void host_result_forget(turbowasm_component_host_result *owner) {
     turbowasm_component_instance_public_impl *instance = impl->instance;
     /* The caller holds activity through unpublication and allocator callbacks. */
     impl->budget->used -= impl->bytes;
+    turbowasm_component_host_unregister(&impl->registration);
     owner->impl = NULL; turbowasm_rt_free(impl);
     turbowasm_component_host_activity_leave(instance); component_instance_release(instance);
 }
@@ -1478,6 +1484,9 @@ void turbowasm_component_instance_destroy(
     if (instance == NULL)
         return;
     impl = turbowasm_component_instance_public_impl_get(instance);
+    /* The private shutdown caller must still be able to drive guest cleanup.
+     * Ordinary instances never enter this state while public async is gated. */
+    if (impl != NULL && impl->admission_closed && !impl->shutdown_complete) return;
     instance->impl = NULL;
     component_instance_release(impl);
 }
@@ -1684,6 +1693,7 @@ typedef struct turbowasm_component_call_public_impl {
     turbowasm_component_core_call_adapter adapter;
     component_public_admission admission;
     bool has_result;
+    turbowasm_component_host_registration registration;
 } turbowasm_component_call_public_impl;
 
 static turbowasm_component_call_public_impl *
@@ -1768,6 +1778,7 @@ static turbowasm_status component_call_create(
     call_impl->instance = instance_impl;
     call_impl->has_result = has_result;
     call->impl = call_impl;
+    turbowasm_component_host_register(instance_impl, &call_impl->registration, call_impl, NULL, NULL);
     call_impl = NULL;
 
 done:
@@ -1819,6 +1830,7 @@ void turbowasm_component_call_destroy(
         &instance->component->binary.config);
     turbowasm_component_exec_call_destroy(&impl->call);
     admission_destroy(&impl->admission);
+    turbowasm_component_host_unregister(&impl->registration);
     turbowasm_rt_free(impl);
     turbowasm_runtime_scope_leave(scope);
     turbowasm_component_host_activity_leave(instance);

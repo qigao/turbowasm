@@ -985,6 +985,46 @@ compiled callback cancellation and post-return trap handling across fuel
 suspension. This qualifies shutdown request/admission closure, not instance
 drain or the full public async boundary.
 
+Private drain extends that transition on the instance owner thread. Ordinary
+argument/result staging and synchronous call bodies are passive registrations:
+their lifetime blocks drain without changing their cancellation semantics.
+Before starting a pass, all host registrations, canonical owners, imported calls
+and guest tasks must be gone. A pass scans at most the initial finite handle
+capacity, closing local guest ends and dropping sets after membership clears.
+Buffer leases attached to those guest ends are cancelled and acknowledged within
+the pass; the aggregate buffer-owner count must reach zero for completion, but
+does not prevent the pass from releasing its own local leases.
+Outstanding lends, borrowed resources, reservations and independently owned
+subtasks stay pending; drain does not counterfeit their release. Resources are
+removed before their defining destructor runs, so a failed destructor consumes
+that obligation once, records the first error and permits sibling cleanup.
+When Core is present, one internal unit host-entry task runs the pass using the
+existing coroutine/control path. It retains the instance, graph and pass state
+through fuel/host-wait suspension; its storage is bounded to one per instance
+and subject to Runtime allocation/stack limits. Core-free graphs use the same
+finite scan with their synchronous capability destructor contract. Admission
+remains closed through allocation failure or interruption, and startup failure
+before the scan leaves handles retryable. Handles still present after the finite
+scan are handled by a later pass rather than an unbounded loop. Completion requires no
+host owners, calls, canonical owners, loans, local handles or live creation
+pairs. A foreign end therefore keeps its origin pending until it is released.
+The first consumed cleanup failure is reported at terminal completion. Core
+storage remains with the instance until normal instance destruction; no pending
+owner is freed merely to make completion succeed. Destroying a requested but
+incomplete private instance preserves its public carrier so that the caller can
+still drive and audit completion. This remains a private
+boundary until public options and value/endpoint integration are complete.
+Formal drain cases cover retained guest destructors across fuel and cooperative
+interruption, sibling cleanup after a trap, every cleanup-driver startup
+allocation failure, callback/allocator reentry, outstanding lends and borrowed
+handles, unpublished reservations, active set waits, passive argument/result/call
+owners, foreign creation pairs and Core-free resource definitions. Actual guest
+string writes for memory32 and memory64 leave codec leases after the calling
+task exits; shutdown cancels, acknowledges and releases both leases before
+completion. Windows ASan passes 81 cases and 55,422 assertions; the related
+Component/WASI/Runtime regression passes 86/86 in 20.20 s. Imported host-wait
+destructors and nested Component provider integration remain unqualified.
+
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
 an existing Core instance for its allocator/store and caller memory; it constructs
