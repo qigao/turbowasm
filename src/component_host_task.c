@@ -10,6 +10,7 @@ typedef struct component_host_task_impl {
     turbowasm_component_value canonical;
     turbowasm_component_task task;
     turbowasm_component_exec_resource_codec resources;
+    turbowasm_component_endpoint_codec endpoints;
     turbowasm_component_exec_realloc_context realloc;
     turbowasm_component_host_registration registration;
     bool result_loaded, delivered, driving;
@@ -33,6 +34,8 @@ static turbowasm_status shutdown_cancel(void *context) {
 
 static turbowasm_status rollback_parameters(component_host_task_impl *impl, turbowasm_status status) {
     turbowasm_status cleanup = turbowasm_component_exec_resource_codec_rollback(&impl->resources);
+    turbowasm_status endpoint_cleanup = turbowasm_component_endpoint_codec_rollback(&impl->endpoints);
+    if (cleanup == TURBOWASM_OK) cleanup = endpoint_cleanup;
     return status != TURBOWASM_OK ? status : cleanup;
 }
 
@@ -74,7 +77,10 @@ static turbowasm_status prepare_parameters(void *context, turbowasm_component_ta
         cursor += count;
     }
     if (status == TURBOWASM_OK && cursor != task->signature.param_count) status = TURBOWASM_TYPE_MISMATCH;
+    if (status == TURBOWASM_OK) status = turbowasm_component_exec_resource_codec_preflight(&impl->resources);
+    if (status == TURBOWASM_OK) status = turbowasm_component_endpoint_codec_preflight(&impl->endpoints);
     if (status == TURBOWASM_OK) status = turbowasm_component_exec_resource_codec_commit(&impl->resources);
+    if (status == TURBOWASM_OK) status = turbowasm_component_endpoint_codec_commit(&impl->endpoints);
     if (status == TURBOWASM_OK) status = turbowasm_component_host_arguments_published(&impl->arguments);
     if (status != TURBOWASM_OK) return rollback_parameters(impl, status);
     *out_count = cursor;
@@ -90,7 +96,7 @@ static turbowasm_status export_supported(const turbowasm_component_task_binding 
         turbowasm_component_type_ref ref;
         if (result && !type->as.function.has_result) break;
         ref = result ? type->as.function.result : type->as.function.params[i];
-        if (!turbowasm_component_value_type_features(binding->graph, ref, &features)) return TURBOWASM_UNSUPPORTED;
+        if (!turbowasm_component_transfer_type_features(binding->graph, ref, &features)) return TURBOWASM_UNSUPPORTED;
         if (result) break;
     }
     return TURBOWASM_OK;
@@ -128,6 +134,10 @@ turbowasm_status turbowasm_component_host_task_create(turbowasm_component_host_t
     impl->instance = instance; impl->budget = budget;
     target = *binding;
     turbowasm_component_exec_resource_codec_bind(&impl->resources, &instance->exec, &target.memory);
+    impl->endpoints.table = &instance->exec.resource_table;
+    target.memory.endpoint_lift = turbowasm_component_endpoint_codec_lift;
+    target.memory.endpoint_lower = turbowasm_component_endpoint_codec_lower;
+    target.memory.endpoint_context = &impl->endpoints;
     impl->resources.borrow_scope = &impl->task;
     if (target.memory.guest_realloc != NULL) {
         if (target.memory.realloc_context == NULL) { status = TURBOWASM_INVALID_ARGUMENT; goto fail; }
@@ -164,6 +174,41 @@ fail:
 const turbowasm_component_task *turbowasm_component_host_task_view(const turbowasm_component_host_task *owner) {
     const component_host_task_impl *impl = owner != NULL ? owner->impl : NULL;
     return impl != NULL ? &impl->task : NULL;
+}
+
+turbowasm_status turbowasm_component_async_task_state_get(const turbowasm_component_async_task *owner,
+    turbowasm_component_async_task_state *out) {
+    const component_host_task_impl *impl = owner != NULL ? owner->impl : NULL;
+    const turbowasm_component_task *task;
+    const turbowasm_component_type *type;
+    turbowasm_component_async_task_state state = {0};
+    turbowasm_component_task_host_wait wait;
+    if (impl == NULL || out == NULL || impl->driving || impl->instance->shutdown_driving ||
+        impl->task.domain->active != NULL || impl->task.domain->auxiliary != NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    task = &impl->task;
+    state.execution = task->state; state.terminal = task->state >= TURBOWASM_EXECUTION_COMPLETED;
+    state.cancellation_requested = task->cancellation_requested;
+    state.cancelled = state.terminal && task->phase == TURBOWASM_COMPONENT_TASK_CANCELLED;
+    state.status = !state.terminal ? TURBOWASM_YIELDED : state.cancelled ? TURBOWASM_INTERRUPTED : task->status;
+    state.trap = task->trap; state.result_taken = impl->delivered;
+    type = turbowasm_component_type_graph_get(task->binding.graph, task->binding.function_type);
+    if (state.terminal && state.status == TURBOWASM_OK) state.result_count = type->as.function.has_result ? 1u : 0u;
+    if (!state.terminal) {
+        turbowasm_yield_reason reason = turbowasm_execution_yield_reason_get(&task->core);
+        if (task->phase == TURBOWASM_COMPONENT_TASK_INITIAL && task->domain->backpressure != 0u)
+            state.wait_reason = TURBOWASM_COMPONENT_ASYNC_WAIT_BACKPRESSURE;
+        else if (reason == TURBOWASM_YIELD_FUEL) state.wait_reason = TURBOWASM_COMPONENT_ASYNC_WAIT_FUEL;
+        else if (reason == TURBOWASM_YIELD_INTERRUPTION) state.wait_reason = TURBOWASM_COMPONENT_ASYNC_WAIT_INTERRUPTION;
+        else if (turbowasm_component_host_task_pending_host_wait(owner, &wait))
+            state.wait_reason = TURBOWASM_COMPONENT_ASYNC_WAIT_HOST_IO;
+        else if (task->builtin_wait != TURBOWASM_COMPONENT_TASK_WAIT_NONE || task->waiting_set != 0u)
+            state.wait_reason = TURBOWASM_COMPONENT_ASYNC_WAIT_COMPONENT_EVENT;
+        else if (task->between_callbacks || task->state == TURBOWASM_EXECUTION_YIELDED)
+            state.wait_reason = TURBOWASM_COMPONENT_ASYNC_WAIT_COOPERATIVE;
+    }
+    *out = state;
+    return TURBOWASM_OK;
 }
 
 bool turbowasm_component_host_task_pending_host_wait(const turbowasm_component_host_task *owner,

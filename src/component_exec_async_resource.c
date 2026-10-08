@@ -211,6 +211,32 @@ void turbowasm_component_exec_resource_value_disown(turbowasm_component_value *v
     memset(value, 0, sizeof(*value));
 }
 
+turbowasm_status turbowasm_component_exec_resource_prepare_host_transfer(turbowasm_component_value *value) {
+    turbowasm_component_async_resource_owner *owner;
+    turbowasm_component_task_domain *domain;
+    if (value == NULL || value->kind != TURBOWASM_COMPONENT_TYPE_OWN ||
+        !turbowasm_component_exec_resource_value_idle(value)) return TURBOWASM_INVALID_ARGUMENT;
+    owner = value->release_context; domain = &owner->exec->task_domain;
+    if (owner->borrowed || owner->committed || owner->host_admitted == NULL || *owner->host_admitted ||
+        owner->host_finish == NULL || owner->instance_release != NULL || domain->pair_retain == NULL ||
+        domain->pair_release == NULL || !domain->pair_retain(domain->pair_owner)) return TURBOWASM_INVALID_ARGUMENT;
+    owner->instance_owner = domain->pair_owner; owner->instance_release = domain->pair_release;
+    return TURBOWASM_OK;
+}
+bool turbowasm_component_exec_resource_host_transfer_pending(const turbowasm_component_value *value) {
+    const turbowasm_component_async_resource_owner *owner;
+    if (value == NULL || value->kind != TURBOWASM_COMPONENT_TYPE_OWN ||
+        !turbowasm_component_exec_resource_value_idle(value)) return false;
+    owner = value->release_context;
+    return !owner->borrowed && !owner->committed && owner->instance_release != NULL &&
+        owner->host_admitted != NULL && !*owner->host_admitted && owner->host_finish != NULL;
+}
+void turbowasm_component_exec_resource_publish_host_transfer(turbowasm_component_value *value) {
+    turbowasm_component_async_resource_owner *owner = value->release_context;
+    owner->host_admitted = NULL; owner->host_published = NULL;
+    owner->host_finish = NULL; owner->host_context = NULL;
+}
+
 static const turbowasm_component_type *instance_resource(turbowasm_component_exec_resource_codec *codec,
     const turbowasm_component_type_graph *graph, turbowasm_component_type_ref ref,
     const turbowasm_component_type **out_type) {

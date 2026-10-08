@@ -671,6 +671,594 @@ addition. Explicit and implicit guest backpressure use the same bounded pending
 task state and preserve queued admission order; they do not create a worker pool
 or an unbounded event queue. No new logging subsystem is required.
 
+### Public async C interface proposal
+
+This proposal makes the approved host boundary concrete. The declarations below
+are a design for the installed `turbowasm/component.h`, not an assertion that
+these functions are implemented or exported. Keep the ordinary synchronous
+loader/constructor contract and add explicit async admission. Private canonical
+types, handle tables, buffers, task pointers and budget objects never appear in
+the public signatures. The implementation continues to use the existing
+Component owners and type graph as its authorities.
+
+The alternatives considered were extending `component_call`, exporting the
+private host-owner signatures, and introducing separate public async owners.
+The separate owners are selected: `component_call` retains its synchronous
+restartable-call contract, while task cancellation, callback scheduling and
+transfer completion have distinct lifecycles. Exporting private signatures
+would make callers own budgets and canonical buffers and would expose mutable
+runtime state. Separate owners add a small public surface and require a joined
+adapter, but keep those obligations inside Component. No executor, worker pool
+or second type registry is added.
+
+#### Common rules and bounded instance creation
+
+All opaque owners start as `{0}`, have unique ownership and are moved by copying
+the carrier and clearing the source, never by retaining a shallow copy. API
+output cells and move input trees must be exclusive during the whole operation,
+including allocator callbacks. Operations run on the instance execution owner
+thread; external threads enqueue I/O completion to that thread. Inspection is
+allocation-free and returns a snapshot, not a mutable internal view.
+
+Except for documented terminal cleanup, failure preserves input ownership and
+all output cells. `INVALID_ARGUMENT` covers an empty/stale owner, wrong role,
+busy/reentrant operation or invalid limit; `TYPE_MISMATCH` covers a valid value
+that does not match the declared Component type. `OUT_OF_MEMORY` covers finite
+quota exhaustion as well as allocation failure. `YIELDED` means progress or
+external completion remains pending. Existing `turbowasm_status` values are
+reused; no new public busy status is required.
+
+```c
+typedef struct turbowasm_component_async_task { void *impl; }
+    turbowasm_component_async_task;
+typedef struct turbowasm_component_async_endpoint { void *impl; }
+    turbowasm_component_async_endpoint;
+typedef struct turbowasm_component_async_transfer { void *impl; }
+    turbowasm_component_async_transfer;
+
+typedef struct turbowasm_component_async_options {
+    uint32_t tasks;
+    uint32_t handles;
+    uint32_t transfers;
+    size_t host_bytes;
+} turbowasm_component_async_options;
+
+void turbowasm_component_async_options_init(
+    turbowasm_component_async_options *options);
+
+turbowasm_status turbowasm_component_load_async_borrowed(
+    turbowasm_component *component, const uint8_t *bytes, size_t size);
+turbowasm_status turbowasm_component_load_async_borrowed_with_config(
+    turbowasm_component *component, const uint8_t *bytes, size_t size,
+    const turbowasm_runtime_config *config);
+
+turbowasm_status turbowasm_component_instance_create_async_with_options(
+    turbowasm_component_instance *instance,
+    const turbowasm_component *component,
+    const turbowasm_component_async_options *options);
+```
+
+The loader outputs must be empty; source bytes are immutable and borrowed until
+the last derived instance/task/transfer/value releases its reference. Config and
+options are copied before allocator callbacks; allocator contexts remain
+borrowed through the last release. A NULL config or options selects initialized
+defaults. `async_options_init(NULL)` is a no-op. Defaults are 64 tasks, 4,096
+canonical handles, 64 transfers and 16 MiB of logical host storage. Zero counts,
+unlimited sentinels and values beyond the canonical representation are rejected.
+Tasks/handles/transfers retain their quota until their actual retirement, not
+merely until terminal notification. The constructor owns one stable byte budget;
+callers neither pass nor mutate it.
+
+Host storage covers owner bodies, snapshots, copied payloads and retained result
+allocations. Successful publication transfers each remaining reservation to
+the returned allocation/resource/endpoint owner until its actual destruction or
+subsequent move. It must not return the charge merely because a task or transfer
+hands out a value. Runtime allocation and stack limits apply in addition. This
+is implemented through private Runtime allocation finalizers for ordinary
+returned string/composite/resource storage and direct endpoint-body ownership.
+Each allocation retains the instance/budget and releases its charge after the
+allocator's deallocation callback. Detached subtrees therefore remain charged
+independently, without a public ownership field or parallel value registry.
+
+An async-capable instance may also run synchronous exports through the existing
+sync APIs. Async-typed exports require `async_task`; the sync APIs return
+`UNSUPPORTED` for them. The existing synchronous loader and constructor continue
+to reject async components. The explicit loader makes that behavior stable and
+allows rollback by withholding the new installed surface until its gates pass.
+
+#### Type discovery and endpoint identity
+
+Pair creation needs a type from the receiving instance, including a future or
+stream nested in a function parameter/result. A graph index alone is not a
+public type identity. A copyable token borrows its live instance; it carries no
+cleanup obligation and cannot be used after that instance's backing state has
+been released. All token consumers take the expected live instance and validate
+the scope before interpreting its id. The token contents are opaque to callers.
+
+```c
+typedef struct turbowasm_component_type_token {
+    const void *scope;
+    uint32_t id;
+    bool inline_type;
+} turbowasm_component_type_token;
+
+typedef enum turbowasm_component_type_edge {
+    TURBOWASM_COMPONENT_TYPE_EDGE_ELEMENT,
+    TURBOWASM_COMPONENT_TYPE_EDGE_FIELD,
+    TURBOWASM_COMPONENT_TYPE_EDGE_CASE,
+    TURBOWASM_COMPONENT_TYPE_EDGE_SOME,
+    TURBOWASM_COMPONENT_TYPE_EDGE_OK,
+    TURBOWASM_COMPONENT_TYPE_EDGE_ERROR,
+    TURBOWASM_COMPONENT_TYPE_EDGE_PAYLOAD
+} turbowasm_component_type_edge;
+
+turbowasm_status turbowasm_component_instance_parameter_type(
+    const turbowasm_component_instance *instance, turbowasm_name export_name,
+    size_t parameter_index, turbowasm_component_type_token *out);
+turbowasm_status turbowasm_component_instance_result_type(
+    const turbowasm_component_instance *instance, turbowasm_name export_name,
+    turbowasm_component_type_token *out);
+turbowasm_status turbowasm_component_instance_type_child(
+    const turbowasm_component_instance *instance,
+    turbowasm_component_type_token parent, turbowasm_component_type_edge edge,
+    size_t index, turbowasm_component_type_token *out);
+
+typedef struct turbowasm_component_async_endpoint_type {
+    bool future;
+    bool has_payload;
+    turbowasm_component_type_token payload;
+} turbowasm_component_async_endpoint_type;
+
+turbowasm_status turbowasm_component_instance_endpoint_type_get(
+    const turbowasm_component_instance *instance,
+    turbowasm_component_type_token type,
+    turbowasm_component_async_endpoint_type *out);
+```
+
+`ELEMENT` selects a list element; `FIELD` selects an ordered record/tuple field;
+`CASE` selects a variant's payload; `SOME`, `OK` and `ERROR` select option/result
+payloads; `PAYLOAD` selects a future/stream payload. Only FIELD/CASE use a
+nonzero index. A wrong edge/kind or absent payload/result returns
+`TYPE_MISMATCH`; an out-of-range index or foreign token returns
+`INVALID_ARGUMENT`. An unresolved function export returns `LINK_ERROR`.
+Endpoint type inspection returns `TYPE_MISMATCH` for a non-endpoint type and a
+zero payload token when `has_payload` is false. These allocation-free queries
+project the existing type graph; they do not construct reflected metadata.
+
+Resource identity remains generative and is validated at value admission.
+Foreign endpoint values may move only when the existing structural type and
+resource-identity checks admit them; a foreign token cannot create a pair in an
+unrelated instance. Retain the pair's creation domain independently of the host
+carrier's receiving instance. Public type queries and provider link adapters
+must use the same instance type view, including its bound resource identities.
+
+#### Task creation, progress and result delivery
+
+```c
+typedef enum turbowasm_component_async_wait_reason {
+    TURBOWASM_COMPONENT_ASYNC_WAIT_NONE,
+    TURBOWASM_COMPONENT_ASYNC_WAIT_FUEL,
+    TURBOWASM_COMPONENT_ASYNC_WAIT_INTERRUPTION,
+    TURBOWASM_COMPONENT_ASYNC_WAIT_HOST_IO,
+    TURBOWASM_COMPONENT_ASYNC_WAIT_COMPONENT_EVENT,
+    TURBOWASM_COMPONENT_ASYNC_WAIT_BACKPRESSURE,
+    TURBOWASM_COMPONENT_ASYNC_WAIT_COOPERATIVE
+} turbowasm_component_async_wait_reason;
+
+typedef struct turbowasm_component_async_task_state {
+    turbowasm_execution_state execution;
+    turbowasm_component_async_wait_reason wait_reason;
+    bool terminal;
+    bool cancellation_requested;
+    bool cancelled;
+    bool result_taken;
+    size_t result_count;
+    turbowasm_status status;
+    turbowasm_trap trap;
+} turbowasm_component_async_task_state;
+
+turbowasm_status turbowasm_component_async_task_create(
+    turbowasm_component_async_task *task,
+    turbowasm_component_instance *instance, turbowasm_name export_name,
+    const turbowasm_component_host_value *arguments, size_t argument_count);
+turbowasm_status turbowasm_component_async_task_create_move(
+    turbowasm_component_async_task *task,
+    turbowasm_component_instance *instance, turbowasm_name export_name,
+    turbowasm_component_host_value *arguments, size_t argument_count);
+turbowasm_status turbowasm_component_async_task_resume(
+    turbowasm_component_async_task *task,
+    const turbowasm_execution_options *options);
+turbowasm_status turbowasm_component_async_task_state_get(
+    const turbowasm_component_async_task *task,
+    turbowasm_component_async_task_state *out);
+turbowasm_status turbowasm_component_async_task_request_cancel(
+    turbowasm_component_async_task *task);
+turbowasm_status turbowasm_component_async_task_take_result(
+    turbowasm_component_async_task *task,
+    turbowasm_component_host_value *out, size_t *out_result_count);
+turbowasm_status turbowasm_component_async_task_destroy(
+    turbowasm_component_async_task *task);
+```
+
+Create admits only async-typed function exports, copies ordinary argument
+storage and takes a snapshot before any later execution. The const entry rejects
+all nested own/endpoint leaves. The move entry performs complete validation and
+allocation before committing every own/endpoint leaf together; those leaves are
+zeroed on success, while caller string/composite containers remain caller-owned.
+Borrow arguments pin their source own through terminal resolution. Create does
+not enter guest code; the caller may immediately reuse non-own input storage.
+
+Resume drives one entry/callback quantum or the retained Core continuation.
+Options are borrowed only for that resume; NULL means unlimited fuel/no
+interruption callback, not an implicit blocking event loop. `YIELDED` preserves
+the owner; state reports why it yielded. Internal waitable waits are distinct
+from external host I/O. Callers drive other tasks/transfers as needed and resume
+again when the relevant event is ready. Callback stacks, realloc, post-return
+and destructor stacks obey the same execution control and cannot replay effects.
+
+State `status` is `YIELDED` before terminal completion; afterwards it is the
+final status, with acknowledged cancellation represented as `INTERRUPTED` and
+`cancelled=true`. `result_count` is zero until successful terminal completion,
+then 0 or 1 according to the signature, and stays observable after delivery.
+`result_taken` tracks successful delivery, including a successful unit delivery.
+Task.return/result resolution alone is insufficient: `terminal` requires
+entry/callback exit and the associated loan/cleanup obligations to finish.
+
+Cancel is an idempotent request on a live task, not acknowledgement. A terminal
+task accepts it without changing its outcome. A result committed before
+cancellation wins; merely requesting cancellation cannot discard that result.
+Take-result returns `YIELDED` while nonterminal and the final error/cancellation
+status after unsuccessful completion. On successful completion, an empty output
+receives the single result once; a unit function allows out=NULL and writes count
+0. Failure, including result allocation/quota exhaustion, leaves output/count
+and canonical ownership unchanged for retry. Returned values use the existing
+`host_value_destroy` contract, extended to endpoint leaves and charge retirement.
+
+Destroy on NULL is invalid; on an empty carrier it succeeds. A live, driving or
+reentrant task returns `INVALID_ARGUMENT` unchanged. A terminal destroy consumes
+the owner and any untaken result even if cleanup returns an error; primary guest
+failure precedes a cleanup failure. Callers inspect the cleared carrier to
+distinguish consumed cleanup failure from a busy rejection. No raw private task
+view is installed.
+
+#### Authenticated external waits
+
+```c
+typedef struct turbowasm_component_async_wait {
+    const void *owner;
+    uint64_t generation;
+    uint64_t continuation;
+    turbowasm_host_wait wait;
+} turbowasm_component_async_wait;
+
+bool turbowasm_component_async_task_pending_host_wait(
+    const turbowasm_component_async_task *task,
+    turbowasm_component_async_wait *out);
+turbowasm_status turbowasm_component_async_task_complete_host_wait(
+    turbowasm_component_async_task *task,
+    turbowasm_component_async_wait wait, int completion_status);
+```
+
+Tickets borrow the live task/instance, do not retain them, and are passed back
+unchanged. Query returns false without touching out for internal Component waits,
+no pending wait or reentrant access. Completion allocates nothing and enters no
+guest code: it records completion for a subsequent resume. Authenticate owner,
+admission generation, Core continuation generation and Runtime wait before any
+mutation. A foreign/stale/duplicate ticket is invalid, including repeated Runtime
+tokens across entry/callback continuations and reused task storage in the same
+live domain. Never use a ticket after its owner/domain is destroyed. Shutdown
+uses the same public ticket carrier but distinct owner authentication, so a task
+ticket cannot complete a destructor wait. Completion must remain available after
+shutdown closes admission, while the actual owner remains pending.
+
+#### Endpoint owners and host values
+
+```c
+typedef struct turbowasm_component_async_endpoint_state {
+    bool future;
+    bool readable;
+    bool has_payload;
+    bool peer_dropped;
+    bool finished;
+} turbowasm_component_async_endpoint_state;
+
+turbowasm_status turbowasm_component_async_endpoint_pair_create(
+    turbowasm_component_async_endpoint *reader,
+    turbowasm_component_async_endpoint *writer,
+    turbowasm_component_instance *instance,
+    turbowasm_component_type_token type);
+turbowasm_status turbowasm_component_async_endpoint_state_get(
+    const turbowasm_component_async_endpoint *endpoint,
+    turbowasm_component_async_endpoint_state *out);
+turbowasm_status turbowasm_component_async_endpoint_into_value(
+    turbowasm_component_async_endpoint *reader,
+    turbowasm_component_host_value *out);
+turbowasm_status turbowasm_component_async_endpoint_from_value(
+    turbowasm_component_async_endpoint *reader,
+    turbowasm_component_host_value *source);
+turbowasm_status turbowasm_component_async_endpoint_destroy(
+    turbowasm_component_async_endpoint *endpoint);
+```
+
+Pair-create requires distinct empty outputs and an authenticated future/stream
+token. Allocate/reserve both ends before publishing either. On success each end
+retains its host instance, and the pair independently retains its creation
+domain. Readable ends can be encoded as `HOST_FUTURE`/`HOST_STREAM`; writable
+ends cannot be host values. Into-value moves an idle readable carrier to an
+empty host-value output with its true kind. From-value authenticates that kind
+and moves the embedded owner to an empty endpoint carrier. Neither operation
+creates a canonical value or changes the endpoint's instance; both are
+allocation-free and failure-atomic. Views of an embedded endpoint use its
+address, e.g. `&value.as.future`, without shallow-copying its ownership.
+
+State is a copy; `finished` is the future's one completed operation, not
+end-of-stream. A stream reports peer drop separately and may be reused after
+successful transfer completion. Destroy closes an idle end and notifies its
+peer of drop (the writer's close is stream end-of-stream); empty succeeds,
+NULL is invalid. A transferring carrier has been moved to its transfer and is
+empty. A busy embedded endpoint blocks `host_value_destroy` before any sibling
+string/resource/endpoint is consumed. Once complete preflight passes, freeze all
+owned leaves through callbacks, release the whole tree despite destructor
+errors, clear it, and report the first cleanup error. Public carrier operations
+never expose raw canonical end handles.
+
+#### Transfers and atomic terminal delivery
+
+```c
+typedef enum turbowasm_component_async_transfer_outcome {
+    TURBOWASM_COMPONENT_ASYNC_TRANSFER_PENDING,
+    TURBOWASM_COMPONENT_ASYNC_TRANSFER_COMPLETED,
+    TURBOWASM_COMPONENT_ASYNC_TRANSFER_PEER_DROPPED,
+    TURBOWASM_COMPONENT_ASYNC_TRANSFER_CANCELLED,
+    TURBOWASM_COMPONENT_ASYNC_TRANSFER_FAILED
+} turbowasm_component_async_transfer_outcome;
+
+typedef struct turbowasm_component_async_transfer_state {
+    uint32_t length;
+    uint32_t progress;
+    bool readable;
+    bool terminal;
+    bool result_taken;
+    turbowasm_component_async_transfer_outcome outcome;
+    turbowasm_status status;
+} turbowasm_component_async_transfer_state;
+
+typedef struct turbowasm_component_async_transfer_result {
+    turbowasm_component_async_endpoint endpoint;
+    turbowasm_component_host_value values;
+    uint32_t first_index;
+    uint32_t logical_count;
+} turbowasm_component_async_transfer_result;
+
+turbowasm_status turbowasm_component_async_transfer_read(
+    turbowasm_component_async_transfer *transfer,
+    turbowasm_component_async_endpoint *reader,
+    uint32_t count, size_t payload_bytes);
+turbowasm_status turbowasm_component_async_transfer_write(
+    turbowasm_component_async_transfer *transfer,
+    turbowasm_component_async_endpoint *writer,
+    const turbowasm_component_host_value *values, uint32_t count);
+turbowasm_status turbowasm_component_async_transfer_write_move(
+    turbowasm_component_async_transfer *transfer,
+    turbowasm_component_async_endpoint *writer,
+    turbowasm_component_host_value *values, uint32_t count);
+turbowasm_status turbowasm_component_async_transfer_poll(
+    turbowasm_component_async_transfer *transfer);
+turbowasm_status turbowasm_component_async_transfer_state_get(
+    const turbowasm_component_async_transfer *transfer,
+    turbowasm_component_async_transfer_state *out);
+turbowasm_status turbowasm_component_async_transfer_request_cancel(
+    turbowasm_component_async_transfer *transfer);
+turbowasm_status turbowasm_component_async_transfer_take_result(
+    turbowasm_component_async_transfer *transfer,
+    turbowasm_component_async_transfer_result *out);
+turbowasm_status turbowasm_component_async_transfer_result_destroy(
+    turbowasm_component_async_transfer_result *result);
+turbowasm_status turbowasm_component_async_transfer_destroy(
+    turbowasm_component_async_transfer *transfer);
+```
+
+All three admission calls explicitly consume the appropriate endpoint on
+success; they preserve it on failure. Write additionally snapshots ordinary
+values; only write-move consumes nested own/endpoint leaves. Borrow leaves are
+not transfer payloads. All source trees and endpoint identities are checked,
+all storage reserved and all fallible staging completed before the whole move
+commit. If rendezvous subsequently fails, return an admitted transfer that owns
+its terminal failure, rather than an admission error that falsely promises the
+now-consumed inputs are intact. A copied source root never becomes caller-owned
+canonical storage. Drivers and retained guest buffers remain internal.
+
+Read `payload_bytes` reserves a finite cumulative payload allowance beyond
+separately charged top-level cells. It may be zero for scalar/unit data; SIZE_MAX
+is invalid. Limits/checked sizing reject impossible reservations before move.
+When incoming owned payload exceeds the allowance, terminate the operation with
+the real error, keep its committed prefix, and clean up any rejected staging
+according to the canonical copy contract. A future requires count=1. A unit
+future/stream accepts values=NULL and counts logical completions without payload
+cells. Streams allow count=0 with canonical readiness semantics; count must fit
+the packed canonical copy length. Closing the writer, not a zero-length write,
+signals end-of-stream.
+
+Poll acknowledges a pending endpoint event at most once and frees its buffer
+lease; it does not run arbitrary guest tasks or guest realloc. Peer tasks must
+be driven separately, using their Runtime execution budgets. Pending returns
+`YIELDED`; a successfully terminal completed/dropped/cancelled operation returns
+OK, with its distinct outcome in state. A failed copy returns its primary status.
+Later polls return the recorded terminal status without consuming a second event.
+State is observational and cannot acknowledge an event. Cancel is idempotent and
+requires later polling to confirm terminal completion. Never free a leased
+buffer or infer cancellation acknowledgement from an OK cancel-request.
+
+Take-result requires terminal event acknowledgement and an empty result struct.
+It atomically publishes the endpoint plus the complete value batch once:
+
+| Direction | first_index | logical_count | values for a payload-bearing type |
+| --- | --- | --- | --- |
+| Read | 0 | progress | Owned HOST_LIST of all received values |
+| Write | progress | length - progress | Owned HOST_LIST of the entire untransferred tail |
+
+The outer HOST_LIST is a batch envelope, not the declared element's Component
+list type. For a unit endpoint values is empty (kind 0), even if logical_count
+is positive. For payload-bearing endpoints a zero-length batch is an owned empty
+HOST_LIST. The returned endpoint is the original read/write role, including a
+completed future that can only be closed. `take_result` may succeed for a failed
+operation so callers can reclaim its prefix/tail and endpoint; operation failure
+remains in transfer state. It returns the delivery error only if publication
+itself fails. Allocation/quota failure changes neither endpoint nor batch nor
+output and permits retry. A second take is invalid. No borrowed canonical-cell
+array is exposed. Already transferred elements are never returned in a write
+tail or transferred a second time.
+
+The result struct owns its nonempty fields until callers move them onward or
+call result-destroy. That helper preflights endpoint and all value leaves
+together; busy rejection preserves the whole struct. After preflight it consumes
+both fields, clears the struct and reports the first cleanup error. A terminal
+transfer may also be destroyed without taking a result; it destroys the tail or
+received values and closes its endpoint exactly once. Live/driving destruction
+fails unchanged. Terminal destruction consumes the transfer even when returning
+the saved copy error or a cleanup error. The transfer's reservation is retired or
+handed off to the returned owners, never duplicated.
+
+#### Shutdown and orderly release
+
+```c
+typedef struct turbowasm_component_async_shutdown_state {
+    bool requested;
+    bool complete;
+    turbowasm_component_async_wait_reason wait_reason;
+    turbowasm_status status;
+} turbowasm_component_async_shutdown_state;
+
+turbowasm_status turbowasm_component_instance_request_shutdown(
+    turbowasm_component_instance *instance);
+turbowasm_status turbowasm_component_instance_poll_shutdown(
+    turbowasm_component_instance *instance,
+    const turbowasm_execution_options *options);
+turbowasm_status turbowasm_component_instance_shutdown_state_get(
+    const turbowasm_component_instance *instance,
+    turbowasm_component_async_shutdown_state *out);
+bool turbowasm_component_instance_shutdown_pending_host_wait(
+    const turbowasm_component_instance *instance,
+    turbowasm_component_async_wait *out);
+turbowasm_status turbowasm_component_instance_shutdown_complete_host_wait(
+    turbowasm_component_instance *instance,
+    turbowasm_component_async_wait wait, int completion_status);
+```
+
+Request closes admission before requesting registered cancellation; repeated
+requests are idempotent and an error after closure never reopens admission.
+New tasks, endpoint pairs and transfers are rejected. Existing tasks may resume,
+external waits may complete, transfers may poll/take, and all values/owners may
+be released. Result promotion during shutdown is delivery, not new admission.
+
+Poll requires a prior request. It drains local guest handles and retained cleanup
+with the supplied fresh execution budget, but does not consume host result
+carriers or acknowledge host transfer events. It returns `YIELDED` while host
+owners, loans, endpoints or destructor execution remain pending. State reports
+HOST_IO for an authenticated destructor wait, FUEL/INTERRUPTION for Runtime
+suspension, and COMPONENT_EVENT when external owner retirement is required.
+Pending status is YIELDED; the first saved cleanup error is returned only after
+all obligations drain, with complete=true. Startup allocation failure returns
+its error without losing handles and is retryable. Complete polling is
+idempotent and returns the saved terminal status.
+
+Keep the public instance handle until shutdown completes. Existing void
+instance-destroy remains a reference release; it cannot imply cancellation/drain.
+If explicit shutdown has been requested but is incomplete, it preserves the
+carrier as the current private contract does. After completion, destroy releases
+it. Releasing the public handle without requesting shutdown is permitted when
+all remaining owners retain the instance, but does not perform cooperative
+guest cleanup; applications that need orderly teardown use this protocol.
+
+#### Example: pass a future to an async export
+
+The following sketches the API sequence for an async export `consume` whose
+parameter 0 is `future<u32>`. It is design documentation, not an executable
+fixture. Every actual application must check each API result; this example shows
+the admitted path after loading and constructing an async instance.
+
+```c
+turbowasm_component_type_token type = {0};
+turbowasm_component_async_endpoint reader = {0}, writer = {0};
+turbowasm_component_async_task task = {0};
+turbowasm_component_async_transfer write = {0};
+turbowasm_component_async_transfer_result tail = {0};
+turbowasm_component_host_value argument = {0}, answer = {0};
+turbowasm_component_host_value value = {
+    .kind = TURBOWASM_COMPONENT_HOST_U32, .as.u32 = 42
+};
+size_t result_count;
+/* 'instance' is a live turbowasm_component_instance. */
+turbowasm_name consume = {(const uint8_t *)"consume", 7};
+
+/* Check OK after each admission; failure leaves its sources untouched. */
+turbowasm_component_instance_parameter_type(&instance, consume, 0, &type);
+turbowasm_component_async_endpoint_pair_create(&reader, &writer, &instance, type);
+turbowasm_component_async_endpoint_into_value(&reader, &argument);
+turbowasm_component_async_task_create_move(&task, &instance, consume, &argument, 1);
+turbowasm_component_async_transfer_write(&write, &writer, &value, 1);
+
+/* The application's owner-thread loop interleaves task_resume and transfer_poll.
+ * It handles task host I/O tickets and supplies fresh fuel for each resume.
+ * When both owners report terminal, reclaim their results: */
+turbowasm_component_async_transfer_take_result(&write, &tail);
+turbowasm_component_async_task_take_result(&task, &answer, &result_count);
+turbowasm_component_async_transfer_result_destroy(&tail);
+turbowasm_component_host_value_destroy(&answer);
+turbowasm_component_async_transfer_destroy(&write);
+turbowasm_component_async_task_destroy(&task);
+
+/* Request shutdown, drive/cancel/release remaining owners, complete any
+ * destructor host-wait, and poll until shutdown_state.complete is true.
+ * Then release the public instance and component handles. */
+```
+
+#### Implementation gates, migration and qualification
+
+The shape above is additive and follows the previously approved lifecycle
+extension. Component consumers recompile against the expanded host-value
+surface; existing synchronous function signatures and ownership behavior remain.
+Do not install unimplemented declarations or lift public loader gates ahead of
+the complete joined surface. This document is reviewable while implementation
+continues. Revert the new adapter/header additions and retain the explicit async
+gate if qualification fails; no serialized data migration is introduced.
+
+Required implementation work includes authenticated public type queries and
+state snapshots; all-or-nothing host task/transfer value conversion; reservation
+handoff through returned string/composite/resource/endpoint destruction; atomic
+transfer result delivery; public wait-ticket adapters; and options/shutdown
+adapters. Provider linking and nested Component instantiation remain required
+parts of the wider completion goal: they must share this typed ownership/wait
+boundary and the same generative resource view, not expose private imports or
+replace missing providers with successful stubs. WASI-specific constructors must
+eventually compose their capability owners with the async options/lifecycle.
+
+The joined declarations and adapters are currently staged privately in
+`src/component_async_api.h`. Windows ASan qualification passes the formal host
+task, argument/result and options/adapter targets, including actual memory32/64
+guest echoes of mixed string/own/future values, detached-string charging, typed
+and unit futures, partial transfers, repeated cancellation and exhaustive
+composite write admission allocation failures. The result handoff now keeps
+returned allocations charged until destruction. Async tasks use the transfer
+type predicate; synchronous calls retain their existing type gate. A composite
+transfer test exposed stale admission references after result promotion; payload
+handoff now retires those references before the canonical cells can be freed.
+Remaining qualification includes public wait/shutdown suspension adapters,
+installed C/C++ consumers and Linux/macOS MIR. Post-admission copy failures are
+reported by the accepted transfer, preserving its received prefix and unsent tail.
+
+The release gate is formal behavioral coverage of scalar/composite/own/borrow
+task arguments, nested future/stream values, memory32/memory64, unit operations,
+partial progress, zero-length stream readiness, cancellation before entry and
+after return, busy whole-tree destroy, stale/foreign wait tickets, quota boundaries
+and allocation failure at every staging point. Returned values must survive task,
+transfer and public instance-handle release while remaining charged; returning or
+destroying a prefix/tail must drop each owned leaf once. Exercise shutdown with
+guest destructor fuel/I/O suspension and outstanding host results. Qualify the
+same behavior under interpreted execution, Windows ASan and Linux/macOS MIR,
+then run existing installed C/C++ consumer tests against the actual new public
+surface. Green private-owner tests alone do not open the loader gate.
+
 The private instance-options path separates task, canonical-handle, transfer and
 host-byte limits. Defaults are 64 tasks, 4,096 canonical handles, 64 retained
 transfers and 16 MiB of logical host owner/payload storage, in addition to Runtime
@@ -731,6 +1319,23 @@ with restored Salts 3.0.0: Linux MIR 213/213 in 1.88 s, macOS MIR 213/213 in
 4.09 s, and Windows 172 main tests in 3.20 s plus 16 installed-package tests in
 0.20 s. This qualifies task/host-owner wait authentication, including real
 compiled callback suspension; full public async admission remains gated.
+
+Future/stream host-value leaves carry an opaque readable endpoint owner by value.
+The carrier is unique: copying it does not create ownership. Argument admission
+requires an explicit move and shares the complete value tree's existing commit
+flag. Preparation freezes each source; any later conversion/type/allocation
+failure destroys the proxies and restores every source. Whole-tree commit clears
+all owned source leaves without callbacks; borrowed resource loans retain their
+existing lifetime. Endpoint records and admission entries count against the
+snapshot budget, while endpoint bodies keep their original instance/budget.
+Results allocate new endpoint bodies before touching canonical leaves. Staging
+failure frees only those wrappers. Successful promotion transfers the body byte
+reservation from result staging to the new endpoint owners; it survives result
+delivery and returns only when the endpoint is moved/published or destroyed.
+The source and destination trees are exclusive throughout admission/promotion.
+Host-value destruction preflights and freezes every owned leaf before releasing
+any; a busy endpoint rejects the whole destruction unchanged. Public async
+loading remains closed during integration of the full task/transfer surface.
 
 The private endpoint argument adapter now separates preparation, admission and
 guest publication. Preparation allocates an authentic canonical owner record,

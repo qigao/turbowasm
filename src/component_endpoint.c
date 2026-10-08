@@ -600,9 +600,8 @@ turbowasm_status turbowasm_component_endpoint_codec_lower(void *context,
     return TURBOWASM_OK;
 }
 
-static turbowasm_status finish_codec(turbowasm_component_endpoint_codec *codec, bool commit) {
-    turbowasm_component_endpoint *endpoint;
-    turbowasm_component_endpoint_value_owner *notifications = NULL;
+static turbowasm_status preflight_codec(const turbowasm_component_endpoint_codec *codec, bool commit) {
+    const turbowasm_component_endpoint *endpoint;
     if (codec == NULL || codec->table == NULL) return TURBOWASM_INVALID_ARGUMENT;
     /* No allocation/callback between this preflight and the exclusive commit. */
     for (endpoint = codec->lower_head; endpoint != NULL; endpoint = endpoint->lower_next)
@@ -612,6 +611,18 @@ static turbowasm_status finish_codec(turbowasm_component_endpoint_codec *codec, 
             turbowasm_component_handle_object(codec->table, endpoint->lower_handle,
                 endpoint_kind(endpoint)) != &endpoint->waitable)
             return TURBOWASM_TRAPPED;
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_endpoint_codec_preflight(const turbowasm_component_endpoint_codec *codec) {
+    return preflight_codec(codec, true);
+}
+
+static turbowasm_status finish_codec(turbowasm_component_endpoint_codec *codec, bool commit) {
+    turbowasm_component_endpoint *endpoint;
+    turbowasm_component_endpoint_value_owner *notifications = NULL;
+    turbowasm_status preflight = preflight_codec(codec, commit);
+    if (preflight != TURBOWASM_OK) return preflight;
     while ((endpoint = codec->lower_head) != NULL) {
         if (commit) {
             turbowasm_component_endpoint_value_owner *owner = endpoint->value_owner;

@@ -1,6 +1,7 @@
 #include <turbowasm/component.h>
 
 #include "component_api_internal.h"
+#include "component_host_endpoint_internal.h"
 #include "component_type_graph.h"
 #include "runtime_alloc.h"
 
@@ -28,16 +29,19 @@ typedef struct component_resource_argument {
     const turbowasm_component_host_value *source;
     turbowasm_component_host_resource *owner;
     turbowasm_component_value *value;
+    turbowasm_component_host_endpoint *endpoint;
     struct component_public_admission *admission;
-    bool own, promoted;
+    bool own, promoted, published;
     bool reserved;
+    void (*transfer_finish)(void *, bool);
+    void *transfer_context;
 } component_resource_argument;
 
 typedef struct component_public_admission {
     turbowasm_component_instance_public_impl *instance;
     component_resource_argument *entries;
     size_t count, capacity;
-    bool move, committed, started, copy_strings;
+    bool move, committed, started, copy_strings, async_values, has_endpoints, transfer;
 } component_public_admission;
 
 #define TW_COMPONENT_PUBLIC_KIND_MATCH(public_kind, internal_kind) \
@@ -97,6 +101,8 @@ TW_COMPONENT_PUBLIC_KIND_MATCH(
 
 TW_COMPONENT_PUBLIC_KIND_MATCH(TURBOWASM_COMPONENT_HOST_OWN, TURBOWASM_COMPONENT_TYPE_OWN);
 TW_COMPONENT_PUBLIC_KIND_MATCH(TURBOWASM_COMPONENT_HOST_BORROW, TURBOWASM_COMPONENT_TYPE_BORROW);
+TW_COMPONENT_PUBLIC_KIND_MATCH(TURBOWASM_COMPONENT_HOST_FUTURE, TURBOWASM_COMPONENT_TYPE_FUTURE);
+TW_COMPONENT_PUBLIC_KIND_MATCH(TURBOWASM_COMPONENT_HOST_STREAM, TURBOWASM_COMPONENT_TYPE_STREAM);
 #undef TW_COMPONENT_PUBLIC_KIND_MATCH
 
 turbowasm_component_public_impl *
@@ -150,7 +156,16 @@ static bool public_kind_supported(
     turbowasm_component_host_value_kind kind) {
     return (kind >= TURBOWASM_COMPONENT_HOST_BOOL &&
             kind <= TURBOWASM_COMPONENT_HOST_FLAGS) ||
-        kind == TURBOWASM_COMPONENT_HOST_OWN || kind == TURBOWASM_COMPONENT_HOST_BORROW;
+        kind == TURBOWASM_COMPONENT_HOST_OWN || kind == TURBOWASM_COMPONENT_HOST_BORROW ||
+        kind == TURBOWASM_COMPONENT_HOST_FUTURE || kind == TURBOWASM_COMPONENT_HOST_STREAM;
+}
+
+static turbowasm_component_host_endpoint *public_endpoint(const turbowasm_component_host_value *value) {
+    switch (value->kind) {
+        case TURBOWASM_COMPONENT_HOST_FUTURE: return (turbowasm_component_host_endpoint *)&value->as.future;
+        case TURBOWASM_COMPONENT_HOST_STREAM: return (turbowasm_component_host_endpoint *)&value->as.stream;
+        default: return NULL;
+    }
 }
 
 static bool public_type_ref_supported(
@@ -194,7 +209,8 @@ static turbowasm_status visit_public_resources(
         return TURBOWASM_OK;
     if (depth >= COMPONENT_PUBLIC_MAX_DEPTH)
         return TURBOWASM_TRAPPED;
-    if (value->kind == TURBOWASM_COMPONENT_HOST_OWN || value->kind == TURBOWASM_COMPONENT_HOST_BORROW)
+    if (value->kind == TURBOWASM_COMPONENT_HOST_OWN || value->kind == TURBOWASM_COMPONENT_HOST_BORROW ||
+        public_endpoint(value) != NULL)
         return visit(value, context);
     sequence = public_sequence(value);
     variant = public_variant(value);
@@ -296,7 +312,9 @@ fail:
 static turbowasm_status count_resource_argument(
     const turbowasm_component_host_value *value, void *context) {
     component_public_admission *admission = context;
-    if (value->kind == TURBOWASM_COMPONENT_HOST_OWN && !admission->move)
+    if (admission->transfer && value->kind == TURBOWASM_COMPONENT_HOST_BORROW) return TURBOWASM_TYPE_MISMATCH;
+    if (public_endpoint(value) != NULL) admission->has_endpoints = true;
+    if ((value->kind == TURBOWASM_COMPONENT_HOST_OWN || public_endpoint(value) != NULL) && !admission->move)
         return TURBOWASM_INVALID_ARGUMENT;
     if (admission->capacity == TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS)
         return TURBOWASM_OUT_OF_MEMORY;
@@ -326,6 +344,7 @@ static turbowasm_status reserve_resource_arguments(component_public_admission *a
     size_t i;
     for (i = 0u; i < admission->count; ++i) {
         component_resource_argument *entry = &admission->entries[i];
+        if (entry->endpoint != NULL) continue;
         if (entry->owner->busy || (entry->own && entry->owner->loans != 0u) ||
             (!entry->own && entry->owner->loans == UINT32_MAX))
             return TURBOWASM_INVALID_ARGUMENT;
@@ -341,15 +360,19 @@ static turbowasm_status reserve_resource_arguments(component_public_admission *a
 static void admission_commit(void *context) {
     component_public_admission *admission = context;
     size_t i;
+    /* All leaves are frozen. No callback may intervene between admission and
+     * clearing every resource/endpoint source carrier. */
+    admission->committed = true;
     for (i = 0u; i < admission->count; ++i) {
         component_resource_argument *entry = &admission->entries[i];
+        if (entry->endpoint != NULL)
+            turbowasm_component_host_endpoint_move_publish(entry->endpoint);
         if (entry->own) {
             /* Only move entry points can place an own leaf in this transaction. */
             memset((turbowasm_component_host_value *)entry->source, 0, sizeof(*entry->source));
         }
         entry->source = NULL;
     }
-    admission->committed = true;
 }
 
 static void admission_start(component_public_admission *admission) {
@@ -358,7 +381,7 @@ static void admission_start(component_public_admission *admission) {
         return;
     for (i = 0u; i < admission->count; ++i) {
         component_resource_argument *entry = &admission->entries[i];
-        if (entry->own && entry->owner != NULL && !entry->promoted) {
+        if (entry->endpoint == NULL && entry->own && entry->owner != NULL && (!entry->promoted || entry->published)) {
             resource_owner_forget(entry->owner);
             entry->owner = NULL;
         }
@@ -376,7 +399,7 @@ static turbowasm_status admission_destroy(component_public_admission *admission)
     turbowasm_status first = TURBOWASM_OK;
     for (i = 0u; i < admission->count; ++i) {
         component_resource_argument *entry = &admission->entries[i];
-        if (!entry->reserved || entry->owner == NULL)
+        if (entry->endpoint != NULL || !entry->reserved || entry->owner == NULL)
             continue;
         if (!entry->own)
             --entry->owner->loans;
@@ -435,7 +458,8 @@ static turbowasm_status internal_input_destroy(
         } else if (strings_owned && value->kind == TURBOWASM_COMPONENT_TYPE_STRING) {
             turbowasm_rt_free(value->as.string.data);
         } else if (value->release != NULL && (value->kind == TURBOWASM_COMPONENT_TYPE_OWN ||
-            value->kind == TURBOWASM_COMPONENT_TYPE_BORROW)) {
+            value->kind == TURBOWASM_COMPONENT_TYPE_BORROW || value->kind == TURBOWASM_COMPONENT_TYPE_FUTURE ||
+            value->kind == TURBOWASM_COMPONENT_TYPE_STREAM)) {
             first = turbowasm_component_value_destroy(value);
         }
     }
@@ -535,7 +559,8 @@ static turbowasm_status public_to_internal(
                 turbowasm_status status = public_to_internal(
                     &input->items[i], &sequence->items[i], depth + 1u, admission);
                 if (status != TURBOWASM_OK) {
-                    internal_input_destroy(out, admission->copy_strings);
+                    /* Admission entries borrow these leaf addresses. Keep the
+                     * partial tree stable until the enclosing owner unwinds. */
                     return status;
                 }
             }
@@ -556,7 +581,6 @@ static turbowasm_status public_to_internal(
                 status = public_to_internal(input->payload,
                     variant->payload, depth + 1u, admission);
                 if (status != TURBOWASM_OK) {
-                    internal_input_destroy(out, admission->copy_strings);
                     return status;
                 }
             }
@@ -576,23 +600,38 @@ static turbowasm_status public_to_internal(
         case TURBOWASM_COMPONENT_HOST_BORROW:
             return convert_resource_argument(admission, source, out);
 
+        case TURBOWASM_COMPONENT_HOST_FUTURE:
+        case TURBOWASM_COMPONENT_HOST_STREAM: {
+            component_resource_argument *entry;
+            turbowasm_status status;
+            const turbowasm_component_endpoint *end = turbowasm_component_host_endpoint_view(public_endpoint(source));
+            if (!admission->async_values || !admission->move || admission->count >= admission->capacity)
+                return TURBOWASM_INVALID_ARGUMENT;
+            if (end == NULL || !end->readable ||
+                end->waitable.state.endpoint.future != (source->kind == TURBOWASM_COMPONENT_HOST_FUTURE))
+                return TURBOWASM_INVALID_ARGUMENT;
+            entry = &admission->entries[admission->count];
+            entry->endpoint = public_endpoint(source); entry->source = source;
+            entry->own = true; entry->value = out; entry->admission = admission;
+            memset(out, 0, sizeof(*out));
+            status = turbowasm_component_host_endpoint_move_prepare(entry->endpoint, out, &admission->committed);
+            if (status == TURBOWASM_OK) ++admission->count;
+            return status;
+        }
+
         default:
             return TURBOWASM_UNSUPPORTED;
     }
 }
 
-static turbowasm_status prepare_public_arguments(
+static turbowasm_status prepare_public_values(
     component_public_admission *admission,
-    const turbowasm_component_core_call_adapter *adapter,
+    const turbowasm_component_type_graph *graph, const turbowasm_component_type_ref *types, bool repeated,
     const turbowasm_component_host_value *arguments, size_t count,
     turbowasm_component_value **out_arguments) {
-    const turbowasm_component_type *function = turbowasm_component_type_graph_get(
-        adapter->graph, adapter->function_type);
     turbowasm_component_value *values;
     turbowasm_status status;
     size_t i;
-    if (function == NULL || count != function->as.function.param_count)
-        return TURBOWASM_INVALID_ARGUMENT;
     for (i = 0u; i < count; ++i) {
         status = visit_public_resources(&arguments[i], 0u,
             count_resource_argument, admission);
@@ -615,11 +654,19 @@ static turbowasm_status prepare_public_arguments(
         if (status != TURBOWASM_OK)
             return status;
         status = turbowasm_component_canonical_validate_value(
-            adapter->graph, function->as.function.params[i], &values[i]);
+            graph, types[repeated ? 0u : i], &values[i]);
         if (status != TURBOWASM_OK)
             return status;
     }
     return reserve_resource_arguments(admission);
+}
+
+static turbowasm_status prepare_public_arguments(component_public_admission *admission,
+    const turbowasm_component_core_call_adapter *adapter, const turbowasm_component_host_value *arguments,
+    size_t count, turbowasm_component_value **out) {
+    const turbowasm_component_type *function = turbowasm_component_type_graph_get(adapter->graph, adapter->function_type);
+    if (function == NULL || count != function->as.function.param_count) return TURBOWASM_INVALID_ARGUMENT;
+    return prepare_public_values(admission, adapter->graph, function->as.function.params, false, arguments, count, out);
 }
 
 typedef struct component_host_arguments_impl {
@@ -669,6 +716,12 @@ static turbowasm_status argument_storage_size(
         if (value->as.string.size != 0u && value->as.string.data == NULL)
             return TURBOWASM_INVALID_ARGUMENT;
         return argument_size_add(size, value->as.string.size, 1u, limit);
+    } else if (public_endpoint(value) != NULL) {
+        if (!async_resources) return TURBOWASM_INVALID_ARGUMENT;
+        status = argument_size_add(size, 1u, sizeof(component_resource_argument), limit);
+        if (status == TURBOWASM_OK)
+            status = argument_size_add(size, 1u, sizeof(turbowasm_component_endpoint_value_owner), limit);
+        return status;
     } else if (value->kind == TURBOWASM_COMPONENT_HOST_OWN ||
         value->kind == TURBOWASM_COMPONENT_HOST_BORROW) {
         status = argument_size_add(size, 1u, sizeof(component_resource_argument), limit);
@@ -696,35 +749,32 @@ static turbowasm_status finish_host_resource(void *context, bool published) {
 
 static void publish_host_resource(void *context) {
     component_resource_argument *entry = context;
-    if (entry->own && entry->owner != NULL) {
+    /* Resource handles commit before endpoint handles. Defer allocator cleanup
+     * until host_arguments_published, after both codecs have published. */
+    entry->published = true;
+    if (!entry->admission->has_endpoints && entry->own && entry->owner != NULL) {
         turbowasm_component_host_resource *owner = entry->owner;
-        entry->owner = NULL;
-        resource_owner_forget(owner);
+        entry->owner = NULL; resource_owner_forget(owner);
     }
 }
 
-turbowasm_status turbowasm_component_host_arguments_prepare(
+static turbowasm_status prepare_host_values(
     turbowasm_component_host_arguments *owner,
     turbowasm_component_instance_public_impl *instance,
-    const turbowasm_component_type_graph *graph, uint32_t function_type,
+    const turbowasm_component_type_graph *graph, const turbowasm_component_type_ref *types, bool repeated,
     const turbowasm_component_host_value *arguments, size_t count, bool move, bool async_resources,
     turbowasm_component_host_budget *budget) {
-    const turbowasm_component_type *function;
     component_host_arguments_impl *impl;
-    turbowasm_component_core_call_adapter adapter = {0};
     turbowasm_runtime_scope scope;
     turbowasm_status status;
     size_t bytes = sizeof(*impl), i, available;
     if (owner == NULL || owner->impl != NULL || instance == NULL ||
         instance->component == NULL || !instance->exec.initialized || instance->admission_closed ||
         instance->shutdown_driving ||
+        graph == NULL || (count != 0u && types == NULL) ||
         !turbowasm_component_host_budget_valid(instance, budget) || (count != 0u && arguments == NULL))
         return TURBOWASM_INVALID_ARGUMENT;
     if (async_resources && instance->exec.task_domain.table == NULL)
-        return TURBOWASM_INVALID_ARGUMENT;
-    function = turbowasm_component_type_graph_get(graph, function_type);
-    if (function == NULL || function->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
-        count != function->as.function.param_count)
         return TURBOWASM_INVALID_ARGUMENT;
     available = budget->limit - budget->used;
     status = argument_size_add(&bytes, count, sizeof(turbowasm_component_value), available);
@@ -748,18 +798,25 @@ turbowasm_status turbowasm_component_host_arguments_prepare(
     impl->admission.instance = instance;
     impl->admission.move = move;
     impl->admission.copy_strings = true;
+    impl->admission.async_values = async_resources;
+    impl->admission.transfer = repeated;
     impl->count = count; impl->bytes = bytes; impl->budget = budget;
-    adapter.graph = graph; adapter.function_type = function_type;
-    status = prepare_public_arguments(&impl->admission, &adapter, arguments, count, &impl->values);
+    status = prepare_public_values(&impl->admission, graph, types, repeated, arguments, count, &impl->values);
     if (status == TURBOWASM_OK && async_resources) {
+        size_t resources = 0u;
+        for (i = 0u; i < impl->admission.count; ++i)
+            if (impl->admission.entries[i].endpoint == NULL) ++resources;
         if (instance->exec.async_resource_owners > instance->exec.resource_table.max_entries ||
-            impl->admission.count > instance->exec.resource_table.max_entries - instance->exec.async_resource_owners)
+            resources > instance->exec.resource_table.max_entries - instance->exec.async_resource_owners)
             status = TURBOWASM_OUT_OF_MEMORY;
         for (i = 0u; status == TURBOWASM_OK && i < impl->admission.count; ++i) {
             component_resource_argument *entry = &impl->admission.entries[i];
+            if (entry->endpoint != NULL) continue;
             status = turbowasm_component_exec_resource_adopt(&instance->exec, entry->value,
                 &impl->admission.committed, publish_host_resource, finish_host_resource, entry);
             if (status == TURBOWASM_OK) entry->promoted = true;
+            if (status == TURBOWASM_OK && repeated)
+                status = turbowasm_component_exec_resource_prepare_host_transfer(entry->value);
         }
     }
     turbowasm_runtime_scope_leave(scope);
@@ -775,6 +832,58 @@ turbowasm_status turbowasm_component_host_arguments_prepare(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_component_host_arguments_prepare(turbowasm_component_host_arguments *owner,
+    turbowasm_component_instance_public_impl *instance, const turbowasm_component_type_graph *graph,
+    uint32_t function_type, const turbowasm_component_host_value *arguments, size_t count, bool move,
+    bool async_resources, turbowasm_component_host_budget *budget) {
+    const turbowasm_component_type *function = turbowasm_component_type_graph_get(graph, function_type);
+    if (function == NULL || function->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION || count != function->as.function.param_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+    return prepare_host_values(owner, instance, graph, function->as.function.params, false,
+        arguments, count, move, async_resources, budget);
+}
+turbowasm_status turbowasm_component_host_payload_prepare(turbowasm_component_host_arguments *owner,
+    turbowasm_component_instance_public_impl *instance, const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_ref element, const turbowasm_component_host_value *values, uint32_t count,
+    bool move, turbowasm_component_host_budget *budget) {
+    return prepare_host_values(owner, instance, graph, &element, true, values, count, move, true, budget);
+}
+void turbowasm_component_host_payload_publish(turbowasm_component_host_arguments *owner) {
+    component_host_arguments_impl *impl = owner->impl;
+    size_t i;
+    /* All canonical leaves become independent before allocator cleanup runs. */
+    for (i = 0u; i < impl->admission.count; ++i) {
+        component_resource_argument *entry = &impl->admission.entries[i];
+        if (entry->endpoint != NULL) {
+            turbowasm_component_endpoint_value_owner *record =
+                ((turbowasm_component_endpoint *)turbowasm_component_endpoint_value_get(entry->value))->value_owner;
+            entry->transfer_finish = record->host_finish; entry->transfer_context = record->host_context;
+            if (record->host_begin != NULL) record->host_begin(record->host_context);
+            record->host_admitted = NULL; record->host_begin = NULL;
+            record->host_finish = NULL; record->host_context = NULL;
+        } else {
+            turbowasm_component_exec_resource_publish_host_transfer(entry->value);
+            entry->published = true;
+        }
+    }
+    for (i = 0u; i < impl->admission.count; ++i) {
+        component_resource_argument *entry = &impl->admission.entries[i];
+        if (entry->transfer_finish != NULL) {
+            entry->transfer_finish(entry->transfer_context, true);
+            entry->transfer_finish = NULL; entry->transfer_context = NULL;
+        }
+    }
+    admission_start(&impl->admission);
+}
+void turbowasm_component_host_payload_storage_moved(turbowasm_component_host_arguments *owner, size_t bytes) {
+    component_host_arguments_impl *impl = owner->impl;
+    /* Publication detached every hook and retired every source owner. The
+     * transfer now owns the nested cells; they may be promoted and freed before
+     * this empty staging allocation is retired. Keep no references to them. */
+    impl->admission.count = 0u;
+    impl->bytes -= bytes; impl->budget->used -= bytes;
+}
+
 const turbowasm_component_value *turbowasm_component_host_arguments_values(
     const turbowasm_component_host_arguments *owner, size_t *count) {
     const component_host_arguments_impl *impl = owner != NULL ? owner->impl : NULL;
@@ -786,6 +895,11 @@ turbowasm_status turbowasm_component_host_arguments_commit(
     turbowasm_component_host_arguments *owner) {
     component_host_arguments_impl *impl = owner != NULL ? owner->impl : NULL;
     if (impl == NULL || impl->admission.committed) return TURBOWASM_INVALID_ARGUMENT;
+    for (size_t i = 0u; i < impl->admission.count; ++i) {
+        const component_resource_argument *entry = &impl->admission.entries[i];
+        if (entry->endpoint != NULL && !turbowasm_component_host_endpoint_move_ready(
+            entry->endpoint, entry->value, &impl->admission.committed)) return TURBOWASM_INVALID_ARGUMENT;
+    }
     admission_commit(&impl->admission);
     return TURBOWASM_OK;
 }
@@ -809,6 +923,11 @@ turbowasm_status turbowasm_component_host_arguments_destroy(
     if (impl == NULL) return TURBOWASM_OK;
     for (i = 0u; i < impl->admission.count; ++i) {
         const component_resource_argument *entry = &impl->admission.entries[i];
+        if (entry->endpoint != NULL) {
+            const turbowasm_component_endpoint *end = turbowasm_component_endpoint_value_get(entry->value);
+            if (end != NULL && (end->lower_scope != NULL || end->value_owner->publishing))
+                return TURBOWASM_INVALID_ARGUMENT;
+        }
         if (entry->promoted && !turbowasm_component_exec_resource_value_idle(entry->value))
             return TURBOWASM_INVALID_ARGUMENT;
     }
@@ -837,7 +956,54 @@ turbowasm_status turbowasm_component_host_arguments_destroy(
 typedef struct component_result_build {
     turbowasm_component_instance_public_impl *instance;
     turbowasm_component_host_resource *pending;
+    component_host_endpoint_impl *pending_endpoints;
+    turbowasm_component_host_budget *budget;
+    size_t endpoint_bytes;
+    size_t allocation_bytes;
+    uint32_t allocation_refs;
 } component_result_build;
+
+static void result_allocation_release(void *owner, void *context, size_t bytes) {
+    turbowasm_component_host_budget *budget = context;
+    budget->used -= bytes;
+    component_instance_release(owner);
+}
+
+/* New nodes and borrowed source strings are still unpublished. Reserve one
+ * instance reference per actual allocation, without changing source metadata.
+ * The root result owner keeps the instance alive while failures roll back. */
+static turbowasm_status retain_result_allocations(const turbowasm_component_host_value *value,
+    component_result_build *build) {
+    const turbowasm_component_host_sequence *sequence = public_sequence(value);
+    const turbowasm_component_host_variant *variant = public_variant(value);
+    const void *allocation = NULL;
+    size_t i;
+    turbowasm_status status;
+    if (sequence != NULL) allocation = sequence->items;
+    else if (variant != NULL) allocation = variant->payload;
+    else if (value->kind == TURBOWASM_COMPONENT_HOST_STRING) allocation = value->as.string.data;
+    else if (value->kind == TURBOWASM_COMPONENT_HOST_FLAGS) allocation = value->as.flags.words;
+    else if (value->kind == TURBOWASM_COMPONENT_HOST_OWN) allocation = value->as.own;
+    if (allocation != NULL) {
+        if (!turbowasm_rt_allocation_unowned(allocation) || !component_instance_retain(build->instance))
+            return TURBOWASM_INVALID_ARGUMENT;
+        ++build->allocation_refs;
+    }
+    if (sequence != NULL) {
+        for (i = 0u; i < sequence->count; ++i) {
+            status = retain_result_allocations(&sequence->items[i], build);
+            if (status != TURBOWASM_OK) return status;
+        }
+    } else if (variant != NULL && variant->payload != NULL)
+        return retain_result_allocations(variant->payload, build);
+    return TURBOWASM_OK;
+}
+
+static void commit_result_allocation(component_result_build *build, void *allocation, size_t bytes) {
+    if (allocation == NULL) return;
+    turbowasm_rt_allocation_own(allocation, build->instance, build->budget, bytes, result_allocation_release);
+    build->allocation_bytes += bytes;
+}
 
 /* Staging owns only new wrappers/nodes. Strings and canonical obligations still
  * belong to the unchanged source until the complete tree is committed. */
@@ -855,6 +1021,12 @@ static void discard_staged_result(turbowasm_component_host_value *value) {
     } else if (value->kind == TURBOWASM_COMPONENT_HOST_OWN && value->as.own != NULL) {
         turbowasm_component_instance_public_impl *instance = value->as.own->instance;
         turbowasm_rt_free(value->as.own); component_instance_release(instance);
+    } else if (public_endpoint(value) != NULL && public_endpoint(value)->impl != NULL) {
+        component_host_endpoint_impl *impl = public_endpoint(value)->impl;
+        turbowasm_component_instance_public_impl *instance = impl->instance;
+        /* Staging owns only this wrapper/ref; its canonical source and the
+         * enclosing precharged byte reservation are still owned elsewhere. */
+        turbowasm_rt_free(impl); component_instance_release(instance);
     }
     memset(value, 0, sizeof(*value));
 }
@@ -1049,6 +1221,28 @@ static turbowasm_status convert_result(
             out->as.own = source->release_context;
             break;
 
+        case TURBOWASM_COMPONENT_TYPE_FUTURE:
+        case TURBOWASM_COMPONENT_TYPE_STREAM: {
+            component_host_endpoint_impl *impl, *pending;
+            const turbowasm_component_endpoint *end = turbowasm_component_endpoint_value_get(source);
+            if (build == NULL) return TURBOWASM_UNSUPPORTED;
+            if (end == NULL || end->lower_scope != NULL || end->value_owner->publishing ||
+                end->value_owner->host_admitted != NULL || end->value_owner->host_finish != NULL ||
+                !turbowasm_component_endpoint_domain_pair_retained(end)) return TURBOWASM_INVALID_ARGUMENT;
+            for (pending = build->pending_endpoints; pending != NULL; pending = pending->stage_next)
+                if (pending->endpoint == end) return TURBOWASM_INVALID_ARGUMENT;
+            if (!component_instance_retain(build->instance)) return TURBOWASM_INVALID_ARGUMENT;
+            impl = turbowasm_rt_calloc(1u, sizeof(*impl));
+            if (impl == NULL) { component_instance_release(build->instance); return TURBOWASM_OUT_OF_MEMORY; }
+            impl->instance = build->instance; impl->budget = build->budget;
+            impl->endpoint = (turbowasm_component_endpoint *)end; impl->driving = true;
+            impl->stage_record = source->as.endpoint.owner;
+            impl->stage_next = build->pending_endpoints; build->pending_endpoints = impl;
+            build->endpoint_bytes += sizeof(*impl);
+            public_endpoint(out)->impl = impl;
+            break;
+        }
+
         default:
             return TURBOWASM_UNSUPPORTED;
     }
@@ -1081,7 +1275,8 @@ static turbowasm_status result_storage_size(turbowasm_component_instance_public_
     if (depth >= COMPONENT_PUBLIC_MAX_DEPTH) return TURBOWASM_TRAPPED;
     if (!public_kind_supported((turbowasm_component_host_value_kind)value->kind) ||
         value->kind == TURBOWASM_COMPONENT_TYPE_BORROW) return TURBOWASM_UNSUPPORTED;
-    if (value->kind != TURBOWASM_COMPONENT_TYPE_OWN && value->release != NULL)
+    if (value->kind != TURBOWASM_COMPONENT_TYPE_OWN && value->kind != TURBOWASM_COMPONENT_TYPE_FUTURE &&
+        value->kind != TURBOWASM_COMPONENT_TYPE_STREAM && value->release != NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     sequence = internal_sequence(value); variant = internal_variant(value);
     if (sequence != NULL) {
@@ -1113,6 +1308,12 @@ static turbowasm_status result_storage_size(turbowasm_component_instance_public_
         if (status == TURBOWASM_OK)
             status = argument_size_add(size, 1u, turbowasm_component_exec_resource_adopt_size(), limit);
         return status;
+    } else if (value->kind == TURBOWASM_COMPONENT_TYPE_FUTURE || value->kind == TURBOWASM_COMPONENT_TYPE_STREAM) {
+        const turbowasm_component_endpoint *end = turbowasm_component_endpoint_value_get(value);
+        if (end == NULL || end->lower_scope != NULL || end->value_owner->publishing ||
+            end->value_owner->host_admitted != NULL || end->value_owner->host_finish != NULL ||
+            !turbowasm_component_endpoint_domain_pair_retained(end)) return TURBOWASM_INVALID_ARGUMENT;
+        return argument_size_add(size, 1u, sizeof(component_host_endpoint_impl), limit);
     }
     return TURBOWASM_OK;
 }
@@ -1120,37 +1321,52 @@ static turbowasm_status result_storage_size(turbowasm_component_instance_public_
 /* The staged tree has the same shape. No allocation or guest callback occurs
  * while source ownership and the public resource registry are committed. */
 static void commit_staged_result(turbowasm_component_value *source,
-    turbowasm_component_host_value *value) {
+    turbowasm_component_host_value *value, component_result_build *build, bool borrowed_root) {
     turbowasm_component_value_list *sequence = internal_sequence(source);
     turbowasm_component_value_variant *variant = internal_variant(source);
     const turbowasm_component_host_sequence *out_sequence = public_sequence(value);
     const turbowasm_component_host_variant *out_variant = public_variant(value);
     uint64_t i;
     if (sequence != NULL) {
+        commit_result_allocation(build, out_sequence->items, out_sequence->count * sizeof(*out_sequence->items));
         for (i = 0u; i < sequence->count; ++i)
-            commit_staged_result(&sequence->items[i], &out_sequence->items[i]);
-        turbowasm_rt_free(sequence->items);
+            commit_staged_result(&sequence->items[i], &out_sequence->items[i], build, false);
+        if (!borrowed_root) turbowasm_rt_free(sequence->items);
     } else if (variant != NULL && variant->payload != NULL) {
-        commit_staged_result(variant->payload, out_variant->payload);
+        commit_result_allocation(build, out_variant->payload, sizeof(*out_variant->payload));
+        commit_staged_result(variant->payload, out_variant->payload, build, false);
         turbowasm_rt_free(variant->payload);
     } else if (source->kind == TURBOWASM_COMPONENT_TYPE_OWN) {
         turbowasm_component_host_resource *owner = value->as.own;
+        commit_result_allocation(build, owner, sizeof(*owner));
         owner->next = owner->instance->resources;
         owner->instance->resources = owner; ++owner->instance->resource_count;
+    } else if (public_endpoint(value) != NULL) {
+        component_host_endpoint_impl *impl = public_endpoint(value)->impl;
+        /* Staging authenticated this fresh source, held exclusive by the root
+         * owner. Defer record deallocation until every leaf has transferred. */
+        impl->stage_record->endpoint = NULL;
+        impl->endpoint->value_owner = NULL;
+        turbowasm_component_host_endpoint_register(impl);
+    } else if (value->kind == TURBOWASM_COMPONENT_HOST_STRING) {
+        commit_result_allocation(build, value->as.string.data, value->as.string.size);
+    } else if (value->kind == TURBOWASM_COMPONENT_HOST_FLAGS) {
+        commit_result_allocation(build, value->as.flags.words, value->as.flags.word_count * sizeof(uint32_t));
     }
     memset(source, 0, sizeof(*source));
 }
 
-turbowasm_status turbowasm_component_host_result_prepare(
+static turbowasm_status prepare_host_result(
     turbowasm_component_host_result *owner, turbowasm_component_instance_public_impl *instance,
     const turbowasm_component_type_graph *graph, turbowasm_component_type_ref type,
-    turbowasm_component_value *source, turbowasm_component_host_budget *budget) {
+    turbowasm_component_value *source, turbowasm_component_host_budget *budget, bool batch) {
     component_host_result_impl *impl;
-    component_result_build build = {instance, NULL};
+    component_result_build build = {0};
     turbowasm_runtime_scope scope;
     size_t bytes = sizeof(*impl), available;
     uint32_t resources = 0u;
     turbowasm_status status;
+    build.instance = instance; build.budget = budget;
     if (owner == NULL || owner->impl != NULL || instance == NULL || !instance->exec.initialized ||
         instance->shutdown_driving ||
         instance->exec.task_domain.table == NULL || graph == NULL || source == NULL ||
@@ -1160,7 +1376,13 @@ turbowasm_status turbowasm_component_host_result_prepare(
     if (bytes > available) return TURBOWASM_OUT_OF_MEMORY;
     status = result_storage_size(instance, source, 0u, &bytes, available, &resources);
     if (status != TURBOWASM_OK) return status;
-    status = turbowasm_component_canonical_validate_value(graph, type, source);
+    if (batch) {
+        uint64_t i;
+        for (i = 0u; i < source->as.list.count; ++i) {
+            status = turbowasm_component_canonical_validate_value(graph, type, &source->as.list.items[i]);
+            if (status != TURBOWASM_OK) break;
+        }
+    } else status = turbowasm_component_canonical_validate_value(graph, type, source);
     if (status != TURBOWASM_OK) return status;
     if (!component_instance_retain(instance)) return TURBOWASM_INVALID_ARGUMENT;
     if (!turbowasm_component_host_activity_enter(instance, false)) {
@@ -1175,19 +1397,47 @@ turbowasm_status turbowasm_component_host_result_prepare(
         component_instance_release(instance); return TURBOWASM_OUT_OF_MEMORY;
     }
     status = convert_result(source, &impl->value, 0u, &build);
+    if (status == TURBOWASM_OK) status = retain_result_allocations(&impl->value, &build);
     if (status != TURBOWASM_OK) {
         discard_staged_result(&impl->value); turbowasm_rt_free(impl);
+        while (build.allocation_refs != 0u) { --build.allocation_refs; component_instance_release(instance); }
         budget->used -= bytes;
         turbowasm_runtime_scope_leave(scope); turbowasm_component_host_activity_leave(instance);
         component_instance_release(instance); return status;
     }
-    commit_staged_result(source, &impl->value);
-    impl->instance = instance; impl->budget = budget; impl->bytes = bytes;
+    commit_staged_result(source, &impl->value, &build, batch);
+    {
+        component_host_endpoint_impl *endpoint, *next;
+        for (endpoint = build.pending_endpoints; endpoint != NULL; endpoint = endpoint->stage_next) {
+            turbowasm_rt_free(endpoint->stage_record); endpoint->stage_record = NULL;
+        }
+        /* Every source has moved and every pending cleanup has finished. */
+        for (endpoint = build.pending_endpoints; endpoint != NULL; endpoint = next) {
+            next = endpoint->stage_next; endpoint->stage_next = NULL; endpoint->driving = false;
+        }
+    }
+    impl->instance = instance; impl->budget = budget;
+    impl->bytes = bytes - build.endpoint_bytes - build.allocation_bytes;
     owner->impl = impl;
     turbowasm_component_host_register(instance, &impl->registration, impl, NULL, NULL);
     turbowasm_runtime_scope_leave(scope);
     turbowasm_component_host_activity_leave(instance);
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_host_result_prepare(
+    turbowasm_component_host_result *owner, turbowasm_component_instance_public_impl *instance,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref type,
+    turbowasm_component_value *source, turbowasm_component_host_budget *budget) {
+    return prepare_host_result(owner, instance, graph, type, source, budget, false);
+}
+turbowasm_status turbowasm_component_host_result_prepare_batch(
+    turbowasm_component_host_result *owner, turbowasm_component_instance_public_impl *instance,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref element,
+    turbowasm_component_value *values, uint32_t count, turbowasm_component_host_budget *budget) {
+    turbowasm_component_value source = {.kind = TURBOWASM_COMPONENT_TYPE_LIST};
+    source.as.list.items = values; source.as.list.count = count;
+    return prepare_host_result(owner, instance, graph, element, &source, budget, true);
 }
 
 static void host_result_forget(turbowasm_component_host_result *owner) {
@@ -1230,6 +1480,12 @@ turbowasm_status turbowasm_component_host_result_destroy(turbowasm_component_hos
 static turbowasm_status check_destroy_owner(
     const turbowasm_component_host_value *value, void *context) {
     (void)context;
+    if (public_endpoint(value) != NULL) {
+        const turbowasm_component_endpoint *end = turbowasm_component_host_endpoint_view(public_endpoint(value));
+        if (end == NULL || !end->readable ||
+            end->waitable.state.endpoint.future != (value->kind == TURBOWASM_COMPONENT_HOST_FUTURE) ||
+            !turbowasm_component_host_endpoint_destroy_ready(public_endpoint(value))) return TURBOWASM_INVALID_ARGUMENT;
+    }
     if (value->kind == TURBOWASM_COMPONENT_HOST_OWN &&
         (value->as.own == NULL || value->as.own->loans != 0u || value->as.own->busy))
         return TURBOWASM_INVALID_ARGUMENT;
@@ -1239,6 +1495,12 @@ static turbowasm_status check_destroy_owner(
 static turbowasm_status mark_destroy_owner(
     const turbowasm_component_host_value *value, void *context) {
     bool lock = *(const bool *)context;
+    turbowasm_component_host_endpoint *endpoint = public_endpoint(value);
+    if (endpoint != NULL) {
+        component_host_endpoint_impl *impl = endpoint->impl;
+        if (lock && impl->driving) return TURBOWASM_INVALID_ARGUMENT;
+        impl->driving = lock;
+    }
     if (value->kind == TURBOWASM_COMPONENT_HOST_OWN) {
         if (lock && value->as.own->busy)
             return TURBOWASM_INVALID_ARGUMENT;
@@ -1275,8 +1537,24 @@ static turbowasm_status destroy_public_value(turbowasm_component_host_value *val
         turbowasm_rt_free(owned.as.flags.words);
     } else if (owned.kind == TURBOWASM_COMPONENT_HOST_OWN) {
         first = resource_owner_release(owned.as.own);
+    } else if (public_endpoint(&owned) != NULL) {
+        first = turbowasm_component_host_endpoint_destroy_locked(public_endpoint(&owned));
     }
     return first;
+}
+
+turbowasm_status turbowasm_component_host_value_destroy_preflight(const turbowasm_component_host_value *value) {
+    return visit_public_resources(value, 0u, check_destroy_owner, NULL);
+}
+turbowasm_status turbowasm_component_host_value_destroy_lock(const turbowasm_component_host_value *value, bool lock) {
+    turbowasm_status status = visit_public_resources(value, 0u, mark_destroy_owner, &lock);
+    if (status != TURBOWASM_OK && lock) {
+        lock = false; (void)visit_public_resources(value, 0u, mark_destroy_owner, &lock);
+    }
+    return status;
+}
+turbowasm_status turbowasm_component_host_value_destroy_locked(turbowasm_component_host_value *value) {
+    return destroy_public_value(value);
 }
 
 turbowasm_status turbowasm_component_host_value_destroy(

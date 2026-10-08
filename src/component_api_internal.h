@@ -2,6 +2,7 @@
 #define TURBOWASM_COMPONENT_API_INTERNAL_H
 
 #include <turbowasm/component.h>
+#include "component_async_api.h"
 
 #include "component_binary.h"
 #include "component_exec.h"
@@ -23,12 +24,6 @@ typedef struct turbowasm_component_host_budget {
     size_t used;
 } turbowasm_component_host_budget;
 
-/* Private staging of the approved public options contract. Counts/bytes are
- * finite, nonzero and copied on create; no caller-owned budget is borrowed. */
-typedef struct turbowasm_component_async_options {
-    uint32_t tasks, handles, transfers;
-    size_t host_bytes;
-} turbowasm_component_async_options;
 
 /* Intrusive, non-owning registration in already bounded host owner storage.
  * Shutdown requests cancellation without taking or freeing the host carrier. */
@@ -186,6 +181,17 @@ turbowasm_status turbowasm_component_host_arguments_published(
  * mutation. Otherwise frees the owner even if a destructor reports failure. */
 turbowasm_status turbowasm_component_host_arguments_destroy(
     turbowasm_component_host_arguments *owner);
+turbowasm_status turbowasm_component_host_payload_prepare(
+    turbowasm_component_host_arguments *owner, turbowasm_component_instance_public_impl *instance,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref element,
+    const turbowasm_component_host_value *values, uint32_t count, bool move,
+    turbowasm_component_host_budget *budget);
+/* Requires successful whole-tree commit. Converts retained admission proxies
+ * into independent canonical owners before retiring any old host wrappers. */
+void turbowasm_component_host_payload_publish(turbowasm_component_host_arguments *owner);
+/* Transfer has reserved the same payload bytes and moved the canonical cells;
+ * retire the snapshot's payload reservation, keeping only its empty metadata. */
+void turbowasm_component_host_payload_storage_moved(turbowasm_component_host_arguments *owner, size_t bytes);
 
 typedef struct turbowasm_component_host_result { void *impl; } turbowasm_component_host_result;
 /* Private staging for terminal async delivery. The graph is an instantiated
@@ -198,13 +204,23 @@ turbowasm_status turbowasm_component_host_result_prepare(
     turbowasm_component_host_result *owner, turbowasm_component_instance_public_impl *instance,
     const turbowasm_component_type_graph *graph, turbowasm_component_type_ref type,
     turbowasm_component_value *source, turbowasm_component_host_budget *budget);
-/* Moves the result into an empty host value and returns the retained byte charge.
- * The ordinary host-value destroy contract then owns its storage/resources. */
+/* Moves the result into an empty host value and retires only staging storage.
+ * Published allocation/resource/endpoint owners hold their byte charges and
+ * instance references until actual destruction or subsequent move. */
 turbowasm_status turbowasm_component_host_result_take(
     turbowasm_component_host_result *owner, turbowasm_component_host_value *out);
 turbowasm_status turbowasm_component_host_result_destroy(turbowasm_component_host_result *owner);
+turbowasm_status turbowasm_component_host_result_prepare_batch(
+    turbowasm_component_host_result *owner, turbowasm_component_instance_public_impl *instance,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref element,
+    turbowasm_component_value *values, uint32_t count, turbowasm_component_host_budget *budget);
+/* Private whole-aggregate cleanup: preflight all fields, freeze every owner,
+ * then consume under one exclusive transition. Unlock is used only on abort. */
+turbowasm_status turbowasm_component_host_value_destroy_preflight(const turbowasm_component_host_value *value);
+turbowasm_status turbowasm_component_host_value_destroy_lock(const turbowasm_component_host_value *value, bool lock);
+turbowasm_status turbowasm_component_host_value_destroy_locked(turbowasm_component_host_value *value);
 
-typedef struct turbowasm_component_host_task { void *impl; } turbowasm_component_host_task;
+typedef turbowasm_component_async_task turbowasm_component_host_task;
 /* Private async root owner. Name/inputs are needed only during creation.
  * Successful creation consumes move inputs; failure keeps them intact. Budget
  * and source binary bytes outlive the owner. All operations run on the instance
@@ -234,7 +250,7 @@ turbowasm_status turbowasm_component_host_task_take_result(turbowasm_component_h
  * freed despite a destructor error; the primary guest error takes precedence. */
 turbowasm_status turbowasm_component_host_task_destroy(turbowasm_component_host_task *owner);
 
-typedef struct turbowasm_component_host_endpoint { void *impl; } turbowasm_component_host_endpoint;
+typedef turbowasm_component_async_endpoint turbowasm_component_host_endpoint;
 /* Private finite host owner. Graph/type comes from the retained instance; both
  * empty output owners are published together. Budget outlives reservations.
  * Owner-thread only, output/source cells are exclusive through each transition. */
@@ -280,7 +296,7 @@ turbowasm_status turbowasm_component_host_endpoint_from_value(
  * byte reservation and instance reference. Empty owner destruction succeeds. */
 turbowasm_status turbowasm_component_host_endpoint_destroy(turbowasm_component_host_endpoint *owner);
 
-typedef struct turbowasm_component_host_transfer { void *impl; } turbowasm_component_host_transfer;
+typedef turbowasm_component_async_transfer turbowasm_component_host_transfer;
 typedef struct turbowasm_component_host_transfer_state {
     uint32_t length, progress;
     turbowasm_status status;

@@ -142,6 +142,9 @@ turbowasm_status turbowasm_component_endpoint_codec_lift(void *context,
 turbowasm_status turbowasm_component_endpoint_codec_lower(void *context,
     const turbowasm_component_type_graph *graph, turbowasm_component_type_ref type,
     const turbowasm_component_value *value, uint32_t *out_handle);
+/* Pure whole-scope validation; used before publishing mixed resource/endpoint
+ * trees. No callback may intervene before the corresponding commit. */
+turbowasm_status turbowasm_component_endpoint_codec_preflight(const turbowasm_component_endpoint_codec *codec);
 turbowasm_status turbowasm_component_endpoint_codec_commit(turbowasm_component_endpoint_codec *codec);
 turbowasm_status turbowasm_component_endpoint_codec_rollback(turbowasm_component_endpoint_codec *codec);
 

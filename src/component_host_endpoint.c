@@ -208,10 +208,24 @@ turbowasm_status turbowasm_component_host_endpoint_move_commit(
     if (impl == NULL || !impl->driving || endpoint != impl->endpoint || record == NULL ||
         record->host_finish != finish_host_move || record->host_context != impl ||
         record->host_admitted == NULL || !*record->host_admitted) return TURBOWASM_INVALID_ARGUMENT;
-    owner->impl = NULL;
-    impl->deferred_move = true;
-    turbowasm_component_host_activity_leave(impl->instance);
+    turbowasm_component_host_endpoint_move_publish(owner);
     return TURBOWASM_OK;
+}
+
+bool turbowasm_component_host_endpoint_move_ready(const turbowasm_component_host_endpoint *owner,
+    const turbowasm_component_value *value, const bool *admitted) {
+    const component_host_endpoint_impl *impl = owner != NULL ? owner->impl : NULL;
+    const turbowasm_component_endpoint *end = turbowasm_component_endpoint_value_get(value);
+    const turbowasm_component_endpoint_value_owner *record = end != NULL ? end->value_owner : NULL;
+    return impl != NULL && impl->driving && !impl->deferred_move && end == impl->endpoint &&
+        record != NULL && !record->publishing && record->host_finish == finish_host_move &&
+        record->host_context == impl && record->host_admitted == admitted && admitted != NULL && !*admitted;
+}
+
+void turbowasm_component_host_endpoint_move_publish(turbowasm_component_host_endpoint *owner) {
+    component_host_endpoint_impl *impl = owner->impl;
+    owner->impl = NULL; impl->deferred_move = true;
+    turbowasm_component_host_activity_leave(impl->instance);
 }
 
 turbowasm_status turbowasm_component_host_endpoint_from_value(
@@ -254,19 +268,45 @@ fail:
     return status;
 }
 
-turbowasm_status turbowasm_component_host_endpoint_destroy(turbowasm_component_host_endpoint *owner) {
+bool turbowasm_component_host_endpoint_destroy_ready(const turbowasm_component_host_endpoint *owner) {
+    const component_host_endpoint_impl *impl = owner != NULL ? owner->impl : NULL;
+    const turbowasm_component_endpoint *end;
+    turbowasm_component_endpoint_state peer_state;
+    if (impl == NULL || impl->driving || impl->instance->shutdown_driving ||
+        impl->instance->host_activity == UINT32_MAX) return false;
+    end = impl->endpoint;
+    if (!end->initialized || end->closed || end->operation != NULL || end->lower_scope != NULL ||
+        end->value_owner != NULL || end->waitable.table != NULL || end->waitable.sync_waiter || end->waitable.delivering ||
+        (end->waitable.state.endpoint.phase != TURBOWASM_COMPONENT_ENDPOINT_IDLE &&
+         end->waitable.state.endpoint.phase != TURBOWASM_COMPONENT_ENDPOINT_DONE)) return false;
+    if (end->peer == NULL) return true;
+    peer_state = end->peer->waitable.state.endpoint;
+    return end->peer->peer == end && turbowasm_component_endpoint_peer_dropped(&peer_state);
+}
+
+turbowasm_status turbowasm_component_host_endpoint_destroy_locked(turbowasm_component_host_endpoint *owner) {
     component_host_endpoint_impl *impl;
     turbowasm_status status;
     if (owner == NULL) return TURBOWASM_INVALID_ARGUMENT;
     impl = owner->impl;
     if (impl == NULL) return TURBOWASM_OK;
-    if (impl->driving || impl->instance->shutdown_driving) return TURBOWASM_INVALID_ARGUMENT;
-    if (!turbowasm_component_host_activity_enter(impl->instance, false)) return TURBOWASM_INVALID_ARGUMENT;
-    impl->driving = true;
+    if (!impl->driving || impl->deferred_move || impl->instance->shutdown_driving) return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_component_host_activity_enter(impl->instance, false)) {
+        impl->driving = false; return TURBOWASM_INVALID_ARGUMENT;
+    }
     status = turbowasm_component_endpoint_close(impl->endpoint);
     if (status != TURBOWASM_OK) {
         impl->driving = false; turbowasm_component_host_activity_leave(impl->instance); return status;
     }
     release_body(owner, impl, true);
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_host_endpoint_destroy(turbowasm_component_host_endpoint *owner) {
+    component_host_endpoint_impl *impl = owner != NULL ? owner->impl : NULL;
+    if (owner == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    if (impl == NULL) return TURBOWASM_OK;
+    if (impl->driving || impl->instance->shutdown_driving) return TURBOWASM_INVALID_ARGUMENT;
+    impl->driving = true;
+    return turbowasm_component_host_endpoint_destroy_locked(owner);
 }

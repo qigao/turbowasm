@@ -39,6 +39,11 @@ bool turbowasm_component_exec_resource_value_owned(
     const struct turbowasm_component_exec *exec, const turbowasm_component_value *value);
 /* Fresh owner with an independent public-domain instance keepalive. */
 bool turbowasm_component_exec_resource_value_retained(const turbowasm_component_value *value);
+/* Whole host payload admission: reserve the defining exec keepalive before
+ * commit, then detach only the host hooks after all public sources moved. */
+turbowasm_status turbowasm_component_exec_resource_prepare_host_transfer(turbowasm_component_value *value);
+bool turbowasm_component_exec_resource_host_transfer_pending(const turbowasm_component_value *value);
+void turbowasm_component_exec_resource_publish_host_transfer(turbowasm_component_value *value);
 /* Infallible after value_owned admission, when exclusive ownership is published.
  * Drops canonical storage/quota without destroying the now-transferred rep. */
 void turbowasm_component_exec_resource_value_disown(turbowasm_component_value *value);

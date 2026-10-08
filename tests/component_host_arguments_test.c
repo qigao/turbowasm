@@ -905,7 +905,7 @@ spec("Deferred Component host argument ownership") {
         check_equal(result.kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
         check_greater(budget.used, (size_t)0); check_equal(resource_codec.exec->async_resource_owners, 1u);
         check_equal(turbowasm_component_host_result_take(&result_owners[0], &resources[0]), TURBOWASM_OK);
-        check_equal(budget.used, (size_t)0);
+        check_greater(budget.used, (size_t)0);
         check_equal(prepare_async(0u, "consume", resources, 1u, true), TURBOWASM_OK);
         check_equal(resource_codec.exec->async_resource_owners, 2u);
         check_equal(turbowasm_component_host_arguments_commit(&owners[0]), TURBOWASM_OK);
@@ -919,6 +919,7 @@ spec("Deferred Component host argument ownership") {
         invoke_raw("consume", &handle, 1u, 42);
         check_equal(turbowasm_component_host_arguments_destroy(&owners[0]), TURBOWASM_OK);
         check_equal(resource_codec.exec->async_resource_owners, 0u); check_equal(drops(), 1u);
+        check_equal(budget.used, (size_t)0);
     }
     it("releases a promoted own cancelled before publication using its original canonical authority") {
         async_instance(8u); fresh_result(42, &result);
@@ -1105,8 +1106,8 @@ spec("Deferred Component host argument ownership") {
         check_null(result_owners[0].impl); check_equal(budget.used, (size_t)0); check_less(allocations.live, live);
         memset(&resource_codec, 0, sizeof(resource_codec));
     }
-    it("returns result byte capacity on take and rejects one byte short before consuming own") {
-        size_t charge, attempts;
+    it("retains delivered own byte capacity and rejects one byte short before consuming another own") {
+        size_t charge, retained, attempts;
         async_instance(8u); fresh_result(42, &result);
         check_equal(promote_result(0u, 1u, "make"), TURBOWASM_OK); charge = budget.used;
         delivered = number(9);
@@ -1114,16 +1115,19 @@ spec("Deferred Component host argument ownership") {
         check_equal(delivered.as.s32, 9); check_equal(budget.used, charge);
         memset(&delivered, 0, sizeof(delivered));
         check_equal(turbowasm_component_host_result_take(&result_owners[0], &delivered), TURBOWASM_OK);
-        check_equal(budget.used, (size_t)0); fresh_result(43, &result);
-        budget.limit = charge - 1u; attempts = allocations.attempts;
+        retained = budget.used; check_greater(retained, (size_t)0); check_less(retained, charge);
+        fresh_result(43, &result);
+        budget.limit = retained + charge - 1u; attempts = allocations.attempts;
         check_equal(promote_result(1u, 1u, "make"), TURBOWASM_OUT_OF_MEMORY);
         check_equal(allocations.attempts, attempts); check_equal(result.as.resource_rep.as.i32, 43);
-        budget.limit = charge;
-        allocation_budget_floor = charge;
+        budget.limit = retained + charge;
+        allocation_budget_floor = retained + charge;
         turbowasm_status status = promote_result(1u, 1u, "make"); allocation_budget_floor = 0u;
-        check_equal(status, TURBOWASM_OK); check_equal(budget.used, charge);
+        check_equal(status, TURBOWASM_OK); check_equal(budget.used, retained + charge);
         check_equal(turbowasm_component_host_result_destroy(&result_owners[1]), TURBOWASM_OK);
-        check_equal(budget.used, (size_t)0); check_equal(drops(), 1u);
+        check_equal(budget.used, retained); check_equal(drops(), 1u);
+        check_equal(turbowasm_component_host_value_destroy(&delivered), TURBOWASM_OK);
+        check_equal(budget.used, (size_t)0); check_equal(drops(), 2u);
     }
     it("preserves synchronous borrowing and move calls for a promoted host owner") {
         host_value borrowed = {0}, output = {0};
@@ -1215,7 +1219,9 @@ spec("Deferred Component host argument ownership") {
         check_equal(fields[3].as.flags.words[0], UINT32_C(0x80000001));
         host_value *pair = fields[0].as.result.payload->as.option.payload->as.variant.payload->as.tuple.items;
         check_equal(pair[0].as.s32, -42); check_true(pair[1].as.string.data == bytes);
-        check_equal(pair[1].as.string.size, (size_t)5); check_equal(budget.used, (size_t)0);
+        check_equal(pair[1].as.string.size, (size_t)5); check_greater(budget.used, (size_t)0);
+        check_equal(turbowasm_component_host_value_destroy(&delivered), TURBOWASM_OK);
+        check_equal(budget.used, (size_t)0);
     }
     it("rejects busy canonical results without changing their lower reservation") {
         uint32_t handle;

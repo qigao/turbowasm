@@ -37,6 +37,10 @@ typedef struct turbowasm_component_call {
     void *impl;
 } turbowasm_component_call;
 
+/* Unique endpoint carrier. A future/stream host value owns a readable end;
+ * copying the carrier does not retain it. All operations use the owner thread. */
+typedef struct turbowasm_component_async_endpoint { void *impl; } turbowasm_component_async_endpoint;
+
 typedef enum turbowasm_component_host_value_kind {
     TURBOWASM_COMPONENT_HOST_BOOL = 1,
     TURBOWASM_COMPONENT_HOST_S8,
@@ -60,7 +64,9 @@ typedef enum turbowasm_component_host_value_kind {
     TURBOWASM_COMPONENT_HOST_ENUM,
     TURBOWASM_COMPONENT_HOST_FLAGS,
     TURBOWASM_COMPONENT_HOST_OWN = 24,
-    TURBOWASM_COMPONENT_HOST_BORROW = 25
+    TURBOWASM_COMPONENT_HOST_BORROW = 25,
+    TURBOWASM_COMPONENT_HOST_FUTURE = 27,
+    TURBOWASM_COMPONENT_HOST_STREAM = 28
 } turbowasm_component_host_value_kind;
 
 typedef struct turbowasm_component_host_value
@@ -123,6 +129,8 @@ struct turbowasm_component_host_value {
         turbowasm_component_host_flags flags;
         turbowasm_component_host_resource *own;
         turbowasm_component_host_resource *borrow;
+        turbowasm_component_async_endpoint future;
+        turbowasm_component_async_endpoint stream;
     } as;
 };
 

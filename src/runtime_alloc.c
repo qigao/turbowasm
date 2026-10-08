@@ -12,6 +12,9 @@ typedef __declspec(align(16)) union turbowasm_allocation_header {
         turbowasm_allocator allocator;
         size_t max_allocation_bytes;
         size_t payload_size;
+        void *owner, *context;
+        turbowasm_allocation_release_fn release;
+        size_t release_bytes;
     } metadata;
 } turbowasm_allocation_header;
 #else
@@ -21,6 +24,9 @@ typedef union turbowasm_allocation_header {
         turbowasm_allocator allocator;
         size_t max_allocation_bytes;
         size_t payload_size;
+        void *owner, *context;
+        turbowasm_allocation_release_fn release;
+        size_t release_bytes;
     } metadata;
 } turbowasm_allocation_header;
 #endif
@@ -64,6 +70,7 @@ static void *allocate_with(const turbowasm_allocator *allocator, size_t limit, s
     h=(turbowasm_allocation_header *)allocator->allocate(allocator->context,sizeof(*h)+payload);
     if (h==NULL) return NULL;
     h->metadata.allocator=*allocator; h->metadata.max_allocation_bytes=limit; h->metadata.payload_size=size;
+    h->metadata.owner=NULL; h->metadata.context=NULL; h->metadata.release=NULL; h->metadata.release_bytes=0u;
     return (void *)(h+1);
 }
 void *turbowasm_rt_malloc(size_t size) {
@@ -82,6 +89,9 @@ void *turbowasm_rt_realloc(void *pointer,size_t size) {
     if (pointer==NULL) return turbowasm_rt_malloc(size);
     if (size==0u) {turbowasm_rt_free(pointer); return NULL;}
     h=((turbowasm_allocation_header *)pointer)-1; a=h->metadata.allocator; limit=h->metadata.max_allocation_bytes; old=h->metadata.payload_size;
+    /* Published Component allocations carry fixed lifetime/byte obligations.
+     * They are moved or freed, never resized behind their charge owner. */
+    if (h->metadata.release!=NULL) return size==old?pointer:NULL;
     if (limit!=0u && size>limit) return NULL;
     if (size>SIZE_MAX-sizeof(*h)) return NULL;
     if (a.reallocate!=NULL) {
@@ -100,7 +110,26 @@ void *turbowasm_rt_realloc(void *pointer,size_t size) {
 }
 void turbowasm_rt_free(void *pointer) {
     turbowasm_allocation_header *h; turbowasm_allocator a;
+    turbowasm_allocation_release_fn release;
+    void *owner, *context;
+    size_t bytes;
     if (pointer==NULL) return;
     h=((turbowasm_allocation_header *)pointer)-1; a=h->metadata.allocator;
+    release=h->metadata.release; owner=h->metadata.owner; context=h->metadata.context;
+    bytes=h->metadata.release_bytes;
     a.deallocate(a.context,h);
+    if (release!=NULL) release(owner,context,bytes);
+}
+bool turbowasm_rt_allocation_unowned(const void *pointer) {
+    const turbowasm_allocation_header *h;
+    if (pointer==NULL) return true;
+    h=((const turbowasm_allocation_header *)pointer)-1;
+    return h->metadata.release==NULL;
+}
+void turbowasm_rt_allocation_own(void *pointer, void *owner, void *context, size_t bytes,
+    turbowasm_allocation_release_fn release) {
+    turbowasm_allocation_header *h;
+    if (pointer==NULL) return;
+    h=((turbowasm_allocation_header *)pointer)-1;
+    h->metadata.owner=owner; h->metadata.context=context; h->metadata.release=release; h->metadata.release_bytes=bytes;
 }

@@ -11,13 +11,18 @@
 #include <string.h>
 
 enum { OWNER_COUNT = 3 };
+static turbowasm_name name(const char *text) {
+    return (turbowasm_name){(const uint8_t *)text, (uint32_t)strlen(text)};
+}
 static turbowasm_component component;
 static turbowasm_component_instance instance;
+static turbowasm_component_async_transfer_result public_results[OWNER_COUNT];
 static turbowasm_component_instance_public_impl *impl;
 static turbowasm_component_host_task tasks[OWNER_COUNT];
 static turbowasm_component_host_endpoint ends[OWNER_COUNT][2];
 static turbowasm_component_host_transfer transfers[OWNER_COUNT];
 static turbowasm_component_host_value output;
+static turbowasm_component_host_value compound_cells[3];
 static size_t allocation_calls, live_allocations, fail_at;
 static bool close_loader;
 static turbowasm_component_async_options *mutate_options;
@@ -132,6 +137,11 @@ spec("Instance-owned Component async options") {
             check_equal(turbowasm_component_host_endpoint_destroy(&ends[i][0]), TURBOWASM_OK);
             check_equal(turbowasm_component_host_endpoint_destroy(&ends[i][1]), TURBOWASM_OK);
         }
+        for (i = 0u; i < OWNER_COUNT; ++i)
+            check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[i]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_value_destroy(&compound_cells[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_value_destroy(&compound_cells[2]), TURBOWASM_OK);
+        memset(compound_cells, 0, sizeof(compound_cells));
         check_equal(turbowasm_component_host_value_destroy(&output), TURBOWASM_OK);
         if (instance.impl != NULL) {
             check_equal(impl->host_budget.used, (size_t)0); check_equal(impl->host_transfer_count, 0u);
@@ -140,6 +150,271 @@ spec("Instance-owned Component async options") {
         }
         turbowasm_component_instance_destroy(&instance); impl = NULL;
         turbowasm_component_destroy(&component); check_equal(live_allocations, (size_t)0);
+    }
+    it("uses the designed task and typed endpoint interface without private graph indices") {
+        turbowasm_component_type_token type = {0}, payload_type = {0};
+        turbowasm_component_async_endpoint_type info = {0};
+        turbowasm_component_async_endpoint_state endpoint_state;
+        turbowasm_component_async_task_state state;
+        turbowasm_execution_options options = {.has_fuel_limit = true, .fuel = 8u};
+        turbowasm_status status = TURBOWASM_YIELDED;
+        size_t count = 99u;
+        unsigned turn;
+        check_equal(turbowasm_component_instance_parameter_type(&instance, name("echo-stream"), 0u, &type), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_endpoint_type_get(&instance, type, &info), TURBOWASM_OK);
+        check_false(info.future); check_true(info.has_payload);
+        check_equal(turbowasm_component_instance_type_child(&instance, type,
+            TURBOWASM_COMPONENT_TYPE_EDGE_PAYLOAD, 0u, &payload_type), TURBOWASM_OK);
+        check_true(payload_type.inline_type); check_equal(payload_type.id, (uint32_t)TURBOWASM_COMPONENT_TYPE_U32);
+        check_equal(turbowasm_component_async_endpoint_pair_create(&ends[0][0], &ends[0][1], &instance, type), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_into_value(&ends[0][0], &output), TURBOWASM_OK);
+        check_null(ends[0][0].impl); check_equal(output.kind, TURBOWASM_COMPONENT_HOST_STREAM);
+        check_equal(turbowasm_component_async_endpoint_from_value(&ends[0][0], &output), TURBOWASM_OK);
+        check_equal((int)output.kind, 0);
+        check_equal(turbowasm_component_async_endpoint_into_value(&ends[0][0], &output), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_task_create(&tasks[0], &instance, name("echo-stream"), &output, 1u),
+            TURBOWASM_INVALID_ARGUMENT);
+        check_not_null(output.as.stream.impl); check_null(tasks[0].impl);
+        check_equal(turbowasm_component_async_task_create_move(&tasks[0], &instance, name("echo-stream"), &output, 1u), TURBOWASM_OK);
+        check_equal((int)output.kind, 0);
+        check_equal(turbowasm_component_async_task_state_get(&tasks[0], &state), TURBOWASM_OK);
+        check_false(state.terminal); check_equal(state.status, TURBOWASM_YIELDED);
+        for (turn = 0u; turn < 128u && status == TURBOWASM_YIELDED; ++turn)
+            status = turbowasm_component_async_task_resume(&tasks[0], &options);
+        check_equal(status, TURBOWASM_OK);
+        check_equal(turbowasm_component_async_task_state_get(&tasks[0], &state), TURBOWASM_OK);
+        check_true(state.terminal); check_false(state.cancelled); check_false(state.result_taken);
+        check_equal(state.result_count, (size_t)1);
+        check_equal(turbowasm_component_async_task_take_result(&tasks[0], &output, &count), TURBOWASM_OK);
+        check_equal(count, (size_t)1);
+        check_equal(turbowasm_component_async_task_state_get(&tasks[0], &state), TURBOWASM_OK); check_true(state.result_taken);
+        check_equal(turbowasm_component_async_task_destroy(&tasks[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_from_value(&ends[0][0], &output), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_destroy(&ends[0][1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_state_get(&ends[0][0], &endpoint_state), TURBOWASM_OK);
+        check_true(endpoint_state.peer_dropped); check_true(endpoint_state.readable);
+        check_equal(turbowasm_component_async_endpoint_destroy(&ends[0][0]), TURBOWASM_OK);
+        check_equal(impl->host_budget.used, (size_t)0);
+    }
+    it("authenticates instance type tokens and preserves failed query and pair outputs") {
+        turbowasm_component_instance other = {0};
+        turbowasm_component_type_token tuple = {0}, future = {0}, sentinel;
+        turbowasm_component_async_endpoint_type info = {0};
+        check_equal(turbowasm_component_instance_create_async_with_options(&other, &component, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_parameter_type(&instance, name("echo-compound64"), 0u, &tuple), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_type_child(&instance, tuple,
+            TURBOWASM_COMPONENT_TYPE_EDGE_FIELD, 2u, &future), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_endpoint_type_get(&instance, future, &info), TURBOWASM_OK);
+        check_true(info.future); sentinel = future;
+        turbowasm_status query = turbowasm_component_instance_parameter_type(&instance, name("missing"), 0u, &future);
+        check_equal(query, TURBOWASM_LINK_ERROR); check_equal(future.scope, sentinel.scope); check_equal(future.id, sentinel.id);
+        query = turbowasm_component_async_endpoint_pair_create(&ends[0][0], &ends[0][1], &other, future);
+        turbowasm_component_instance_destroy(&other);
+        check_equal(query, TURBOWASM_INVALID_ARGUMENT); check_null(ends[0][0].impl); check_null(ends[0][1].impl);
+        check_equal(turbowasm_component_instance_type_child(&instance, tuple,
+            TURBOWASM_COMPONENT_TYPE_EDGE_FIELD, 99u, &future), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(future.id, sentinel.id);
+    }
+    it("drains the designed shutdown interface only after task cancellation is acknowledged and retired") {
+        turbowasm_component_async_task_state task_state;
+        turbowasm_component_async_shutdown_state state;
+        size_t count = 99u;
+        void *carrier = instance.impl;
+        check_equal(turbowasm_component_async_task_create(&tasks[0], &instance, name("answer"), NULL, 0u), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown(&instance), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown(&instance, NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_instance_shutdown_state_get(&instance, &state), TURBOWASM_OK);
+        check_true(state.requested); check_false(state.complete);
+        check_equal(turbowasm_component_async_task_state_get(&tasks[0], &task_state), TURBOWASM_OK);
+        check_true(task_state.cancellation_requested);
+        turbowasm_component_instance_destroy(&instance); check_equal(instance.impl, carrier);
+        check_equal(turbowasm_component_async_task_resume(&tasks[0], NULL), TURBOWASM_INTERRUPTED);
+        check_equal(turbowasm_component_async_task_state_get(&tasks[0], &task_state), TURBOWASM_OK);
+        check_true(task_state.cancelled); check_equal(task_state.status, TURBOWASM_INTERRUPTED);
+        check_equal(turbowasm_component_async_task_take_result(&tasks[0], &output, &count), TURBOWASM_INTERRUPTED);
+        check_equal(count, (size_t)99); check_equal((int)output.kind, 0);
+        check_equal(turbowasm_component_async_task_destroy(&tasks[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown(&instance, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_shutdown_state_get(&instance, &state), TURBOWASM_OK);
+        check_true(state.complete); check_equal(state.status, TURBOWASM_OK);
+    }
+    it("publishes a received prefix and unsent write tail with their original endpoint roles") {
+        turbowasm_component_async_options options = {2u, 16u, 2u, 65536u};
+        turbowasm_component_type_token type;
+        turbowasm_component_host_value values[3] = {
+            {.kind = TURBOWASM_COMPONENT_HOST_U32, .as.u32 = 42u},
+            {.kind = TURBOWASM_COMPONENT_HOST_U32, .as.u32 = 43u},
+            {.kind = TURBOWASM_COMPONENT_HOST_U32, .as.u32 = 44u}};
+        turbowasm_component_async_transfer_state state;
+        size_t used, limit;
+        unsigned failure;
+        bool delivered = false;
+        configure(&options);
+        check_equal(turbowasm_component_instance_parameter_type(&instance, name("echo-stream"), 0u, &type), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_pair_create(&ends[0][0], &ends[0][1], &instance, type), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_write(&transfers[1], &ends[0][1], values, 3u), TURBOWASM_OK);
+        values[1].as.u32 = values[2].as.u32 = 0u;
+        check_null(ends[0][1].impl);
+        check_equal(turbowasm_component_async_transfer_take_result(&transfers[1], &public_results[1]), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_async_transfer_read(&transfers[0], &ends[0][0], 1u, 0u), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_state_get(&transfers[0], &state), TURBOWASM_OK);
+        check_false(state.terminal); check_equal(state.progress, 1u);
+        check_equal(turbowasm_component_async_transfer_poll(&transfers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_poll(&transfers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_request_cancel(&transfers[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_poll(&transfers[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_state_get(&transfers[1], &state), TURBOWASM_OK);
+        check_true(state.terminal); check_equal(state.progress, 1u);
+        check_equal(state.outcome, TURBOWASM_COMPONENT_ASYNC_TRANSFER_COMPLETED);
+        used = impl->host_budget.used; limit = impl->host_budget.limit;
+        impl->host_budget.limit = used;
+        turbowasm_status status = turbowasm_component_async_transfer_take_result(&transfers[0], &public_results[0]);
+        impl->host_budget.limit = limit;
+        check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_null(public_results[0].endpoint.impl);
+        check_equal((int)public_results[0].values.kind, 0); check_equal(impl->host_budget.used, used);
+        for (failure = 1u; failure < 16u; ++failure) {
+            fail_at = allocation_calls + failure;
+            status = turbowasm_component_async_transfer_take_result(&transfers[0], &public_results[0]);
+            fail_at = 0u;
+            if (status == TURBOWASM_OK) { delivered = true; break; }
+            check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_null(public_results[0].endpoint.impl);
+            check_equal((int)public_results[0].values.kind, 0); check_equal(impl->host_budget.used, used);
+        }
+        check_true(delivered); check_greater(failure, 1u);
+        check_equal(public_results[0].first_index, 0u); check_equal(public_results[0].logical_count, 1u);
+        check_equal(public_results[0].values.kind, TURBOWASM_COMPONENT_HOST_LIST);
+        check_equal(public_results[0].values.as.list.items[0].as.u32, 42u);
+        check_equal(turbowasm_component_async_transfer_take_result(&transfers[0], &public_results[2]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_async_transfer_take_result(&transfers[1], &public_results[1]), TURBOWASM_OK);
+        check_equal(public_results[1].first_index, 1u); check_equal(public_results[1].logical_count, 2u);
+        check_equal(public_results[1].values.as.list.count, (size_t)2);
+        check_equal(public_results[1].values.as.list.items[0].as.u32, 43u);
+        check_equal(public_results[1].values.as.list.items[1].as.u32, 44u);
+        check_equal(turbowasm_component_async_transfer_destroy(&transfers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_destroy(&transfers[1]), TURBOWASM_OK);
+        check_greater(impl->host_budget.used, (size_t)0);
+        check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[1]), TURBOWASM_OK);
+        check_equal(impl->host_budget.used, (size_t)0);
+    }
+    it("cancels a pending transfer once and returns every unsent copied value") {
+        turbowasm_component_type_token type;
+        turbowasm_component_host_value value = {.kind = TURBOWASM_COMPONENT_HOST_U32, .as.u32 = 77u};
+        turbowasm_component_async_transfer_state state;
+        check_equal(turbowasm_component_instance_parameter_type(&instance, name("echo-stream"), 0u, &type), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_pair_create(&ends[0][0], &ends[0][1], &instance, type), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_write(&transfers[0], &ends[0][1], &value, 1u), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_poll(&transfers[0]), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_async_transfer_destroy(&transfers[0]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_async_transfer_request_cancel(&transfers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_request_cancel(&transfers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_state_get(&transfers[0], &state), TURBOWASM_OK);
+        check_false(state.terminal);
+        check_equal(turbowasm_component_async_transfer_poll(&transfers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_state_get(&transfers[0], &state), TURBOWASM_OK);
+        check_equal(state.outcome, TURBOWASM_COMPONENT_ASYNC_TRANSFER_CANCELLED);
+        check_equal(turbowasm_component_async_transfer_take_result(&transfers[0], &public_results[0]), TURBOWASM_OK);
+        check_equal(public_results[0].first_index, 0u); check_equal(public_results[0].logical_count, 1u);
+        check_equal(public_results[0].values.as.list.items[0].as.u32, 77u);
+    }
+    it("delivers typed and unit futures in either submission order and preserves logical unit counts") {
+        turbowasm_component_async_options options = {2u, 16u, 2u, 65536u};
+        turbowasm_component_type_token type;
+        turbowasm_component_async_endpoint_state end_state;
+        turbowasm_component_host_value value = {.kind = TURBOWASM_COMPONENT_HOST_U32, .as.u32 = 91u};
+        unsigned variant;
+        configure(&options);
+        for (variant = 0u; variant < 4u; ++variant) {
+            bool unit = variant >= 2u;
+            check_equal(turbowasm_component_instance_parameter_type(&instance,
+                name(unit ? "echo-unit-future" : "echo-future"), 0u, &type), TURBOWASM_OK);
+            check_equal(turbowasm_component_async_endpoint_pair_create(&ends[0][0], &ends[0][1], &instance, type), TURBOWASM_OK);
+            if ((variant & 1u) != 0u)
+                check_equal(turbowasm_component_async_transfer_read(&transfers[0], &ends[0][0], 1u, 0u), TURBOWASM_OK);
+            check_equal(turbowasm_component_async_transfer_write(&transfers[1], &ends[0][1], unit ? NULL : &value, 1u), TURBOWASM_OK);
+            if ((variant & 1u) == 0u)
+                check_equal(turbowasm_component_async_transfer_read(&transfers[0], &ends[0][0], 1u, 0u), TURBOWASM_OK);
+            check_equal(turbowasm_component_async_transfer_poll(&transfers[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_async_transfer_poll(&transfers[1]), TURBOWASM_OK);
+            check_equal(turbowasm_component_async_transfer_take_result(&transfers[0], &public_results[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_async_transfer_take_result(&transfers[1], &public_results[1]), TURBOWASM_OK);
+            check_equal(public_results[0].logical_count, 1u); check_equal(public_results[1].logical_count, 0u);
+            if (unit) { check_equal((int)public_results[0].values.kind, 0); check_equal((int)public_results[1].values.kind, 0); }
+            else check_equal(public_results[0].values.as.list.items[0].as.u32, 91u);
+            check_equal(turbowasm_component_async_endpoint_state_get(&public_results[0].endpoint, &end_state), TURBOWASM_OK);
+            check_true(end_state.future); check_true(end_state.finished); check_true(end_state.readable);
+            check_equal(turbowasm_component_async_transfer_destroy(&transfers[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_async_transfer_destroy(&transfers[1]), TURBOWASM_OK);
+            check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[0]), TURBOWASM_OK);
+            check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[1]), TURBOWASM_OK);
+            check_equal(impl->host_budget.used, (size_t)0);
+        }
+    }
+    it("returns peer closure separately from successful zero-length stream readiness") {
+        turbowasm_component_type_token type;
+        turbowasm_component_async_transfer_state state;
+        check_equal(turbowasm_component_instance_parameter_type(&instance, name("echo-stream"), 0u, &type), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_pair_create(&ends[0][0], &ends[0][1], &instance, type), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_destroy(&ends[0][1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_read(&transfers[0], &ends[0][0], 1u, 0u), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_poll(&transfers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_state_get(&transfers[0], &state), TURBOWASM_OK);
+        check_equal(state.outcome, TURBOWASM_COMPONENT_ASYNC_TRANSFER_PEER_DROPPED); check_equal(state.progress, 0u);
+        check_equal(turbowasm_component_async_transfer_take_result(&transfers[0], &public_results[0]), TURBOWASM_OK);
+        check_equal(public_results[0].logical_count, 0u);
+    }
+    it("moves a composite payload atomically after every admission allocation succeeds") {
+        turbowasm_component_async_options options = {2u, 32u, 2u, 131072u};
+        turbowasm_component_type_token type, future;
+        turbowasm_component_host_value rep = {.kind = TURBOWASM_COMPONENT_HOST_S32, .as.s32 = 42};
+        turbowasm_component_host_value tuple = {.kind = TURBOWASM_COMPONENT_HOST_TUPLE,
+            .as.tuple = {compound_cells, 3u}};
+        uint8_t text[] = {'a', 'b', 0, 'c'};
+        size_t count, used, live, refs;
+        turbowasm_trap trap;
+        void *resource, *reader, *writer;
+        unsigned failure;
+        bool admitted = false;
+        configure(&options);
+        check_equal(turbowasm_component_instance_invoke(&instance, name("make"), &rep, 1u, &output, 1u, &count, &trap), TURBOWASM_OK);
+        compound_cells[0] = (turbowasm_component_host_value){.kind = TURBOWASM_COMPONENT_HOST_STRING,
+            .as.string = {text, sizeof(text)}};
+        compound_cells[1] = output; memset(&output, 0, sizeof(output));
+        check_equal(turbowasm_component_instance_parameter_type(&instance, name("echo-compound-stream"), 0u, &type), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_parameter_type(&instance, name("echo-future"), 0u, &future), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_pair_create(&ends[0][0], &ends[0][1], &instance, type), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_pair_create(&ends[1][0], &ends[1][1], &instance, future), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_into_value(&ends[1][0], &compound_cells[2]), TURBOWASM_OK);
+        resource = compound_cells[1].as.own; reader = compound_cells[2].as.future.impl; writer = ends[0][1].impl;
+        used = impl->host_budget.used; live = live_allocations; refs = impl->ref_count;
+        check_equal(turbowasm_component_async_transfer_write(&transfers[1], &ends[0][1], &tuple, 1u), TURBOWASM_INVALID_ARGUMENT);
+        for (failure = 1u; failure < 64u; ++failure) {
+            fail_at = allocation_calls + failure;
+            turbowasm_status status = turbowasm_component_async_transfer_write_move(&transfers[1], &ends[0][1], &tuple, 1u);
+            fail_at = 0u;
+            if (status == TURBOWASM_OK) { admitted = true; break; }
+            check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_null(transfers[1].impl);
+            check_equal((const void *)compound_cells[1].as.own, resource); check_equal(compound_cells[2].as.future.impl, reader);
+            check_equal(ends[0][1].impl, writer); check_equal(impl->host_budget.used, used);
+            check_equal(live_allocations, live); check_equal((size_t)impl->ref_count, refs);
+        }
+        check_true(admitted); check_greater(failure, 2u);
+        check_equal((int)compound_cells[1].kind, 0); check_equal((int)compound_cells[2].kind, 0); check_null(ends[0][1].impl);
+        text[0] = 'z';
+        check_equal(turbowasm_component_async_transfer_read(&transfers[0], &ends[0][0], 1u, 4096u), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_poll(&transfers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_poll(&transfers[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_take_result(&transfers[0], &public_results[0]), TURBOWASM_OK);
+        turbowasm_component_host_value *received = public_results[0].values.as.list.items[0].as.tuple.items;
+        check_equal(received[0].as.string.size, sizeof(text)); check_equal(received[0].as.string.data[0], (uint8_t)'a');
+        check_equal(received[1].kind, TURBOWASM_COMPONENT_HOST_OWN); check_equal(received[2].kind, TURBOWASM_COMPONENT_HOST_FUTURE);
+        check_equal(turbowasm_component_async_transfer_take_result(&transfers[1], &public_results[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_destroy(&transfers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_destroy(&transfers[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_transfer_result_destroy(&public_results[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_endpoint_destroy(&ends[1][1]), TURBOWASM_OK);
+        check_equal(impl->host_budget.used, (size_t)0);
     }
     it("initializes finite independent defaults and copies options before allocator reentry") {
         turbowasm_component_async_options options;
@@ -288,6 +563,22 @@ spec("Instance-owned Component async options") {
         check_equal(turbowasm_component_host_task_take_result(&tasks[0], &output, &count), TURBOWASM_OK);
         check_equal(output.as.string.data, "a\0b", 3u); check_equal(output.as.string.size, (size_t)3);
         check_equal(turbowasm_component_host_task_destroy(&tasks[0]), TURBOWASM_OK); impl = NULL;
+    }
+    it("holds delivered string capacity until destruction and makes that quota reusable") {
+        uint8_t text[] = {'a', 0, 'b'};
+        size_t count, limit;
+        turbowasm_component_host_value argument = {.kind = TURBOWASM_COMPONENT_HOST_STRING,
+            .as.string = {text, sizeof(text)}};
+        check_equal(create_task(0u, "echo32", &argument, 1u), TURBOWASM_OK); finish(0u);
+        check_equal(turbowasm_component_host_task_take_result(&tasks[0], &output, &count), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_destroy(&tasks[0]), TURBOWASM_OK);
+        check_equal(impl->host_budget.used, sizeof(text)); limit = impl->host_budget.limit;
+        impl->host_budget.limit = sizeof(text);
+        check_equal(create_task(0u, "answer", NULL, 0u), TURBOWASM_OUT_OF_MEMORY); check_null(tasks[0].impl);
+        check_equal(output.as.string.data, text, sizeof(text));
+        check_equal(turbowasm_component_host_value_destroy(&output), TURBOWASM_OK);
+        check_equal(impl->host_budget.used, (size_t)0); impl->host_budget.limit = limit;
+        check_equal(create_task(0u, "answer", NULL, 0u), TURBOWASM_OK); cancel_task(0u);
     }
     it("rolls back every configured constructor allocation without publishing an instance") {
         turbowasm_component_async_options options = {2u, 8u, 1u, 16384u};
