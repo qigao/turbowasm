@@ -803,7 +803,27 @@ exhaustion leaves output/count intact and retries after another task releases it
 reservation, without changing the budget limit. Windows ASan passes 22 cases and
 10,651 assertions; related Component/WASI/Runtime regression passes 86/86 in
 8.67 s. The MIR variant requires compiled export/callback and resource destructor
-bodies; native qualification of this owner is pending.
+bodies. Commit `dc5ec11` passes all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37724147564):
+Linux MIR 209/209 in 2.91 s and macOS MIR 209/209 in 3.74 s.
+
+Host-created endpoint pairs use the task domain's existing stable pair storage
+and pair quota. A private factory accepts the instantiated type graph and either
+publishes both guest handles or leaves both ends host-owned. Only successful
+admission changes its empty output pointers. A failed allocation or registration
+does not retain half a pair; fully closed earlier pairs may be collected. Moving
+a readable end through the canonical codec preserves the domain-owned storage
+until both ends close. This factory borrows its domain and immutable graph; the
+eventual host endpoint owner must retain the corresponding instance across
+operations and cross-instance publication. It does not enable public endpoint
+values or async loading on its own.
+Formal endpoint builtin cases exhaust host storage with zero occupied handles,
+reject guest creation at that shared quota, verify invalid/allocation-failed
+admission leaves outputs empty, reuse closed storage, and move a host reader
+through the canonical codec into actual Core memory32/64 reads while its host
+writer completes the rendezvous. Windows ASan passes 19 cases and 3,507
+assertions; the related regression passes 86/86 in 9.15 s. Native qualification
+of the shared host/guest factory is pending.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows

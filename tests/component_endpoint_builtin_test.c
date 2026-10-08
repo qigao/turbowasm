@@ -66,6 +66,27 @@ static turbowasm_component_endpoint external_reader, external_writer;
 static bool probe_copy_reentry;
 static bool fail_realloc;
 static unsigned reallocations;
+enum { HOST_PAIR_LIMIT = 16 };
+static turbowasm_component_endpoint *host_readers[HOST_PAIR_LIMIT], *host_writers[HOST_PAIR_LIMIT];
+static turbowasm_component_endpoint_codec host_codec;
+static turbowasm_component_value host_value, host_number;
+static turbowasm_component_buffer host_buffer;
+
+static void close_host_pair(unsigned index) {
+    turbowasm_component_endpoint *ends[2] = {host_readers[index], host_writers[index]};
+    unsigned i;
+    host_readers[index] = host_writers[index] = NULL;
+    for (i = 0u; i < 2u; ++i) if (ends[i] != NULL && !ends[i]->closed) {
+        if (ends[i]->operation != NULL) {
+            turbowasm_component_event event;
+            if (ends[i]->waitable.state.endpoint.phase == TURBOWASM_COMPONENT_ENDPOINT_COPYING)
+                check_equal(turbowasm_component_endpoint_cancel(ends[i]), TURBOWASM_OK);
+            (void)turbowasm_component_endpoint_take(ends[i], &event);
+        }
+        check_equal(turbowasm_component_endpoint_close(ends[i]), TURBOWASM_OK);
+    }
+    turbowasm_component_endpoint_domain_collect(&domain);
+}
 
 static turbowasm_status realloc_text(void *context, uint64_t old_pointer, uint64_t old_size,
     uint64_t alignment, uint64_t size, uint64_t *out) {
@@ -168,6 +189,9 @@ spec("Core endpoint builtin ownership and progress") {
         unsigned i, j;
         live = returns = 0; allowance = SIZE_MAX; may_leave = true;
         probe_copy_reentry = fail_realloc = false; reallocations = 0;
+        memset(host_readers, 0, sizeof(host_readers)); memset(host_writers, 0, sizeof(host_writers));
+        memset(&host_codec, 0, sizeof(host_codec)); memset(&host_buffer, 0, sizeof(host_buffer));
+        memset(&host_value, 0, sizeof(host_value)); memset(&host_number, 0, sizeof(host_number));
         memset(&external_reader, 0, sizeof(external_reader)); memset(&external_writer, 0, sizeof(external_writer));
         memset(builtins, 0, sizeof(builtins)); memset(memories, 0, sizeof(memories)); memset(&set, 0, sizeof(set));
         turbowasm_runtime_config_init(&config); config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
@@ -224,6 +248,11 @@ spec("Core endpoint builtin ownership and progress") {
     after_each() {
         unsigned i; allowance = SIZE_MAX;
         for (i = 0; i < 3; ++i) check_equal(turbowasm_component_task_destroy(&tasks[i]), TURBOWASM_OK);
+        if (host_codec.table != NULL)
+            check_equal(turbowasm_component_endpoint_codec_rollback(&host_codec), TURBOWASM_OK);
+        check_equal(turbowasm_component_value_destroy(&host_value), TURBOWASM_OK);
+        for (i = 0u; i < HOST_PAIR_LIMIT; ++i)
+            if (host_readers[i] != NULL || host_writers[i] != NULL) close_host_pair(i);
         if (external_writer.initialized && !external_writer.closed) {
             if (external_writer.operation != NULL) {
                 turbowasm_component_event event;
@@ -260,6 +289,71 @@ spec("Core endpoint builtin ownership and progress") {
         check_true(endpoint(reader)->peer == endpoint(writer)); check_equal(domain.pair_count, 1u);
         check_equal(turbowasm_component_task_domain_destroy(&domain), TURBOWASM_TRAPPED);
         close_pair(pair, false); check_equal(domain.pair_count, 0u); check_equal(table.live_count, 0u);
+    }
+    it("bounds host pair storage even when no canonical handles are occupied") {
+        unsigned i;
+        turbowasm_component_endpoint *reader = NULL, *writer = NULL;
+        for (i = 0u; i < HOST_PAIR_LIMIT; ++i) {
+            check_equal(turbowasm_component_endpoint_domain_pair_open(&domain, &graph, i % 2u, false,
+                &host_readers[i], &host_writers[i]), TURBOWASM_OK);
+            check_null(host_readers[i]->waitable.table); check_null(host_writers[i]->waitable.table);
+        }
+        check_equal(domain.pair_count, (uint32_t)HOST_PAIR_LIMIT); check_equal(table.live_count, 0u);
+        check_equal(turbowasm_component_endpoint_domain_pair_open(&domain, &graph, 0u, false,
+            &reader, &writer), TURBOWASM_OUT_OF_MEMORY);
+        check_null(reader); check_null(writer);
+        check_equal(start(1u, "snew", 0u, 0u, 0u), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(turbowasm_component_task_destroy(&tasks[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_domain_destroy(&domain), TURBOWASM_TRAPPED);
+        close_host_pair(0u); close_pair(run("snew", 0u, 0u, 0u), false);
+        check_equal(domain.pair_count, (uint32_t)HOST_PAIR_LIMIT - 1u);
+    }
+    it("publishes no host outputs on invalid input or allocation failure and reuses closed storage") {
+        size_t baseline = live;
+        allowance = 0u;
+        check_equal(turbowasm_component_endpoint_domain_pair_open(&domain, &graph, 3u, false,
+            &host_readers[0], &host_writers[0]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_endpoint_domain_pair_open(&domain, &graph, 0u, false,
+            &host_readers[0], &host_readers[0]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_endpoint_domain_pair_open(&domain, &graph, 0u, false,
+            &host_readers[0], &host_writers[0]), TURBOWASM_OUT_OF_MEMORY);
+        check_null(host_readers[0]); check_null(host_writers[0]);
+        check_equal(domain.pair_count, 0u); check_equal(table.live_count, 0u); check_equal(live, baseline);
+        allowance = SIZE_MAX;
+        check_equal(turbowasm_component_endpoint_domain_pair_open(&domain, &graph, 0u, false,
+            &host_readers[0], &host_writers[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_domain_pair_open(&domain, &graph, 0u, false,
+            &host_readers[0], &host_writers[0]), TURBOWASM_INVALID_ARGUMENT);
+        close_host_pair(0u); check_equal(domain.pair_count, 0u); check_equal(live, baseline);
+    }
+    it("moves a domain-owned host reader to Core while its host writer completes the rendezvous") {
+        unsigned wide;
+        for (wide = 0u; wide < 2u; ++wide) {
+            turbowasm_component_event event;
+            uint32_t handle = 0u;
+            check_equal(turbowasm_component_endpoint_domain_pair_open(&domain, &graph, 0u, false,
+                &host_readers[0], &host_writers[0]), TURBOWASM_OK);
+            host_number.kind = TURBOWASM_COMPONENT_TYPE_U32; host_number.as.u32 = 42u + wide;
+            host_buffer.values = &host_number; host_buffer.length = 1u;
+            check_equal(turbowasm_component_endpoint_submit(host_writers[0], &host_buffer), TURBOWASM_OK);
+            check_equal(turbowasm_component_endpoint_into_value(host_readers[0], &host_value), TURBOWASM_OK);
+            host_codec.table = &table;
+            check_equal(turbowasm_component_endpoint_codec_lower(&host_codec, &graph,
+                turbowasm_component_type_ref_indexed(0u), &host_value, &handle), TURBOWASM_OK);
+            check_equal(turbowasm_component_endpoint_codec_commit(&host_codec), TURBOWASM_OK);
+            check_equal(turbowasm_component_value_destroy(&host_value), TURBOWASM_OK);
+            check_equal(domain.pair_count, 1u); check_equal(table.live_count, 1u);
+            check_equal(run(wide ? "sread64" : "sread", handle, 128u, 1u), 16u);
+            check_equal(load_u32(wide, 128u), 42u + wide);
+            check_equal(turbowasm_component_endpoint_take(host_writers[0], &event), TURBOWASM_OK);
+            check_equal(event.payload, 16u); check_false(host_buffer.leased);
+            check_equal(turbowasm_component_endpoint_close(host_writers[0]), TURBOWASM_OK);
+            /* Guest drop may collect the stable pair; discard borrowed pointers first. */
+            host_readers[0] = host_writers[0] = NULL;
+            run("sdropr", handle, 0u, 0u);
+            check_equal(domain.pair_count, 0u); check_equal(table.live_count, 0u);
+            memset(&host_buffer, 0, sizeof(host_buffer));
+        }
     }
     it("copies streams across memory widths and retains async descriptors through set delivery") {
         unsigned wide;

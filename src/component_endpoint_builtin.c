@@ -26,22 +26,41 @@ void turbowasm_component_endpoint_domain_collect(turbowasm_component_task_domain
     }
 }
 
-static turbowasm_status new_pair(turbowasm_component_task_builtin *binding, turbowasm_value *result) {
-    turbowasm_component_task_domain *domain = binding->domain;
+turbowasm_status turbowasm_component_endpoint_domain_pair_open(
+    turbowasm_component_task_domain *domain, const turbowasm_component_type_graph *graph,
+    turbowasm_component_type_id type_id, bool guest_handles,
+    turbowasm_component_endpoint **reader, turbowasm_component_endpoint **writer) {
     turbowasm_component_task_owned_pair *pair;
+    const turbowasm_component_type *type;
     turbowasm_status status;
+    if (domain == NULL || domain->table == NULL || domain->table->max_entries == 0u ||
+        reader == NULL || writer == NULL || reader == writer || *reader != NULL || *writer != NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    type = turbowasm_component_type_graph_get(graph, type_id);
+    if (type == NULL || (type->kind != TURBOWASM_COMPONENT_TYPE_STREAM && type->kind != TURBOWASM_COMPONENT_TYPE_FUTURE))
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_component_type_graph_validate(graph)) return TURBOWASM_TYPE_MISMATCH;
     turbowasm_component_endpoint_domain_collect(domain);
     /* Moving ends does not release stable storage. Bound that retained storage
      * independently of currently occupied handle slots. */
     if (domain->pair_count >= domain->table->max_entries) return TURBOWASM_OUT_OF_MEMORY;
     pair = turbowasm_rt_calloc(1, sizeof(*pair));
     if (pair == NULL) return TURBOWASM_OUT_OF_MEMORY;
-    status = turbowasm_component_endpoint_pair_open(binding->graph, binding->definition.type_index,
-        domain->table, domain->table, &pair->reader, &pair->writer);
+    status = turbowasm_component_endpoint_pair_open(graph, type_id,
+        guest_handles ? domain->table : NULL, guest_handles ? domain->table : NULL, &pair->reader, &pair->writer);
     if (status != TURBOWASM_OK) { turbowasm_rt_free(pair); return status; }
     pair->next = domain->pairs; domain->pairs = pair; ++domain->pair_count;
+    *reader = &pair->reader; *writer = &pair->writer;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status new_pair(turbowasm_component_task_builtin *binding, turbowasm_value *result) {
+    turbowasm_component_endpoint *reader = NULL, *writer = NULL;
+    turbowasm_status status = turbowasm_component_endpoint_domain_pair_open(binding->domain,
+        binding->graph, binding->definition.type_index, true, &reader, &writer);
+    if (status != TURBOWASM_OK) return status;
     result->kind = TURBOWASM_VALUE_I64;
-    result->as.i64 = (int64_t)((uint64_t)pair->reader.waitable.handle | ((uint64_t)pair->writer.waitable.handle << 32));
+    result->as.i64 = (int64_t)((uint64_t)reader->waitable.handle | ((uint64_t)writer->waitable.handle << 32));
     return TURBOWASM_OK;
 }
 
