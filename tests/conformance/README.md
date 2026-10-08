@@ -1440,7 +1440,10 @@ futures, mixed resource/endpoint/string payloads, both memory directions and
 rendezvous orders, exited asynchronous readers, suspended conversion unwind,
 foreign failure destructors, third-instance forwarding and allocation failures.
 Windows ASan passed 26 resource-import cases with 7,575 assertions and the related
-84/84 targets in 7.60 seconds. Native MIR qualification for this extension is pending.
+84/84 targets in 7.60 seconds. At `a9b6150`, Linux x64 MIR passed 205/205 targets
+in 2.87 seconds and macOS arm64 MIR passed 205/205 in 2.89 seconds, including
+the compiled resource-import suite in 0.18/0.10 seconds. All five jobs passed in
+the [native run](https://github.com/qigao/turbowasm/actions/runs/37712584270).
 
 Async host capability callbacks,
 nested Component instantiation, public task/endpoint owners, synchronous
