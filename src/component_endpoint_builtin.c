@@ -116,7 +116,7 @@ static turbowasm_status copy_endpoint(turbowasm_component_task_builtin *binding,
         status = binding->buffer_prepare(binding->buffer_prepare_context, &buffer);
         if (status != TURBOWASM_OK) return status;
     }
-    status = turbowasm_component_endpoint_submit_guest(endpoint, &buffer, synchronous);
+    status = turbowasm_component_endpoint_submit_guest(endpoint, &buffer, synchronous, binding->domain->active);
     if (status != TURBOWASM_OK) {
         if (buffer.guest.release != NULL) (void)buffer.guest.release(buffer.guest.context);
         return status == TURBOWASM_INVALID_ARGUMENT ? TURBOWASM_TRAPPED : status;
@@ -162,7 +162,7 @@ turbowasm_status turbowasm_component_endpoint_builtin_invoke(turbowasm_component
     if (kind == TURBOWASM_COMPONENT_STREAM_FORWARD || kind == TURBOWASM_COMPONENT_FUTURE_FORWARD) {
         turbowasm_component_endpoint *writer = get_endpoint(binding, (uint32_t)arguments[1].as.i32, future, false);
         if (writer == NULL) return TURBOWASM_TRAPPED;
-        status = turbowasm_component_endpoint_forward(endpoint, writer);
+        status = turbowasm_component_endpoint_forward_from_task(endpoint, writer, binding->domain->active);
     } else {
         if (future && !readable && endpoint->waitable.state.endpoint.phase != TURBOWASM_COMPONENT_ENDPOINT_DONE)
             return TURBOWASM_TRAPPED;

@@ -376,6 +376,9 @@ static turbowasm_status component_resource_destructor_bridge(
     }
     if (resource_context->trap != NULL)
         *resource_context->trap = trap;
+    else if (resource_context->progress_task != NULL && trap != TURBOWASM_TRAP_NONE &&
+             resource_context->progress_task->trap == TURBOWASM_TRAP_NONE)
+        resource_context->progress_task->trap = trap;
     if (status != TURBOWASM_OK)
         return status;
     if (trap != TURBOWASM_TRAP_NONE || result_count != 0u)
@@ -390,7 +393,8 @@ static turbowasm_status component_resource_release_from_host(
     turbowasm_component_task *progress_task;
     if (exec == NULL || exec->binary == NULL || identity == 0u)
         return TURBOWASM_INVALID_ARGUMENT;
-    progress_task = exec->task_domain.active;
+    progress_task = exec->task_domain.auxiliary;
+    if (progress_task == NULL || progress_task->core.impl == NULL) progress_task = exec->task_domain.active;
     for (;;) {
         const turbowasm_component_resource_identity *imported =
             turbowasm_component_exec_resource_identity(exec, identity);
@@ -1914,7 +1918,8 @@ static turbowasm_status bind_async_builtin(turbowasm_component_exec *exec, uint3
         if (type->as.async_value.has_payload &&
             !turbowasm_component_transfer_type_features(&exec->binary->type_graph, type->as.async_value.payload, &features))
             return TURBOWASM_UNSUPPORTED;
-        if ((features & (TURBOWASM_COMPONENT_VALUE_RESOURCES | TURBOWASM_COMPONENT_VALUE_ENDPOINTS)) != 0u) {
+        if ((features & (TURBOWASM_COMPONENT_VALUE_RESOURCES | TURBOWASM_COMPONENT_VALUE_ENDPOINTS |
+                         TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY)) != 0u) {
             context->binding.buffer_prepare = turbowasm_component_exec_async_buffer_prepare;
             context->binding.buffer_prepare_context = exec;
         }

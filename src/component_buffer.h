@@ -3,6 +3,8 @@
 
 #include "component_canonical.h"
 
+struct turbowasm_component_task;
+
 typedef enum turbowasm_component_buffer_kind {
     TURBOWASM_COMPONENT_BUFFER_HOST = 0,
     TURBOWASM_COMPONENT_BUFFER_GUEST
@@ -17,6 +19,11 @@ typedef turbowasm_status (*turbowasm_component_buffer_commit_fn)(void *context,
     turbowasm_component_value *values, uint32_t count);
 typedef turbowasm_status (*turbowasm_component_buffer_rollback_fn)(void *context);
 typedef turbowasm_status (*turbowasm_component_buffer_release_fn)(void *context);
+/* A copy borrows its driving task only until end_copy, including suspension.
+ * Begin failure leaves the context unchanged; end cannot fail or suspend. */
+typedef turbowasm_status (*turbowasm_component_buffer_begin_copy_fn)(void *context,
+    struct turbowasm_component_task *driver);
+typedef void (*turbowasm_component_buffer_end_copy_fn)(void *context);
 
 /* Caller-owned stable storage, lent from endpoint submit through event/error
  * delivery. Host values are uniquely owned and read destinations start empty.
@@ -41,6 +48,8 @@ typedef struct turbowasm_component_buffer {
          * with the caller. Runs once on delivery, never during conversion;
          * cleanup must not suspend. */
         turbowasm_component_buffer_release_fn release;
+        turbowasm_component_buffer_begin_copy_fn begin_copy;
+        turbowasm_component_buffer_end_copy_fn end_copy;
         void *context;
     } guest;
 } turbowasm_component_buffer;
@@ -57,6 +66,7 @@ turbowasm_status turbowasm_component_buffer_validate(const turbowasm_component_b
  * consume guest source owners; callers must terminate both endpoint operations.
  * Lower failure rolls back destination ownership before temporary cleanup. */
 turbowasm_status turbowasm_component_buffer_copy(turbowasm_component_buffer *source,
-    turbowasm_component_buffer *destination, bool has_payload, uint32_t count);
+    turbowasm_component_buffer *destination, bool has_payload, uint32_t count,
+    struct turbowasm_component_task *driver);
 
 #endif

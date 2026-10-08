@@ -1,5 +1,6 @@
 #include "component_exec.h"
 #include "component_subtask.h"
+#include "component_endpoint_builtin.h"
 #include "runtime_alloc.h"
 #include "instance_internal.h"
 #include <tinytest.h>
@@ -14,6 +15,9 @@
 static turbowasm_component_binary binaries[2];
 static turbowasm_component_exec execs[3];
 static turbowasm_component_task root;
+static turbowasm_component_task payload_tasks[3];
+static turbowasm_value payload_arguments[3][3];
+static turbowasm_component_endpoint payload_ends[2][2];
 static turbowasm_component_value value;
 static turbowasm_runtime_config config;
 static turbowasm_runtime_scope scope;
@@ -30,6 +34,7 @@ static void *allocate(void *context, size_t size) {
     p = malloc(size); if (p != NULL) ++live; return p;
 }
 static void deallocate(void *context, void *p) { (void)context; if (p != NULL) --live; free(p); }
+static bool interrupt_copy(void *context) { ++*(unsigned *)context; return true; }
 static bool name_is(turbowasm_component_name name, const char *text) {
     return name.size == strlen(text) && memcmp(name.bytes, text, name.size) == 0;
 }
@@ -134,6 +139,16 @@ static uint32_t destructions(void) {
 static turbowasm_status release_rep(void *context, uint64_t identity, turbowasm_value rep) {
     return turbowasm_component_exec_resource_release(context, identity, rep);
 }
+static void release_end(turbowasm_component_endpoint *end) {
+    turbowasm_component_event event;
+    if (!end->initialized || end->closed) return;
+    if (end->operation != NULL) {
+        if (end->waitable.state.endpoint.phase == TURBOWASM_COMPONENT_ENDPOINT_COPYING)
+            check_equal(turbowasm_component_endpoint_cancel(end), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_take(end, &event), end->failure);
+    }
+    check_equal(turbowasm_component_endpoint_close(end), TURBOWASM_OK);
+}
 static void clear_handles(unsigned index) {
     uint32_t i; turbowasm_component_exec *exec = &execs[index];
     for (i = 0u; i < exec->resource_table.capacity; ++i) {
@@ -144,17 +159,77 @@ static void clear_handles(unsigned index) {
                 exec->resource_table.entries[i].resource_identity, release_rep, exec), TURBOWASM_OK);
         else if (kind == TURBOWASM_COMPONENT_HANDLE_WAITABLE_SET)
             check_equal(turbowasm_component_task_set_drop(&exec->task_domain, handle), TURBOWASM_OK);
-        else check_true(false);
+        else {
+            turbowasm_component_endpoint *end = turbowasm_component_endpoint_get(&exec->resource_table, handle, kind);
+            check_not_null(end); release_end(end);
+        }
     }
+    turbowasm_component_endpoint_domain_collect(&exec->task_domain);
 }
 static void cleanup(void) {
     int i;
+    for (i = 2; i >= 0; --i) check_equal(turbowasm_component_task_destroy(&payload_tasks[i]), TURBOWASM_OK);
     check_equal(turbowasm_component_task_destroy(&root), TURBOWASM_OK);
     check_equal(turbowasm_component_value_destroy(&value), TURBOWASM_OK);
+    for (i = 0; i < 2; ++i) { release_end(&payload_ends[i][0]); release_end(&payload_ends[i][1]); }
+    memset(payload_ends, 0, sizeof(payload_ends));
     for (i = 2; i >= 0; --i) if (execs[i].initialized) {
         check_equal(turbowasm_component_exec_async_abort(&execs[i], TURBOWASM_INTERRUPTED), TURBOWASM_OK);
         clear_handles((unsigned)i);
     }
+}
+static uint32_t payload_type(bool future, bool mixed) {
+    uint32_t i, expected = TURBOWASM_COMPONENT_VALUE_RESOURCES;
+    if (mixed) expected |= TURBOWASM_COMPONENT_VALUE_ENDPOINTS | TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY;
+    for (i = 0u; i < execs[0].binary->type_graph.count; ++i) {
+        const turbowasm_component_type *type = &execs[0].binary->type_graph.types[i]; uint32_t features;
+        if (type->kind == (future ? TURBOWASM_COMPONENT_TYPE_FUTURE : TURBOWASM_COMPONENT_TYPE_STREAM) &&
+            type->as.async_value.has_payload && turbowasm_component_transfer_type_features(&execs[0].binary->type_graph,
+                type->as.async_value.payload, &features) && features == expected) return i;
+    }
+    return UINT32_MAX;
+}
+static void payload_pair(unsigned pair, unsigned reader, unsigned writer, bool future, bool mixed) {
+    uint32_t type = payload_type(future, mixed); check_not_equal(type, UINT32_MAX);
+    check_equal(turbowasm_component_endpoint_pair_open(&execs[0].binary->type_graph, type,
+        &execs[reader].resource_table, &execs[writer].resource_table,
+        &payload_ends[pair][0], &payload_ends[pair][1]), TURBOWASM_OK);
+}
+static turbowasm_status prepare_payload(void *context, turbowasm_component_task *task,
+    turbowasm_value *out, size_t capacity, size_t *count) {
+    (void)task; if (capacity < 3u) return TURBOWASM_TYPE_MISMATCH;
+    memcpy(out, context, 3u * sizeof(*out)); *count = 3u; return TURBOWASM_OK;
+}
+static void create_payload(unsigned slot, unsigned owner, const char *name, uint32_t handle, uint32_t address, uint32_t count) {
+    turbowasm_component_task_binding copy = *binding(owner, name); unsigned i;
+    for (i = 0u; i < 3u; ++i) payload_arguments[slot][i].kind = TURBOWASM_VALUE_I32;
+    payload_arguments[slot][0].as.i32 = (int32_t)handle; payload_arguments[slot][1].as.i32 = (int32_t)address;
+    payload_arguments[slot][2].as.i32 = (int32_t)count;
+    copy.prepare = prepare_payload; copy.prepare_context = payload_arguments[slot];
+    check_equal(turbowasm_component_task_create(&payload_tasks[slot], &execs[owner].task_domain, &copy), TURBOWASM_OK);
+}
+static turbowasm_status drive_payload(unsigned slot, const turbowasm_execution_options *options) {
+    unsigned turns = 0u; turbowasm_status status;
+    do {
+        unsigned i;
+        for (i = 1u; i < 3u; ++i) if (execs[i].initialized) {
+            uint32_t pending;
+            status = turbowasm_component_exec_async_poll(&execs[i], 8u, options, &pending);
+            if (status != TURBOWASM_OK && status != TURBOWASM_YIELDED) return status;
+        }
+        status = turbowasm_component_task_resume(&payload_tasks[slot], options);
+        check_less(++turns, 10000u);
+    } while (status == TURBOWASM_YIELDED);
+    return status;
+}
+static void payload_result(unsigned slot, uint32_t expected) {
+    turbowasm_component_value result = {0};
+    check_equal(turbowasm_component_task_take_result(&payload_tasks[slot], &result), TURBOWASM_OK);
+    check_equal(result.as.u32, expected); check_equal(turbowasm_component_value_destroy(&result), TURBOWASM_OK);
+#ifdef TURBOWASM_TEST_MIR
+    check_equal(((turbowasm_instance_impl *)payload_tasks[slot].binding.instance->impl)->jit_functions[
+        payload_tasks[slot].binding.function_index].state, TURBOWASM_JIT_COMPILED);
+#endif
 }
 static void number(unsigned index, const char *name, uint32_t expected, const turbowasm_execution_options *options) {
     create(index, name); check_equal(drive(options), TURBOWASM_OK);
@@ -214,6 +289,111 @@ spec("resource imports between async Component instances") {
     it("borrows an imported owner back into its defining instance") {
         number(1u, "borrow-roundtrip", 42u, NULL);
         check_equal(destructions(), 1u); compiled(0u, "resource-borrow-child");
+    }
+    it("copies resource streams futures and mixed payloads between distinct instance tables") {
+        unsigned kind, reverse, writer_first;
+        for (kind = 0u; kind < 3u; ++kind) for (reverse = 0u; reverse < 2u; ++reverse)
+        for (writer_first = 0u; writer_first < 2u; ++writer_first) {
+            const char *read = kind == 0u ? "payload-read" : kind == 1u ? "payload-mixed-read" : "payload-future-read";
+            const char *write = kind == 0u ? "payload-write" : kind == 1u ? "payload-mixed-write" : "payload-future-write";
+            uint32_t count = kind == 0u ? 2u : 1u, before = destructions();
+            unsigned reader = reverse, writer = 1u - reverse;
+            payload_pair(0u, reader, writer, kind == 2u, kind == 1u);
+            create_payload(writer_first ? 1u : 0u, reader, read, payload_ends[0][0].waitable.handle, 512u, count);
+            create_payload(writer_first ? 0u : 1u, writer, write, payload_ends[0][1].waitable.handle, 512u, count);
+            check_equal(turbowasm_component_task_resume(&payload_tasks[0], NULL), TURBOWASM_YIELDED);
+            check_equal(drive_payload(1u, NULL), TURBOWASM_OK); payload_result(1u, count);
+            check_equal(drive_payload(0u, NULL), TURBOWASM_OK); payload_result(0u, count);
+            cleanup(); check_equal(destructions() - before, count);
+            check_equal(execs[0].async_buffer_owners, 0u); check_equal(execs[1].async_buffer_owners, 0u);
+        }
+    }
+    it("keeps a pending destination buffer valid after its initiating task exits") {
+        payload_pair(0u, 1u, 0u, false, true);
+        create_payload(0u, 1u, "payload-mixed-read-async", payload_ends[0][0].waitable.handle, 512u, 1u);
+        check_equal(drive_payload(0u, NULL), TURBOWASM_OK); payload_result(0u, UINT32_MAX);
+        check_equal(turbowasm_component_task_destroy(&payload_tasks[0]), TURBOWASM_OK);
+        check_equal(execs[1].async_buffer_owners, 1u);
+        create_payload(1u, 0u, "payload-mixed-write", payload_ends[0][1].waitable.handle, 512u, 1u);
+        check_equal(drive_payload(1u, NULL), TURBOWASM_OK); payload_result(1u, 1u);
+        cleanup(); check_equal(destructions(), 1u); check_equal(execs[1].async_buffer_owners, 0u);
+    }
+    it("retains both instance guards through foreign realloc fuel yields and forced unwind") {
+        unsigned abort;
+        for (abort = 0u; abort < 2u; ++abort) {
+            turbowasm_execution_options options = {0}; unsigned turns = 0u;
+            options.has_fuel_limit = true; options.fuel = 4u;
+            payload_pair(0u, 1u, 0u, false, true);
+            create_payload(0u, 1u, "payload-mixed-read", payload_ends[0][0].waitable.handle, 512u, 1u);
+            check_equal(turbowasm_component_task_resume(&payload_tasks[0], NULL), TURBOWASM_YIELDED);
+            create_payload(1u, 0u, "payload-mixed-write", payload_ends[0][1].waitable.handle, 512u, 1u);
+            do {
+                check_equal(turbowasm_component_task_resume(&payload_tasks[1], &options), TURBOWASM_YIELDED);
+                check_less(++turns, 10000u);
+            } while (execs[1].may_leave);
+            check_true(execs[0].task_domain.auxiliary == &payload_tasks[1]);
+            check_true(execs[1].task_domain.auxiliary == &payload_tasks[1]);
+            check_true(payload_ends[0][0].waitable.delivering); check_true(payload_ends[0][1].waitable.delivering);
+            check_equal(turbowasm_component_task_destroy(&payload_tasks[0]), TURBOWASM_TRAPPED);
+            if (abort == 0u) {
+                turbowasm_execution_options interrupt = {0}; unsigned checks = 0u;
+                interrupt.should_interrupt = interrupt_copy; interrupt.interrupt_context = &checks;
+                check_equal(turbowasm_component_task_resume(&payload_tasks[1], &interrupt), TURBOWASM_YIELDED);
+                check_greater(checks, 0u);
+                check_equal(turbowasm_execution_yield_reason_get(&payload_tasks[1].core), TURBOWASM_YIELD_INTERRUPTION);
+                check_false(execs[1].may_leave); check_true(execs[1].task_domain.auxiliary == &payload_tasks[1]);
+                check_equal(drive_payload(1u, &options), TURBOWASM_OK); payload_result(1u, 1u);
+                check_equal(drive_payload(0u, &options), TURBOWASM_OK); payload_result(0u, 1u);
+            } else check_equal(turbowasm_component_task_destroy(&payload_tasks[1]), TURBOWASM_OK);
+            check_null(execs[0].task_domain.auxiliary); check_null(execs[1].task_domain.auxiliary);
+            check_true(execs[0].may_leave); check_true(execs[1].may_leave);
+            cleanup(); check_equal(destructions(), abort + 1u);
+        }
+    }
+    it("uses the reader's fuel when failed lowering destroys a foreign source resource") {
+        turbowasm_execution_options options = {0}; unsigned turns = 0u;
+        options.has_fuel_limit = true; options.fuel = 4u;
+        /* Configure before table allocation: one end and one reservation fit. */
+        execs[1].resource_table.max_entries = 2u;
+        payload_pair(0u, 1u, 0u, false, true);
+        create_payload(0u, 0u, "payload-mixed-write", payload_ends[0][1].waitable.handle, 512u, 1u);
+        check_equal(turbowasm_component_task_resume(&payload_tasks[0], NULL), TURBOWASM_YIELDED);
+        create_payload(1u, 1u, "payload-mixed-read", payload_ends[0][0].waitable.handle, 512u, 1u);
+        do {
+            check_equal(turbowasm_component_task_resume(&payload_tasks[1], &options), TURBOWASM_YIELDED);
+            check_less(++turns, 10000u);
+        } while (execs[0].task_domain.synchronous_depth == 0u);
+        check_true(execs[1].task_domain.auxiliary == &payload_tasks[1]);
+        check_equal(drive_payload(1u, &options), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(drive_payload(0u, NULL), TURBOWASM_OUT_OF_MEMORY);
+        cleanup(); check_equal(destructions(), 1u); check_equal(execs[0].task_domain.synchronous_depth, 0u);
+        compiled_destructor();
+    }
+    it("uses a third instance's forwarding task to drive pending mixed payloads") {
+        turbowasm_component_exec_imports set = imports(0u);
+        turbowasm_execution_options options = {0}; unsigned turns = 0u;
+        options.has_fuel_limit = true; options.fuel = 4u;
+        check_equal(turbowasm_component_exec_init_async_with_import_sets(&execs[2], &binaries[1], &limits, &set, 1u), TURBOWASM_OK);
+        attach(2u);
+        payload_pair(0u, 2u, 0u, false, true); payload_pair(1u, 1u, 2u, false, true);
+        create_payload(0u, 1u, "payload-mixed-read", payload_ends[1][0].waitable.handle, 512u, 1u);
+        create_payload(1u, 0u, "payload-mixed-write", payload_ends[0][1].waitable.handle, 512u, 1u);
+        check_equal(turbowasm_component_task_resume(&payload_tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_task_resume(&payload_tasks[1], NULL), TURBOWASM_YIELDED);
+        create_payload(2u, 2u, "payload-forward", payload_ends[0][0].waitable.handle, payload_ends[1][1].waitable.handle, 0u);
+        do {
+            check_equal(turbowasm_component_task_resume(&payload_tasks[2], &options), TURBOWASM_YIELDED);
+            check_less(++turns, 10000u);
+        } while (execs[1].may_leave);
+        check_true(execs[0].task_domain.auxiliary == &payload_tasks[2]);
+        check_true(execs[1].task_domain.auxiliary == &payload_tasks[2]);
+        check_true(execs[2].task_domain.auxiliary == &payload_tasks[2]);
+        check_equal(turbowasm_component_task_resume(&payload_tasks[0], NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_task_resume(&payload_tasks[1], NULL), TURBOWASM_YIELDED);
+        check_equal(drive_payload(2u, &options), TURBOWASM_OK); payload_result(2u, 1u);
+        check_equal(drive_payload(1u, &options), TURBOWASM_OK); payload_result(1u, 1u);
+        check_equal(drive_payload(0u, &options), TURBOWASM_OK); payload_result(0u, 1u);
+        cleanup(); check_equal(destructions(), 1u);
     }
     it("drops a foreign task borrow only after its transitive loan is delivered") {
         turbowasm_component_exec_imports set = imports(1u);
@@ -405,5 +585,29 @@ spec("resource imports between async Component instances") {
             if (status == TURBOWASM_OK) { check_equal(destructions() - before, 1u); break; }
         }
         check_greater(budget, 0u); check_less(budget, 1024u);
+    }
+    it("unwinds every allocation failure during a foreign mixed payload conversion") {
+        size_t baseline = 0u, budget;
+        for (budget = 0u; budget < 1024u; ++budget) {
+            turbowasm_status status; uint32_t before = destructions();
+            /* The first complete copy warms table capacities and MIR entries. */
+            payload_pair(0u, 1u, 0u, false, true);
+            create_payload(0u, 1u, "payload-mixed-read", payload_ends[0][0].waitable.handle, 512u, 1u);
+            check_equal(turbowasm_component_task_resume(&payload_tasks[0], NULL), TURBOWASM_YIELDED);
+            create_payload(1u, 0u, "payload-mixed-write", payload_ends[0][1].waitable.handle, 512u, 1u);
+            allowance = budget == 0u ? SIZE_MAX : budget - 1u;
+            status = drive_payload(1u, NULL); allowance = SIZE_MAX;
+            if (status == TURBOWASM_OK) {
+                payload_result(1u, 1u); check_equal(drive_payload(0u, NULL), TURBOWASM_OK); payload_result(0u, 1u);
+            } else check_equal(status, TURBOWASM_OUT_OF_MEMORY);
+            cleanup();
+            if (budget == 0u) baseline = live;
+            check_equal(live, baseline); check_true(destructions() - before <= 1u);
+            check_null(execs[0].task_domain.auxiliary); check_null(execs[1].task_domain.auxiliary);
+            check_equal(execs[0].async_buffer_owners, 0u); check_equal(execs[1].async_buffer_owners, 0u);
+            check_equal(execs[0].async_resource_owners, 0u); check_equal(execs[1].async_resource_owners, 0u);
+            if (status == TURBOWASM_OK && budget != 0u) { check_equal(destructions() - before, 1u); break; }
+        }
+        check_greater(budget, 1u); check_less(budget, 1024u);
     }
 }

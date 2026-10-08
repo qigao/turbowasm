@@ -22,6 +22,12 @@
   (type $own-echo (func async (param "x" (own $resource)) (result (own $resource))))
   (type $pair (tuple (own $resource) string))
   (type $text-echo (func async (param "x" $pair) (result $pair)))
+  (type $payload-copy (func async (param "handle" u32) (param "address" u32) (param "count" u32) (result u32)))
+  (type $u32-stream (stream u32))
+  (type $own-stream (stream (own $resource)))
+  (type $own-future (future (own $resource)))
+  (type $mixed-payload (tuple (own $resource) $u32-stream string))
+  (type $mixed-stream (stream $mixed-payload))
   (core module $memory
     (memory (export "memory") 1) (data (i32.const 0) "hello")
     (func (export "realloc") (param i32 i32 i32 i32) (result i32) (local $n i32)
@@ -35,6 +41,17 @@
   (core func $echo (canon lower (func $echo) async (memory $memory)))
   (core func $text (canon lower (func $text) async (memory $memory) (realloc $realloc)))
   (core func $borrow (canon lower (func $borrow) async (memory $memory)))
+  (core func $payload-read (canon stream.read $own-stream (memory $memory)))
+  (core func $payload-write (canon stream.write $own-stream (memory $memory)))
+  (core func $mixed-read (canon stream.read $mixed-stream (memory $memory) (realloc $realloc)))
+  (core func $mixed-read-async (canon stream.read $mixed-stream async (memory $memory) (realloc $realloc)))
+  (core func $mixed-write (canon stream.write $mixed-stream (memory $memory)))
+  (core func $future-read (canon future.read $own-future (memory $memory)))
+  (core func $future-write (canon future.write $own-future (memory $memory)))
+  (core func $stream-new (canon stream.new $u32-stream))
+  (core func $stream-drop-read (canon stream.drop-readable $u32-stream))
+  (core func $stream-drop-write (canon stream.drop-writable $u32-stream))
+  (core func $forward (canon stream.forward $mixed-stream))
   (core func $drop (canon resource.drop $resource))
   (core func $return (canon task.return (result u32) (memory $memory)))
   (core func $own-return (canon task.return (result (own $resource)) (memory $memory)))
@@ -47,6 +64,12 @@
   (core instance $a
     (export "make" (func $make)) (export "echo" (func $echo)) (export "text" (func $text))
     (export "borrow" (func $borrow))
+    (export "payload-read" (func $payload-read)) (export "payload-write" (func $payload-write))
+    (export "mixed-read" (func $mixed-read)) (export "mixed-read-async" (func $mixed-read-async))
+    (export "mixed-write" (func $mixed-write)) (export "future-read" (func $future-read))
+    (export "future-write" (func $future-write)) (export "stream-new" (func $stream-new))
+    (export "stream-drop-read" (func $stream-drop-read)) (export "stream-drop-write" (func $stream-drop-write))
+    (export "forward" (func $forward))
     (export "drop" (func $drop)) (export "return" (func $return))
     (export "own-return" (func $own-return)) (export "text-return" (func $text-return))
     (export "new-set" (func $new-set)) (export "drop-set" (func $drop-set))
@@ -56,6 +79,17 @@
     (import "a" "echo" (func $echo (param i32 i32) (result i32)))
     (import "a" "text" (func $text (param i32 i32 i32 i32) (result i32)))
     (import "a" "borrow" (func $borrow (param i32 i32) (result i32)))
+    (import "a" "payload-read" (func $payload-read (param i32 i32 i32) (result i32)))
+    (import "a" "payload-write" (func $payload-write (param i32 i32 i32) (result i32)))
+    (import "a" "mixed-read" (func $mixed-read (param i32 i32 i32) (result i32)))
+    (import "a" "mixed-read-async" (func $mixed-read-async (param i32 i32 i32) (result i32)))
+    (import "a" "mixed-write" (func $mixed-write (param i32 i32 i32) (result i32)))
+    (import "a" "future-read" (func $future-read (param i32 i32) (result i32)))
+    (import "a" "future-write" (func $future-write (param i32 i32) (result i32)))
+    (import "a" "stream-new" (func $stream-new (result i64)))
+    (import "a" "stream-drop-read" (func $stream-drop-read (param i32)))
+    (import "a" "stream-drop-write" (func $stream-drop-write (param i32)))
+    (import "a" "forward" (func $forward (param i32 i32)))
     (import "a" "drop" (func $drop (param i32)))
     (import "a" "return" (func $return (param i32)))
     (import "a" "own-return" (func $own-return (param i32)))
@@ -75,6 +109,44 @@
         local.get $sub call $drop-sub local.get $set call $drop-set
       end)
     (func $make-handle (result i32) i32.const 128 call $make call $await i32.const 128 i32.load)
+    (func $drop-values (param $addr i32) (param $count i32)
+      block $done loop $next local.get $count i32.eqz br_if $done
+        local.get $addr i32.load call $drop
+        local.get $addr i32.const 4 i32.add local.set $addr
+        local.get $count i32.const 1 i32.sub local.set $count br $next end end)
+    (func $write-values (param $addr i32) (param $count i32)
+      block $done loop $next local.get $count i32.eqz br_if $done
+        local.get $addr call $make-handle i32.store
+        local.get $addr i32.const 4 i32.add local.set $addr
+        local.get $count i32.const 1 i32.sub local.set $count br $next end end)
+    (func (export "payload-read") (param i32 i32 i32)
+      local.get 0 local.get 1 local.get 2 call $payload-read drop
+      local.get 1 local.get 2 call $drop-values local.get 2 call $return)
+    (func (export "payload-write") (param i32 i32 i32)
+      local.get 1 local.get 2 call $write-values
+      local.get 0 local.get 1 local.get 2 call $payload-write drop local.get 2 call $return)
+    (func (export "mixed-read") (param i32 i32 i32)
+      local.get 0 local.get 1 local.get 2 call $mixed-read drop
+      local.get 1 i32.load call $drop
+      local.get 1 i32.const 4 i32.add i32.load call $stream-drop-read
+      local.get 1 i32.const 8 i32.add i32.load i32.load8_u i32.const 104 i32.ne if unreachable end
+      local.get 2 call $return)
+    (func (export "mixed-read-async") (param i32 i32 i32)
+      local.get 0 local.get 1 local.get 2 call $mixed-read-async call $return)
+    (func (export "mixed-write") (param i32 i32 i32) (local $pair i64)
+      call $stream-new local.set $pair
+      local.get 1 call $make-handle i32.store
+      local.get 1 i32.const 4 i32.add local.get $pair i32.wrap_i64 i32.store
+      local.get 1 i32.const 8 i32.add i32.const 0 i32.store
+      local.get 1 i32.const 12 i32.add i32.const 5 i32.store
+      local.get $pair i64.const 32 i64.shr_u i32.wrap_i64 call $stream-drop-write
+      local.get 0 local.get 1 local.get 2 call $mixed-write drop local.get 2 call $return)
+    (func (export "future-read") (param i32 i32 i32)
+      local.get 0 local.get 1 call $future-read drop local.get 1 i32.const 1 call $drop-values i32.const 1 call $return)
+    (func (export "future-write") (param i32 i32 i32)
+      local.get 1 i32.const 1 call $write-values
+      local.get 0 local.get 1 call $future-write drop i32.const 1 call $return)
+    (func (export "forward") (param i32 i32 i32) local.get 0 local.get 1 call $forward i32.const 1 call $return)
     (func (export "keep") call $make-handle call $own-return)
     (func (export "relay") (param i32)
       local.get 0 i32.const 128 call $echo call $await i32.const 128 i32.load call $own-return)
@@ -122,4 +194,20 @@
   (func (export "borrow-abort") (type $borrow-number) (canon lift (core func $borrow-abort) async (memory $memory)))
   (func (export "borrow-roundtrip") (type $number) (canon lift (core func $borrow-roundtrip) async (memory $memory)))
   (func (export "borrow-drop-live") (type $number) (canon lift (core func $borrow-drop-live) async (memory $memory)))
+  (alias core export $caller "payload-read" (core func $payload-read-entry))
+  (alias core export $caller "payload-write" (core func $payload-write-entry))
+  (alias core export $caller "mixed-read" (core func $mixed-read-entry))
+  (alias core export $caller "mixed-read-async" (core func $mixed-read-async-entry))
+  (alias core export $caller "mixed-write" (core func $mixed-write-entry))
+  (alias core export $caller "future-read" (core func $future-read-entry))
+  (alias core export $caller "future-write" (core func $future-write-entry))
+  (alias core export $caller "forward" (core func $forward-entry))
+  (func (export "payload-read") (type $payload-copy) (canon lift (core func $payload-read-entry) async (memory $memory)))
+  (func (export "payload-write") (type $payload-copy) (canon lift (core func $payload-write-entry) async (memory $memory)))
+  (func (export "payload-mixed-read") (type $payload-copy) (canon lift (core func $mixed-read-entry) async (memory $memory)))
+  (func (export "payload-mixed-read-async") (type $payload-copy) (canon lift (core func $mixed-read-async-entry) async (memory $memory)))
+  (func (export "payload-mixed-write") (type $payload-copy) (canon lift (core func $mixed-write-entry) async (memory $memory)))
+  (func (export "payload-future-read") (type $payload-copy) (canon lift (core func $future-read-entry) async (memory $memory)))
+  (func (export "payload-future-write") (type $payload-copy) (canon lift (core func $future-write-entry) async (memory $memory)))
+  (func (export "payload-forward") (type $payload-copy) (canon lift (core func $forward-entry) async (memory $memory)))
 )

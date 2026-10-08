@@ -286,7 +286,9 @@ turbowasm_status turbowasm_component_exec_async_lower(void *context, turbowasm_h
     const turbowasm_value *arguments, size_t argument_count, turbowasm_value *results,
     size_t result_capacity, size_t *result_count, turbowasm_trap *trap);
 /* Allocate one quota-bounded retained buffer transaction for an endpoint builtin.
- * The caller releases it on failed admission; otherwise the endpoint owns it. */
+ * Input uses this exec's canonical memory/realloc options. The caller releases
+ * it on failed admission; otherwise the endpoint owns it until event delivery.
+ * Each copy borrows its explicit driver through commit/rollback and cleanup. */
 turbowasm_status turbowasm_component_exec_async_buffer_prepare(void *context, turbowasm_component_buffer *buffer);
 /* Refuses live async owners without destroying instances or bindings. */
 turbowasm_status turbowasm_component_exec_destroy(

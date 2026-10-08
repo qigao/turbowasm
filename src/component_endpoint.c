@@ -110,10 +110,10 @@ static bool overlaps(const turbowasm_component_buffer *a,
 
 /* Both operations are admitted and COPYING before any conversion callback. */
 static turbowasm_status transfer_buffers(turbowasm_component_endpoint *reader,
-    turbowasm_component_endpoint *writer, uint32_t count) {
+    turbowasm_component_endpoint *writer, uint32_t count, struct turbowasm_component_task *driver) {
     turbowasm_status status;
     reader->waitable.delivering = writer->waitable.delivering = true;
-    status = turbowasm_component_buffer_copy(writer->operation, reader->operation, reader->has_payload, count);
+    status = turbowasm_component_buffer_copy(writer->operation, reader->operation, reader->has_payload, count, driver);
     reader->waitable.delivering = writer->waitable.delivering = false;
     if (status != TURBOWASM_OK) {
         reader->failure = writer->failure = status;
@@ -126,7 +126,8 @@ static turbowasm_status transfer_buffers(turbowasm_component_endpoint *reader,
 }
 
 static turbowasm_status submit(
-    turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer, bool pinned) {
+    turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer, bool pinned,
+    struct turbowasm_component_task *driver) {
     turbowasm_component_endpoint *peer;
     turbowasm_component_buffer *other;
     turbowasm_component_endpoint_state next_self, next_peer = {0};
@@ -185,7 +186,7 @@ static turbowasm_status submit(
     if (count != 0u) {
         endpoint->waitable.state.endpoint.phase = TURBOWASM_COMPONENT_ENDPOINT_COPYING;
         status = transfer_buffers(endpoint->readable ? endpoint : peer,
-            endpoint->readable ? peer : endpoint, count);
+            endpoint->readable ? peer : endpoint, count, driver);
         if (status != TURBOWASM_OK) return TURBOWASM_OK;
     }
     endpoint->available = self_available ? buffer : NULL;
@@ -232,11 +233,18 @@ turbowasm_status turbowasm_component_endpoint_cancel(turbowasm_component_endpoin
 
 turbowasm_status turbowasm_component_endpoint_submit(
     turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer) {
-    return submit(endpoint, buffer, false);
+    return submit(endpoint, buffer, false, NULL);
+}
+
+turbowasm_status turbowasm_component_endpoint_submit_from_task(
+    turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer,
+    struct turbowasm_component_task *driver) {
+    return submit(endpoint, buffer, false, driver);
 }
 
 turbowasm_status turbowasm_component_endpoint_submit_guest(
-    turbowasm_component_endpoint *endpoint, const turbowasm_component_buffer *buffer, bool synchronous) {
+    turbowasm_component_endpoint *endpoint, const turbowasm_component_buffer *buffer, bool synchronous,
+    struct turbowasm_component_task *driver) {
     turbowasm_status status;
     if (!live(endpoint) || buffer == NULL || buffer->kind != TURBOWASM_COMPONENT_BUFFER_GUEST ||
         endpoint->operation != NULL || endpoint->guest_buffer.leased) return TURBOWASM_INVALID_ARGUMENT;
@@ -245,7 +253,7 @@ turbowasm_status turbowasm_component_endpoint_submit_guest(
         if (status != TURBOWASM_OK) return status;
     }
     endpoint->guest_buffer = *buffer;
-    status = submit(endpoint, &endpoint->guest_buffer, synchronous);
+    status = submit(endpoint, &endpoint->guest_buffer, synchronous, driver);
     if (status != TURBOWASM_OK) {
         memset(&endpoint->guest_buffer, 0, sizeof(endpoint->guest_buffer));
         if (synchronous) (void)turbowasm_component_waitable_wait_cancel(endpoint->waitable.table, endpoint->waitable.handle);
@@ -408,6 +416,12 @@ static bool forwardable(const turbowasm_component_endpoint *endpoint) {
 
 turbowasm_status turbowasm_component_endpoint_forward(
     turbowasm_component_endpoint *source, turbowasm_component_endpoint *destination) {
+    return turbowasm_component_endpoint_forward_from_task(source, destination, NULL);
+}
+
+turbowasm_status turbowasm_component_endpoint_forward_from_task(
+    turbowasm_component_endpoint *source, turbowasm_component_endpoint *destination,
+    struct turbowasm_component_task *driver) {
     turbowasm_component_endpoint *reader, *writer;
     turbowasm_component_endpoint_state next_read, next_write;
     turbowasm_status status;
@@ -462,7 +476,7 @@ turbowasm_status turbowasm_component_endpoint_forward(
     source->closed = destination->closed = true;
     reader->peer = writer; writer->peer = reader;
     if (count != 0u) {
-        status = transfer_buffers(reader, writer, count);
+        status = transfer_buffers(reader, writer, count, driver);
         if (status != TURBOWASM_OK) return status;
     }
     if (rendezvous) {

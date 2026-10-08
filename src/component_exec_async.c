@@ -15,6 +15,14 @@ typedef struct turbowasm_component_exec_async_call {
     turbowasm_status failure;
 } turbowasm_component_exec_async_call;
 
+typedef struct turbowasm_component_exec_async_buffer {
+    /* Existing commit/rollback hooks consume the initial transaction member. */
+    turbowasm_component_exec_async_transaction transaction;
+    turbowasm_component_exec_realloc_context realloc;
+    turbowasm_component_task *driver, *saved_auxiliary, *saved_driver_auxiliary;
+    bool copying;
+} turbowasm_component_exec_async_buffer;
+
 turbowasm_status turbowasm_component_exec_async_bind(
     turbowasm_component_exec_canon_lower_context *lower,
     turbowasm_component_exec *provider, uint32_t adapter_index) {
@@ -99,25 +107,65 @@ static void bind_values(turbowasm_component_canonical_memory *memory,
     transaction->context = codec;
 }
 
+static turbowasm_status begin_buffer_copy(void *context, turbowasm_component_task *driver) {
+    turbowasm_component_exec_async_buffer *codec = context;
+    turbowasm_component_task_domain *domain = &codec->transaction.resources.exec->task_domain;
+    if (codec->copying || (domain->auxiliary != NULL && domain->auxiliary != driver) ||
+        (driver == NULL && domain->active != NULL) ||
+        (driver != NULL && (driver->domain == NULL || driver->destroying || driver->core.impl == NULL ||
+        (driver->domain->auxiliary != NULL && driver->domain->auxiliary != driver))))
+        return TURBOWASM_TRAPPED;
+    codec->copying = true;
+    codec->driver = driver;
+    codec->realloc.progress_task = driver;
+    if (driver != NULL) {
+        codec->saved_auxiliary = domain->auxiliary;
+        codec->saved_driver_auxiliary = driver->domain->auxiliary;
+        domain->auxiliary = driver;
+        driver->domain->auxiliary = driver;
+    }
+    return TURBOWASM_OK;
+}
+
+static void end_buffer_copy(void *context) {
+    turbowasm_component_exec_async_buffer *codec = context;
+    if (codec->driver != NULL) {
+        codec->transaction.resources.exec->task_domain.auxiliary = codec->saved_auxiliary;
+        codec->driver->domain->auxiliary = codec->saved_driver_auxiliary;
+    }
+    codec->realloc.progress_task = NULL;
+    codec->driver = codec->saved_auxiliary = codec->saved_driver_auxiliary = NULL;
+    codec->copying = false;
+}
+
 static turbowasm_status release_buffer(void *context) {
-    turbowasm_component_exec_async_transaction *codec = context;
-    turbowasm_status status = rollback_buffer(codec);
-    --codec->resources.exec->async_buffer_owners;
+    turbowasm_component_exec_async_buffer *codec = context;
+    turbowasm_status status;
+    if (codec->copying) return TURBOWASM_TRAPPED;
+    status = rollback_buffer(&codec->transaction);
+    --codec->transaction.resources.exec->async_buffer_owners;
     turbowasm_rt_free(codec);
     return status;
 }
 
 turbowasm_status turbowasm_component_exec_async_buffer_prepare(void *context, turbowasm_component_buffer *buffer) {
     turbowasm_component_exec *exec = context;
-    turbowasm_component_exec_async_transaction *codec;
+    turbowasm_component_exec_async_buffer *codec;
     if (exec == NULL || buffer == NULL || buffer->kind != TURBOWASM_COMPONENT_BUFFER_GUEST ||
-        buffer->guest.release != NULL) return TURBOWASM_INVALID_ARGUMENT;
+        buffer->guest.release != NULL ||
+        (buffer->guest.memory.guest_realloc != NULL && buffer->guest.memory.realloc_context == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
     if (exec->async_buffer_owners >= exec->resource_table.max_entries) return TURBOWASM_OUT_OF_MEMORY;
     codec = turbowasm_rt_calloc(1u, sizeof(*codec));
     if (codec == NULL) return TURBOWASM_OUT_OF_MEMORY;
-    bind_codec(&buffer->guest.memory, codec, exec);
+    bind_codec(&buffer->guest.memory, &codec->transaction, exec);
+    if (buffer->guest.memory.guest_realloc != NULL) {
+        codec->realloc = *(turbowasm_component_exec_realloc_context *)buffer->guest.memory.realloc_context;
+        buffer->guest.memory.realloc_context = &codec->realloc;
+    }
     buffer->guest.commit = commit_buffer; buffer->guest.rollback = rollback_buffer;
     buffer->guest.release = release_buffer; buffer->guest.context = codec;
+    buffer->guest.begin_copy = begin_buffer_copy; buffer->guest.end_copy = end_buffer_copy;
     ++exec->async_buffer_owners;
     return TURBOWASM_OK;
 }

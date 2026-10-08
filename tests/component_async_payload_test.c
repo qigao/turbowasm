@@ -151,7 +151,7 @@ static turbowasm_status drive_host_write(void *context, turbowasm_component_task
     turbowasm_value *out, size_t capacity, size_t *count) {
     turbowasm_component_event event; turbowasm_status status;
     (void)context; (void)task; (void)out; (void)capacity;
-    status = turbowasm_component_endpoint_submit(&ends[0][1], &buffers[0]);
+    status = turbowasm_component_endpoint_submit_from_task(&ends[0][1], &buffers[0], task);
     if (status == TURBOWASM_OK) status = turbowasm_component_endpoint_take(&ends[0][1], &event);
     if (status == TURBOWASM_OK) *count = 0;
     return status;

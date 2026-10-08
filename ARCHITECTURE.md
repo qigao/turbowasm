@@ -1202,6 +1202,22 @@ endpoints guarded against reentrant take/cancel/close or another submit. Their
 enclosing execution owner must retain Component instances and callback contexts
 through suspension; no independent worker or raw guest-memory view is introduced.
 
+Cross-instance copies explicitly borrow the task that triggers the rendezvous,
+including a third-instance forwarding task. The endpoint passes that task only
+through the current copy stack; pending buffers never retain a task pointer.
+Each exec-owned guest buffer has a bounded, operation-local conversion context
+with its own realloc options. Copy entry temporarily installs the driver in the
+source/destination auxiliary domains, and copy exit restores those domains in
+reverse order after commit, rollback and temporary-value destruction. Realloc
+and failure destructors consequently use the driver's execution budget and trap
+destination even when the receiving task is suspended or has already exited.
+Domain guards and endpoint delivery guards survive fuel/interruption suspension;
+forced unwind restores them before operation/error delivery releases the context.
+Plain host-only copies need no task. This extends the existing private buffer
+transaction hooks and auxiliary-task exclusion instead of adding a scheduler or
+retaining arbitrary initiating tasks until a peer arrives. Public async admission
+continues to require the remaining host-owner contract.
+
 Private endpoint forwarding consumes an idle, unjoined readable end and writable
 end of the same structural type. Admission checks both registrations and their
 peer links before mutation. It removes the intermediate registrations and links

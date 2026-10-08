@@ -1428,6 +1428,20 @@ and macOS arm64 MIR passed 205/205 in 3.15 seconds, including the compiled
 resource-import suite in 0.12/0.10 seconds. All five jobs passed in the
 [native run](https://github.com/qigao/turbowasm/actions/runs/37710876080).
 
-Async host capability callbacks, cross-instance payload conversion,
+Private cross-instance payload rendezvous now receives its driving task explicitly,
+including copies triggered by a third-instance forward. Operation-local realloc
+options and copy scopes retain source/destination auxiliary guards through fuel
+and interruption yields. Source cleanup destructors share that driver's control;
+all guards restore after commit, rollback or forced unwind. Pending buffers retain
+their exec/options but no pointer to a task that may have already exited.
+
+The expanded wasm-tools-validated fixture exercises owned-resource streams and
+futures, mixed resource/endpoint/string payloads, both memory directions and
+rendezvous orders, exited asynchronous readers, suspended conversion unwind,
+foreign failure destructors, third-instance forwarding and allocation failures.
+Windows ASan passed 26 resource-import cases with 7,575 assertions and the related
+84/84 targets in 7.60 seconds. Native MIR qualification for this extension is pending.
+
+Async host capability callbacks,
 nested Component instantiation, public task/endpoint owners, synchronous
 destructor-to-async lowering and the broader Component/WASI gaps remain open.

@@ -45,12 +45,17 @@ turbowasm_status turbowasm_component_endpoint_pair_open(
  * release buffer borrows; the failed pair can close but cannot copy or move. */
 turbowasm_status turbowasm_component_endpoint_submit(
     turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer);
+/* Task-driven host submission; driver is borrowed only during this call. */
+turbowasm_status turbowasm_component_endpoint_submit_from_task(
+    turbowasm_component_endpoint *endpoint, turbowasm_component_buffer *buffer,
+    struct turbowasm_component_task *driver);
 /* Own the descriptor until event delivery; guest memory stays borrowed. A
  * supplied guest.release transfers context cleanup on successful admission. A sync
  * submission pins before conversion; the caller must wait_end/cancel its pin.
  * Failure before admission preserves the endpoint and consumes no buffer. */
 turbowasm_status turbowasm_component_endpoint_submit_guest(
-    turbowasm_component_endpoint *endpoint, const turbowasm_component_buffer *buffer, bool synchronous);
+    turbowasm_component_endpoint *endpoint, const turbowasm_component_buffer *buffer, bool synchronous,
+    struct turbowasm_component_task *driver);
 /* Validate the registered object's provenance before interpreting it as an end. */
 turbowasm_component_endpoint *turbowasm_component_endpoint_get(
     turbowasm_component_resource_table *table, turbowasm_component_resource_handle handle,
@@ -89,6 +94,10 @@ turbowasm_status turbowasm_component_endpoint_close(turbowasm_component_endpoint
  * surviving operations before releasing their borrowed storage. */
 turbowasm_status turbowasm_component_endpoint_forward(
     turbowasm_component_endpoint *source, turbowasm_component_endpoint *destination);
+/* The forwarding task drives any immediate copy between surviving peers. */
+turbowasm_status turbowasm_component_endpoint_forward_from_task(
+    turbowasm_component_endpoint *source, turbowasm_component_endpoint *destination,
+    struct turbowasm_component_task *driver);
 
 /* Zero-initialize then set table to the destination/source canonical table.
  * Source values, table and codec remain alive and exclusively borrowed until

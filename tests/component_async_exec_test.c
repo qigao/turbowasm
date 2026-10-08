@@ -78,7 +78,7 @@ static turbowasm_status prepare_host_write(void *context, turbowasm_component_ta
     turbowasm_value *arguments, size_t capacity, size_t *count) {
     turbowasm_component_event event; turbowasm_status status;
     (void)context; (void)task; (void)arguments; (void)capacity; ++prepared;
-    status = turbowasm_component_endpoint_submit(writer, &input_buffer);
+    status = turbowasm_component_endpoint_submit_from_task(writer, &input_buffer, task);
     if (status == TURBOWASM_OK) status = turbowasm_component_endpoint_take(writer, &event);
     if (status == TURBOWASM_OK) { *count = 0; ++completed; }
     return status;
