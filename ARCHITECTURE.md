@@ -978,6 +978,12 @@ Core continuation, and noncancellable yields continue to a real return. A fuel-s
 keeps its eventual primary Core trap, and existing synchronous calls and terminal
 results remain deliverable. Windows ASan passes 66 cases and 43,328 assertions;
 the related Component/WASI/Runtime regression passes 86/86 in 8.59 s.
+Commit `486bb85` passes all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37733404437):
+Linux MIR 209/209 in 3.17 s and macOS MIR 209/209 in 4.77 s, including actual
+compiled callback cancellation and post-return trap handling across fuel
+suspension. This qualifies shutdown request/admission closure, not instance
+drain or the full public async boundary.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
