@@ -16,9 +16,6 @@ void turbowasm_component_host_endpoint_register(component_host_endpoint_impl *im
     turbowasm_component_host_register(impl->instance, &impl->registration, impl, shutdown_busy, shutdown_cancel);
 }
 
-static bool valid_budget(const turbowasm_component_host_budget *budget) {
-    return budget != NULL && budget->limit != 0u && budget->limit != SIZE_MAX && budget->used <= budget->limit;
-}
 static void release_body(turbowasm_component_host_endpoint *owner, component_host_endpoint_impl *impl) {
     turbowasm_component_instance_public_impl *instance = impl->instance;
     impl->budget->used -= sizeof(*impl); owner->impl = NULL;
@@ -39,7 +36,7 @@ turbowasm_status turbowasm_component_host_endpoint_pair_create(
     turbowasm_runtime_scope scope;
     turbowasm_status status;
     if (reader == NULL || writer == NULL || reader == writer || reader->impl != NULL || writer->impl != NULL ||
-        instance == NULL || !instance->exec.initialized || !valid_budget(budget) ||
+        instance == NULL || !instance->exec.initialized || !turbowasm_component_host_budget_valid(instance, budget) ||
         instance->admission_closed || instance->shutdown_driving ||
         instance->exec.task_domain.pair_owner != instance || instance->exec.task_domain.pair_retain == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -150,7 +147,7 @@ turbowasm_status turbowasm_component_host_endpoint_from_value(
     turbowasm_runtime_scope scope;
     turbowasm_status status;
     if (owner == NULL || owner->impl != NULL || instance == NULL || !instance->exec.initialized ||
-        instance->shutdown_driving || !valid_budget(budget))
+        instance->shutdown_driving || !turbowasm_component_host_budget_valid(instance, budget))
         return TURBOWASM_INVALID_ARGUMENT;
     end = turbowasm_component_endpoint_value_get(source);
     if (end == NULL || end->lower_scope != NULL || !turbowasm_component_endpoint_domain_pair_retained(end))

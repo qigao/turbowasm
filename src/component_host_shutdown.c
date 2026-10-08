@@ -241,6 +241,7 @@ static turbowasm_status create_drain(turbowasm_component_instance_public_impl *i
 
 static bool drained(turbowasm_component_instance_public_impl *instance) {
     return !external_owners(instance) && task_quiescent(&instance->exec.task_domain) &&
+        (!instance->host_budget_owned || instance->host_budget.used == 0u) &&
         instance->exec.resource_table.live_count == 0u && instance->exec.task_domain.pairs == NULL &&
         instance->exec.task_domain.sets == NULL && instance->exec.async_buffer_owners == 0u && !instance->exec.async_driving &&
         instance->ref_count <= 2u; /* Caller plus this poll's temporary reference. */

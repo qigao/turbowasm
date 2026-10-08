@@ -124,9 +124,9 @@ static turbowasm_status start_transfer(turbowasm_component_host_transfer *owner,
     uint32_t i;
     bool cells_moved = false;
     if (owner == NULL || owner->impl != NULL || (void *)owner == (void *)source || body == NULL || body->driving ||
-        budget == NULL || budget->limit == 0u || budget->limit == SIZE_MAX || budget->used > budget->limit ||
         capacity == SIZE_MAX || count > TURBOWASM_COMPONENT_COPY_MAX_LENGTH) return TURBOWASM_INVALID_ARGUMENT;
     end = body->endpoint; instance = body->instance;
+    if (!turbowasm_component_host_budget_valid(instance, budget)) return TURBOWASM_INVALID_ARGUMENT;
     if (instance->admission_closed || instance->shutdown_driving) return TURBOWASM_INVALID_ARGUMENT;
     if (end->readable != readable || end->closed || end->value_owner != NULL || end->lower_scope != NULL ||
         end->operation != NULL || end->waitable.delivering || end->waitable.sync_waiter ||

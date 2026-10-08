@@ -671,6 +671,31 @@ addition. Explicit and implicit guest backpressure use the same bounded pending
 task state and preserve queued admission order; they do not create a worker pool
 or an unbounded event queue. No new logging subsystem is required.
 
+The private instance-options path separates task, canonical-handle, transfer and
+host-byte limits. Defaults are 64 tasks, 4,096 canonical handles, 64 retained
+transfers and 16 MiB of logical host owner/payload storage, in addition to Runtime
+allocation and stack limits. Zero limits, maximum-value unlimited sentinels and
+handle counts beyond the packed canonical representation are invalid. Options
+are copied before instantiation; callers need not retain or stabilize them.
+Task/domain and canonical-table counters remain their existing authorities;
+transfer count remains held through terminal delivery until transfer destruction.
+The instance owns one stable host-byte budget used by parameter snapshots,
+results, host task/endpoint bodies and transfer storage. All admitted owners
+retain the instance, so that budget outlives every reservation. Options-backed
+instances reject a substitute caller budget before allocation or move; legacy
+private constructors preserve their explicit test-budget contract. No public
+option or async loader is exposed until host values and public owners are joined.
+The constructor retains the immutable Component binary/config before its first
+allocation, so an allocator may release the loader carrier without invalidating
+instantiation. The options snapshot also precedes allocator callbacks. Formal
+`component_async_options_test` cases cover independent task/handle/transfer
+exhaustion, exact byte boundaries, retryable result promotion, foreign-budget
+rejection across every host admission, deferred string storage after public
+carriers close, first-allocation loader closure and complete allocation rollback
+for constructors, tasks, endpoint pairs and transfers. Windows ASan passes 15
+cases and 64,155 assertions; related Component/WASI/Runtime regression passes
+88/88 in 10.54 s. The MIR variant requires actual compiled task bodies.
+
 Alternatives rejected: treating a fuel yield as async completion loses task
 state; detached threads violate instance affinity; implicitly cloning endpoints
 breaks unique ownership; unbounded buffering hides backpressure. The chosen

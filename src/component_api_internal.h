@@ -17,6 +17,19 @@ typedef struct turbowasm_component_public_impl {
 typedef void (*turbowasm_component_instance_owner_release_fn)(
     void *context);
 
+/* Owner-thread logical host storage; each reservation has one release owner. */
+typedef struct turbowasm_component_host_budget {
+    size_t limit;
+    size_t used;
+} turbowasm_component_host_budget;
+
+/* Private staging of the approved public options contract. Counts/bytes are
+ * finite, nonzero and copied on create; no caller-owned budget is borrowed. */
+typedef struct turbowasm_component_async_options {
+    uint32_t tasks, handles, transfers;
+    size_t host_bytes;
+} turbowasm_component_async_options;
+
 /* Intrusive, non-owning registration in already bounded host owner storage.
  * Shutdown requests cancellation without taking or freeing the host carrier. */
 typedef struct turbowasm_component_host_registration {
@@ -34,6 +47,8 @@ typedef struct turbowasm_component_instance_public_impl {
     turbowasm_component_host_resource *resources;
     uint32_t resource_count;
     uint32_t host_transfer_count, host_transfer_limit;
+    turbowasm_component_host_budget host_budget;
+    bool host_budget_owned;
     turbowasm_component_host_registration *host_owners;
     uint32_t host_activity;
     bool admission_closed, shutdown_driving;
@@ -130,12 +145,16 @@ turbowasm_status turbowasm_component_instance_create_async_with_import_sets_priv
     const turbowasm_component_exec_async_limits *limits,
     const turbowasm_component_exec_imports *imports, size_t import_count);
 
-/* Owner-thread budget, shared by deferred host admissions. The budget must
- * outlive every reservation; limits are finite and immutable while in use. */
-typedef struct turbowasm_component_host_budget {
-    size_t limit;
-    size_t used;
-} turbowasm_component_host_budget;
+void turbowasm_component_async_options_init_private(turbowasm_component_async_options *options);
+turbowasm_status turbowasm_component_instance_create_async_with_options_private(
+    turbowasm_component_instance *instance, const turbowasm_component *component,
+    const turbowasm_component_async_options *options,
+    const turbowasm_component_exec_imports *imports, size_t import_count);
+
+/* Shared admission check. Options-backed instances accept only their own budget;
+ * primitive test instances keep the explicit caller-budget contract. */
+bool turbowasm_component_host_budget_valid(const turbowasm_component_instance_public_impl *instance,
+    const turbowasm_component_host_budget *budget);
 
 typedef struct turbowasm_component_host_arguments {
     void *impl;

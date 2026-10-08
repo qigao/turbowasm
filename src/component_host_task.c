@@ -108,7 +108,7 @@ turbowasm_status turbowasm_component_host_task_create(turbowasm_component_host_t
     if (owner == NULL || owner->impl != NULL || instance == NULL || !instance->exec.initialized ||
         instance->admission_closed || instance->shutdown_driving ||
         (name.size != 0u && name.bytes == NULL) || (count != 0u && arguments == NULL) ||
-        budget == NULL || budget->limit == 0u || budget->limit == SIZE_MAX || budget->used > budget->limit)
+        !turbowasm_component_host_budget_valid(instance, budget))
         return TURBOWASM_INVALID_ARGUMENT;
     status = turbowasm_component_exec_async_export(&instance->exec, name.bytes, name.size, &binding);
     if (status != TURBOWASM_OK) return status;

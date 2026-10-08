@@ -718,8 +718,7 @@ turbowasm_status turbowasm_component_host_arguments_prepare(
     if (owner == NULL || owner->impl != NULL || instance == NULL ||
         instance->component == NULL || !instance->exec.initialized || instance->admission_closed ||
         instance->shutdown_driving ||
-        budget == NULL || budget->limit == 0u || budget->limit == SIZE_MAX ||
-        budget->used > budget->limit || (count != 0u && arguments == NULL))
+        !turbowasm_component_host_budget_valid(instance, budget) || (count != 0u && arguments == NULL))
         return TURBOWASM_INVALID_ARGUMENT;
     if (async_resources && instance->exec.task_domain.table == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
@@ -1155,7 +1154,7 @@ turbowasm_status turbowasm_component_host_result_prepare(
     if (owner == NULL || owner->impl != NULL || instance == NULL || !instance->exec.initialized ||
         instance->shutdown_driving ||
         instance->exec.task_domain.table == NULL || graph == NULL || source == NULL ||
-        budget == NULL || budget->limit == 0u || budget->limit == SIZE_MAX || budget->used > budget->limit)
+        !turbowasm_component_host_budget_valid(instance, budget))
         return TURBOWASM_INVALID_ARGUMENT;
     available = budget->limit - budget->used;
     if (bytes > available) return TURBOWASM_OUT_OF_MEMORY;
@@ -1368,7 +1367,8 @@ static turbowasm_status component_instance_create(
     turbowasm_component_instance *instance,
     const turbowasm_component *component,
     const turbowasm_component_exec_async_limits *limits,
-    const turbowasm_component_exec_imports *imports, size_t import_count) {
+    const turbowasm_component_exec_imports *imports, size_t import_count,
+    const turbowasm_component_async_options *options) {
     turbowasm_component_public_impl *component_state;
     turbowasm_component_instance_public_impl *impl;
     turbowasm_runtime_scope scope;
@@ -1382,22 +1382,27 @@ static turbowasm_status component_instance_create(
     if (component_state == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
 
+    /* Allocator callbacks may release the loader's public carrier. Retain the
+     * immutable binary/config before any constructor allocation can reenter. */
+    if (!turbowasm_component_public_impl_retain(component_state))
+        return TURBOWASM_INVALID_ARGUMENT;
+
     scope = turbowasm_runtime_scope_enter(
         &component_state->binary.config);
     impl = (turbowasm_component_instance_public_impl *)
         turbowasm_rt_calloc(1u, sizeof(*impl));
     turbowasm_runtime_scope_leave(scope);
-    if (impl == NULL)
+    if (impl == NULL) {
+        turbowasm_component_public_impl_release(component_state);
         return TURBOWASM_OUT_OF_MEMORY;
-
-    if (!turbowasm_component_public_impl_retain(
-            component_state)) {
-        scope = turbowasm_runtime_scope_enter(
-            &component_state->binary.config);
-        turbowasm_rt_free(impl);
-        turbowasm_runtime_scope_leave(scope);
-        return TURBOWASM_INVALID_ARGUMENT;
     }
+
+    if (options != NULL) {
+        impl->host_budget_owned = true;
+        impl->host_budget.limit = options->host_bytes;
+        impl->host_transfer_limit = options->transfers;
+    }
+
     impl->component = component_state;
 
     status = limits != NULL
@@ -1415,7 +1420,7 @@ static turbowasm_status component_instance_create(
 
     impl->ref_count = 1u;
     if (limits != NULL) {
-        impl->host_transfer_limit = limits->handles;
+        if (options == NULL) impl->host_transfer_limit = limits->handles;
         impl->exec.task_domain.pair_owner = impl;
         impl->exec.task_domain.pair_retain = pair_instance_retain;
         impl->exec.task_domain.pair_release = pair_instance_release;
@@ -1436,14 +1441,14 @@ turbowasm_status turbowasm_component_load_async_private(turbowasm_component *com
 
 turbowasm_status turbowasm_component_instance_create(
     turbowasm_component_instance *instance, const turbowasm_component *component) {
-    return component_instance_create(instance, component, NULL, NULL, 0u);
+    return component_instance_create(instance, component, NULL, NULL, 0u, NULL);
 }
 
 turbowasm_status turbowasm_component_instance_create_async_private(
     turbowasm_component_instance *instance, const turbowasm_component *component,
     const turbowasm_component_exec_async_limits *limits) {
     if (limits == NULL) return TURBOWASM_INVALID_ARGUMENT;
-    return component_instance_create(instance, component, limits, NULL, 0u);
+    return component_instance_create(instance, component, limits, NULL, 0u, NULL);
 }
 
 turbowasm_status turbowasm_component_instance_create_async_with_import_sets_private(
@@ -1451,7 +1456,38 @@ turbowasm_status turbowasm_component_instance_create_async_with_import_sets_priv
     const turbowasm_component_exec_async_limits *limits,
     const turbowasm_component_exec_imports *imports, size_t import_count) {
     if (limits == NULL) return TURBOWASM_INVALID_ARGUMENT;
-    return component_instance_create(instance, component, limits, imports, import_count);
+    return component_instance_create(instance, component, limits, imports, import_count, NULL);
+}
+
+void turbowasm_component_async_options_init_private(turbowasm_component_async_options *options) {
+    enum { DEFAULT_TASKS = 64, DEFAULT_HANDLES = 4096, DEFAULT_TRANSFERS = 64,
+           DEFAULT_HOST_BYTES = 16 * 1024 * 1024 };
+    if (options != NULL)
+        *options = (turbowasm_component_async_options){DEFAULT_TASKS, DEFAULT_HANDLES,
+            DEFAULT_TRANSFERS, DEFAULT_HOST_BYTES};
+}
+
+turbowasm_status turbowasm_component_instance_create_async_with_options_private(
+    turbowasm_component_instance *instance, const turbowasm_component *component,
+    const turbowasm_component_async_options *options,
+    const turbowasm_component_exec_imports *imports, size_t import_count) {
+    turbowasm_component_exec_async_limits limits;
+    turbowasm_component_async_options snapshot;
+    if (options == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    snapshot = *options;
+    if (snapshot.tasks == 0u || snapshot.tasks == UINT32_MAX ||
+        snapshot.handles == 0u || snapshot.handles > TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS ||
+        snapshot.transfers == 0u || snapshot.transfers == UINT32_MAX ||
+        snapshot.host_bytes == 0u || snapshot.host_bytes == SIZE_MAX)
+        return TURBOWASM_INVALID_ARGUMENT;
+    limits = (turbowasm_component_exec_async_limits){snapshot.tasks, snapshot.handles};
+    return component_instance_create(instance, component, &limits, imports, import_count, &snapshot);
+}
+
+bool turbowasm_component_host_budget_valid(const turbowasm_component_instance_public_impl *instance,
+    const turbowasm_component_host_budget *budget) {
+    return instance != NULL && budget != NULL && budget->limit != 0u && budget->limit != SIZE_MAX &&
+        budget->used <= budget->limit && (!instance->host_budget_owned || budget == &instance->host_budget);
 }
 
 static bool component_instance_retain(
