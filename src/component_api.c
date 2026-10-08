@@ -24,7 +24,9 @@ struct turbowasm_component_host_resource {
 typedef struct component_resource_argument {
     const turbowasm_component_host_value *source;
     turbowasm_component_host_resource *owner;
-    bool own;
+    turbowasm_component_value *value;
+    struct component_public_admission *admission;
+    bool own, promoted;
     bool reserved;
 } component_resource_argument;
 
@@ -308,6 +310,7 @@ static turbowasm_status convert_resource_argument(
         return TURBOWASM_INVALID_ARGUMENT;
     entry = &admission->entries[admission->count++];
     entry->source = source; entry->owner = owner; entry->own = own;
+    entry->value = out; entry->admission = admission;
     out->as.resource_rep = owner->rep;
     out->resource_identity = owner->identity;
     return TURBOWASM_OK;
@@ -349,7 +352,7 @@ static void admission_start(component_public_admission *admission) {
         return;
     for (i = 0u; i < admission->count; ++i) {
         component_resource_argument *entry = &admission->entries[i];
-        if (entry->own && entry->owner != NULL) {
+        if (entry->own && entry->owner != NULL && !entry->promoted) {
             resource_owner_forget(entry->owner);
             entry->owner = NULL;
         }
@@ -403,25 +406,31 @@ static turbowasm_component_value_variant *internal_variant(
     }
 }
 
-static void internal_input_destroy(
+static turbowasm_status internal_input_destroy(
     turbowasm_component_value *value, bool strings_owned) {
     uint64_t i;
+    turbowasm_status first = TURBOWASM_OK;
 
     if (value == NULL)
-        return;
+        return TURBOWASM_OK;
 
     {
         turbowasm_component_value_list *sequence = internal_sequence(value);
         turbowasm_component_value_variant *variant = internal_variant(value);
         if (sequence != NULL) {
-            for (i = 0u; i < sequence->count; ++i)
-                internal_input_destroy(&sequence->items[i], strings_owned);
+            for (i = 0u; i < sequence->count; ++i) {
+                turbowasm_status status = internal_input_destroy(&sequence->items[i], strings_owned);
+                if (first == TURBOWASM_OK) first = status;
+            }
             turbowasm_rt_free(sequence->items);
         } else if (variant != NULL && variant->payload != NULL) {
-            internal_input_destroy(variant->payload, strings_owned);
+            first = internal_input_destroy(variant->payload, strings_owned);
             turbowasm_rt_free(variant->payload);
         } else if (strings_owned && value->kind == TURBOWASM_COMPONENT_TYPE_STRING) {
             turbowasm_rt_free(value->as.string.data);
+        } else if (value->release != NULL && (value->kind == TURBOWASM_COMPONENT_TYPE_OWN ||
+            value->kind == TURBOWASM_COMPONENT_TYPE_BORROW)) {
+            first = turbowasm_component_value_destroy(value);
         }
     }
 
@@ -430,6 +439,7 @@ static void internal_input_destroy(
      * inputs own their strings; synchronous inputs borrow caller bytes.
      */
     memset(value, 0, sizeof(*value));
+    return first;
 }
 
 static turbowasm_status public_to_internal(
@@ -625,7 +635,7 @@ static turbowasm_status argument_size_add(size_t *size, size_t count,
  * already exist; the snapshot charges its reservation records, not their reps. */
 static turbowasm_status argument_storage_size(
     const turbowasm_component_host_value *value, uint32_t depth,
-    size_t *size, size_t limit) {
+    size_t *size, size_t limit, bool async_resources) {
     const turbowasm_component_host_sequence *sequence;
     const turbowasm_component_host_variant *variant;
     turbowasm_status status;
@@ -641,29 +651,56 @@ static turbowasm_status argument_storage_size(
             sizeof(turbowasm_component_value), limit);
         if (status != TURBOWASM_OK) return status;
         for (i = 0u; i < sequence->count; ++i) {
-            status = argument_storage_size(&sequence->items[i], depth + 1u, size, limit);
+            status = argument_storage_size(&sequence->items[i], depth + 1u, size, limit, async_resources);
             if (status != TURBOWASM_OK) return status;
         }
     } else if (variant != NULL && variant->payload != NULL) {
         status = argument_size_add(size, 1u, sizeof(turbowasm_component_value), limit);
         if (status != TURBOWASM_OK) return status;
-        return argument_storage_size(variant->payload, depth + 1u, size, limit);
+        return argument_storage_size(variant->payload, depth + 1u, size, limit, async_resources);
     } else if (value->kind == TURBOWASM_COMPONENT_HOST_STRING) {
         if (value->as.string.size != 0u && value->as.string.data == NULL)
             return TURBOWASM_INVALID_ARGUMENT;
         return argument_size_add(size, value->as.string.size, 1u, limit);
     } else if (value->kind == TURBOWASM_COMPONENT_HOST_OWN ||
         value->kind == TURBOWASM_COMPONENT_HOST_BORROW) {
-        return argument_size_add(size, 1u, sizeof(component_resource_argument), limit);
+        status = argument_size_add(size, 1u, sizeof(component_resource_argument), limit);
+        if (status == TURBOWASM_OK && async_resources)
+            status = argument_size_add(size, 1u, turbowasm_component_exec_resource_adopt_size(), limit);
+        return status;
     }
     return TURBOWASM_OK;
+}
+
+static turbowasm_status finish_host_resource(void *context, bool published) {
+    component_resource_argument *entry = context;
+    turbowasm_component_host_resource *owner = entry->owner;
+    entry->promoted = false;
+    if (!entry->own || owner == NULL || (!published && !entry->admission->committed)) return TURBOWASM_OK;
+    /* The admission is retained through this finalizer. Detach before invoking
+     * a destructor that can reenter the same instance. */
+    entry->owner = NULL;
+    if (published) {
+        resource_owner_forget(owner);
+        return TURBOWASM_OK;
+    }
+    return resource_owner_release(owner);
+}
+
+static void publish_host_resource(void *context) {
+    component_resource_argument *entry = context;
+    if (entry->own && entry->owner != NULL) {
+        turbowasm_component_host_resource *owner = entry->owner;
+        entry->owner = NULL;
+        resource_owner_forget(owner);
+    }
 }
 
 turbowasm_status turbowasm_component_host_arguments_prepare(
     turbowasm_component_host_arguments *owner,
     turbowasm_component_instance_public_impl *instance,
     const turbowasm_component_type_graph *graph, uint32_t function_type,
-    const turbowasm_component_host_value *arguments, size_t count, bool move,
+    const turbowasm_component_host_value *arguments, size_t count, bool move, bool async_resources,
     turbowasm_component_host_budget *budget) {
     const turbowasm_component_type *function;
     component_host_arguments_impl *impl;
@@ -676,6 +713,8 @@ turbowasm_status turbowasm_component_host_arguments_prepare(
         budget == NULL || budget->limit == 0u || budget->limit == SIZE_MAX ||
         budget->used > budget->limit || (count != 0u && arguments == NULL))
         return TURBOWASM_INVALID_ARGUMENT;
+    if (async_resources && instance->exec.task_domain.table == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
     function = turbowasm_component_type_graph_get(graph, function_type);
     if (function == NULL || function->kind != TURBOWASM_COMPONENT_TYPE_FUNCTION ||
         count != function->as.function.param_count)
@@ -683,7 +722,7 @@ turbowasm_status turbowasm_component_host_arguments_prepare(
     available = budget->limit - budget->used;
     status = argument_size_add(&bytes, count, sizeof(turbowasm_component_value), available);
     for (i = 0u; status == TURBOWASM_OK && i < count; ++i)
-        status = argument_storage_size(&arguments[i], 0u, &bytes, available);
+        status = argument_storage_size(&arguments[i], 0u, &bytes, available, async_resources);
     if (status != TURBOWASM_OK) return status;
     if (!component_instance_retain(instance)) return TURBOWASM_INVALID_ARGUMENT;
     budget->used += bytes;
@@ -701,6 +740,17 @@ turbowasm_status turbowasm_component_host_arguments_prepare(
     impl->count = count; impl->bytes = bytes; impl->budget = budget;
     adapter.graph = graph; adapter.function_type = function_type;
     status = prepare_public_arguments(&impl->admission, &adapter, arguments, count, &impl->values);
+    if (status == TURBOWASM_OK && async_resources) {
+        if (instance->exec.async_resource_owners > instance->exec.resource_table.max_entries ||
+            impl->admission.count > instance->exec.resource_table.max_entries - instance->exec.async_resource_owners)
+            status = TURBOWASM_OUT_OF_MEMORY;
+        for (i = 0u; status == TURBOWASM_OK && i < impl->admission.count; ++i) {
+            component_resource_argument *entry = &impl->admission.entries[i];
+            status = turbowasm_component_exec_resource_adopt(&instance->exec, entry->value,
+                &impl->admission.committed, publish_host_resource, finish_host_resource, entry);
+            if (status == TURBOWASM_OK) entry->promoted = true;
+        }
+    }
     turbowasm_runtime_scope_leave(scope);
     if (status != TURBOWASM_OK) {
         turbowasm_component_host_arguments failed = {impl};
@@ -740,17 +790,26 @@ turbowasm_status turbowasm_component_host_arguments_destroy(
     component_host_arguments_impl *impl = owner != NULL ? owner->impl : NULL;
     turbowasm_component_instance_public_impl *instance;
     turbowasm_runtime_scope scope;
-    turbowasm_status status;
+    turbowasm_status status = TURBOWASM_OK, cleanup;
     size_t i;
     if (impl == NULL) return TURBOWASM_OK;
+    for (i = 0u; i < impl->admission.count; ++i) {
+        const component_resource_argument *entry = &impl->admission.entries[i];
+        if (entry->promoted && !turbowasm_component_exec_resource_value_idle(entry->value))
+            return TURBOWASM_INVALID_ARGUMENT;
+    }
     instance = impl->admission.instance;
     owner->impl = NULL;
     scope = turbowasm_runtime_scope_enter(&instance->component->binary.config);
     if (impl->values != NULL) {
-        for (i = 0u; i < impl->count; ++i) internal_input_destroy(&impl->values[i], true);
+        for (i = 0u; i < impl->count; ++i) {
+            cleanup = internal_input_destroy(&impl->values[i], true);
+            if (status == TURBOWASM_OK) status = cleanup;
+        }
         turbowasm_rt_free(impl->values);
     }
-    status = admission_destroy(&impl->admission);
+    cleanup = admission_destroy(&impl->admission);
+    if (status == TURBOWASM_OK) status = cleanup;
     impl->budget->used -= impl->bytes;
     turbowasm_rt_free(impl);
     turbowasm_runtime_scope_leave(scope);
@@ -1042,9 +1101,10 @@ void turbowasm_component_destroy(
     turbowasm_component_public_impl_release(impl);
 }
 
-turbowasm_status turbowasm_component_instance_create(
+static turbowasm_status component_instance_create(
     turbowasm_component_instance *instance,
-    const turbowasm_component *component) {
+    const turbowasm_component *component,
+    const turbowasm_component_exec_async_limits *limits) {
     turbowasm_component_public_impl *component_state;
     turbowasm_component_instance_public_impl *impl;
     turbowasm_runtime_scope scope;
@@ -1076,8 +1136,9 @@ turbowasm_status turbowasm_component_instance_create(
     }
     impl->component = component_state;
 
-    status = turbowasm_component_exec_init(
-        &impl->exec, &component_state->binary);
+    status = limits != NULL
+        ? turbowasm_component_exec_init_async(&impl->exec, &component_state->binary, limits)
+        : turbowasm_component_exec_init(&impl->exec, &component_state->binary);
     if (status != TURBOWASM_OK) {
         scope = turbowasm_runtime_scope_enter(
             &component_state->binary.config);
@@ -1090,6 +1151,18 @@ turbowasm_status turbowasm_component_instance_create(
     impl->ref_count = 1u;
     instance->impl = impl;
     return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_instance_create(
+    turbowasm_component_instance *instance, const turbowasm_component *component) {
+    return component_instance_create(instance, component, NULL);
+}
+
+turbowasm_status turbowasm_component_instance_create_async_private(
+    turbowasm_component_instance *instance, const turbowasm_component *component,
+    const turbowasm_component_exec_async_limits *limits) {
+    if (limits == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    return component_instance_create(instance, component, limits);
 }
 
 static bool component_instance_retain(

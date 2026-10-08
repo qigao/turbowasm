@@ -17,6 +17,23 @@ void turbowasm_component_exec_resource_imports_destroy(struct turbowasm_componen
 const struct turbowasm_component_resource_identity *turbowasm_component_exec_resource_identity(
     const struct turbowasm_component_exec *exec, uint64_t declaration);
 
+/* Private host admission adapter. Does not consume the original owner on
+ * allocation failure. A successful value borrows admitted/context until release;
+ * lowering requires *admitted. Published runs after ownership publication and
+ * must not fail, suspend or run guest code. Finish runs once, after all codec reservations
+ * have ended, and distinguishes guest publication from cancellation. It must
+ * preserve the original owner when admission itself has not committed. */
+typedef turbowasm_status (*turbowasm_component_resource_host_finish_fn)(
+    void *context, bool published);
+typedef void (*turbowasm_component_resource_host_published_fn)(void *context);
+size_t turbowasm_component_exec_resource_adopt_size(void);
+turbowasm_status turbowasm_component_exec_resource_adopt(
+    struct turbowasm_component_exec *exec, turbowasm_component_value *value,
+    const bool *admitted, turbowasm_component_resource_host_published_fn published,
+    turbowasm_component_resource_host_finish_fn finish,
+    void *context);
+bool turbowasm_component_exec_resource_value_idle(const turbowasm_component_value *value);
+
 /* Owner-thread-only instantiated-resource conversion. Lifted values retain the exec;
  * borrowed source handles stay lent until their values are destroyed at terminal
  * delivery. Each lower scope belongs to one retained call direction. */

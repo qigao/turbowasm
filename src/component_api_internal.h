@@ -47,6 +47,12 @@ bool turbowasm_component_public_impl_retain(
 void turbowasm_component_public_impl_release(
     turbowasm_component_public_impl *impl);
 
+/* Private constructor used while the public async boundary is being completed.
+ * The ordinary loader and public instance constructor retain their async gate. */
+turbowasm_status turbowasm_component_instance_create_async_private(
+    turbowasm_component_instance *instance, const turbowasm_component *component,
+    const turbowasm_component_exec_async_limits *limits);
+
 /* Owner-thread budget, shared by deferred host admissions. The budget must
  * outlive every reservation; limits are finite and immutable while in use. */
 typedef struct turbowasm_component_host_budget {
@@ -63,13 +69,15 @@ typedef struct turbowasm_component_host_arguments {
  * Graph/type are needed only during prepare. Source cells must survive until
  * commit or destruction. Failed prepare leaves output, budget and inputs intact.
  * These values borrow resource obligations from this owner: do not destroy or
- * move individual cells. The future async codec bridge must transfer those
- * obligations at publication, before calling published(). */
+ * move individual cells. Async mode adopts resource leaves into the exec's
+ * existing codec, with storage charged before allocation; requires an async
+ * domain. Lowering is permitted after commit and published() follows the codec
+ * commit. Ordinary mode keeps the synchronous canonical publication contract. */
 turbowasm_status turbowasm_component_host_arguments_prepare(
     turbowasm_component_host_arguments *owner,
     turbowasm_component_instance_public_impl *instance,
     const turbowasm_component_type_graph *graph, uint32_t function_type,
-    const turbowasm_component_host_value *arguments, size_t count, bool move,
+    const turbowasm_component_host_value *arguments, size_t count, bool move, bool async_resources,
     turbowasm_component_host_budget *budget);
 const turbowasm_component_value *turbowasm_component_host_arguments_values(
     const turbowasm_component_host_arguments *owner, size_t *count);
@@ -78,7 +86,8 @@ turbowasm_status turbowasm_component_host_arguments_commit(
 /* Call only after canonical ownership publication succeeds. Leaves loans live. */
 turbowasm_status turbowasm_component_host_arguments_published(
     turbowasm_component_host_arguments *owner);
-/* Requires no in-flight codec/guest use. Frees the owner even if cleanup fails. */
+/* Requires no in-flight guest use. Lower reservations reject destruction without
+ * mutation. Otherwise frees the owner even if a destructor reports failure. */
 turbowasm_status turbowasm_component_host_arguments_destroy(
     turbowasm_component_host_arguments *owner);
 

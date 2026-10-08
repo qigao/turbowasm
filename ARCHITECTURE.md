@@ -708,14 +708,43 @@ changes, nested composites, empty admissions, shared byte exhaustion and reuse,
 overflow, cyclic inputs, instance retention, own/borrow rollback and publication,
 destructor failure, and every snapshot allocation failure. Windows ASan passes
 17 cases and 11,831 assertions; the related Component/WASI/Runtime graph passes
-85/85 in 7.84 s. Async resource-codec adoption and task-owner integration remain
-separate steps; these tests do not claim an available public async execution API.
+85/85 in 7.84 s. Public task/endpoint integration remains a separate step;
+these initial snapshot tests do not claim an available public async execution API.
 Commit `19b5dde` passed all five
 [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37718126233):
 Linux MIR 206/206 in 2.52 s and macOS MIR 206/206 in 2.51 s, including the
 host-argument suite on both platforms. The suite uses the existing synchronous
 canonical execution path to verify snapshot lifetime; compiled async integration
 continues to be covered separately by the Runtime task/import suites.
+
+Deferred admissions can adopt their resource leaves into the existing async
+resource codec. Each adopted owner carries its instantiated identity and a
+borrowed pointer to the admission's commit state; lowering before commit is
+invalid. The codec reserves/publishes the same canonical handles used for
+guest-to-guest calls. An infallible publication hook forgets the original host
+owner immediately after the codec commits the handle, so the same rep can return
+as a new result without appearing twice in the host resource list. A finalizer
+releases the original owner on cancellation, with no second destructor after
+publication. Codec storage stays retained through terminal delivery.
+Host borrow loans stay with the admission until terminal delivery; they never
+create a fictitious guest lender handle. Adopted storage is charged during the
+initial byte preflight and additionally consumes the exec's resource-owner quota.
+Partial adoption failure destroys temporary codec owners and unreserves original
+inputs. Snapshot destruction preflights every adopted leaf: an outstanding lower
+reservation returns INVALID_ARGUMENT without changing storage, loans or quota.
+All mutations and finalizers run on the instance owner thread. The admission
+outlives every codec borrow, and its canonical cells cannot be moved independently.
+Public task/endpoint owners will enforce that lifetime at their boundary.
+The same suite now covers adopted own publication, canonical own results, local
+host borrows, generative identity rejection across instances, byte/owner quota
+exhaustion, busy destruction without mutation, nested cleanup failures, every
+adoption/retained-instance allocation failure, cancellation before entry under
+backpressure, real host-wait completion/cancellation and forced unwind before
+borrow release. Windows ASan passes 33 cases and 42,724 assertions; related
+Component/WASI/Runtime regression passes 85/85 in 9.60 s. Its MIR registration
+attaches real backends and requires compiled canonical callers, resource consumers
+and defining destructors. Public async result promotion, task/endpoint/transfer
+owners and shutdown remain to be integrated; the ordinary loader stays gated.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
