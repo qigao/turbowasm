@@ -28,15 +28,17 @@ static turbowasm_status memory_valid(const turbowasm_component_canonical_memory 
 
 static turbowasm_status transfer_valid(uint32_t features,
     const turbowasm_component_canonical_memory *source, const turbowasm_component_canonical_memory *destination,
-    const turbowasm_component_async_transaction *transaction) {
+    const turbowasm_component_async_transaction *transaction, bool source_host, bool destination_host) {
     if ((transaction->commit == NULL) != (transaction->rollback == NULL)) return TURBOWASM_INVALID_ARGUMENT;
+    if (destination_host && transaction->commit != NULL) return TURBOWASM_INVALID_ARGUMENT;
     if (((features & TURBOWASM_COMPONENT_VALUE_RESOURCES) != 0u &&
-         (source->resource_lift == NULL || destination->resource_lower == NULL)) ||
+         ((!source_host && source->resource_lift == NULL) || (!destination_host && destination->resource_lower == NULL))) ||
         ((features & TURBOWASM_COMPONENT_VALUE_ENDPOINTS) != 0u &&
-         (source->endpoint_lift == NULL || destination->endpoint_lower == NULL)) ||
+         ((!source_host && source->endpoint_lift == NULL) || (!destination_host && destination->endpoint_lower == NULL))) ||
         ((features & TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY) != 0u &&
-         (source->instance == NULL || destination->instance == NULL || destination->guest_realloc == NULL)) ||
-        ((features & (TURBOWASM_COMPONENT_VALUE_RESOURCES | TURBOWASM_COMPONENT_VALUE_ENDPOINTS)) != 0u &&
+         ((!source_host && source->instance == NULL) ||
+          (!destination_host && (destination->instance == NULL || destination->guest_realloc == NULL)))) ||
+        (!destination_host && (features & (TURBOWASM_COMPONENT_VALUE_RESOURCES | TURBOWASM_COMPONENT_VALUE_ENDPOINTS)) != 0u &&
          transaction->commit == NULL)) return TURBOWASM_UNSUPPORTED;
     return TURBOWASM_OK;
 }
@@ -84,6 +86,9 @@ static turbowasm_status prepare_arguments(void *context, turbowasm_component_tas
         if (status != TURBOWASM_OK) return status;
         cursor += flat.count;
     }
+    /* The host consumes these retained canonical values directly. No callee
+     * memory/handles exist, and source loans last through terminal delivery. */
+    if (binding->callee.host_entry != NULL) { *out_count = 0; return TURBOWASM_OK; }
     cursor = 0;
     if (task->signature.params_indirect) {
         turbowasm_component_layout layout;
@@ -149,11 +154,13 @@ turbowasm_status turbowasm_component_async_call_create(turbowasm_component_async
     turbowasm_component_task_binding callee;
     turbowasm_status status;
     uint32_t i, parameters = 0, result = 0;
+    bool host;
     if (call == NULL || call->binding.callee_domain != NULL || binding == NULL ||
         binding->caller_domain == NULL || binding->caller_domain->table == NULL ||
         binding->caller_domain->may_leave == NULL || binding->callee_domain == NULL ||
         binding->callee.prepare != NULL || binding->callee.resolve != NULL || binding->callee.abandon != NULL)
         return TURBOWASM_INVALID_ARGUMENT;
+    host = binding->callee.host_entry != NULL;
     if (!*binding->caller_domain->may_leave) return TURBOWASM_TRAPPED;
     source = turbowasm_component_type_graph_get(binding->caller_graph, binding->caller_function_type);
     target = turbowasm_component_type_graph_get(binding->callee.graph, binding->callee.function_type);
@@ -182,15 +189,15 @@ turbowasm_status turbowasm_component_async_call_create(turbowasm_component_async
     if (status != TURBOWASM_OK) return status;
     status = memory_valid(&binding->callee.memory, false);
     if (status != TURBOWASM_OK) return status;
-    status = transfer_valid(parameters, &binding->caller_memory, &binding->callee.memory, &binding->parameters);
+    status = transfer_valid(parameters, &binding->caller_memory, &binding->callee.memory, &binding->parameters, false, host);
     if (status != TURBOWASM_OK) return status;
-    status = transfer_valid(result, &binding->callee.memory, &binding->caller_memory, &binding->result);
+    status = transfer_valid(result, &binding->callee.memory, &binding->caller_memory, &binding->result, host, false);
     if (status != TURBOWASM_OK) return status;
     status = turbowasm_component_canonical_flatten_function_abi(binding->callee.graph, binding->callee.function_type,
         binding->callee.memory.pointer_type, TURBOWASM_COMPONENT_CANONICAL_LIFT,
         binding->callee.callback_instance ? TURBOWASM_COMPONENT_ABI_ASYNC_CALLBACK : TURBOWASM_COMPONENT_ABI_ASYNC, &target_signature);
     if (status != TURBOWASM_OK) return status;
-    if (target_signature.params_indirect && (binding->callee.memory.instance == NULL || binding->callee.memory.guest_realloc == NULL))
+    if (!host && target_signature.params_indirect && (binding->callee.memory.instance == NULL || binding->callee.memory.guest_realloc == NULL))
         return TURBOWASM_UNSUPPORTED;
     if (argument_count != signature.param_count || argument_count > sizeof(call->raw) / sizeof(call->raw[0]) ||
         (argument_count != 0 && arguments == NULL)) return TURBOWASM_TYPE_MISMATCH;

@@ -37,6 +37,8 @@ static resource_context resources[2];
 static turbowasm_component_endpoint reader, writer;
 static turbowasm_component_endpoint_codec codecs[2];
 static bool reject_endpoint_commit;
+static bool host_wait_before;
+static unsigned host_entries, host_exits;
 
 static turbowasm_status commit_endpoint(void *context, turbowasm_component_task *task,
     turbowasm_component_value *values, uint32_t count) {
@@ -251,6 +253,44 @@ static void take_event(uint32_t phase) {
     check_equal(event.payload, phase);
 }
 
+static turbowasm_status canonical_host(void *context, turbowasm_component_task *task,
+    turbowasm_host_call *core_call) {
+    turbowasm_component_async_call *invocation = context;
+    const turbowasm_component_type *type = &task->binding.graph->types[task->binding.function_type];
+    turbowasm_component_value value = {0};
+    turbowasm_status status = TURBOWASM_OK, cleanup;
+    uint32_t i;
+    ++host_entries;
+    check_true(invocation == &call); check_true(task == &call.task);
+    check_equal(invocation->argument_count, type->as.function.param_count);
+    if (host_wait_before) {
+        turbowasm_host_wait wait;
+        int completion;
+        status = turbowasm_host_call_wait(core_call, 97u, &wait, &completion);
+    }
+    if (status == TURBOWASM_OK) {
+        if (invocation->argument_count == 1 && invocation->arguments[0].kind != TURBOWASM_COMPONENT_TYPE_BORROW) {
+            value = invocation->arguments[0]; memset(&invocation->arguments[0], 0, sizeof(value));
+        } else if (type->as.function.has_result) {
+            value.kind = TURBOWASM_COMPONENT_TYPE_U32;
+            for (i = 0; i < invocation->argument_count; ++i)
+                value.as.u32 += invocation->arguments[i].kind == TURBOWASM_COMPONENT_TYPE_BORROW
+                    ? (uint32_t)invocation->arguments[i].as.resource_rep.as.i32 : invocation->arguments[i].as.u32;
+        }
+        status = turbowasm_component_task_return(task->domain, type->as.function.has_result ? &value : NULL);
+    }
+    cleanup = turbowasm_component_value_destroy(&value);
+    ++host_exits;
+    return status == TURBOWASM_OK ? cleanup : status;
+}
+
+static void use_host_callee(void) {
+    binding.callee.host_entry = canonical_host; binding.callee.host_context = &call;
+    binding.callee.function_index = UINT32_MAX;
+    memset(&binding.callee.memory, 0, sizeof(binding.callee.memory));
+    memset(&binding.parameters, 0, sizeof(binding.parameters));
+}
+
 spec("async canonical lower to lift calls") {
     before_each() {
         static const char *names[] = {"lower32","lower64","string32","string64","return","returnstr32","returnstr64","unit","wait","drop-borrow","lower4"};
@@ -264,6 +304,7 @@ spec("async canonical lower to lift calls") {
         live = 0; allowance = SIZE_MAX; returns = waits = reallocations = 0; reject_realloc = false;
         resource_drops = 0; memset(resources, 0, sizeof(resources));
         reject_endpoint_commit = false;
+        host_wait_before = false; host_entries = host_exits = 0;
         memset(&reader, 0, sizeof(reader)); memset(&writer, 0, sizeof(writer)); memset(codecs, 0, sizeof(codecs));
         turbowasm_runtime_config_init(&config); config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
         scope = turbowasm_runtime_scope_enter(&config);
@@ -333,6 +374,163 @@ spec("async canonical lower to lift calls") {
         check_equal(get_u32(128), 42u); check_equal(returns, 1u);
         check_equal(tables[0].live_count, 0u); check_null(call.arguments); compiled(1, "scalar");
     }
+    it("lifts indirect canonical arguments directly for a host without callee memory or realloc") {
+        unsigned wide, i;
+        for (wide = 0; wide < 2; ++wide) {
+            turbowasm_value args[] = {integer(wide != 0, 32), integer(wide != 0, 128)};
+            setup_binding(2, "tuple32", wide, 0); use_host_callee();
+            for (i = 0; i < 17; ++i) put_u32(32 + 4u * i, i + 1u);
+            check_equal(invoke(wide ? "lower64" : "lower32", args, 2), 2u);
+            check_equal(get_u32(128), 153u); check_equal(reallocations, 0u);
+            check_equal(call.task.signature.param_count, 0u); check_null(call.arguments);
+            check_equal(turbowasm_component_async_call_destroy(&call), TURBOWASM_OK);
+        }
+        check_equal(host_entries, 2u); check_equal(host_exits, 2u);
+    }
+
+    it("retains canonical host strings across I/O and result realloc suspension for both memory widths") {
+        unsigned wide;
+        for (wide = 0; wide < 2; ++wide) {
+            turbowasm_value args[] = {integer(wide != 0, 0), integer(wide != 0, 5), integer(wide != 0, 128)};
+            turbowasm_component_value value = {0};
+            setup_binding(3, "echo32", wide, 0); use_host_callee(); host_wait_before = true;
+            binding.caller_memory.guest_realloc = realloc_core; binding.caller_memory.realloc_context = NULL;
+            check_equal(invoke(wide ? "string64" : "string32", args, 3) & 15u, 1u);
+            check_equal(call.arguments[0].as.string.data, "hello", 5u); check_equal(reallocations, wide);
+            complete_wait();
+            check_equal(turbowasm_component_task_resume(&call.task, NULL), TURBOWASM_YIELDED);
+            check_false(may_leave[0]); check_equal(host_entries, wide + 1u); check_equal(host_exits, wide);
+            complete_wait();
+            check_equal(turbowasm_component_task_resume(&call.task, NULL), TURBOWASM_OK);
+            check_true(may_leave[0]); check_equal(host_exits, wide + 1u);
+            take_event(2); check_null(call.arguments);
+            check_equal(turbowasm_component_canonical_lift_value(&graphs[0], graphs[0].types[3].as.function.result,
+                &binding.caller_memory, 128, &value), TURBOWASM_OK);
+            check_equal(value.as.string.data, "hello", 5u);
+            check_equal(turbowasm_component_value_destroy(&value), TURBOWASM_OK);
+            compiled(0, wide ? "realloc64" : "realloc32");
+            check_equal(turbowasm_component_async_call_destroy(&call), TURBOWASM_OK);
+        }
+    }
+
+    it("moves an owned resource through a host wait without allocating a callee handle") {
+        uint32_t handle = resource_binding(false), output;
+        turbowasm_value args[] = {integer(false, handle), integer(false, 128)}, rep;
+        use_host_callee(); host_wait_before = true;
+        check_equal(invoke("lower32", args, 2) & 15u, 1u);
+        check_equal(turbowasm_component_resource_rep(&tables[0], handle, 42, &rep), TURBOWASM_TRAPPED);
+        check_equal(tables[1].live_count, 0u); check_equal(resource_drops, 0u);
+        complete_wait(); check_equal(turbowasm_component_task_resume(&call.task, NULL), TURBOWASM_OK);
+        output = get_u32(128); take_event(2);
+        check_equal(turbowasm_component_resource_rep(&tables[0], output, 42, &rep), TURBOWASM_OK);
+        check_equal(rep.as.i32, 77); check_equal(resource_drops, 0u);
+        check_equal(turbowasm_component_resource_drop(&tables[0], output, 42, drop_resource, NULL), TURBOWASM_OK);
+        check_equal(resource_drops, 1u); check_equal(resources[1].commits, 0u);
+    }
+
+    it("retains host borrow loans until terminal delivery without publishing a callee borrow handle") {
+        uint32_t handle = resource_binding(true);
+        turbowasm_value args[] = {integer(false, handle), integer(false, 128)};
+        use_host_callee(); host_wait_before = true;
+        check_equal(invoke("lower32", args, 2) & 15u, 1u);
+        check_equal(tables[1].live_count, 0u); check_equal(call.task.borrowed_handles, 0u);
+        check_equal(turbowasm_component_resource_drop(&tables[0], handle, 42, drop_resource, NULL), TURBOWASM_TRAPPED);
+        complete_wait(); check_equal(turbowasm_component_task_resume(&call.task, NULL), TURBOWASM_OK);
+        check_equal(get_u32(128), 77u);
+        check_equal(turbowasm_component_resource_drop(&tables[0], handle, 42, drop_resource, NULL), TURBOWASM_TRAPPED);
+        take_event(2);
+        check_equal(turbowasm_component_resource_drop(&tables[0], handle, 42, drop_resource, NULL), TURBOWASM_OK);
+        check_equal(resource_drops, 1u);
+    }
+
+    it("returns a host-owned future endpoint to the caller without an intermediate guest handle") {
+        turbowasm_value args[2]; uint32_t original;
+        setup_binding(12, "scalar", 0, 0); use_host_callee(); host_wait_before = true;
+        binding.caller_memory.endpoint_lift = turbowasm_component_endpoint_codec_lift;
+        binding.caller_memory.endpoint_lower = turbowasm_component_endpoint_codec_lower;
+        binding.caller_memory.endpoint_context = &codecs[0];
+        binding.result.commit = commit_endpoint; binding.result.rollback = rollback_endpoint; binding.result.context = &codecs[0];
+        check_equal(turbowasm_component_endpoint_pair_open(&graphs[0], 11, &tables[0], NULL, &reader, &writer), TURBOWASM_OK);
+        original = reader.waitable.handle; args[0] = integer(false, original); args[1] = integer(false, 128);
+        check_equal(invoke("lower32", args, 2) & 15u, 1u);
+        check_equal(turbowasm_component_handle_kind_get(&tables[0], original), TURBOWASM_COMPONENT_HANDLE_INVALID);
+        check_equal(tables[1].live_count, 0u); check_true(reader.peer == &writer);
+        complete_wait(); check_equal(turbowasm_component_task_resume(&call.task, NULL), TURBOWASM_OK);
+        take_event(2); check_true(reader.waitable.table == &tables[0]);
+        check_equal(reader.waitable.handle, get_u32(128)); check_false(reader.closed); check_true(reader.peer == &writer);
+        check_null(codecs[0].lower_head);
+    }
+
+    it("unwinds host argument and result storage when aborting either suspension phase") {
+        unsigned result_phase;
+        for (result_phase = 0; result_phase < 2; ++result_phase) {
+            turbowasm_value args[] = {integer(false, 0), integer(false, 5), integer(false, 128)};
+            setup_binding(3, "echo32", 0, 0); use_host_callee(); host_wait_before = true;
+            binding.caller_memory.guest_realloc = realloc_core;
+            check_equal(invoke("string32", args, 3) & 15u, 1u);
+            if (result_phase) {
+                complete_wait(); check_equal(turbowasm_component_task_resume(&call.task, NULL), TURBOWASM_YIELDED);
+                check_false(may_leave[0]);
+            }
+            check_equal(turbowasm_component_async_call_destroy(&call), TURBOWASM_OK);
+            check_equal(host_exits, result_phase + 1u); check_true(may_leave[0]); check_null(call.arguments);
+            check_equal(domains[1].count, 0u);
+        }
+    }
+
+    it("cleans every allocation failure during host argument lifting and result lowering") {
+        turbowasm_value args[] = {integer(false, 0), integer(false, 5), integer(false, 128)};
+        size_t baseline, limit; bool succeeded = false; uint32_t word;
+        setup_binding(3, "echo32", 0, 0); use_host_callee();
+        check_equal(turbowasm_component_async_call_create(&call, &binding, args, 3), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_call_start(&call, NULL, NULL, &word), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_call_destroy(&call), TURBOWASM_OK);
+        baseline = live;
+        for (limit = 0; limit < 100; ++limit) {
+            turbowasm_status status;
+            allowance = limit; word = 99;
+            status = turbowasm_component_async_call_create(&call, &binding, args, 3);
+            if (status == TURBOWASM_OK) status = turbowasm_component_async_call_start(&call, NULL, NULL, &word);
+            allowance = SIZE_MAX;
+            if (status == TURBOWASM_OK) { check_equal(word, 2u); succeeded = true; }
+            else { check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_equal(word, 99u); }
+            check_equal(turbowasm_component_async_call_destroy(&call), TURBOWASM_OK);
+            check_equal(live, baseline); if (succeeded) break;
+        }
+        check_true(succeeded); check_greater_equal(limit, 3u);
+    }
+
+    it("supports host unit results without caller memory or fabricated result storage") {
+        uint32_t word = 99;
+        setup_binding(4, "unit", 0, 0); use_host_callee();
+        memset(&binding.caller_memory, 0, sizeof(binding.caller_memory));
+        check_equal(turbowasm_component_async_call_create(&call, &binding, NULL, 0), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_call_start(&call, NULL, NULL, &word), TURBOWASM_OK);
+        check_equal(word, 2u); check_equal(host_entries, 1u); check_equal(host_exits, 1u);
+    }
+
+    it("rolls back a failed host resource result publication and destroys the moved representation once") {
+        uint32_t handle = resource_binding(false), word = 99;
+        turbowasm_value args[] = {integer(false, handle), integer(false, 128)};
+        use_host_callee(); resources[0].reject_commit = true;
+        check_equal(turbowasm_component_async_call_create(&call, &binding, args, 2), TURBOWASM_OK);
+        check_equal(turbowasm_component_async_call_start(&call, NULL, NULL, &word), TURBOWASM_TRAPPED);
+        check_equal(word, 99u); check_equal(resources[0].rollbacks, 1u);
+        check_equal(resource_drops, 1u); check_equal(host_exits, 1u);
+        check_equal(turbowasm_component_async_call_destroy(&call), TURBOWASM_OK);
+        check_equal(resource_drops, 1u); check_equal(tables[0].live_count, 0u); check_equal(tables[1].live_count, 0u);
+    }
+
+    it("rejects guest parameter transactions on host bindings before moving owned values") {
+        uint32_t handle = resource_binding(false); turbowasm_value rep;
+        turbowasm_value args[] = {integer(false, handle), integer(false, 128)};
+        use_host_callee(); binding.parameters.commit = commit_resource; binding.parameters.rollback = rollback_resource;
+        check_equal(turbowasm_component_async_call_create(&call, &binding, args, 2), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_resource_rep(&tables[0], handle, 42, &rep), TURBOWASM_OK);
+        check_equal(turbowasm_component_resource_drop(&tables[0], handle, 42, drop_resource, NULL), TURBOWASM_OK);
+        check_equal(host_entries, 0u); check_equal(domains[1].count, 0u);
+    }
+
     it("bounds dependency ancestry before publishing a callee task") {
         turbowasm_component_task_binding b = {0};
         turbowasm_value args[] = {integer(false, 42), integer(false, 128)};

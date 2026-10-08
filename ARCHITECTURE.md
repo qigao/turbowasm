@@ -711,7 +711,26 @@ generation-checked I/O waits, cancel-before-entry and explicit cancellation
 acknowledgement, destruction before/after result publication, nested Core fuel
 and interruption, exception-to-trap conversion, invalid callback exits and every
 Runtime allocation failure. The Windows ASan task suite passes 64 cases and
-7,581 assertions; the same suite is registered with the native MIR backend.
+7,581 assertions. Commit `f12a535` passed the complete Windows ASan graph
+(170/170 including both Core 3 conformance suites, 232.09 s) and all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37713987970).
+Linux MIR passed 205/205 in 2.94 s and macOS MIR 205/205 in 2.78 s, including
+the same host-task tests with nested Core calls compiled by MIR.
+
+Private async canonical calls can target these host entries directly. Argument
+preparation lifts caller memory into retained canonical values without allocating
+callee guest storage or publishing temporary guest handles. Host entries move
+consumed values explicitly and stop accessing their arguments before resolving
+the task; unmoved values and caller loans are released at terminal delivery or
+failure teardown. Result lowering still uses the caller memory and atomic
+resource/endpoint publication transaction, including guest realloc suspension.
+Host bindings reject a guest parameter transaction because no such destination
+exists. This call boundary is internal; capability routing and public owners
+remain to be connected. The Windows ASan async-call suite passes 33 cases and
+2,811 assertions, covering indirect arguments, both caller memory widths, host
+and result-realloc suspension, own/borrow/future movement, rollback, forced
+teardown and every Runtime allocation failure. The related regression graph
+passes 84/84 in 7.74 s.
 Qualification must cover scalar/composite/own payloads, unit futures, nested
 endpoints, memory32/64, partial transfers, all cancellation phases, event ordering,
 backpressure, capacity exhaustion, allocation failure, traps and exactly-once

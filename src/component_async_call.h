@@ -46,6 +46,12 @@ typedef struct turbowasm_component_async_call {
 /* Both function types must be validated async signatures with equal parameter
  * and result semantics. Callee prepare/resolve hooks must be empty. Resource
  * and endpoint destinations require transaction hooks; scalar-only paths do not.
+ * A host-entry callee receives call.arguments as retained canonical values:
+ * no callee memory codecs or parameter transaction are used. Its stable context
+ * can refer to this call; moved arguments must be cleared. Unmoved values and
+ * source loans live until terminal delivery or failure teardown, so the callback
+ * must not access them after publishing its result/cancellation. Result lowering
+ * still uses the caller's codecs, memory and result transaction.
  * Admission failures preserve the empty frame and all caller values. */
 turbowasm_status turbowasm_component_async_call_create(turbowasm_component_async_call *call,
     const turbowasm_component_async_call_binding *binding,
