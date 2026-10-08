@@ -874,7 +874,10 @@ and unretained-storage rejection, cancellation acknowledgement before busy
 destruction, allocator reentry and independent creation/receiving instance
 lifetimes. Foreign Core reads now rendezvous through the retained host writer
 owner. Windows ASan passes 40 cases and 22,869 assertions; the related regression
-passes 86/86 in 10.33 s. Native qualification of the host endpoint owner is pending.
+passes 86/86 in 10.33 s. Commit `a7323f6` passes all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37727239239):
+Linux MIR 209/209 in 3.07 s and macOS MIR 209/209 in 2.91 s, including the
+retained host writer under compiled foreign readers and drops.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
