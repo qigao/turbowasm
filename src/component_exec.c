@@ -2247,6 +2247,7 @@ static void destroy_partial(
     turbowasm_rt_free(exec->core_functions);
     turbowasm_rt_free(exec->core_instances);
     turbowasm_rt_free(exec->core_modules);
+    turbowasm_component_type_view_destroy(exec->type_view);
     memset(exec, 0, sizeof(*exec));
 }
 
@@ -2805,6 +2806,15 @@ static turbowasm_status initialize_exec(
     scope = turbowasm_runtime_scope_enter(&binary->config);
     exec->binary = binary;
     exec->may_leave = true;
+
+    if (limits != NULL) {
+        status = turbowasm_component_type_view_create(binary, &exec->type_view);
+        if (status != TURBOWASM_OK) goto fail;
+        if (exec->type_view != NULL) {
+            binary = &exec->type_view->binary;
+            exec->binary = binary;
+        }
+    }
 
     status = component_import_router_init(
         exec, import_sets, import_set_count);

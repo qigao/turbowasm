@@ -1198,7 +1198,10 @@ static bool equal_value_type(const turbowasm_component_type_graph *lg,
         case TURBOWASM_COMPONENT_TYPE_BORROW: {
             const turbowasm_component_type *a = turbowasm_component_resource_definition(lg, left->as.handle.resource_type);
             const turbowasm_component_type *b = turbowasm_component_resource_definition(rg, right->as.handle.resource_type);
-            return a != NULL && b != NULL && a->as.resource.identity == b->as.resource.identity;
+            if (a == NULL || b == NULL) return false;
+            if (a->as.resource.instance_key != NULL || b->as.resource.instance_key != NULL)
+                return a->as.resource.instance_key != NULL && a->as.resource.instance_key == b->as.resource.instance_key;
+            return a->as.resource.identity == b->as.resource.identity;
         }
         default: return false;
     }

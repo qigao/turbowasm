@@ -282,6 +282,13 @@ set_target_properties(turbowasm_component_async_lower_test PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/component")
 add_test(NAME turbowasm_component_async_lower_test COMMAND turbowasm_component_async_lower_test)
 
+add_executable(turbowasm_component_type_view_test component_type_view_test.c)
+target_link_libraries(turbowasm_component_type_view_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_component_type_view_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+set_target_properties(turbowasm_component_type_view_test PROPERTIES
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/component")
+add_test(NAME turbowasm_component_type_view_test COMMAND turbowasm_component_type_view_test)
+
 add_executable(turbowasm_component_async_payload_test component_async_payload_test.c)
 target_link_libraries(turbowasm_component_async_payload_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
 target_include_directories(turbowasm_component_async_payload_test PRIVATE "${PROJECT_SOURCE_DIR}/src")

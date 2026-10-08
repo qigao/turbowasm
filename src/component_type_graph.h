@@ -127,6 +127,9 @@ typedef struct turbowasm_component_type {
         } function;
         struct {
             uint64_t identity;
+            /* NULL in decoded metadata. Instance views supply a generative
+             * nominal key shared by aliases and retained imported providers. */
+            const void *instance_key;
             uint8_t rep_type;
             bool has_destructor;
             bool identity_alias;
@@ -194,8 +197,9 @@ bool turbowasm_component_value_type_resource_free(
     const turbowasm_component_type_graph *graph, turbowasm_component_type_ref ref);
 
 /* Structural equality of value types in validated immutable graphs, including
- * nested future/stream types. Resource leaves compare nominal identity, not
- * graph addresses or local indices. Non-value nodes and excessive depth fail.
+ * nested future/stream types. Resource leaves compare instance keys when bound,
+ * otherwise declaration identities. Bound and unbound resources never match.
+ * Non-value nodes and excessive depth fail.
  * Time O(expanded type tree), stack O(depth); does not allocate. */
 bool turbowasm_component_value_type_equal(
     const turbowasm_component_type_graph *left_graph,

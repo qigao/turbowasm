@@ -60,17 +60,17 @@ static void result(unsigned index, uint32_t expected) {
 static turbowasm_component_type_id payload_type(bool future, bool mixed) {
     uint32_t i, expected = TURBOWASM_COMPONENT_VALUE_RESOURCES;
     if (mixed) expected |= TURBOWASM_COMPONENT_VALUE_ENDPOINTS | TURBOWASM_COMPONENT_VALUE_DYNAMIC_MEMORY;
-    for (i = 0; i < binary.type_graph.count; ++i) {
-        const turbowasm_component_type *type = &binary.type_graph.types[i]; uint32_t features;
+    for (i = 0; i < exec.binary->type_graph.count; ++i) {
+        const turbowasm_component_type *type = &exec.binary->type_graph.types[i]; uint32_t features;
         if (type->kind == (future ? TURBOWASM_COMPONENT_TYPE_FUTURE : TURBOWASM_COMPONENT_TYPE_STREAM) &&
-            type->as.async_value.has_payload && turbowasm_component_transfer_type_features(&binary.type_graph,
+            type->as.async_value.has_payload && turbowasm_component_transfer_type_features(&exec.binary->type_graph,
                 type->as.async_value.payload, &features) && features == expected) return i;
     }
     return UINT32_MAX;
 }
 static void pair(unsigned index, bool destination, bool future, bool mixed) {
     turbowasm_component_type_id type = payload_type(future, mixed); check_not_equal(type, UINT32_MAX);
-    check_equal(turbowasm_component_endpoint_pair_open(&binary.type_graph, type,
+    check_equal(turbowasm_component_endpoint_pair_open(&exec.binary->type_graph, type,
         destination ? &exec.resource_table : NULL, destination ? NULL : &exec.resource_table,
         &ends[index][0], &ends[index][1]), TURBOWASM_OK);
 }
@@ -116,7 +116,7 @@ static void clear_guest_values(void) {
 }
 static uint32_t destructions(void) {
     turbowasm_component_value value = {0};
-    check_equal(turbowasm_component_canonical_lift_value(&binary.type_graph,
+    check_equal(turbowasm_component_canonical_lift_value(&exec.binary->type_graph,
         turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_U32), &binding("payload-read")->memory, 400, &value), TURBOWASM_OK);
     return value.as.u32;
 }
@@ -129,14 +129,14 @@ static void own(turbowasm_component_value *out) {
 static void mixed_input(void) {
     turbowasm_component_value resource = {0}; turbowasm_component_type_id type = UINT32_MAX; uint32_t i;
     own(&resource);
-    for (i = 0; i < binary.type_graph.count; ++i) {
-        const turbowasm_component_type *candidate = &binary.type_graph.types[i];
+    for (i = 0; i < exec.binary->type_graph.count; ++i) {
+        const turbowasm_component_type *candidate = &exec.binary->type_graph.types[i];
         if (candidate->kind == TURBOWASM_COMPONENT_TYPE_STREAM && candidate->as.async_value.has_payload &&
             candidate->as.async_value.payload.kind == TURBOWASM_COMPONENT_TYPE_REF_INLINE &&
             candidate->as.async_value.payload.as.inline_type == TURBOWASM_COMPONENT_TYPE_U32) { type = i; break; }
     }
     check_not_equal(type, UINT32_MAX);
-    check_equal(turbowasm_component_endpoint_pair_open(&binary.type_graph, type, NULL, NULL, &nested[0], &nested[1]), TURBOWASM_OK);
+    check_equal(turbowasm_component_endpoint_pair_open(&exec.binary->type_graph, type, NULL, NULL, &nested[0], &nested[1]), TURBOWASM_OK);
     inputs[0].kind = TURBOWASM_COMPONENT_TYPE_TUPLE;
     inputs[0].as.tuple.items = turbowasm_rt_calloc(3, sizeof(*inputs[0].as.tuple.items));
     check_not_null(inputs[0].as.tuple.items); inputs[0].as.tuple.count = 3;
@@ -293,7 +293,7 @@ spec("instantiated ownership-bearing endpoint payloads") {
     }
     it("preserves the same-Component nonnumeric copy trap and the other pending context") {
         uint32_t type = payload_type(false, false);
-        check_equal(turbowasm_component_endpoint_pair_open(&binary.type_graph, type,
+        check_equal(turbowasm_component_endpoint_pair_open(&exec.binary->type_graph, type,
             &exec.resource_table, &exec.resource_table, &ends[0][0], &ends[0][1]), TURBOWASM_OK);
         create(0, "payload-read", ends[0][0].waitable.handle, 512, 1);
         check_equal(turbowasm_component_task_resume(&tasks[0], NULL), TURBOWASM_YIELDED);

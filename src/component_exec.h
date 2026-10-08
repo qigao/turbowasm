@@ -2,6 +2,7 @@
 #define TURBOWASM_COMPONENT_EXEC_H
 
 #include "component_binary.h"
+#include "component_type_view.h"
 #include "component_core_call.h"
 #include "component_resource_binding.h"
 #include "component_task_builtin.h"
@@ -152,6 +153,7 @@ typedef struct turbowasm_component_exec_canon_lower_context {
 
 typedef struct turbowasm_component_exec {
     const turbowasm_component_binary *binary;
+    turbowasm_component_type_view *type_view;
 
     turbowasm_module *core_modules;
     uint32_t core_module_count;

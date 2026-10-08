@@ -1364,8 +1364,24 @@ A further interruption case resumes a suspended consumer realloc with the
 provider task's new interrupt policy. It verifies the interruption yield reason,
 both retained domain guards, successful continuation without replay and complete
 endpoint cleanup. Windows ASan passed all 16 import cases with 2,086 assertions;
-production code was unchanged after the preceding related regression. Native MIR
-qualification of this additional case is pending.
+production code was unchanged after the preceding related regression. At
+`c1f1725`, Linux x64 MIR passed 202/202 targets in 2.60 seconds and macOS arm64
+MIR passed 202/202 in 3.44 seconds, including the compiled import suite in
+0.04/0.05 seconds. All five jobs passed in the
+[native run](https://github.com/qigao/turbowasm/actions/runs/37705735849).
+
+Private async instantiation now binds resource declarations to generative
+instance keys through an exec-owned type view. Alias classes, including nested
+interface types, retain one key; distinct instantiations cannot exchange a
+resource-bearing endpoint merely because their declaration IDs match. Numeric
+declaration IDs and the decoded metadata remain unchanged. Resource-free binaries
+continue to borrow their decoded graph without extra allocation. The new formal
+type-view suite passes 5 cases and 4,171 assertions under Windows ASan, including
+every allocation failure through view creation and Core instantiation, retained
+source metadata, and actual endpoint admission across two instances of one binary.
+Related regression passed 83/83 targets in 6.14 seconds before the final added
+constructor failure sweep; that additional case passed separately. Native
+qualification of the instance-view change is pending.
 
 Async host capability callbacks, cross-instance resource borrowing and payload
 conversion, nested Component instantiation, public task/endpoint owners, synchronous

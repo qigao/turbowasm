@@ -971,6 +971,31 @@ exported caller tasks, then their outgoing calls; provider teardown refuses live
 import bindings and inbound tasks. Public async admission remains closed while
 host ownership, imported resources and general synchronous interop are completed.
 
+Private async resource identity is generative per exec. A decoded binary's
+numeric resource IDs describe declaration/alias relationships, not runtime type
+identity. Instantiation therefore creates an immutable view when resources are
+present: it copies type nodes and nested instance-type headers, borrows immutable
+field/parameter/export/name arrays from the decoded owner, and binds each
+resource equivalence class to an exec-owned stable identity token. Declaration
+IDs remain unchanged for capability adapters; nominal value-type comparison uses
+the instance key whenever either graph is instantiated. Aliases share
+one token; a second instantiation gets distinct tokens. Tokens are private
+in-process identities, never serialized IDs. The view and its tokens survive all
+tasks, endpoint payload graphs and lifted owners and are released after exec
+teardown. Resource-free binaries keep the existing borrowed graph.
+
+Mutating the decoded graph would invalidate concurrent instances. Adding separate
+resource comparison callbacks to every canonical conversion and endpoint path
+would create competing type-comparison rules. The instance view instead preserves
+the existing nominal equality and canonical value checks. This adds bounded
+metadata allocations during instantiation; it does not copy guest memory or
+create a second runtime type system. The source binary must still outlive the
+exec. Imported equivalence classes will be mapped to their provider's retained
+tokens before binding resource-bearing calls; until then those imports remain
+closed. Rollback destroys only view-owned nodes/headers/tokens and leaves the
+decoded metadata untouched. Synchronous public admission retains its current
+contracts while this private integration is completed.
+
 The first private execution primitive is allocation-free notification state
 embedded in the eventual task/endpoint owner. It tracks pending progress and
 terminal-event delivery separately. Subtask start and resolve notifications

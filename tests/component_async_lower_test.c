@@ -43,8 +43,8 @@ static void compiled_child(const char *name) {
 static void compiled_destructor(void) {
 #ifdef TURBOWASM_TEST_MIR
     uint32_t i;
-    for (i = 0; i < binary.type_graph.count; ++i) {
-        const turbowasm_component_type *type = &binary.type_graph.types[i];
+    for (i = 0; i < exec.binary->type_graph.count; ++i) {
+        const turbowasm_component_type *type = &exec.binary->type_graph.types[i];
         if (type->kind == TURBOWASM_COMPONENT_TYPE_RESOURCE && !type->as.resource.identity_alias &&
             type->as.resource.has_destructor) {
             const turbowasm_component_exec_core_function *function = &exec.core_functions[type->as.resource.destructor_index];
@@ -129,16 +129,16 @@ static uint32_t destructions(void) {
     const turbowasm_component_task_binding *binding = NULL;
     turbowasm_component_value count = {0};
     check_equal(turbowasm_component_exec_async_export(&exec, (const uint8_t *)"resource-own", 12, &binding), TURBOWASM_OK);
-    check_equal(turbowasm_component_canonical_lift_value(&binary.type_graph,
+    check_equal(turbowasm_component_canonical_lift_value(&exec.binary->type_graph,
         turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_U32), &binding->memory, 400, &count), TURBOWASM_OK);
     return count.as.u32;
 }
 static uint64_t local_resource_identity(void) {
     uint32_t i;
-    for (i = 0; i < binary.type_graph.count; ++i)
-        if (binary.type_graph.types[i].kind == TURBOWASM_COMPONENT_TYPE_RESOURCE &&
-            !binary.type_graph.types[i].as.resource.identity_alias)
-            return binary.type_graph.types[i].as.resource.identity;
+    for (i = 0; i < exec.binary->type_graph.count; ++i)
+        if (exec.binary->type_graph.types[i].kind == TURBOWASM_COMPONENT_TYPE_RESOURCE &&
+            !exec.binary->type_graph.types[i].as.resource.identity_alias)
+            return exec.binary->type_graph.types[i].as.resource.identity;
     return 0;
 }
 

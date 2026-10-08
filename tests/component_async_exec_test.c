@@ -311,7 +311,7 @@ spec("Component async binary instantiation") {
     it("retains resolved builtin realloc options during a host string rendezvous") {
         turbowasm_execution_options options = {0}; unsigned attempts = 0;
         initialize();
-        check_equal(turbowasm_component_endpoint_pair_open(&binary.type_graph, 5,
+        check_equal(turbowasm_component_endpoint_pair_open(&exec.binary->type_graph, 5,
             &exec.resource_table, NULL, &host_reader, &host_writer), TURBOWASM_OK);
         reader = &host_reader; writer = &host_writer; argument = reader->waitable.handle;
         input.kind = TURBOWASM_COMPONENT_TYPE_STRING; input.as.string.data = turbowasm_rt_malloc(5);
