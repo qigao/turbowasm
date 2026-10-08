@@ -37,7 +37,9 @@ turbowasm_status turbowasm_component_instance_request_shutdown_private(
         instance->shutdown_driving || instance->host_activity != 0u || instance->exec.async_driving)
         return TURBOWASM_INVALID_ARGUMENT;
     domain = &instance->exec.task_domain;
-    if (domain->active != NULL || domain->exclusive != NULL || domain->auxiliary != NULL ||
+    /* A fuel-suspended callback retains exclusive admission without executing.
+     * Cancellation only sets its request; its driver still owns the Core exit. */
+    if (domain->active != NULL || domain->auxiliary != NULL ||
         domain->synchronous_depth != 0u) return TURBOWASM_INVALID_ARGUMENT;
     for (registration = instance->host_owners; registration != NULL; registration = registration->next)
         if (registration->busy(registration->context)) return TURBOWASM_INVALID_ARGUMENT;

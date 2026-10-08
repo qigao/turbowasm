@@ -449,6 +449,18 @@ spec("Retained Component host task owners") {
         finish(0u);
         check_equal(turbowasm_component_host_task_view(&owners[0])->phase, TURBOWASM_COMPONENT_TASK_CANCELLED);
     }
+    it("requests cancellation while an exclusive callback entry is suspended by fuel") {
+        turbowasm_execution_options options = {.has_fuel_limit = true, .fuel = 1u};
+        const turbowasm_component_task *view;
+        check_equal(create(0u, "callback", NULL, 0u, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_task_resume(&owners[0], &options), TURBOWASM_YIELDED);
+        view = turbowasm_component_host_task_view(&owners[0]);
+        check_true(impl->exec.task_domain.exclusive == view);
+        check_null(impl->exec.task_domain.active); check_equal(view->phase, TURBOWASM_COMPONENT_TASK_STARTED);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_true(view->cancellation_requested);
+        finish(0u); check_equal(view->phase, TURBOWASM_COMPONENT_TASK_CANCELLED);
+    }
     it("preserves a resolved task across fuel suspension and retains its later primary trap") {
         turbowasm_execution_options options = {.has_fuel_limit = true, .fuel = 1u};
         const turbowasm_component_task *view;

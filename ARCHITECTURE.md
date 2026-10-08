@@ -973,10 +973,11 @@ admission closes, repeated cancellation of multiple roots, partial transfer
 acknowledgements and unsent tails, caller-buffer leases, endpoint registration
 across moves, allocator/peer/Core reentry rejection and failed-admission activity
 rollback. Callback tasks acknowledge cancellation through their actual callback;
-noncancellable yields continue to a real return. A fuel-suspended resolved task
+an exclusive fuel-suspended callback accepts a request without releasing its
+Core continuation, and noncancellable yields continue to a real return. A fuel-suspended resolved task
 keeps its eventual primary Core trap, and existing synchronous calls and terminal
-results remain deliverable. Windows ASan passes 65 cases and 42,696 assertions;
-the related Component/WASI/Runtime regression passes 86/86 in 8.44 s.
+results remain deliverable. Windows ASan passes 66 cases and 43,328 assertions;
+the related Component/WASI/Runtime regression passes 86/86 in 8.59 s.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
