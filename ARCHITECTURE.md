@@ -687,6 +687,30 @@ installed C/C++ consumers. Private future/stream type metadata can be tested
 before runtime integration; the synchronous feature predicate and binary loader
 continue to reject them until their complete execution path is available.
 
+Deferred host argument admission owns a private snapshot before a task can wait
+behind backpressure. The existing public-value converter copies strings and
+composite storage in this mode; synchronous calls keep their borrowing contract.
+A shared owner-thread byte budget accounts for the snapshot header, canonical
+cells, resource-admission records and copied UTF-8 bytes. Checked size preflight
+reserves the entire amount before allocation or resource reservation. Zero and
+unlimited budgets are invalid; exhaustion returns OUT_OF_MEMORY without changing
+input owners. Runtime allocator limits additionally bound allocation overhead.
+Preparation retains the instance and reserves own/borrow leaves without consuming
+them. Explicit commit clears moved host cells only after all admission succeeds;
+canonical publication transfers own obligations to the callee. Borrow loans and
+snapshot bytes remain retained until terminal delivery. Failure before commit
+unreserves inputs; cancellation after commit but before publication destroys owned
+resources exactly once. Destruction releases all obligations and reports its first
+cleanup error. No source pointer is used after commit. This private admission
+boundary precedes public task/endpoint integration and does not open async loading.
+The host-argument suite exercises delayed canonical execution after caller storage
+changes, nested composites, empty admissions, shared byte exhaustion and reuse,
+overflow, cyclic inputs, instance retention, own/borrow rollback and publication,
+destructor failure, and every snapshot allocation failure. Windows ASan passes
+17 cases and 11,831 assertions; the related Component/WASI/Runtime graph passes
+85/85 in 7.84 s. Async resource-codec adoption and task-owner integration remain
+separate steps; these tests do not claim an available public async execution API.
+
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
 an existing Core instance for its allocator/store and caller memory; it constructs

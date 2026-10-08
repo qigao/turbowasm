@@ -47,4 +47,39 @@ bool turbowasm_component_public_impl_retain(
 void turbowasm_component_public_impl_release(
     turbowasm_component_public_impl *impl);
 
+/* Owner-thread budget, shared by deferred host admissions. The budget must
+ * outlive every reservation; limits are finite and immutable while in use. */
+typedef struct turbowasm_component_host_budget {
+    size_t limit;
+    size_t used;
+} turbowasm_component_host_budget;
+
+typedef struct turbowasm_component_host_arguments {
+    void *impl;
+} turbowasm_component_host_arguments;
+
+/* Private staging for public async owners. Copies ordinary input storage and
+ * retains the instance. Prepare reserves resources; commit consumes own leaves.
+ * Graph/type are needed only during prepare. Source cells must survive until
+ * commit or destruction. Failed prepare leaves output, budget and inputs intact.
+ * These values borrow resource obligations from this owner: do not destroy or
+ * move individual cells. The future async codec bridge must transfer those
+ * obligations at publication, before calling published(). */
+turbowasm_status turbowasm_component_host_arguments_prepare(
+    turbowasm_component_host_arguments *owner,
+    turbowasm_component_instance_public_impl *instance,
+    const turbowasm_component_type_graph *graph, uint32_t function_type,
+    const turbowasm_component_host_value *arguments, size_t count, bool move,
+    turbowasm_component_host_budget *budget);
+const turbowasm_component_value *turbowasm_component_host_arguments_values(
+    const turbowasm_component_host_arguments *owner, size_t *count);
+turbowasm_status turbowasm_component_host_arguments_commit(
+    turbowasm_component_host_arguments *owner);
+/* Call only after canonical ownership publication succeeds. Leaves loans live. */
+turbowasm_status turbowasm_component_host_arguments_published(
+    turbowasm_component_host_arguments *owner);
+/* Requires no in-flight codec/guest use. Frees the owner even if cleanup fails. */
+turbowasm_status turbowasm_component_host_arguments_destroy(
+    turbowasm_component_host_arguments *owner);
+
 #endif /* TURBOWASM_COMPONENT_API_INTERNAL_H */

@@ -33,6 +33,12 @@ add_test(NAME turbowasm_artifact_restore_test
          COMMAND turbowasm_artifact_restore_test)
 
 if(TURBOWASM_ENABLE_COMPONENT)
+  add_executable(turbowasm_component_host_arguments_test component_host_arguments_test.c)
+  target_link_libraries(turbowasm_component_host_arguments_test PRIVATE TurboWasm::Component Salts::TinyTest)
+  target_include_directories(turbowasm_component_host_arguments_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_component_host_arguments_test PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME turbowasm_component_host_arguments_test COMMAND turbowasm_component_host_arguments_test)
   add_executable(turbowasm_component_host_resources_test component_host_resources_test.c)
   target_link_libraries(turbowasm_component_host_resources_test PRIVATE TurboWasm::Component Salts::TinyTest)
   set_target_properties(turbowasm_component_host_resources_test PROPERTIES
