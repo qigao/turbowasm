@@ -28,6 +28,27 @@ static turbowasm_wasi02_stream_provider streams;
 static turbowasm_wasi02_poll_provider poll;
 static turbowasm_value network, udp[2], in[2], out[2], aliases[4], dns;
 static turbowasm_wasi02_cnet_config_v2 config;
+static bool deny_names, deny_results, probe_reentry;
+static size_t name_policy_calls;
+static bool authorize_name(void *ctx, turbowasm_wasi02_string_view name) {
+    (void)ctx; ++name_policy_calls;
+    if (deny_names) {
+        const char expected[] = "xn--bcher-kva.example";
+        check_equal(name.size,sizeof(expected)-1); check_equal(name.data,expected,sizeof(expected)-1);
+    }
+    return !deny_names;
+}
+static bool authorize_endpoint(void *ctx, unsigned operation, const turbowasm_wasi02_ip_socket_address *address) {
+    (void)ctx; (void)address;
+    if (probe_reentry) {
+        turbowasm_wasi02_socket_error e; turbowasm_wasi02_ip_socket_address local; uint64_t value;
+        check_equal(net.udp_finish_bind(net.context,udp[0],&e),TURBOWASM_INVALID_ARGUMENT);
+        check_equal(net.udp_local_address(net.context,udp[0],&local,&e),TURBOWASM_INVALID_ARGUMENT);
+        check_equal(net.udp_option_get(net.context,udp[0],TURBOWASM_WASI02_UDP_HOP_LIMIT,&value,&e),TURBOWASM_INVALID_ARGUMENT);
+        check_equal(net.udp_option_set(net.context,udp[0],TURBOWASM_WASI02_UDP_HOP_LIMIT,42,&e),TURBOWASM_INVALID_ARGUMENT);
+    }
+    return operation != TURBOWASM_WASI02_CNET_RESOLVE_RESULT || !deny_results;
+}
 static void pump(void) {
     size_t events, count = 0; uint32_t timeout; native_io_completion batch[16];
     check_equal(turbowasm_wasi02_cnet_advance(&adapter,&events), TURBOWASM_OK);
@@ -117,6 +138,8 @@ static void fixture_init(bool allowed) {
         config.udp_capacity = 2; config.pair_capacity = 4; config.lookup_capacity = 2;
         config.datagram_bytes = 64; config.receive_datagrams = config.send_datagrams = 2;
         config.allow_udp_bind = config.allow_udp_send = config.allow_udp_receive = config.allow_name_lookup = allowed;
+        deny_names = deny_results = probe_reentry = false; name_policy_calls = 0;
+        config.authorize_name = authorize_name; config.base.authorize = authorize_endpoint;
         native_io_backend_config bc = {0}; bc.kind = config.base.backend;
         bc.endpoint_capacity = 6; bc.request_capacity = 12; bc.completion_batch_capacity = 12;
         check_equal(native_io_backend_init(&backend,&bc), SALTS_OK);
@@ -270,6 +293,29 @@ suite("native WASI datagrams and name lookup") {
         check_equal(a.family,TURBOWASM_WASI02_IP_ADDRESS_IPV4); check_equal(a.as.ipv4[0],127);
         check_equal(net.resolve_next_address(net.context,dns,&has,&a,&e), TURBOWASM_OK); check_equal(e,0); check_false(has);
         check_equal(net.resolve_drop(net.context,dns), TURBOWASM_OK); memset(&dns,0,sizeof(dns)); check_true(ready(aliases[0]));
+    }
+    it("validates IDNA before name authorization and rejects denied names before lookup") {
+        turbowasm_wasi02_socket_error e; deny_names = true;
+        const char invalid[] = {'x', (char)0xff};
+        check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)invalid,sizeof(invalid)},&dns,&e),TURBOWASM_OK);
+        check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_INVALID_ARGUMENT); check_equal(name_policy_calls,0u);
+        const char name[] = "b\xc3\xbc" "cher.example";
+        check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)name,sizeof(name)-1},&dns,&e),TURBOWASM_OK);
+        check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED); check_equal(name_policy_calls,1u); check_equal(dns.kind,0);
+    }
+    it("rejects denied resolved addresses before publishing an IP value") {
+        turbowasm_wasi02_socket_error e; bool has; turbowasm_wasi02_ip_address address = {0}; deny_results = true;
+        check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)"127.0.0.1",9},&dns,&e),TURBOWASM_OK); check_equal(e,0);
+        check_equal(net.resolve_next_address(net.context,dns,&has,&address,&e),TURBOWASM_OK);
+        check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED); check_false(has);
+        check_equal(address.as.ipv4[0],0);
+        check_equal(net.resolve_next_address(net.context,dns,&has,&address,&e),TURBOWASM_OK);
+        check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED); check_false(has);
+    }
+    it("rejects UDP provider reentry from an authorization callback") {
+        probe_reentry = true;
+        turbowasm_wasi02_ip_socket_address local = bind_udp(0,TURBOWASM_WASI02_IP_ADDRESS_IPV4);
+        check_not_equal(local.as.ipv4.port,0);
     }
 }
 

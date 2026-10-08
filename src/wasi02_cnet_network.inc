@@ -183,7 +183,8 @@ static turbowasm_status net_udp_bind(void *ctx, turbowasm_value rep, turbowasm_v
     udp_changed(u); return TURBOWASM_OK;
 }
 static turbowasm_status net_udp_finish_bind(void *ctx, turbowasm_value rep, turbowasm_wasi02_socket_error *error) {
-    tw_udp *u = udp_get(ctx, rep); if (!u || !u->live || !error) return TURBOWASM_INVALID_ARGUMENT;
+    tw_cnet_impl *p = ctx;
+    tw_udp *u = udp_get(p, rep); if (!u || !u->live || p->busy || !error) return TURBOWASM_INVALID_ARGUMENT;
     *error = u->binding ? TURBOWASM_WASI02_SOCKET_ERROR_NONE : TURBOWASM_WASI02_SOCKET_ERROR_NOT_IN_PROGRESS;
     if (u->binding) { u->binding = false; u->bound = true; } return TURBOWASM_OK;
 }
@@ -231,8 +232,8 @@ static turbowasm_status net_udp_stream(void *ctx, turbowasm_value rep,
 }
 static turbowasm_status net_udp_address(void *ctx, turbowasm_value rep,
     turbowasm_wasi02_ip_socket_address *out, turbowasm_wasi02_socket_error *error, bool remote) {
-    tw_udp *u = udp_get(ctx, rep); cnet_stream_endpoint ep = CNET_STREAM_ENDPOINT_INIT;
-    if (!u || !u->live || !out || !error) return TURBOWASM_INVALID_ARGUMENT;
+    tw_cnet_impl *p = ctx; tw_udp *u = udp_get(p, rep); cnet_stream_endpoint ep = CNET_STREAM_ENDPOINT_INIT;
+    if (!u || !u->live || p->busy || !out || !error) return TURBOWASM_INVALID_ARGUMENT;
     if (remote && !u->associated) { *error = TURBOWASM_WASI02_SOCKET_ERROR_INVALID_STATE; return TURBOWASM_OK; }
     int rc = remote ? cnet_datagram_remote_endpoint(&u->datagram, &ep) : cnet_datagram_local_endpoint(&u->datagram, &ep);
     *error = rc == SALTS_ENOTCONN ? TURBOWASM_WASI02_SOCKET_ERROR_INVALID_STATE : map_error(rc);
@@ -246,11 +247,13 @@ static cnet_tcp_socket_option udp_option(turbowasm_wasi02_udp_option option) {
         option == TURBOWASM_WASI02_UDP_RECEIVE_BUFFER ? CNET_TCP_SOCKET_RECEIVE_BUFFER_BYTES : CNET_TCP_SOCKET_SEND_BUFFER_BYTES;
 }
 static turbowasm_status net_udp_get_option(void *c, turbowasm_value r, turbowasm_wasi02_udp_option o, uint64_t *v, turbowasm_wasi02_socket_error *e) {
-    tw_udp *u = udp_get(c,r); if (!u || !u->live || !e || o > TURBOWASM_WASI02_UDP_SEND_BUFFER) return TURBOWASM_INVALID_ARGUMENT;
+    tw_cnet_impl *p = c; tw_udp *u = udp_get(p,r);
+    if (!u || !u->live || p->busy || !v || !e || o > TURBOWASM_WASI02_UDP_SEND_BUFFER) return TURBOWASM_INVALID_ARGUMENT;
     *e = map_error(cnet_datagram_option_get(&u->datagram, udp_option(o), v)); return TURBOWASM_OK;
 }
 static turbowasm_status net_udp_set_option(void *c, turbowasm_value r, turbowasm_wasi02_udp_option o, uint64_t v, turbowasm_wasi02_socket_error *e) {
-    tw_udp *u = udp_get(c,r); if (!u || !u->live || !e || o > TURBOWASM_WASI02_UDP_SEND_BUFFER) return TURBOWASM_INVALID_ARGUMENT;
+    tw_cnet_impl *p = c; tw_udp *u = udp_get(p,r);
+    if (!u || !u->live || p->busy || !e || o > TURBOWASM_WASI02_UDP_SEND_BUFFER) return TURBOWASM_INVALID_ARGUMENT;
     *e = map_error(cnet_datagram_option_set(&u->datagram, udp_option(o), v)); return TURBOWASM_OK;
 }
 static turbowasm_status net_udp_subscribe(void *ctx, turbowasm_value rep, turbowasm_value *out) {
