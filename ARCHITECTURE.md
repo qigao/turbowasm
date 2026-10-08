@@ -2720,11 +2720,12 @@ auxiliary cloned nodes preserve serialized indices during decoding and are
 compacted before validation; shared dependencies are cloned once per closure,
 with checked size arithmetic and the existing value-depth bound.
 
-UDP/DNS gates C/D, Preview1 sockets and Preview3 remain unimplemented. The
-sections below retain the design and qualification requirements for those
-gates; an API name in a proposed later gate is not an implementation claim.
+UDP/DNS gates C/D are implemented through the additive v2 interface described
+under "Implemented UDP and DNS gate" below. Preview1 socket coverage and
+Preview3 remain separate work. The sections below retain the design and
+qualification requirements for each gate.
 
-The initial deliverable is a complete native TCP path for the pinned
+The initial deliverable was a complete native TCP path for the pinned
 `wasi:sockets@0.2.8` interfaces. UDP and name lookup are separate qualification
 gates. Component async host owners remain the execution/lifetime boundary;
 WASI 0.2 byte-stream resources are not Component typed `stream<T>` endpoints.
@@ -2756,11 +2757,11 @@ SDK version. Configure must compile/link-check the required public symbols
 against the actual selected SDK; do not access CNet internals or provide an
 alternate raw-socket implementation when a capability is missing.
 
-The sibling Salts checkout has `cnet/src/cnet_resolver.h`, but its resolver is
-private, yields one selected native address, and is not a public ordered address
-stream. The current public UDP API also lacks a complete unbound/configurable
-WASI UDP socket contract. Those are explicit Salts prerequisites for the UDP
-and DNS gates, not capabilities supplied by this TurboWasm adapter.
+At the design baseline, Salts' `cnet/src/cnet_resolver.h` was private and yielded
+one selected native address; the public UDP API lacked an unbound/configurable
+WASI socket contract. The prerequisite branch now adds `cnet/name_lookup.h`
+and versioned datagram controls. Configure checks these actual installed SDK
+capabilities before admitting the native adapter.
 
 Normative references are the versioned upstream [TCP WIT](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/tcp.wit),
 [TCP state/readiness semantics](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/TcpSocketOperationalSemantics.md),
@@ -2810,8 +2811,8 @@ recheck, not a second authoritative boolean.
 ### Host interface and composition
 
 The following TCP and I/O entry points are implemented; exact declarations and
-ownership contracts are in the installed headers. Later UDP/DNS entry points
-remain proposed until their separate gates pass. All owner carriers are unique,
+ownership contracts are in the installed headers. UDP/DNS use the separate v2
+provider/configuration entry points described below. All owner carriers are unique,
 opaque and zero initialized.
 Configuration structs have `size` and `api_version`, finite defaults, checked
 field validation, and no implicit unlimited values. Source handles are opaque
@@ -3029,8 +3030,8 @@ shutdown have separate owners and must both reach their terminal conditions.
 I/O domain config bounds source slots, stream/error wrappers, subscriptions,
 simultaneous wait routes and members per route. CNet config bounds TCP owners,
 pending accepts, per-connection receive/send bytes and commands, aggregate
-adapter payload bytes, completion-batch work, and explicit deadlines. Future UDP
-and DNS configs add socket/message/query/name/result bounds. Defaults are finite
+adapter payload bytes, completion-batch work, and explicit deadlines. UDP
+and DNS v2 configs add socket/message/query/name/result bounds. Defaults are finite
 and published through an initializer; zero disables only an optional capability.
 
 For configured TCP owner bound `N`, per-owner receive/send maxima `R`/`W`, and
@@ -3056,8 +3057,8 @@ and a shared byte budget need not permit every owner to saturate simultaneously.
 | Shared adapter payload budget / read chunk | 16 MiB / 64 KiB | Bytes; checked reservation or bounded short read |
 | Native completions per host batch | 64 | Entries; host processes later batches without losing terminals |
 | Connect deadline / read and write deadlines | 30 seconds / disabled | Explicit timeout policy, independent of stream readiness |
-| Later UDP owners / inbound and outbound records per owner | 16 / 4 / 4 | Owners/messages within the shared payload budget |
-| Later max datagram / resolver queries / results per query | 65535 bytes / 16 / 64 | Hard maxima; explicit error on overflow |
+| UDP owners / inbound and outbound records per owner | 16 / 4 / 4 | Separate checked datagram reservation, including native receive storage |
+| Max datagram / resolver queries / results per query | 65507 bytes / 16 / 64 | Hard maxima; explicit error on overflow |
 
 These defaults are a bounded starting configuration, not performance tuning.
 CNet command/event/request bounds must be derived and validated with these
