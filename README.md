@@ -285,6 +285,18 @@ misses and 76 uncached calls; its cacheable-hit percentage excludes those calls.
 The same commit passes the four-platform
 [SDK build and packaging](https://github.com/qigao/turbowasm/actions/runs/37738470020).
 
+After atomics-option normalization, commit `2efaf00` passes the
+[five-platform CI](https://github.com/qigao/turbowasm/actions/runs/37740255366)
+and [four-platform SDK packaging](https://github.com/qigao/turbowasm/actions/runs/37740259898).
+Its [restored Windows CI](https://github.com/qigao/turbowasm/actions/runs/37740607137/job/113190251265)
+records 272 hits, zero misses, zero non-cacheable calls and zero cache write
+errors, passing 170 tests plus 16 installed-package tests. The
+[restored Windows SDK build](https://github.com/qigao/turbowasm/actions/runs/37740611588/job/113190297701)
+records 56 hits and zero misses, non-cacheable calls or cache write errors.
+The hit percentages exclude other compiler requests: sccache separately reports
+two cache errors and eight non-cacheable compilations for Windows CI, and one
+cache error and four non-cacheable compilations for the Windows SDK profile.
+
 ## SIMD
 
 WebAssembly stores SIMD values as `v128`, but TurboWasm refines the semantic
