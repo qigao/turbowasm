@@ -29,11 +29,17 @@ static struct { const char *entry; uint32_t handle; unsigned prepared, entered, 
     bool wait, own_result; } task_context;
 static struct { size_t live, attempts, fail_at; } allocations;
 static size_t allocation_budget_floor;
+static bool close_on_lift_allocate;
 
 static void *allocate(void *context, size_t size) {
     void *pointer;
     (void)context;
     if (allocation_budget_floor != 0u) check_greater_equal(budget.used, allocation_budget_floor);
+    if (close_on_lift_allocate) {
+        close_on_lift_allocate = false;
+        turbowasm_component_instance_destroy(&instances[1]);
+        turbowasm_component_destroy(&components[1]);
+    }
     if (++allocations.attempts == allocations.fail_at) return NULL;
     pointer = malloc(size);
     if (pointer != NULL) ++allocations.live;
@@ -231,17 +237,30 @@ static void invoke_snapshot(unsigned owner, turbowasm_component_core_call_adapte
     compiled(binding);
 }
 
-static void fresh_result(int32_t rep, turbowasm_component_value *out) {
+static uint32_t fresh_handle(int32_t rep) {
     turbowasm_component_core_call_adapter binding = adapter(1u, "make");
-    const turbowasm_component_type *function = turbowasm_component_type_graph_get(binding.graph, binding.function_type);
     turbowasm_value argument = {.kind = TURBOWASM_VALUE_I32, .as.i32 = rep}, value = {0};
     turbowasm_trap trap;
     size_t count;
     check_equal(turbowasm_instance_invoke(binding.instance, binding.function_index,
         &argument, 1u, &value, 1u, &count, &trap), TURBOWASM_OK);
     compiled(binding); check_equal(count, (size_t)1);
-    check_equal(resource_memory.resource_lift(resource_memory.resource_context, binding.graph,
-        function->as.function.result, (uint32_t)value.as.i32, out), TURBOWASM_OK);
+    return (uint32_t)value.as.i32;
+}
+static turbowasm_status lift_handle(uint32_t handle, turbowasm_component_type_ref type,
+    turbowasm_component_value *out) {
+    turbowasm_component_exec *exec = resource_codec.exec;
+    turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(&exec->binary->config);
+    turbowasm_status status = resource_memory.resource_lift(resource_memory.resource_context,
+        &exec->binary->type_graph, type, handle, out);
+    turbowasm_runtime_scope_leave(scope);
+    return status;
+}
+static void fresh_result(int32_t rep, turbowasm_component_value *out) {
+    turbowasm_component_core_call_adapter binding = adapter(1u, "make");
+    const turbowasm_component_type *function = turbowasm_component_type_graph_get(binding.graph, binding.function_type);
+    uint32_t handle = fresh_handle(rep);
+    check_equal(lift_handle(handle, function->as.function.result, out), TURBOWASM_OK);
 }
 static turbowasm_status promote_result(unsigned owner, unsigned instance, const char *name) {
     turbowasm_component_core_call_adapter binding = adapter(instance, name);
@@ -287,6 +306,7 @@ spec("Deferred Component host argument ownership") {
         turbowasm_runtime_config config;
         memset(&allocations, 0, sizeof(allocations));
         allocation_budget_floor = 0u;
+        close_on_lift_allocate = false;
         budget = (turbowasm_component_host_budget){BYTE_LIMIT, 0u};
         turbowasm_runtime_config_init(&config);
         config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
@@ -301,6 +321,7 @@ spec("Deferred Component host argument ownership") {
     after_each() {
         unsigned i;
         allocations.fail_at = 0u;
+        close_on_lift_allocate = false;
         (void)turbowasm_component_task_destroy(&retained_task);
         turbowasm_component_type_graph_destroy(&task_graph); memset(&task_context, 0, sizeof(task_context));
         if (resource_codec.exec != NULL)
@@ -921,6 +942,158 @@ spec("Deferred Component host argument ownership") {
         check_equal(turbowasm_component_host_arguments_destroy(&owners[0]), TURBOWASM_OK);
         check_equal(turbowasm_component_host_value_destroy(&resources[0]), TURBOWASM_OK);
         check_equal(resource_codec.exec->async_resource_owners, 0u); check_equal(drops(), 1u);
+    }
+    it("retains fresh canonical ownership independently of result promotion") {
+        turbowasm_component_instance_public_impl *instance;
+        uint32_t references;
+        async_instance(8u); instance = turbowasm_component_instance_public_impl_get(&instances[1]);
+        references = instance->ref_count;
+        fresh_result(42, &result);
+        check_equal(instance->ref_count, references + 1u);
+        check_equal(turbowasm_component_exec_destroy(&instance->exec), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_value_destroy(&result), TURBOWASM_OK);
+        check_equal(instance->ref_count, references); check_equal(drops(), 1u);
+    }
+    it("keeps canonical sibling owners and their real destructor alive after public handles close") {
+        turbowasm_component_instance_public_impl *instance;
+        turbowasm_component_core_call_adapter binding;
+        turbowasm_value count_value = {0};
+        turbowasm_trap trap;
+        size_t count, live;
+        async_instance(8u); fresh_pair(-1, 42);
+        instance = turbowasm_component_instance_public_impl_get(&instances[1]); binding = adapter(1u, "drops");
+        turbowasm_component_instance_destroy(&instances[1]); turbowasm_component_destroy(&components[1]);
+        check_equal(instance->ref_count, 2u); live = allocations.live;
+        check_equal(turbowasm_component_value_destroy(&result.as.tuple.items[0]), TURBOWASM_TRAPPED);
+        check_equal(instance->ref_count, 1u); check_equal(instance->exec.async_resource_owners, 1u);
+        check_equal(turbowasm_instance_invoke(binding.instance, binding.function_index,
+            NULL, 0u, &count_value, 1u, &count, &trap), TURBOWASM_OK);
+        check_equal(count, (size_t)1); check_equal(count_value.as.i32, 1); compiled(binding);
+#ifdef TURBOWASM_TEST_MIR
+        {
+            const turbowasm_component_type *function, *handle, *definition;
+            turbowasm_component_exec_core_function *dtor;
+            uint32_t i;
+            for (i = 0u; i < instance->exec.binary->type_graph.count; ++i) {
+                function = &instance->exec.binary->type_graph.types[i];
+                if (function->kind != TURBOWASM_COMPONENT_TYPE_OWN) continue;
+                handle = function;
+                definition = turbowasm_component_resource_definition(&instance->exec.binary->type_graph,
+                    handle->as.handle.resource_type);
+                dtor = &instance->exec.core_functions[definition->as.resource.destructor_index];
+                check_equal(((turbowasm_instance_impl *)instance->exec.core_instances[dtor->instance_index].impl)->jit_functions[
+                    dtor->function_index].state, TURBOWASM_JIT_COMPILED);
+                break;
+            }
+            check_less(i, instance->exec.binary->type_graph.count);
+        }
+#endif
+        check_equal(turbowasm_component_value_destroy(&result), TURBOWASM_OK);
+        check_less(allocations.live, live); memset(&resource_codec, 0, sizeof(resource_codec));
+    }
+    it("retains before the lifting allocator can close both public handles") {
+        turbowasm_component_instance_public_impl *instance;
+        turbowasm_component_core_call_adapter binding;
+        const turbowasm_component_type *function;
+        uint32_t handle;
+        size_t live;
+        async_instance(8u); instance = turbowasm_component_instance_public_impl_get(&instances[1]);
+        binding = adapter(1u, "make"); function = turbowasm_component_type_graph_get(binding.graph, binding.function_type);
+        handle = fresh_handle(-1); close_on_lift_allocate = true;
+        check_equal(lift_handle(handle, function->as.function.result, &result), TURBOWASM_OK);
+        check_false(close_on_lift_allocate); check_null(instances[1].impl); check_null(components[1].impl);
+        check_equal(instance->ref_count, 1u); check_equal(instance->exec.async_resource_owners, 1u);
+        live = allocations.live;
+        check_equal(turbowasm_component_value_destroy(&result), TURBOWASM_TRAPPED);
+        check_less(allocations.live, live); memset(&resource_codec, 0, sizeof(resource_codec));
+    }
+    it("releases a whole canonical tree after a destructor trap and the last public handle closes") {
+        size_t live;
+        async_instance(8u); fresh_pair(-1, 42);
+        turbowasm_component_instance_destroy(&instances[1]); turbowasm_component_destroy(&components[1]);
+        live = allocations.live;
+        check_equal(turbowasm_component_value_destroy(&result), TURBOWASM_TRAPPED);
+        check_equal((int)result.kind, 0); check_less(allocations.live, live);
+        memset(&resource_codec, 0, sizeof(resource_codec));
+    }
+    it("rolls back fresh lift allocation and reference exhaustion before consuming its handle") {
+        turbowasm_component_instance_public_impl *instance;
+        turbowasm_component_core_call_adapter binding;
+        const turbowasm_component_type *function;
+        size_t live, attempts;
+        uint32_t handle, references;
+        async_instance(8u); instance = turbowasm_component_instance_public_impl_get(&instances[1]);
+        binding = adapter(1u, "make"); function = turbowasm_component_type_graph_get(binding.graph, binding.function_type);
+        handle = fresh_handle(42); references = instance->ref_count; live = allocations.live;
+        allocations.attempts = 0u; allocations.fail_at = 1u;
+        turbowasm_status status = lift_handle(handle, function->as.function.result, &result);
+        allocations.fail_at = 0u;
+        check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_equal(allocations.live, live);
+        check_equal(instance->ref_count, references); check_equal(instance->exec.resource_table.live_count, 1u);
+        check_equal(instance->exec.async_resource_owners, 0u); check_equal((int)result.kind, 0);
+        instance->ref_count = UINT32_MAX; attempts = allocations.attempts;
+        status = lift_handle(handle, function->as.function.result, &result);
+        instance->ref_count = references;
+        check_equal(status, TURBOWASM_INVALID_ARGUMENT); check_equal(allocations.attempts, attempts);
+        check_equal(instance->exec.resource_table.live_count, 1u); check_equal(drops(), 0u);
+        check_equal(lift_handle(handle, function->as.function.result, &result), TURBOWASM_OK);
+        check_equal(turbowasm_component_value_destroy(&result), TURBOWASM_OK); check_equal(drops(), 1u);
+    }
+    it("returns a fresh keepalive after a lender prevents ownership extraction") {
+        turbowasm_component_instance_public_impl *instance;
+        turbowasm_component_core_call_adapter binding;
+        const turbowasm_component_type *function, *borrow;
+        uint32_t handle, references;
+        size_t live;
+        async_instance(8u); instance = turbowasm_component_instance_public_impl_get(&instances[1]);
+        binding = adapter(1u, "make"); function = turbowasm_component_type_graph_get(binding.graph, binding.function_type);
+        handle = fresh_handle(42);
+        borrow = turbowasm_component_type_graph_get(binding.graph, function->as.function.result.as.indexed);
+        const turbowasm_component_type *definition = turbowasm_component_resource_definition(binding.graph,
+            borrow->as.handle.resource_type);
+        check_equal(turbowasm_component_resource_lend_acquire(&instance->exec.resource_table,
+            handle, definition->as.resource.identity), TURBOWASM_OK);
+        references = instance->ref_count; live = allocations.live;
+        check_equal(lift_handle(handle, function->as.function.result, &result), TURBOWASM_TRAPPED);
+        check_equal(instance->ref_count, references); check_equal(allocations.live, live);
+        check_equal(instance->exec.async_resource_owners, 0u); check_equal((int)result.kind, 0);
+        check_equal(turbowasm_component_resource_lend_release(&instance->exec.resource_table,
+            handle, definition->as.resource.identity), TURBOWASM_OK);
+        check_equal(lift_handle(handle, function->as.function.result, &result), TURBOWASM_OK);
+        check_equal(turbowasm_component_value_destroy(&result), TURBOWASM_OK); check_equal(drops(), 1u);
+    }
+    it("retains the lending instance until a fresh canonical borrow is released") {
+        turbowasm_component_instance_public_impl *instance;
+        turbowasm_component_core_call_adapter make_binding, borrow_binding;
+        const turbowasm_component_type *make_type, *borrow_type;
+        turbowasm_component_value own = {0};
+        uint32_t handle, references;
+        async_instance(8u); instance = turbowasm_component_instance_public_impl_get(&instances[1]);
+        make_binding = adapter(1u, "make"); borrow_binding = adapter(1u, "borrow");
+        make_type = turbowasm_component_type_graph_get(make_binding.graph, make_binding.function_type);
+        borrow_type = turbowasm_component_type_graph_get(borrow_binding.graph, borrow_binding.function_type);
+        handle = fresh_handle(42); references = instance->ref_count;
+        check_equal(lift_handle(handle, borrow_type->as.function.params[0], &result), TURBOWASM_OK);
+        check_equal(instance->ref_count, references + 1u);
+        check_equal(lift_handle(handle, make_type->as.function.result, &own), TURBOWASM_TRAPPED);
+        check_equal((int)own.kind, 0); check_equal(instance->ref_count, references + 1u);
+        check_equal(turbowasm_component_value_destroy(&result), TURBOWASM_OK);
+        check_equal(instance->ref_count, references); check_equal(drops(), 0u);
+        check_equal(lift_handle(handle, make_type->as.function.result, &result), TURBOWASM_OK);
+        check_equal(turbowasm_component_value_destroy(&result), TURBOWASM_OK); check_equal(drops(), 1u);
+    }
+    it("keeps a committed canonical record alive until cleanup without destroying published ownership") {
+        turbowasm_component_instance_public_impl *instance;
+        uint32_t handle, references;
+        async_instance(8u); instance = turbowasm_component_instance_public_impl_get(&instances[1]);
+        references = instance->ref_count; fresh_result(42, &result);
+        check_equal(lower_leaf(&result, "consume", &handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_exec_resource_codec_commit(&resource_codec), TURBOWASM_OK);
+        check_equal(instance->ref_count, references + 1u); check_equal(drops(), 0u);
+        check_equal(turbowasm_component_value_destroy(&result), TURBOWASM_OK);
+        check_equal(instance->ref_count, references); check_equal(instance->exec.async_resource_owners, 0u);
+        check_equal(instance->exec.resource_table.live_count, 1u); check_equal(drops(), 0u);
+        invoke_raw("consume", &handle, 1u, 42); check_equal(drops(), 1u);
     }
     it("keeps result storage and defining resource destruction alive after public handles close") {
         size_t live;

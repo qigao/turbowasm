@@ -102,11 +102,17 @@ typedef struct turbowasm_component_async_resource_owner {
     turbowasm_component_resource_host_published_fn host_published;
     turbowasm_component_resource_host_finish_fn host_finish;
     void *host_context;
+    /* Fresh lifted values can leave their task/endpoint before destruction.
+     * Public domains retain their exec owner independently of that producer. */
+    void *instance_owner;
+    void (*instance_release)(void *owner);
 } turbowasm_component_async_resource_owner;
 
 static turbowasm_status release_resource(void *context) {
     turbowasm_component_async_resource_owner *owner = context;
     turbowasm_status status = TURBOWASM_OK;
+    void *instance_owner = owner->instance_owner;
+    void (*instance_release)(void *) = owner->instance_release;
     if (owner->lower_scope != NULL) return TURBOWASM_TRAPPED;
     if (owner->host_finish != NULL)
         status = owner->host_finish(owner->host_context, owner->committed);
@@ -116,6 +122,8 @@ static turbowasm_status release_resource(void *context) {
         status = turbowasm_component_exec_resource_release(owner->exec, owner->identity, owner->rep);
     --owner->exec->async_resource_owners;
     turbowasm_rt_free(owner);
+    /* This can destroy the exec, its graph and the defining Core instance. */
+    if (instance_release != NULL) instance_release(instance_owner);
     return status;
 }
 
@@ -222,6 +230,8 @@ static turbowasm_status lift_resource(void *context, const turbowasm_component_t
     turbowasm_component_async_resource_owner *owner;
     turbowasm_value rep = {0};
     turbowasm_status status;
+    void *instance_owner;
+    void (*instance_release)(void *);
     if (out == NULL || out->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED || out->release != NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     if (resource == NULL) return TURBOWASM_TYPE_MISMATCH;
@@ -231,15 +241,29 @@ static turbowasm_status lift_resource(void *context, const turbowasm_component_t
         return TURBOWASM_TYPE_MISMATCH;
     if (codec->exec->async_resource_owners >= codec->exec->resource_table.max_entries)
         return TURBOWASM_OUT_OF_MEMORY;
+    if ((codec->exec->task_domain.pair_retain == NULL) != (codec->exec->task_domain.pair_release == NULL))
+        return TURBOWASM_INVALID_ARGUMENT;
+    instance_owner = codec->exec->task_domain.pair_owner;
+    instance_release = codec->exec->task_domain.pair_release;
+    if (instance_release != NULL && !codec->exec->task_domain.pair_retain(instance_owner))
+        return TURBOWASM_INVALID_ARGUMENT;
     owner = turbowasm_rt_calloc(1u, sizeof(*owner));
-    if (owner == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    if (owner == NULL) {
+        if (instance_release != NULL) instance_release(instance_owner);
+        return TURBOWASM_OUT_OF_MEMORY;
+    }
     owner->exec = codec->exec; owner->identity = resource->as.resource.identity; owner->rep = rep;
+    owner->instance_owner = instance_owner; owner->instance_release = instance_release;
     owner->instance_key = resource->as.resource.instance_key;
     owner->borrowed = type->kind == TURBOWASM_COMPONENT_TYPE_BORROW; owner->lender = handle;
     status = owner->borrowed
         ? turbowasm_component_resource_lend_acquire(&codec->exec->resource_table, handle, owner->identity)
         : turbowasm_component_resource_take_owned(&codec->exec->resource_table, handle, owner->identity, &rep);
-    if (status != TURBOWASM_OK) { turbowasm_rt_free(owner); return status; }
+    if (status != TURBOWASM_OK) {
+        turbowasm_rt_free(owner);
+        if (instance_release != NULL) instance_release(instance_owner);
+        return status;
+    }
     ++codec->exec->async_resource_owners;
     out->kind = type->kind; out->resource_identity = owner->identity; out->as.resource_rep = rep;
     out->resource_instance_key = owner->instance_key;

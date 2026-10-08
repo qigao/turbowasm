@@ -879,6 +879,27 @@ passes 86/86 in 10.33 s. Commit `a7323f6` passes all five
 Linux MIR 209/209 in 3.07 s and macOS MIR 209/209 in 2.91 s, including the
 retained host writer under compiled foreign readers and drops.
 
+Fresh canonical resource values have an independent creation-instance keepalive
+in public async domains. A payload can leave a task or endpoint before host-result
+promotion, so its release authority cannot borrow that producer's lifetime.
+Lift retains before allocation and ownership extraction, returning the reference
+on either failure without consuming the handle. Canonical release drops the
+resource or lender, updates its owner count and frees the owner record before
+returning the keepalive; that last release may destroy the exec and its Core
+providers. Committed lower records keep this reference until record cleanup.
+Host argument proxies keep their existing admission-owned lifetime. Raw private
+execs without both domain hooks retain their explicit borrowed-owner contract.
+The existing canonical owner quota bounds these references, and its record size
+is included by the existing resource admission/result byte accounting. Transfer
+storage and public async integration remain pending.
+Formal cases cover sole canonical ownership after both public handles close,
+sibling cleanup and actual compiled destructors after a trap, whole-tree cleanup,
+allocator reentry closing the public handles, allocation/reference exhaustion,
+failed ownership extraction under a lender, borrow release and committed lower
+record cleanup. The resource suite passes 56 cases and 63,262 assertions on
+Windows ASan; the related Component/WASI/Runtime regression passes 86/86 in
+9.58 s. Native MIR qualification is recorded after the dedicated CI run.
+
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
 an existing Core instance for its allocator/store and caller memory; it constructs
