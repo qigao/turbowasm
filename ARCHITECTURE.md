@@ -3432,3 +3432,194 @@ the new socket backend with the prerequisite SDK, not the published Salts SDK.
 
 References: [WASI UDP 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/udp.wit),
 [WASI name lookup 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/ip-name-lookup.wit).
+
+
+## Preview1 socket descriptors and async polling (proposed)
+
+This is a separate admission gate after the implemented WASI 0.2 TCP/UDP/DNS
+backend. It requires approval before declaring new public APIs. The existing
+Preview1 configuration, initializer, imports and filesystem provider contracts
+remain supported. No socket API is advertised until the complete gate passes.
+
+### Scope and evidence
+
+Pin Preview1 to WebAssembly/WASI revision
+`fae981bae14809d91f9bc2d63852d461f331d161`, specifically
+[the import definitions](https://github.com/WebAssembly/WASI/blob/fae981bae14809d91f9bc2d63852d461f331d161/preview1/witx/wasi_snapshot_preview1.witx)
+and [the type definitions](https://github.com/WebAssembly/WASI/blob/fae981bae14809d91f9bc2d63852d461f331d161/preview1/witx/typenames.witx).
+The original `snapshot-01` tag lacks the later `sock_accept` addition and is
+therefore insufficient as this gate's ABI source.
+
+`wasi.h` and `wasi_preview1.c` currently supply capability-gated fd reads/writes
+and filesystem imports, but no socket imports, fdstat operations or
+`poll_oneoff`. `wasi_fs.c` already owns a bounded descriptor table, guest fd
+assignment, provider identities, generations and rights. Its provider bundle is
+currently global to the filesystem. `wasi_native_io.h` explicitly excludes UDP
+because one scalar I/O request cannot preserve a vectored datagram. The
+implemented `wasi02_cnet.c` owns bounded TCP/UDP payloads, listener admission,
+transport termination and reusable readiness; its TCP receive operation
+currently consumes the receive buffer and cannot implement Preview1 PEEK by
+simply calling a WASI 0.2 stream read.
+
+Implement the four standard socket imports (`sock_accept`, `sock_recv`,
+`sock_send`, `sock_shutdown`) together with socket `fd_read`, `fd_write`,
+`fd_close`, `fd_fdstat_get`, `fd_fdstat_set_flags`,
+`fd_fdstat_set_rights` and mixed fd/timer `poll_oneoff`. Hosts provide listening
+TCP sockets, connected TCP streams and connected UDP sockets. Preview1 has no
+standard socket creation, bind, connect, DNS or WebSocket imports; those remain
+explicit host setup or the already implemented WASI 0.2 API. This gate does not
+claim complete Preview1 filesystem coverage or add vendor socket imports.
+
+The new guest imports use the pinned memory32 ABI. Iovec tables have 8-byte
+entries; fdstat, subscription and event records have 24-, 48- and 32-byte
+layouts respectively. Scalar carriers and output ranges are:
+
+| Import | Core parameters | Outputs in guest memory |
+| --- | --- | --- |
+| `sock_accept` | fd i32, flags i32, result i32 | fd u32 |
+| `sock_recv` | fd i32, iovecs i32, count i32, flags i32, size result i32, flags result i32 | byte count u32, result flags u16 |
+| `sock_send` | fd i32, iovecs i32, count i32, flags i32, result i32 | byte count u32 |
+| `sock_shutdown` | fd i32, directions i32 | None |
+| `fd_fdstat_get` | fd i32, result i32 | fdstat record |
+| `fd_fdstat_set_flags` | fd i32, flags i32 | None |
+| `fd_fdstat_set_rights` | fd i32, base rights i64, inheriting rights i64 | None |
+| `poll_oneoff` | subscriptions i32, events i32, count i32, result i32 | event records, event count u32 |
+
+Every import returns errno i32. These remain Preview1 memory32 layouts even
+when the runtime supports Core memory64; do not silently widen the ABI.
+
+### Public boundary and descriptor ownership
+
+Add `wasi_sockets.h` for a versioned, provider-neutral socket operation bundle
+and descriptor admission. Add `turbowasm_wasi_preview1_config_v2` with
+`size`, `api_version`, the existing config as `base`, and explicit socket/poll
+configuration, plus `turbowasm_wasi_preview1_init_v2`. Do not append fields to
+the existing config. New configurations have finite descriptor, wait,
+subscription and per-call byte limits; socket/poll admission is opt-in.
+Clock polling requires the configured clock capability and provider; enabling
+socket polling does not grant clock access implicitly.
+
+Generalize the existing filesystem descriptor table with additive versioned
+binding that copies a per-descriptor operation bundle. Old binding functions
+copy the existing filesystem-wide bundle into each new descriptor, preserving
+old behavior. One table remains authoritative for guest fd allocation, provider
+identity, rights and generation. File and socket descriptors can coexist and
+`path_open` cannot accidentally allocate an fd already used by a socket. Do not
+partition fd numbers into invented high ranges or create a second socket fd
+allocator. Host-selected bindings and allocated descriptors must respect the
+pinned Preview1 fd range. A slot whose generation is exhausted is retired,
+rather than wrapping and making stale async identities valid again.
+
+A new socket bind/move entry takes an owned provider socket identity, descriptor
+kind, flags and base/inheriting rights. Success transfers ownership into the
+reserved descriptor and zeros the caller's owned carrier; failure preserves
+that carrier. Each descriptor copies its operation bundle and retains its
+provider context until all active operations release it. The provider remains
+responsible for its opaque transport identity. `sock_accept` reserves a table
+slot, output range and all wait metadata before consuming an accepted connection;
+commit publishes the fd without allocation. Abort preserves the queued accept
+or closes a newly owned connection through exactly one cleanup path.
+
+Fdstat reports the actual socket kind, descriptor flags and current rights.
+Rights may only decrease; fd operations and accept/poll/shutdown verify their
+specific rights before side effects. Accepted descriptors inherit only rights
+applicable to the accepted stream. Their nonblocking flag comes from
+`sock_accept`'s flags. Socket-specific fd dispatch must use the same table as
+filesystem dispatch; existing configured stdio callbacks remain valid.
+
+`fd_close` invalidates the guest descriptor once close admission succeeds, wakes
+its waiters and retires its generation. Outstanding operations retain their
+exact descriptor/provider identity until actual terminal cleanup. An errno
+that leaves close ownership intact leaves the descriptor valid for retry, in
+accordance with the existing filesystem close contract. Parent listener close
+does not close accepted children. New shutdown/poll/destroy entry points return
+status; they preserve owners while retained descriptors or waits remain.
+The Preview1 facade must continue to outlive its bound consumer instances,
+as required by the existing linker contract.
+
+### CNet reuse and dependency direction
+
+Expose a Preview1 operation factory and explicit move helpers from the existing
+CNet adapter through `wasi_cnet.h`. The helpers move an owned listener, TCP
+socket/input/output triple, or associated UDP socket/datagram pair into a
+Preview1 provider identity. They validate origin, kind and quiescence before
+consuming any carrier; failure leaves every input owned by the caller. Moving
+reps already published to a live WASI 0.2 guest is forbidden. This avoids two
+frontends independently consuming one receive queue.
+
+Implement the transport-specific callbacks beside the existing CNet owners,
+where their buffers and terminal state are authoritative. Add an optional
+installed `TurboWasm::WASICNet` composition target linking the Preview1 facade
+and existing CNet backend. The backend factory exchanges public provider types;
+it does not call filesystem internals or make Runtime depend on WASI. Existing
+WASI02CNet-only configurations remain buildable. The cost of this reuse is that
+the optional Preview1 native composition also brings the existing WASI 0.2
+backend dependencies. Extracting a new transport framework or owning another
+CNet client per frontend would increase migration and duplicate progress;
+this gate deliberately uses the established owner instead.
+
+One serialized host still advances CNet, observes the external backend once,
+routes each completion exactly once and advances readiness. No worker, native
+fd exposure, second observation loop or raw-platform socket fallback is added.
+The existing default-deny address policy also governs host setup and accepts.
+
+### Transfer, wait and publication protocol
+
+Validate all iovecs, result locations, enum/flag bits and checked total lengths
+before native effects. The existing iovec count limit remains in force. Guest
+spans and callback buffers are borrowed only for their live host-call lease.
+A suspended frame retains identities, offsets, counts and bounded owned data;
+it never retains an unchecked guest memory pointer across a suspension. Resume
+reacquires output spans before publication and accounts for memory growth.
+Faults before publication do not consume queued UDP packets or accepted sockets.
+
+TCP receives preserve PEEK without consuming authoritative buffered bytes.
+WAITALL aggregates a bounded request until filled, EOF, error or cancellation;
+a partial result is committed according to the pinned Preview1/POSIX semantics.
+PEEK plus WAITALL waits for the requested contiguous observation without consuming
+it; a request above the configured retention limit fails explicitly. Nonblocking
+operations return available progress or AGAIN and never park. Zero-length TCP
+reads do not wait. Receive shutdown and peer EOF remain distinct from destruction.
+
+UDP gathers all send iovecs into one bounded message, including an actual empty
+message. Receive scatters one queued message across the destination iovecs;
+a short destination reports `recv_data_truncated`, consumes the whole message
+unless PEEK was requested, and never exposes its suffix as a second message.
+PEEK preserves that same packet for a later receive. WAITALL does not aggregate
+multiple UDP messages. TCP may publish a legal send prefix; UDP sends preserve
+all-or-nothing message admission. Unsupported send flags fail with INVAL.
+
+`poll_oneoff` copies a bounded subscription list before parking and reserves all
+output events first. Per-entry fd errors become events with the original
+userdata; invalid overall buffers/counts fail the call. Duplicate subscriptions
+retain separate output positions. Readiness uses each descriptor's retained
+source and reports available bytes and hangup without consuming payloads.
+Clock subscriptions honor clock id, relative/absolute flags and precision using
+checked deadlines. A clock-only poll remains valid. Socket and timer sources
+join one backend-neutral Runtime host wait, using the established notification
+owner rather than busy polling or sleeping on the execution thread. Cancellation
+and fd close complete the exact wait generation, release source leases and
+reservation slots once, and never cancel an unrelated subscriber's transport.
+
+### Compatibility, qualification and rollback
+
+Existing Preview1 users keep their initializer/configuration and fd policies.
+New consumers rebuild to use the versioned socket config and per-descriptor
+binding. No native handle or persistent data format is changed. Generated CMeta
+adapter metadata retains existing ordinals and appends the admitted standard
+imports; metadata, linker signatures and executable tests share the existing
+manifest/generator path rather than a second signature table.
+
+Qualification covers mixed file/socket fd allocation, rights reduction,
+fdstat/nonblocking flags, accept capacity/OOM rollback, stale generations and
+close during waits. Real IPv4/IPv6 TCP tests exercise vectored short transfers,
+PEEK, WAITALL, EOF, half-close and inherited accept rights. UDP tests exercise
+empty messages, PEEK, exact message boundaries and truncation. Mixed clock/fd
+poll tests cover duplicates, terminal errors, relative/absolute deadlines,
+cancellation, source retirement, guest memory growth and no premature storage
+reuse. Add formal installed C/C++ consumers and execute Core guest fixtures
+under interpreter and MIR. Continue Linux/macOS execution and Android
+build/install qualification with Windows CI omitted by the user's current
+instruction; local Windows ASAN remains available. Rollback disables the new
+v2 socket/poll capability and optional composition target while retaining the
+old Preview1 API and completed WASI 0.2 socket gates.
