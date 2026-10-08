@@ -1403,7 +1403,10 @@ lifetimes, ambiguous/mismatched providers, table quota rejection, suspended
 result rollback, fuel-suspended destructor completion/unwind, destructor traps,
 and allocation failures throughout construction and transfers. Related regression
 passed 84/84 targets in 7.03 seconds. The MIR variant requires compiled caller,
-provider and destructor handles; native qualification of this change is pending.
+provider and destructor handles. At `92eff58`, Linux x64 MIR passed 205/205
+targets in 2.73 seconds and macOS arm64 MIR passed 205/205 in 3.12 seconds,
+including the compiled resource-import suite in 0.07/0.05 seconds. All five jobs
+passed in the [native run](https://github.com/qigao/turbowasm/actions/runs/37708969643).
 
 Async host capability callbacks, cross-instance resource borrowing and payload
 conversion, nested Component instantiation, public task/endpoint owners, synchronous
