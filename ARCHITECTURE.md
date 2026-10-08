@@ -1053,6 +1053,13 @@ Commit `8bac9a9` passes all five
 Linux MIR 209/209 in 2.55 s and macOS MIR 209/209 in 4.02 s, including compiled
 guest destructor suspension and memory32/memory64 codec-lease shutdown. This
 qualifies private drain; the public async boundary remains closed.
+Commit `b36a8cc` passes all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37741983427):
+Linux MIR 211/211 in 2.78 s and macOS MIR 211/211 in 3.60 s. Both execute the
+new shutdown host-wait suite under interpreted and compiled destructor bodies,
+including a real nested guest resource.new that requires a second cleanup pass.
+This qualifies the private imported host-wait boundary; it does not open public
+async loading or qualify nested Component instantiation.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
