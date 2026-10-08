@@ -743,8 +743,38 @@ backpressure, real host-wait completion/cancellation and forced unwind before
 borrow release. Windows ASan passes 33 cases and 42,724 assertions; related
 Component/WASI/Runtime regression passes 85/85 in 9.60 s. Its MIR registration
 attaches real backends and requires compiled canonical callers, resource consumers
-and defining destructors. Public async result promotion, task/endpoint/transfer
-owners and shutdown remain to be integrated; the ordinary loader stays gated.
+and defining destructors. Public async task/endpoint/transfer owners and shutdown
+remain to be integrated; the ordinary loader stays gated.
+The host argument resource bridge is qualified by all five native CI jobs at
+[`7297810`](https://github.com/qigao/turbowasm/actions/runs/37720891458): Linux
+MIR 207/207 in 1.74 s and macOS MIR 207/207 in 3.11 s, including compiled host
+argument callers, consumers and defining destructors. Inline Core export bags
+have no executable instance and are skipped when attaching test backends.
+
+Async result promotion stages the existing host value tree before changing the
+canonical result. Allocation, byte quota, type or resource validation failure
+leaves that result available for retry. Fresh canonical own leaves are wrapped
+with their original release obligations and retain the public instance; adopted
+argument proxies, borrowed leaves, published owners and active lower reservations
+cannot become independent results. Publication of the staged tree moves strings
+and resources without another allocation. A private result owner charges its
+tree, bytes and resource wrappers to the shared owner-thread budget until take
+or destruction; take transfers ordinary host-value destruction obligations.
+Destroying a wrapped resource uses its canonical release authority. Moving it
+back into a guest detaches that authority only after canonical publication, so
+publication, rollback and cancellation cannot execute a second destructor.
+The private result owner retains the instance through all cleanup, reports the
+first destructor failure, and releases remaining leaves and byte reservations.
+The host-argument suite covers real retained task own results after host waits,
+result survival through task/admission cleanup, canonical publication and rollback
+of promoted own values, cancellation before publication, host borrow retention,
+destructor failure after public handles close, exact byte boundaries, all nested
+conversion/wrapper allocation failures, duplicate owners, busy lower reservations,
+wrong nominal types and instances, malformed budgets and storage overflow.
+Windows ASan passes 48 cases and 56,209 assertions; the related
+Component/WASI/Runtime graph passes 85/85 in 9.39 s. Resource and composite
+result promotion remains private until the public async task and endpoint
+boundary is complete; future/stream results still require that endpoint owner.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows

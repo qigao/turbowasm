@@ -16,6 +16,8 @@ static turbowasm_component components[2];
 static turbowasm_component_instance instances[2];
 static turbowasm_component_instance alternate_instance;
 static turbowasm_component_host_arguments owners[OWNER_COUNT];
+static turbowasm_component_host_result result_owners[OWNER_COUNT];
+static host_value delivered;
 static turbowasm_component_host_budget budget;
 static turbowasm_component_value result;
 static host_value resources[3];
@@ -24,12 +26,14 @@ static turbowasm_component_canonical_memory resource_memory;
 static turbowasm_component_task retained_task;
 static turbowasm_component_type_graph task_graph;
 static struct { const char *entry; uint32_t handle; unsigned prepared, entered, exited;
-    bool wait; } task_context;
+    bool wait, own_result; } task_context;
 static struct { size_t live, attempts, fail_at; } allocations;
+static size_t allocation_budget_floor;
 
 static void *allocate(void *context, size_t size) {
     void *pointer;
     (void)context;
+    if (allocation_budget_floor != 0u) check_greater_equal(budget.used, allocation_budget_floor);
     if (++allocations.attempts == allocations.fail_at) return NULL;
     pointer = malloc(size);
     if (pointer != NULL) ++allocations.live;
@@ -154,8 +158,13 @@ static turbowasm_status task_entry(void *context, turbowasm_component_task *task
     if (status == TURBOWASM_OK && turbowasm_component_task_deliver_cancel(task->domain))
         status = turbowasm_component_task_cancel(task->domain);
     else if (status == TURBOWASM_OK) {
-        value.kind = TURBOWASM_COMPONENT_TYPE_S32; value.as.s32 = output.as.i32;
-        status = turbowasm_component_task_return(task->domain, &value);
+        if (task_context.own_result) {
+            const turbowasm_component_type *function = turbowasm_component_type_graph_get(binding.graph, binding.function_type);
+            status = resource_memory.resource_lift(resource_memory.resource_context, binding.graph,
+                function->as.function.result, (uint32_t)output.as.i32, &value);
+        } else { value.kind = TURBOWASM_COMPONENT_TYPE_S32; value.as.s32 = output.as.i32; }
+        if (status == TURBOWASM_OK) status = turbowasm_component_task_return(task->domain, &value);
+        (void)turbowasm_component_value_destroy(&value);
     }
     ++task_context.exited;
     return status;
@@ -169,7 +178,7 @@ static void create_task(const char *entry, bool wait) {
     task_graph.types[0].as.resource.instance_key = value[0].resource_instance_key;
     check_true(turbowasm_component_type_graph_define_handle(&task_graph, 1u, value[0].kind, 0u));
     check_true(turbowasm_component_type_graph_define_function(&task_graph, 2u, &parameter, 1u, true,
-        turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_S32)));
+        task_context.own_result ? parameter : turbowasm_component_type_ref_inline(TURBOWASM_COMPONENT_TYPE_S32)));
     task_graph.types[2].as.function.is_async = true;
     task_context.entry = entry; task_context.wait = wait;
     binding.graph = &task_graph; binding.function_type = 2u; binding.instance = adapter(1u, entry).instance;
@@ -222,10 +231,62 @@ static void invoke_snapshot(unsigned owner, turbowasm_component_core_call_adapte
     compiled(binding);
 }
 
+static void fresh_result(int32_t rep, turbowasm_component_value *out) {
+    turbowasm_component_core_call_adapter binding = adapter(1u, "make");
+    const turbowasm_component_type *function = turbowasm_component_type_graph_get(binding.graph, binding.function_type);
+    turbowasm_value argument = {.kind = TURBOWASM_VALUE_I32, .as.i32 = rep}, value = {0};
+    turbowasm_trap trap;
+    size_t count;
+    check_equal(turbowasm_instance_invoke(binding.instance, binding.function_index,
+        &argument, 1u, &value, 1u, &count, &trap), TURBOWASM_OK);
+    compiled(binding); check_equal(count, (size_t)1);
+    check_equal(resource_memory.resource_lift(resource_memory.resource_context, binding.graph,
+        function->as.function.result, (uint32_t)value.as.i32, out), TURBOWASM_OK);
+}
+static turbowasm_status promote_result(unsigned owner, unsigned instance, const char *name) {
+    turbowasm_component_core_call_adapter binding = adapter(instance, name);
+    const turbowasm_component_type *function = turbowasm_component_type_graph_get(binding.graph, binding.function_type);
+    return turbowasm_component_host_result_prepare(&result_owners[owner],
+        turbowasm_component_instance_public_impl_get(&instances[instance]), binding.graph,
+        function->as.function.result, &result, &budget);
+}
+static void fresh_pair(int32_t first, int32_t second) {
+    turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(
+        &turbowasm_component_instance_public_impl_get(&instances[1])->exec.binary->config);
+    result.kind = TURBOWASM_COMPONENT_TYPE_TUPLE; result.as.tuple.count = 2u;
+    result.as.tuple.items = turbowasm_rt_calloc(2u, sizeof(*result.as.tuple.items));
+    turbowasm_runtime_scope_leave(scope);
+    check_not_null(result.as.tuple.items);
+    fresh_result(first, &result.as.tuple.items[0]); fresh_result(second, &result.as.tuple.items[1]);
+}
+static void nested_result(void) {
+    uint8_t bytes[] = {'h', 0xc3, 0xa9, 0, 'x'};
+    uint32_t flags = 5u, wide = UINT32_C(0x80000001);
+    host_value pair[2] = {number(-42), {.kind = TURBOWASM_COMPONENT_HOST_STRING, .as.string = {bytes, sizeof(bytes)}}};
+    host_value tuple = {.kind = TURBOWASM_COMPONENT_HOST_TUPLE, .as.tuple = {pair, 2u}};
+    host_value variant = {.kind = TURBOWASM_COMPONENT_HOST_VARIANT, .as.variant = {2u, &tuple}};
+    host_value option = {.kind = TURBOWASM_COMPONENT_HOST_OPTION, .as.option = {1u, &variant}};
+    host_value fields[4] = {{.kind = TURBOWASM_COMPONENT_HOST_RESULT, .as.result = {1u, &option}},
+        {.kind = TURBOWASM_COMPONENT_HOST_ENUM, .as.enum_index = 2u},
+        {.kind = TURBOWASM_COMPONENT_HOST_FLAGS, .as.flags = {&flags, 1u}},
+        {.kind = TURBOWASM_COMPONENT_HOST_FLAGS, .as.flags = {&wide, 1u}}};
+    host_value item = {.kind = TURBOWASM_COMPONENT_HOST_TUPLE, .as.tuple = {fields, 4u}};
+    host_value list = {.kind = TURBOWASM_COMPONENT_HOST_LIST, .as.list = {&item, 1u}};
+    turbowasm_component_exec_async_limits limits = {4u, 8u};
+    turbowasm_component_instance_destroy(&instances[0]);
+    check_equal(turbowasm_component_instance_create_async_private(&instances[0], &components[0], &limits), TURBOWASM_OK);
+    attach(0u);
+    check_equal(prepare(0u, 0u, "echo-nested", &list, 1u, false), TURBOWASM_OK);
+    check_equal(turbowasm_component_host_arguments_commit(&owners[0]), TURBOWASM_OK);
+    invoke_snapshot(0u, adapter(0u, "echo-nested"));
+    check_equal(turbowasm_component_host_arguments_destroy(&owners[0]), TURBOWASM_OK);
+}
+
 spec("Deferred Component host argument ownership") {
     before_each() {
         turbowasm_runtime_config config;
         memset(&allocations, 0, sizeof(allocations));
+        allocation_budget_floor = 0u;
         budget = (turbowasm_component_host_budget){BYTE_LIMIT, 0u};
         turbowasm_runtime_config_init(&config);
         config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
@@ -246,6 +307,9 @@ spec("Deferred Component host argument ownership") {
             (void)turbowasm_component_exec_resource_codec_rollback(&resource_codec);
         for (i = 0u; i < OWNER_COUNT; ++i)
             (void)turbowasm_component_host_arguments_destroy(&owners[i]);
+        for (i = 0u; i < OWNER_COUNT; ++i)
+            (void)turbowasm_component_host_result_destroy(&result_owners[i]);
+        (void)turbowasm_component_host_value_destroy(&delivered);
         (void)turbowasm_component_value_destroy(&result);
         for (i = 0u; i < 3u; ++i) (void)turbowasm_component_host_value_destroy(&resources[i]);
         turbowasm_component_instance_destroy(&alternate_instance);
@@ -792,6 +856,253 @@ spec("Deferred Component host argument ownership") {
         check_equal(turbowasm_component_host_value_destroy(&resources[0]), TURBOWASM_OK);
         check_equal(turbowasm_component_host_value_destroy(&resources[1]), TURBOWASM_OK);
         check_equal(drops(), 2u);
+    }
+    it("delivers a real retained task own result after host wait and survives task and argument cleanup") {
+        turbowasm_host_wait wait;
+        async_instance(8u); make(0u, 42);
+        check_equal(prepare_async(0u, "echo", resources, 1u, true), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_arguments_commit(&owners[0]), TURBOWASM_OK);
+        task_context.own_result = true; create_task("echo", true);
+        check_equal(turbowasm_component_task_resume(&retained_task, NULL), TURBOWASM_YIELDED);
+        check_equal(turbowasm_component_task_take_result(&retained_task, &result), TURBOWASM_YIELDED);
+        check_true(turbowasm_execution_pending_host_wait(&retained_task.core, &wait));
+        check_equal(turbowasm_execution_complete_host_wait(&retained_task.core, wait, 0), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_resume(&retained_task, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_take_result(&retained_task, &result), TURBOWASM_OK);
+        check_equal(result.as.resource_rep.as.i32, 42); compiled(adapter(1u, "echo"));
+        check_equal(promote_result(0u, 1u, "echo"), TURBOWASM_OK);
+        check_equal(turbowasm_component_task_destroy(&retained_task), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_arguments_destroy(&owners[0]), TURBOWASM_OK);
+        check_equal(resource_codec.exec->async_resource_owners, 1u); check_equal(drops(), 0u);
+        check_equal(turbowasm_component_host_result_destroy(&result_owners[0]), TURBOWASM_OK);
+        check_equal(resource_codec.exec->async_resource_owners, 0u); check_equal(drops(), 1u);
+    }
+    it("promotes a fresh own result and moves it back through canonical publication once") {
+        uint32_t handle;
+        async_instance(8u); fresh_result(42, &result);
+        check_equal(promote_result(0u, 1u, "make"), TURBOWASM_OK);
+        check_equal(result.kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+        check_greater(budget.used, (size_t)0); check_equal(resource_codec.exec->async_resource_owners, 1u);
+        check_equal(turbowasm_component_host_result_take(&result_owners[0], &resources[0]), TURBOWASM_OK);
+        check_equal(budget.used, (size_t)0);
+        check_equal(prepare_async(0u, "consume", resources, 1u, true), TURBOWASM_OK);
+        check_equal(resource_codec.exec->async_resource_owners, 2u);
+        check_equal(turbowasm_component_host_arguments_commit(&owners[0]), TURBOWASM_OK);
+        check_equal(lower_leaf(turbowasm_component_host_arguments_values(&owners[0], NULL), "consume", &handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_exec_resource_codec_rollback(&resource_codec), TURBOWASM_OK);
+        check_equal(drops(), 0u); check_equal(resource_codec.exec->async_resource_owners, 2u);
+        check_equal(lower_leaf(turbowasm_component_host_arguments_values(&owners[0], NULL), "consume", &handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_exec_resource_codec_commit(&resource_codec), TURBOWASM_OK);
+        check_equal(resource_codec.exec->async_resource_owners, 1u);
+        check_equal(turbowasm_component_host_arguments_published(&owners[0]), TURBOWASM_OK);
+        invoke_raw("consume", &handle, 1u, 42);
+        check_equal(turbowasm_component_host_arguments_destroy(&owners[0]), TURBOWASM_OK);
+        check_equal(resource_codec.exec->async_resource_owners, 0u); check_equal(drops(), 1u);
+    }
+    it("releases a promoted own cancelled before publication using its original canonical authority") {
+        async_instance(8u); fresh_result(42, &result);
+        check_equal(promote_result(0u, 1u, "make"), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_result_take(&result_owners[0], &resources[0]), TURBOWASM_OK);
+        check_equal(prepare_async(0u, "consume", resources, 1u, true), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_arguments_commit(&owners[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_arguments_destroy(&owners[0]), TURBOWASM_OK);
+        check_equal(resource_codec.exec->async_resource_owners, 0u); check_equal(drops(), 1u);
+    }
+    it("preserves a promoted own when re-admission aborts and holds its borrow through delivery") {
+        async_instance(8u); fresh_result(42, &result);
+        check_equal(promote_result(0u, 1u, "make"), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_result_take(&result_owners[0], &resources[0]), TURBOWASM_OK);
+        check_equal(prepare_async(0u, "consume", resources, 1u, true), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_arguments_destroy(&owners[0]), TURBOWASM_OK);
+        check_equal(resources[0].kind, TURBOWASM_COMPONENT_HOST_OWN);
+        check_equal(turbowasm_component_host_value_borrow(&resources[0], &resources[1]), TURBOWASM_OK);
+        check_equal(prepare_async(0u, "borrow", &resources[1], 1u, false), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_value_destroy(&resources[0]), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_arguments_destroy(&owners[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_value_destroy(&resources[0]), TURBOWASM_OK);
+        check_equal(resource_codec.exec->async_resource_owners, 0u); check_equal(drops(), 1u);
+    }
+    it("keeps result storage and defining resource destruction alive after public handles close") {
+        size_t live;
+        async_instance(8u); fresh_result(-1, &result);
+        check_equal(promote_result(0u, 1u, "make"), TURBOWASM_OK);
+        turbowasm_component_instance_destroy(&instances[1]); turbowasm_component_destroy(&components[1]);
+        live = allocations.live;
+        check_equal(turbowasm_component_host_result_destroy(&result_owners[0]), TURBOWASM_TRAPPED);
+        check_null(result_owners[0].impl); check_equal(budget.used, (size_t)0); check_less(allocations.live, live);
+        memset(&resource_codec, 0, sizeof(resource_codec));
+    }
+    it("returns result byte capacity on take and rejects one byte short before consuming own") {
+        size_t charge, attempts;
+        async_instance(8u); fresh_result(42, &result);
+        check_equal(promote_result(0u, 1u, "make"), TURBOWASM_OK); charge = budget.used;
+        delivered = number(9);
+        check_equal(turbowasm_component_host_result_take(&result_owners[0], &delivered), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(delivered.as.s32, 9); check_equal(budget.used, charge);
+        memset(&delivered, 0, sizeof(delivered));
+        check_equal(turbowasm_component_host_result_take(&result_owners[0], &delivered), TURBOWASM_OK);
+        check_equal(budget.used, (size_t)0); fresh_result(43, &result);
+        budget.limit = charge - 1u; attempts = allocations.attempts;
+        check_equal(promote_result(1u, 1u, "make"), TURBOWASM_OUT_OF_MEMORY);
+        check_equal(allocations.attempts, attempts); check_equal(result.as.resource_rep.as.i32, 43);
+        budget.limit = charge;
+        allocation_budget_floor = charge;
+        turbowasm_status status = promote_result(1u, 1u, "make"); allocation_budget_floor = 0u;
+        check_equal(status, TURBOWASM_OK); check_equal(budget.used, charge);
+        check_equal(turbowasm_component_host_result_destroy(&result_owners[1]), TURBOWASM_OK);
+        check_equal(budget.used, (size_t)0); check_equal(drops(), 1u);
+    }
+    it("preserves synchronous borrowing and move calls for a promoted host owner") {
+        host_value borrowed = {0}, output = {0};
+        turbowasm_trap trap;
+        size_t count;
+        async_instance(8u); fresh_result(42, &result);
+        check_equal(promote_result(0u, 1u, "make"), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_result_take(&result_owners[0], &resources[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_value_borrow(&resources[0], &borrowed), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_invoke(&instances[1], name_span("borrow"),
+            &borrowed, 1u, &output, 1u, &count, &trap), TURBOWASM_OK);
+        check_equal(output.as.s32, 42); check_equal(drops(), 0u); compiled(adapter(1u, "borrow"));
+        check_equal(turbowasm_component_instance_invoke_move(&instances[1], name_span("consume"),
+            &resources[0], 1u, &output, 1u, &count, &trap), TURBOWASM_OK);
+        check_equal(output.as.s32, 42); check_equal((int)resources[0].kind, 0);
+        compiled(adapter(1u, "consume")); check_equal(resource_codec.exec->async_resource_owners, 0u);
+        check_equal(drops(), 1u);
+    }
+    it("rolls back every resource result allocation and preserves canonical owners for retry") {
+        size_t failure, live;
+        uint32_t refs;
+        bool complete = false;
+        async_instance(8u); fresh_pair(42, 43);
+        live = allocations.live; refs = turbowasm_component_instance_public_impl_get(&instances[1])->ref_count;
+        for (failure = 1u; failure < FAILURE_LIMIT; ++failure) {
+            allocations.attempts = 0u; allocations.fail_at = failure;
+            turbowasm_status status = promote_result(0u, 1u, "pair");
+            allocations.fail_at = 0u;
+            if (status == TURBOWASM_OK) { complete = true; break; }
+            check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_null(result_owners[0].impl);
+            check_equal(result.kind, TURBOWASM_COMPONENT_TYPE_TUPLE);
+            check_equal(result.as.tuple.items[0].as.resource_rep.as.i32, 42);
+            check_equal(result.as.tuple.items[1].as.resource_rep.as.i32, 43);
+            check_equal(resource_codec.exec->async_resource_owners, 2u);
+            check_equal(turbowasm_component_instance_public_impl_get(&instances[1])->resource_count, 0u);
+            check_equal(turbowasm_component_instance_public_impl_get(&instances[1])->ref_count, refs);
+            check_equal(allocations.live, live); check_equal(budget.used, (size_t)0); check_equal(drops(), 0u);
+        }
+        check_true(complete); check_greater(failure, (size_t)3);
+        check_equal(turbowasm_component_host_result_destroy(&result_owners[0]), TURBOWASM_OK);
+        check_equal(resource_codec.exec->async_resource_owners, 0u); check_equal(drops(), 2u);
+    }
+    it("reports the first promoted composite destructor failure and releases every result leaf") {
+        async_instance(8u); fresh_pair(-1, 42);
+        check_equal(promote_result(0u, 1u, "pair"), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_result_destroy(&result_owners[0]), TURBOWASM_TRAPPED);
+        check_null(result_owners[0].impl); check_equal(budget.used, (size_t)0);
+        check_equal(resource_codec.exec->async_resource_owners, 0u); check_equal(drops(), 2u);
+    }
+    it("does not promote argument proxies into independent results") {
+        const turbowasm_component_value *value;
+        turbowasm_component_core_call_adapter binding;
+        const turbowasm_component_type *function;
+        size_t used;
+        async_instance(8u); make(0u, 42);
+        check_equal(prepare_async(0u, "consume", resources, 1u, true), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_arguments_commit(&owners[0]), TURBOWASM_OK);
+        value = turbowasm_component_host_arguments_values(&owners[0], NULL);
+        binding = adapter(1u, "make"); function = turbowasm_component_type_graph_get(binding.graph, binding.function_type);
+        used = budget.used;
+        check_equal(turbowasm_component_host_result_prepare(&result_owners[0],
+            turbowasm_component_instance_public_impl_get(&instances[1]), binding.graph,
+            function->as.function.result, (turbowasm_component_value *)value, &budget), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(budget.used, used); check_null(result_owners[0].impl);
+        check_equal(value->kind, TURBOWASM_COMPONENT_TYPE_OWN); check_equal(drops(), 0u);
+    }
+    it("rolls back every nested result allocation without moving strings or flag storage") {
+        size_t failure, live;
+        turbowasm_component_value *root;
+        uint8_t *bytes;
+        bool complete = false;
+        nested_result(); root = result.as.list.items;
+        bytes = root[0].as.tuple.items[0].as.result.payload->as.option.payload->as.variant.payload->as.tuple.items[1].as.string.data;
+        live = allocations.live;
+        for (failure = 1u; failure < FAILURE_LIMIT; ++failure) {
+            allocations.attempts = 0u; allocations.fail_at = failure;
+            turbowasm_status status = promote_result(0u, 0u, "echo-nested");
+            allocations.fail_at = 0u;
+            if (status == TURBOWASM_OK) { complete = true; break; }
+            check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_null(result_owners[0].impl);
+            check_true(result.as.list.items == root); check_equal(memcmp(bytes, "h\xc3\xa9\0x", 5u), 0);
+            check_equal(root[0].as.tuple.items[2].as.flags, 5u);
+            check_equal(allocations.live, live); check_equal(budget.used, (size_t)0);
+        }
+        check_true(complete); check_greater(failure, (size_t)8);
+        check_equal(turbowasm_component_host_result_take(&result_owners[0], &delivered), TURBOWASM_OK);
+        host_value *fields = delivered.as.list.items[0].as.tuple.items;
+        check_equal(fields[1].as.enum_index, 2u); check_equal(fields[2].as.flags.words[0], 5u);
+        check_equal(fields[3].as.flags.words[0], UINT32_C(0x80000001));
+        host_value *pair = fields[0].as.result.payload->as.option.payload->as.variant.payload->as.tuple.items;
+        check_equal(pair[0].as.s32, -42); check_true(pair[1].as.string.data == bytes);
+        check_equal(pair[1].as.string.size, (size_t)5); check_equal(budget.used, (size_t)0);
+    }
+    it("rejects busy canonical results without changing their lower reservation") {
+        uint32_t handle;
+        size_t used;
+        async_instance(8u); fresh_result(42, &result);
+        check_equal(lower_leaf(&result, "consume", &handle), TURBOWASM_OK); used = budget.used;
+        check_equal(promote_result(0u, 1u, "make"), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(budget.used, used); check_not_null(resource_codec.lower_head);
+        check_equal(result.kind, TURBOWASM_COMPONENT_TYPE_OWN); check_equal(drops(), 0u);
+        check_equal(turbowasm_component_exec_resource_codec_rollback(&resource_codec), TURBOWASM_OK);
+        check_equal(promote_result(0u, 1u, "make"), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_result_destroy(&result_owners[0]), TURBOWASM_OK);
+        check_equal(drops(), 1u);
+    }
+    it("rejects duplicate canonical owners and preserves both original result obligations") {
+        turbowasm_component_value saved;
+        turbowasm_status status;
+        size_t live;
+        async_instance(8u); fresh_pair(42, 43); live = allocations.live;
+        saved = result.as.tuple.items[1]; result.as.tuple.items[1] = result.as.tuple.items[0];
+        status = promote_result(0u, 1u, "pair"); result.as.tuple.items[1] = saved;
+        check_equal(status, TURBOWASM_INVALID_ARGUMENT); check_null(result_owners[0].impl);
+        check_equal(allocations.live, live); check_equal(budget.used, (size_t)0);
+        check_equal(resource_codec.exec->async_resource_owners, 2u); check_equal(drops(), 0u);
+        check_equal(promote_result(0u, 1u, "pair"), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_result_destroy(&result_owners[0]), TURBOWASM_OK);
+        check_equal(drops(), 2u);
+    }
+    it("rejects another instance and the wrong nominal result type before moving own") {
+        turbowasm_component_exec_async_limits limits = {4u, 8u};
+        turbowasm_component_core_call_adapter binding;
+        const turbowasm_component_type *function;
+        async_instance(8u); fresh_result(42, &result);
+        check_equal(turbowasm_component_instance_create_async_private(&alternate_instance, &components[1], &limits), TURBOWASM_OK);
+        binding = adapter(1u, "make"); function = turbowasm_component_type_graph_get(binding.graph, binding.function_type);
+        check_equal(turbowasm_component_host_result_prepare(&result_owners[0],
+            turbowasm_component_instance_public_impl_get(&alternate_instance), binding.graph,
+            function->as.function.result, &result, &budget), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(promote_result(0u, 1u, "make-s"), TURBOWASM_TYPE_MISMATCH);
+        check_equal(result.as.resource_rep.as.i32, 42); check_equal(budget.used, (size_t)0);
+        check_equal(promote_result(0u, 1u, "make"), TURBOWASM_OK);
+    }
+    it("rejects invalid result budgets and overflowing storage before allocating") {
+        size_t attempts;
+        turbowasm_component_exec_async_limits limits = {4u, 8u};
+        turbowasm_component_instance_destroy(&instances[0]);
+        check_equal(turbowasm_component_instance_create_async_private(&instances[0], &components[0], &limits), TURBOWASM_OK);
+        result.kind = TURBOWASM_COMPONENT_TYPE_ENUM; result.as.enum_index = 1u;
+        attempts = allocations.attempts; budget.limit = 0u;
+        check_equal(promote_result(0u, 0u, "flat-enum"), TURBOWASM_INVALID_ARGUMENT);
+        budget.limit = SIZE_MAX;
+        check_equal(promote_result(0u, 0u, "flat-enum"), TURBOWASM_INVALID_ARGUMENT);
+        budget.limit = BYTE_LIMIT; budget.used = BYTE_LIMIT + 1u;
+        check_equal(promote_result(0u, 0u, "flat-enum"), TURBOWASM_INVALID_ARGUMENT);
+        budget.used = 0u; result.kind = TURBOWASM_COMPONENT_TYPE_LIST;
+        result.as.list.items = &result; result.as.list.count = UINT64_MAX;
+        turbowasm_status status = promote_result(0u, 0u, "echo-enum");
+        memset(&result, 0, sizeof(result));
+        check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_equal(allocations.attempts, attempts);
+        check_equal(budget.used, (size_t)0); check_null(result_owners[0].impl);
     }
     it("rolls back the retained instance constructor after every failed allocation") {
         turbowasm_component_exec_async_limits limits = {4u, 8u};

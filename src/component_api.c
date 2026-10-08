@@ -19,6 +19,7 @@ struct turbowasm_component_host_resource {
     uint32_t loans;
     bool busy;
     bool external;
+    turbowasm_component_value canonical;
 };
 
 typedef struct component_resource_argument {
@@ -219,6 +220,8 @@ static void resource_owner_forget(turbowasm_component_host_resource *owner) {
         cursor = &(*cursor)->next;
     *cursor = owner->next;
     --instance->resource_count;
+    if (owner->canonical.kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED)
+        turbowasm_component_exec_resource_value_disown(&owner->canonical);
     turbowasm_rt_free(owner);
     component_instance_release(instance);
 }
@@ -229,8 +232,9 @@ static turbowasm_status resource_owner_release(void *context) {
     if (owner == NULL || owner->loans != 0u)
         return TURBOWASM_INVALID_ARGUMENT;
     owner->busy = true;
-    status = turbowasm_component_exec_resource_release(
-        &owner->instance->exec, owner->identity, owner->rep);
+    status = owner->canonical.kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED
+        ? turbowasm_component_value_destroy(&owner->canonical)
+        : turbowasm_component_exec_resource_release(&owner->instance->exec, owner->identity, owner->rep);
     resource_owner_forget(owner);
     return status;
 }
@@ -817,10 +821,71 @@ turbowasm_status turbowasm_component_host_arguments_destroy(
     return status;
 }
 
-static turbowasm_status internal_to_public(
+typedef struct component_result_build {
+    turbowasm_component_instance_public_impl *instance;
+    turbowasm_component_host_resource *pending;
+} component_result_build;
+
+/* Staging owns only new wrappers/nodes. Strings and canonical obligations still
+ * belong to the unchanged source until the complete tree is committed. */
+static void discard_staged_result(turbowasm_component_host_value *value) {
+    const turbowasm_component_host_sequence *sequence = public_sequence(value);
+    const turbowasm_component_host_variant *variant = public_variant(value);
+    size_t i;
+    if (sequence != NULL) {
+        for (i = 0u; i < sequence->count; ++i) discard_staged_result(&sequence->items[i]);
+        turbowasm_rt_free(sequence->items);
+    } else if (variant != NULL && variant->payload != NULL) {
+        discard_staged_result(variant->payload); turbowasm_rt_free(variant->payload);
+    } else if (value->kind == TURBOWASM_COMPONENT_HOST_FLAGS) {
+        turbowasm_rt_free(value->as.flags.words);
+    } else if (value->kind == TURBOWASM_COMPONENT_HOST_OWN && value->as.own != NULL) {
+        turbowasm_component_instance_public_impl *instance = value->as.own->instance;
+        turbowasm_rt_free(value->as.own); component_instance_release(instance);
+    }
+    memset(value, 0, sizeof(*value));
+}
+
+static turbowasm_status stage_result_resource(component_result_build *build,
+    const turbowasm_component_value *source, turbowasm_component_host_resource **out) {
+    turbowasm_component_host_resource *owner;
+    const turbowasm_component_resource_identity *identity =
+        turbowasm_component_exec_resource_identity(&build->instance->exec, source->resource_identity);
+    uint32_t count = build->instance->resource_count;
+    if (identity == NULL) return TURBOWASM_TYPE_MISMATCH;
+    for (owner = build->pending; owner != NULL; owner = owner->next) {
+        if (owner->canonical.release_context == source->release_context) return TURBOWASM_INVALID_ARGUMENT;
+        if (identity->provider != NULL && owner->external && owner->identity == source->resource_identity &&
+            owner->rep.kind == source->as.resource_rep.kind &&
+            (owner->rep.kind == TURBOWASM_VALUE_I32 ? owner->rep.as.i32 == source->as.resource_rep.as.i32
+                : owner->rep.as.i64 == source->as.resource_rep.as.i64)) return TURBOWASM_TRAPPED;
+        if (++count >= TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS) return TURBOWASM_OUT_OF_MEMORY;
+    }
+    if (count >= TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS) return TURBOWASM_OUT_OF_MEMORY;
+    if (identity->provider != NULL) {
+        for (owner = build->instance->resources; owner != NULL; owner = owner->next)
+            if (owner->external && owner->identity == source->resource_identity &&
+                owner->rep.kind == source->as.resource_rep.kind &&
+                (owner->rep.kind == TURBOWASM_VALUE_I32
+                    ? owner->rep.as.i32 == source->as.resource_rep.as.i32
+                    : owner->rep.as.i64 == source->as.resource_rep.as.i64)) return TURBOWASM_TRAPPED;
+    }
+    owner = turbowasm_rt_calloc(1u, sizeof(*owner));
+    if (owner == NULL) return TURBOWASM_OUT_OF_MEMORY;
+    if (!component_instance_retain(build->instance)) {
+        turbowasm_rt_free(owner); return TURBOWASM_INVALID_ARGUMENT;
+    }
+    owner->instance = build->instance; owner->identity = source->resource_identity;
+    owner->rep = source->as.resource_rep; owner->external = identity->provider != NULL;
+    owner->canonical = *source; owner->next = build->pending; build->pending = owner;
+    *out = owner;
+    return TURBOWASM_OK;
+}
+
+static turbowasm_status convert_result(
     turbowasm_component_value *source,
     turbowasm_component_host_value *out,
-    uint32_t depth) {
+    uint32_t depth, component_result_build *build) {
     uint64_t i;
 
     if (source == NULL || out == NULL)
@@ -875,8 +940,10 @@ static turbowasm_status internal_to_public(
         case TURBOWASM_COMPONENT_TYPE_STRING:
             out->as.string.data = source->as.string.data;
             out->as.string.size = source->as.string.size;
-            source->as.string.data = NULL;
-            source->as.string.size = 0u;
+            if (build == NULL) {
+                source->as.string.data = NULL;
+                source->as.string.size = 0u;
+            }
             break;
 
         case TURBOWASM_COMPONENT_TYPE_LIST:
@@ -899,16 +966,19 @@ static turbowasm_status internal_to_public(
                 default: out->as.tuple = sequence; break;
             }
             for (i = 0u; i < input->count; ++i) {
-                turbowasm_status status = internal_to_public(
-                    &input->items[i], &sequence.items[i], depth + 1u);
+                turbowasm_status status = convert_result(
+                    &input->items[i], &sequence.items[i], depth + 1u, build);
                 if (status != TURBOWASM_OK) {
-                    turbowasm_component_host_value_destroy(out);
+                    if (build != NULL) discard_staged_result(out);
+                    else turbowasm_component_host_value_destroy(out);
                     return status;
                 }
             }
-            turbowasm_rt_free(input->items);
-            input->items = NULL;
-            input->count = 0u;
+            if (build == NULL) {
+                turbowasm_rt_free(input->items);
+                input->items = NULL;
+                input->count = 0u;
+            }
             break;
         }
         case TURBOWASM_COMPONENT_TYPE_VARIANT:
@@ -923,15 +993,18 @@ static turbowasm_status internal_to_public(
                     turbowasm_rt_calloc(1u, sizeof(*variant.payload));
                 if (variant.payload == NULL)
                     return TURBOWASM_OUT_OF_MEMORY;
-                status = internal_to_public(input->payload,
-                    variant.payload, depth + 1u);
+                status = convert_result(input->payload,
+                    variant.payload, depth + 1u, build);
                 if (status != TURBOWASM_OK) {
-                    turbowasm_component_host_value_destroy(variant.payload);
+                    if (build != NULL) discard_staged_result(variant.payload);
+                    else turbowasm_component_host_value_destroy(variant.payload);
                     turbowasm_rt_free(variant.payload);
                     return status;
                 }
-                turbowasm_rt_free(input->payload);
-                input->payload = NULL;
+                if (build == NULL) {
+                    turbowasm_rt_free(input->payload);
+                    input->payload = NULL;
+                }
             }
             switch (out->kind) {
                 case TURBOWASM_COMPONENT_HOST_VARIANT: out->as.variant = variant; break;
@@ -953,6 +1026,11 @@ static turbowasm_status internal_to_public(
             break;
 
         case TURBOWASM_COMPONENT_TYPE_OWN:
+            if (build != NULL) {
+                turbowasm_status status = stage_result_resource(build, source, &out->as.own);
+                if (status != TURBOWASM_OK) return status;
+                break;
+            }
             if (source->release != resource_owner_release || source->release_context == NULL)
                 return TURBOWASM_INVALID_ARGUMENT;
             out->as.own = source->release_context;
@@ -962,8 +1040,157 @@ static turbowasm_status internal_to_public(
             return TURBOWASM_UNSUPPORTED;
     }
 
-    memset(source, 0, sizeof(*source));
+    if (build == NULL) memset(source, 0, sizeof(*source));
     return TURBOWASM_OK;
+}
+
+static turbowasm_status internal_to_public(turbowasm_component_value *source,
+    turbowasm_component_host_value *out, uint32_t depth) {
+    return convert_result(source, out, depth, NULL);
+}
+
+typedef struct component_host_result_impl {
+    turbowasm_component_instance_public_impl *instance;
+    turbowasm_component_host_budget *budget;
+    size_t bytes;
+    turbowasm_component_host_value value;
+} component_host_result_impl;
+
+static turbowasm_status result_storage_size(turbowasm_component_instance_public_impl *instance,
+    turbowasm_component_value *value, uint32_t depth, size_t *size, size_t limit, uint32_t *resources) {
+    turbowasm_component_value_list *sequence;
+    turbowasm_component_value_variant *variant;
+    turbowasm_status status;
+    uint64_t i;
+    if (value == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    if (depth >= COMPONENT_PUBLIC_MAX_DEPTH) return TURBOWASM_TRAPPED;
+    if (!public_kind_supported((turbowasm_component_host_value_kind)value->kind) ||
+        value->kind == TURBOWASM_COMPONENT_TYPE_BORROW) return TURBOWASM_UNSUPPORTED;
+    if (value->kind != TURBOWASM_COMPONENT_TYPE_OWN && value->release != NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    sequence = internal_sequence(value); variant = internal_variant(value);
+    if (sequence != NULL) {
+        if ((sequence->count != 0u && sequence->items == NULL) || sequence->count > SIZE_MAX)
+            return TURBOWASM_INVALID_ARGUMENT;
+        status = argument_size_add(size, (size_t)sequence->count, sizeof(turbowasm_component_host_value), limit);
+        if (status != TURBOWASM_OK) return status;
+        for (i = 0u; i < sequence->count; ++i) {
+            status = result_storage_size(instance, &sequence->items[i], depth + 1u, size, limit, resources);
+            if (status != TURBOWASM_OK) return status;
+        }
+    } else if (variant != NULL && variant->payload != NULL) {
+        status = argument_size_add(size, 1u, sizeof(turbowasm_component_host_value), limit);
+        if (status != TURBOWASM_OK) return status;
+        return result_storage_size(instance, variant->payload, depth + 1u, size, limit, resources);
+    } else if (value->kind == TURBOWASM_COMPONENT_TYPE_STRING) {
+        if (value->as.string.size > SIZE_MAX ||
+            (value->as.string.size != 0u && value->as.string.data == NULL)) return TURBOWASM_INVALID_ARGUMENT;
+        return argument_size_add(size, (size_t)value->as.string.size, 1u, limit);
+    } else if (value->kind == TURBOWASM_COMPONENT_TYPE_FLAGS) {
+        return argument_size_add(size, COMPONENT_PUBLIC_FLAGS_WORDS, sizeof(uint32_t), limit);
+    } else if (value->kind == TURBOWASM_COMPONENT_TYPE_OWN) {
+        if (!turbowasm_component_exec_resource_value_owned(&instance->exec, value)) return TURBOWASM_INVALID_ARGUMENT;
+        if (instance->resource_count >= TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS ||
+            *resources >= TURBOWASM_COMPONENT_RESOURCE_MAX_SLOTS - instance->resource_count)
+            return TURBOWASM_OUT_OF_MEMORY;
+        ++*resources;
+        status = argument_size_add(size, 1u, sizeof(turbowasm_component_host_resource), limit);
+        if (status == TURBOWASM_OK)
+            status = argument_size_add(size, 1u, turbowasm_component_exec_resource_adopt_size(), limit);
+        return status;
+    }
+    return TURBOWASM_OK;
+}
+
+/* The staged tree has the same shape. No allocation or guest callback occurs
+ * while source ownership and the public resource registry are committed. */
+static void commit_staged_result(turbowasm_component_value *source,
+    turbowasm_component_host_value *value) {
+    turbowasm_component_value_list *sequence = internal_sequence(source);
+    turbowasm_component_value_variant *variant = internal_variant(source);
+    const turbowasm_component_host_sequence *out_sequence = public_sequence(value);
+    const turbowasm_component_host_variant *out_variant = public_variant(value);
+    uint64_t i;
+    if (sequence != NULL) {
+        for (i = 0u; i < sequence->count; ++i)
+            commit_staged_result(&sequence->items[i], &out_sequence->items[i]);
+        turbowasm_rt_free(sequence->items);
+    } else if (variant != NULL && variant->payload != NULL) {
+        commit_staged_result(variant->payload, out_variant->payload);
+        turbowasm_rt_free(variant->payload);
+    } else if (source->kind == TURBOWASM_COMPONENT_TYPE_OWN) {
+        turbowasm_component_host_resource *owner = value->as.own;
+        owner->next = owner->instance->resources;
+        owner->instance->resources = owner; ++owner->instance->resource_count;
+    }
+    memset(source, 0, sizeof(*source));
+}
+
+turbowasm_status turbowasm_component_host_result_prepare(
+    turbowasm_component_host_result *owner, turbowasm_component_instance_public_impl *instance,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref type,
+    turbowasm_component_value *source, turbowasm_component_host_budget *budget) {
+    component_host_result_impl *impl;
+    component_result_build build = {instance, NULL};
+    turbowasm_runtime_scope scope;
+    size_t bytes = sizeof(*impl), available;
+    uint32_t resources = 0u;
+    turbowasm_status status;
+    if (owner == NULL || owner->impl != NULL || instance == NULL || !instance->exec.initialized ||
+        instance->exec.task_domain.table == NULL || graph == NULL || source == NULL ||
+        budget == NULL || budget->limit == 0u || budget->limit == SIZE_MAX || budget->used > budget->limit)
+        return TURBOWASM_INVALID_ARGUMENT;
+    available = budget->limit - budget->used;
+    if (bytes > available) return TURBOWASM_OUT_OF_MEMORY;
+    status = result_storage_size(instance, source, 0u, &bytes, available, &resources);
+    if (status != TURBOWASM_OK) return status;
+    status = turbowasm_component_canonical_validate_value(graph, type, source);
+    if (status != TURBOWASM_OK) return status;
+    if (!component_instance_retain(instance)) return TURBOWASM_INVALID_ARGUMENT;
+    budget->used += bytes;
+    scope = turbowasm_runtime_scope_enter(&instance->exec.binary->config);
+    impl = turbowasm_rt_calloc(1u, sizeof(*impl));
+    if (impl == NULL) {
+        budget->used -= bytes; turbowasm_runtime_scope_leave(scope);
+        component_instance_release(instance); return TURBOWASM_OUT_OF_MEMORY;
+    }
+    status = convert_result(source, &impl->value, 0u, &build);
+    if (status != TURBOWASM_OK) {
+        discard_staged_result(&impl->value); turbowasm_rt_free(impl);
+        budget->used -= bytes;
+        turbowasm_runtime_scope_leave(scope); component_instance_release(instance); return status;
+    }
+    commit_staged_result(source, &impl->value);
+    impl->instance = instance; impl->budget = budget; impl->bytes = bytes;
+    owner->impl = impl;
+    turbowasm_runtime_scope_leave(scope);
+    return TURBOWASM_OK;
+}
+
+static void host_result_forget(turbowasm_component_host_result *owner) {
+    component_host_result_impl *impl = owner->impl;
+    turbowasm_component_instance_public_impl *instance = impl->instance;
+    impl->budget->used -= impl->bytes;
+    owner->impl = NULL; turbowasm_rt_free(impl); component_instance_release(instance);
+}
+
+turbowasm_status turbowasm_component_host_result_take(
+    turbowasm_component_host_result *owner, turbowasm_component_host_value *out) {
+    component_host_result_impl *impl = owner != NULL ? owner->impl : NULL;
+    if (impl == NULL || out == NULL || (int)out->kind != 0) return TURBOWASM_INVALID_ARGUMENT;
+    *out = impl->value; host_result_forget(owner);
+    return TURBOWASM_OK;
+}
+
+turbowasm_status turbowasm_component_host_result_destroy(turbowasm_component_host_result *owner) {
+    component_host_result_impl *impl;
+    turbowasm_status status;
+    if (owner == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    impl = owner->impl;
+    if (impl == NULL) return TURBOWASM_OK;
+    status = turbowasm_component_host_value_destroy(&impl->value);
+    if ((int)impl->value.kind == 0) host_result_forget(owner);
+    return status;
 }
 
 static turbowasm_status check_destroy_owner(

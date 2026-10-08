@@ -174,6 +174,28 @@ bool turbowasm_component_exec_resource_value_idle(const turbowasm_component_valu
     return owner->lower_scope == NULL;
 }
 
+bool turbowasm_component_exec_resource_value_owned(
+    const turbowasm_component_exec *exec, const turbowasm_component_value *value) {
+    const turbowasm_component_async_resource_owner *owner;
+    if (value == NULL || value->kind != TURBOWASM_COMPONENT_TYPE_OWN ||
+        !turbowasm_component_exec_resource_value_idle(value)) return false;
+    owner = value->release_context;
+    return owner->exec == exec && !owner->borrowed && !owner->committed &&
+        owner->host_finish == NULL && value->resource_identity == owner->identity &&
+        value->resource_instance_key == owner->instance_key &&
+        value->as.resource_rep.kind == owner->rep.kind &&
+        (owner->rep.kind == TURBOWASM_VALUE_I32
+            ? value->as.resource_rep.as.i32 == owner->rep.as.i32
+            : owner->rep.kind == TURBOWASM_VALUE_I64 && value->as.resource_rep.as.i64 == owner->rep.as.i64);
+}
+
+void turbowasm_component_exec_resource_value_disown(turbowasm_component_value *value) {
+    turbowasm_component_async_resource_owner *owner = value->release_context;
+    owner->committed = true;
+    (void)release_resource(owner);
+    memset(value, 0, sizeof(*value));
+}
+
 static const turbowasm_component_type *instance_resource(turbowasm_component_exec_resource_codec *codec,
     const turbowasm_component_type_graph *graph, turbowasm_component_type_ref ref,
     const turbowasm_component_type **out_type) {

@@ -91,4 +91,21 @@ turbowasm_status turbowasm_component_host_arguments_published(
 turbowasm_status turbowasm_component_host_arguments_destroy(
     turbowasm_component_host_arguments *owner);
 
+typedef struct turbowasm_component_host_result { void *impl; } turbowasm_component_host_result;
+/* Private staging for terminal async delivery. The graph is an instantiated
+ * result type. Fresh canonical resources are retained with their release
+ * authority; argument proxies and borrowed results cannot escape. Failure keeps
+ * source/output/budget intact. Success empties source and holds the byte charge
+ * and instance until take/destroy. Source allocation must belong to this runtime.
+ * Owner-thread only; the shared budget must outlive this owner. */
+turbowasm_status turbowasm_component_host_result_prepare(
+    turbowasm_component_host_result *owner, turbowasm_component_instance_public_impl *instance,
+    const turbowasm_component_type_graph *graph, turbowasm_component_type_ref type,
+    turbowasm_component_value *source, turbowasm_component_host_budget *budget);
+/* Moves the result into an empty host value and returns the retained byte charge.
+ * The ordinary host-value destroy contract then owns its storage/resources. */
+turbowasm_status turbowasm_component_host_result_take(
+    turbowasm_component_host_result *owner, turbowasm_component_host_value *out);
+turbowasm_status turbowasm_component_host_result_destroy(turbowasm_component_host_result *owner);
+
 #endif /* TURBOWASM_COMPONENT_API_INTERNAL_H */

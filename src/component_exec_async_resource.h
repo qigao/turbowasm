@@ -33,6 +33,13 @@ turbowasm_status turbowasm_component_exec_resource_adopt(
     turbowasm_component_resource_host_finish_fn finish,
     void *context);
 bool turbowasm_component_exec_resource_value_idle(const turbowasm_component_value *value);
+/* Independent own result: fresh, idle and owned by this exec; admission proxies
+ * borrow their original owner and cannot escape as independent results. */
+bool turbowasm_component_exec_resource_value_owned(
+    const struct turbowasm_component_exec *exec, const turbowasm_component_value *value);
+/* Infallible after value_owned admission, when exclusive ownership is published.
+ * Drops canonical storage/quota without destroying the now-transferred rep. */
+void turbowasm_component_exec_resource_value_disown(turbowasm_component_value *value);
 
 /* Owner-thread-only instantiated-resource conversion. Lifted values retain the exec;
  * borrowed source handles stay lent until their values are destroyed at terminal
