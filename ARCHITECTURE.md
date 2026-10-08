@@ -765,6 +765,11 @@ host/provider routing, ambiguous claims, callback errors, real I/O cancellation,
 early caller exit, caller-backpressure isolation, nested result realloc control,
 resource identity/loans, forced teardown and per-call allocation rollback. The
 related Component/WASI/Runtime regression graph passes 84/84 in 9.03 s.
+Commit `b9a5e23` passed all five
+[native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37716084457):
+Linux MIR 205/205 in 2.56 s and macOS MIR 205/205 in 3.67 s. Both run the
+host-import and imported-resource suites with compiled callers, result realloc
+and defining-instance destructors.
 Qualification must cover scalar/composite/own payloads, unit futures, nested
 endpoints, memory32/64, partial transfers, all cancellation phases, event ordering,
 backpressure, capacity exhaustion, allocation failure, traps and exactly-once
