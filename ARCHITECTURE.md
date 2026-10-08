@@ -775,6 +775,9 @@ Windows ASan passes 48 cases and 56,209 assertions; the related
 Component/WASI/Runtime graph passes 85/85 in 9.39 s. Resource and composite
 result promotion remains private until the public async task and endpoint
 boundary is complete; future/stream results still require that endpoint owner.
+Commit `73e1137` passes all five [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37722176124):
+Linux MIR 207/207 in 1.94 s and macOS MIR 207/207 in 2.73 s, including the
+host result cases under interpreted and compiled callers/resource destructors.
 
 Private host-task execution reuses Runtime's resumable coroutine, execution
 control and host-wait generation checks. An internal host-entry execution borrows
