@@ -121,6 +121,12 @@ synchronous admission retains its behavior. Component provider linking, nested
 instantiation and broader WASI 0.2 integration remain incomplete; the Component
 Model is not yet complete.
 
+WASI 0.2 TCP has a provider-neutral interface and state machine; its current
+built-in CNet backend covers create/bind/listen/options. Native connect/accept,
+byte-stream I/O and reusable readiness, followed by UDP and DNS, are described
+in the [proposed socket backend design](ARCHITECTURE.md#wasi-socket-backend-and-reusable-io-readiness-proposed).
+These proposed additions are not yet installed APIs.
+
 MIR admits the complete helper-backed SIMD instruction set, including shuffle,
 lane extraction/replacement, extending/splat/zero loads and lane loads/stores.
 Immediate SIMD operations reuse Runtime's validated instruction semantics; this

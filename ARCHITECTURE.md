@@ -2693,6 +2693,460 @@ limits for module bytes, individual Runtime allocations, owned linear memories
 and owned tables. Module-derived instances and restartable executions inherit
 that policy; imported memories/tables retain the provider instance policy.
 
+## WASI socket backend and reusable I/O readiness (proposed)
+
+This is an implementation design, not a claim that the APIs below are already
+installed. The initial deliverable is a complete native TCP path for the pinned
+`wasi:sockets@0.2.8` interfaces. UDP and name lookup are separate qualification
+gates. Component async host owners remain the execution/lifetime boundary;
+WASI 0.2 byte-stream resources are not Component typed `stream<T>` endpoints.
+Preview1 socket imports and a Preview3 WIT package are separate admission work,
+not aliases added to this implementation.
+
+### Evidence and dependency boundary
+
+The current public `include/turbowasm/wasi02_sockets.h` already describes TCP
+providers. `src/wasi02_sockets.c` implements the typed state machine, connects
+successful connect/accept results to the existing stream resource table, and
+rejects absent provider methods. `tests/wasi02_tcp_state_test.c` qualifies that
+contract with a fake provider. The concrete provider in `src/wasi02_cnet.c`
+currently supplies create/bind/listen/options only;
+`tests/wasi02_cnet_control_test.c` explicitly checks that connect, accept,
+remote-address, subscribe and shutdown callbacks remain absent.
+
+`src/wasi02_poll_native_io.c` records readiness for one terminal NativeIO
+request. That contract remains useful for completion-bound sources, but cannot
+represent a socket subscription reused across bind/connect/listen operations.
+The existing installed WASI02 facade also selects only the synchronous exec
+constructor; a separate async-aware constructor is required.
+
+The locally inspected released Salts 2.2.0 SDK exports external CNet client and
+listener progress, exact bound-socket connect handoff, portable endpoint
+queries, receive demand, half-shutdown, and external UDP progress. These are
+capabilities verified in its installed `cnet/cnet.h`, not an assumed minimum
+SDK version. Configure must compile/link-check the required public symbols
+against the actual selected SDK; do not access CNet internals or provide an
+alternate raw-socket implementation when a capability is missing.
+
+The sibling Salts checkout has `cnet/src/cnet_resolver.h`, but its resolver is
+private, yields one selected native address, and is not a public ordered address
+stream. The current public UDP API also lacks a complete unbound/configurable
+WASI UDP socket contract. Those are explicit Salts prerequisites for the UDP
+and DNS gates, not capabilities supplied by this TurboWasm adapter.
+
+Normative references are the versioned upstream [TCP WIT](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/tcp.wit),
+[TCP state/readiness semantics](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/TcpSocketOperationalSemantics.md),
+[I/O streams WIT](https://github.com/WebAssembly/wasi-io/blob/v0.2.8/wit/streams.wit),
+[UDP WIT](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/udp.wit),
+and [name lookup WIT](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/ip-name-lookup.wit).
+Pin their resolved commits in the fixture provenance when implementing; the
+unstable `network-error-code` export is not part of this stable gate.
+
+### Module and state ownership
+
+Keep `TurboWasm::WASI02` provider-neutral. Add optional installed
+`TurboWasm::WASI02IO` and `TurboWasm::WASI02CNet` targets. The first supplies a
+shared provider representation/notification domain; the second depends on it,
+WASI02 and `Salts::CNet`. NativeIO public types appear only in the optional
+CNet adapter header. No new third-party library is needed for TCP.
+
+```text
+WASI02 socket / stream / poll imports
+    -> existing Component resource tables and canonical ownership
+    -> WASI02IO provider-token dispatch and reusable subscriptions
+    -> WASI02CNet bounded socket / connection / buffer owners
+    -> public external-progress CNet APIs
+    -> one caller-owned NativeIO backend
+
+Runtime host-wait generation -> one aggregate wait route -> ready sources
+Component call/task resume   <- host completes progress, then resumes explicitly
+```
+
+The existing WASI socket table is authoritative for WIT operational states.
+CNet is authoritative for transport state and request completion. The adapter
+owns only their translation: terminal connect/accept outcomes awaiting a WIT
+method, half-close flags, byte queues, and publication obligations. A native
+connect completion resolves the pending outcome; `finish-connect` commits the
+WIT transition. Only actual connection termination may asynchronously mark an
+already connected WIT socket closed. Do not mirror OS descriptors or maintain
+a second mutable copy of the WIT state machine.
+
+WASI02IO holds bounded provider-token slots and wait membership, not another
+Component resource table or scheduler. Tokens include domain identity, kind,
+slot and generation; cross-domain, stale, or wrong-kind tokens fail before
+callbacks. Exhausted generations retire slots rather than wrap to a live alias.
+Source readiness is queried from its owner. Change notifications are hints to
+recheck, not a second authoritative boolean.
+
+### Proposed host interface and composition
+
+The following are proposed entry points, to be declared only when each complete
+gate passes. All owner carriers are unique, opaque and zero initialized.
+Configuration structs have `size` and `api_version`, finite defaults, checked
+field validation, and no implicit unlimited values. Source handles are opaque
+generation-checked identities scoped to the I/O domain.
+
+```c
+/* New wasi02_io.h; proposed names, not current declarations. */
+turbowasm_status turbowasm_wasi02_io_init(
+    turbowasm_wasi02_io *io, const turbowasm_wasi02_io_config *config,
+    const turbowasm_runtime_config *runtime_config);
+turbowasm_status turbowasm_wasi02_io_source_register(
+    turbowasm_wasi02_io *io, const turbowasm_wasi02_io_source_ops *ops,
+    turbowasm_wasi02_io_source *out_source);
+turbowasm_status turbowasm_wasi02_io_source_changed(
+    turbowasm_wasi02_io *io, turbowasm_wasi02_io_source source);
+turbowasm_status turbowasm_wasi02_io_source_close(
+    turbowasm_wasi02_io *io, turbowasm_wasi02_io_source *source);
+turbowasm_status turbowasm_wasi02_io_pollable_register(
+    turbowasm_wasi02_io *io, turbowasm_wasi02_io_source source,
+    turbowasm_value *out_owned_rep);
+turbowasm_status turbowasm_wasi02_io_stream_register(
+    turbowasm_wasi02_io *io, turbowasm_wasi02_io_stream_kind kind,
+    const turbowasm_wasi02_stream_provider *operations,
+    turbowasm_value owned_rep, turbowasm_wasi02_io_source source,
+    turbowasm_value *out_domain_rep);
+turbowasm_status turbowasm_wasi02_io_cli_factory_set(
+    turbowasm_wasi02_io *io, turbowasm_wasi02_io_cli_kind kind,
+    turbowasm_wasi02_stream_factory_fn create, void *context);
+turbowasm_status turbowasm_wasi02_io_providers(
+    turbowasm_wasi02_io *io, turbowasm_wasi02_stream_provider *out_streams,
+    turbowasm_wasi02_poll_provider *out_poll);
+turbowasm_status turbowasm_wasi02_io_advance(turbowasm_wasi02_io *io);
+turbowasm_status turbowasm_wasi02_io_destroy(turbowasm_wasi02_io *io);
+
+/* New wasi02_cnet.h; the NativeIO backend is borrowed. */
+turbowasm_status turbowasm_wasi02_cnet_init_external(
+    turbowasm_wasi02_cnet *adapter, turbowasm_wasi02_io *io,
+    native_io_backend *backend, const turbowasm_wasi02_cnet_config *config,
+    const turbowasm_runtime_config *runtime_config);
+turbowasm_status turbowasm_wasi02_cnet_socket_provider(
+    turbowasm_wasi02_cnet *adapter,
+    turbowasm_wasi02_socket_provider *out_sockets);
+turbowasm_status turbowasm_wasi02_cnet_advance(
+    turbowasm_wasi02_cnet *adapter, size_t *out_events);
+turbowasm_status turbowasm_wasi02_cnet_route_completion(
+    turbowasm_wasi02_cnet *adapter, const native_io_completion *completion,
+    bool *out_consumed);
+turbowasm_status turbowasm_wasi02_cnet_next_timeout(
+    turbowasm_wasi02_cnet *adapter, uint32_t max_wait_ms,
+    uint32_t *out_timeout_ms);
+turbowasm_status turbowasm_wasi02_cnet_shutdown_request(
+    turbowasm_wasi02_cnet *adapter);
+turbowasm_status turbowasm_wasi02_cnet_shutdown_poll(
+    turbowasm_wasi02_cnet *adapter, bool *out_complete);
+turbowasm_status turbowasm_wasi02_cnet_destroy(
+    turbowasm_wasi02_cnet *adapter);
+
+/* Addition to wasi02.h, preserving the existing sync constructor. */
+turbowasm_status turbowasm_wasi02_component_instance_create_async(
+    turbowasm_component_instance *instance, const turbowasm_component *component,
+    turbowasm_wasi02 *wasi02,
+    const turbowasm_component_async_options *options);
+```
+
+`io_source_ops` contains a borrowed stable context and copied `ready`, `retain`
+and `release` callbacks. Registration retains the source only after all slot
+allocation and validation succeeds. Close consumes the registration handle,
+marks the source closed/ready, and releases the context after all child stream,
+subscription and route references retire. `source_changed` only marks bounded
+notification work; it never executes a guest or recursively advances I/O.
+`io_advance` rechecks dirty sources and completes exact retained Runtime waits.
+
+`io_stream_register` copies the operation table, takes `owned_rep` only on
+success, and returns one stream representation owned by the caller until it
+is successfully transferred into WASI02. Its source reference and provider drop
+obligation travel with that representation. Failure preserves caller ownership.
+The data callbacks use the existing input/output/error signatures; CLI producers
+are configured before provider publication with `io_cli_factory_set`; their
+factories return an owned domain stream rep produced by `io_stream_register`.
+Filesystem factories wrap their results into this same domain through that
+registration API. Factory contexts are borrowed until domain destruction; no
+factory replacement is allowed while its produced streams are live. The copied
+stream operation context remains valid through the delegate's final drop, using
+an explicitly retained owner when different from the readiness source context.
+Error representations likewise receive kind-checked wrappers
+and exactly one delegate `error_drop` obligation.
+
+This permits socket, stdio and filesystem streams plus timer/readiness sources
+in one poll wait-set. Existing arbitrary provider reps must first be explicitly
+wrapped and supplied a readiness source; never overwrite configured callbacks,
+guess a rep's origin, or compose opaque `arm_many` callbacks that own different
+wait storage. Existing custom bundles continue to work through their existing
+WASI02 configuration. Wrapping them is an explicit migration when combining
+them with this adapter.
+
+Provider tables borrow their domain/adapter. The I/O domain outlives the adapter,
+and the NativeIO backend outlives every borrowed CNet owner and its real terminal
+completion. Init is transactional; destroy rejects live registrations/resources,
+waits or undrained requests without partly destroying the owner. The new
+constructor retains the existing WASI02 context through the Component's final
+reference, including tasks, shutdown work and returned resource values; failure
+leaves the output empty and balances every retain.
+
+### Progress and reusable subscriptions
+
+One host thread performs all admission, CNet advance/routing, source publication,
+wait completion and guest resume. No worker, recursive backend observation, or
+cross-thread send queue is added. The host alone observes NativeIO. Route each
+completion to its owning CNet client/listener/datagram owner; unrelated results
+return `out_consumed=false`. After routing the full batch, advance owners, then
+the I/O domain, then explicitly resume eligible Component calls/tasks. Preserve
+the first error while settling the remaining owned batch entries. A stale or
+duplicate terminal cannot release storage or complete a second wait.
+
+`next_timeout` supplies a capped deadline for CNet and, later, resolver progress.
+An idle drive reports zero events without inventing readiness. Backend request
+snapshots are transient routing hints only; no socket subscription is permanently
+bound to one request identity. An exact terminal identity remains retained until
+its CNet owner acknowledges completion, including after cancellation.
+
+Each `subscribe` allocates a child pollable retaining its logical source. The
+same pollable follows later operations on that source. A connected socket's
+socket pollable is ready; traffic readiness comes from its input/output sources.
+Input readiness derives from readable bytes or a terminal state. Output
+readiness derives from a usable permit or terminal state, respecting a pending
+flush. Listen readiness derives from an accepted child or terminal accept error.
+
+Wait-any registration preflights every handle, route/member capacity and owner
+reference, links all members, then rechecks every readiness predicate before
+suspending. Already-ready and completion-before-arm paths cannot lose a wake.
+Return every ready input index, preserving duplicate positions. Cancellation of
+one wait removes its membership and acknowledges its Runtime wait; it does not
+cancel a shared socket request or drop another subscriber. Parent closure wakes
+subscribers to observe the terminal outcome and keeps storage alive until their
+references retire. Concurrent/callback reentry returns the existing busy/invalid
+admission status; notifications never execute guest callbacks.
+
+### TCP publication, byte ownership and shutdown
+
+Use `cnet_listener_connect_endpoint` to consume the exact unbound/bound owner;
+never close a bound socket and create another with the same address. The source
+slot and observer context remain stable across handoff. A successful start
+records one connection owner; its terminal outcome is consumed once by finish.
+Before transport admission, reserve stream representations, readiness sources,
+byte storage and publication metadata. A failed admission releases uncommitted
+storage. After an irreversible handoff, preserve the actual terminal failure
+and the required WIT state; do not replay connect or restore a consumed owner.
+
+For accept, maintain at most one external accept and one pending accepted child
+per listener. Reserve child/stream capacity before consuming the child. Prefer
+the public direct listener-to-client accept API because it preserves inherited
+listener socket policy; do not adopt through a client policy that silently
+changes the child's settings. Retain the accepted owner until callback admission
+and result publication settle. If canonical resource/result publication fails,
+drop unpublished handles and close the accepted owner exactly once; native
+side effects cannot be rolled back or returned as a fresh retryable child.
+
+Keep the shared byte path single-producer/single-consumer on the owner thread.
+Each connection has bounded receive and send storage, one receive demand at a
+time, and one logical send in flight initially. Receive is admitted only after
+reserving room for the maximum callback payload. Copy a borrowed CNet receive
+view before callback return; never retain it or a guest linear-memory view.
+Stop issuing receive demand while storage is full, letting TCP exert backpressure.
+
+Read/skip consume in order; empty open input is distinct from EOF. The existing
+provider read contract returns a borrowed view which must remain valid through
+the facade's immediate result copy. The chosen change preallocates the result
+nodes and a bounded byte chunk before calling the provider. Pass no more than
+that chunk's capacity as `max_bytes`; a short read is permitted. After a validated
+callback result, copying and completing the host result require no allocation,
+so provider consumption cannot be followed by a host-result OOM. Skip similarly
+preallocates its result nodes before consuming. A later guest canonical lowering
+failure is an execution failure after an admitted read, not a retry that replays
+bytes; previously executed guest allocator effects are also not rolled back.
+Queued bytes precede remote EOF/error except explicit receive-shutdown, which
+discards them. Define bounded scratch lifetime separately from the live queue.
+
+`check-write` reserves a permit in bytes for that output stream. Validate and
+copy the entire permitted write before publishing it; writes above the permit
+trap, while a stream closed since the permit reports closed. The facade and
+backend share one permit fact source. Reservations cannot be stolen by another
+stream; a new check replaces the prior unused permit. A copied accepted write
+returns promptly; CNet completes partial native sends internally. Send storage
+retires only at a real terminal callback. Failed admitted sends become retained
+stream errors, rather than a false pre-admission failure.
+
+Flush captures the prior write sequence and closes write permits until that
+sequence is terminally drained or failed. It does not promise peer consumption.
+Blocking methods use existing Runtime host waits without blocking the host's
+progress owner. A one-shot invocation requiring a wait is rejected before arm
+or irreversible write admission. Zero-write/splice use the same budget/permit
+logic; same-source aliases and overlapping ownership fail before mutation.
+
+Socket, input and output resources retain one connection owner independently.
+Dropping one carrier does not prematurely invalidate the others. Logical drop
+consumes its handle; it must not synchronously wait for callbacks on the same
+owner. A bounded retirement record retains requests/buffers/context until drain.
+Half-shutdown closes the selected stream immediately, uses CNet's directional
+shutdown, and leaves the socket resource alive. Send shutdown rejects new bytes
+and drains previously admitted writes before FIN. Repeated directions are
+idempotent. Dropping an output without flush may discard pending data according
+to the WIT contract, but cancellation still waits for real transport terminals.
+
+Adapter shutdown stops admission, closes every logical source, requests transport
+cancellation, and continues external route/advance until terminal. It never
+force-frees buffers, destroys the borrowed backend, or fabricates completion on
+cancel-not-found. Existing public owners remain explicitly releasable; completion
+requires their references, routes and retirement records to settle. Cleanup
+errors remain observable independently of `out_complete`; repeated polling
+cannot turn a recorded error into success. Component shutdown and adapter
+shutdown have separate owners and must both reach their terminal conditions.
+
+### Bounds, policy and errors
+
+I/O domain config bounds source slots, stream/error wrappers, subscriptions,
+simultaneous wait routes and members per route. CNet config bounds TCP owners,
+pending accepts, per-connection receive/send bytes and commands, aggregate
+adapter payload bytes, completion-batch work, and explicit deadlines. Future UDP
+and DNS configs add socket/message/query/name/result bounds. Defaults are finite
+and published through an initializer; zero disables only an optional capability.
+
+For configured TCP owner bound `N`, per-owner receive/send maxima `R`/`W`, and
+route/member bounds `Q`/`K`, validate `N * (R + W)` and `Q * K` with checked
+arithmetic. For example, 64 connections with 64 KiB in each direction reserve
+8 MiB of adapter TCP payload, excluding CNet copies and metadata. This is a
+capacity calculation, not a throughput claim. Bound CNet command/event storage
+separately using its public configuration; account simultaneous adapter and
+CNet copies instead of advertising the adapter byte limit as total process RAM.
+Host-returned Component values retain their existing instance storage charges.
+
+Proposed named defaults are listed below. Init helpers set these values, while
+explicit config values are checked as hard bounds. Metadata is preallocated;
+payload reservations are taken before native admission. Maximum owner counts
+and a shared byte budget need not permit every owner to saturate simultaneously.
+
+| Setting | Proposed default | Unit/full behavior |
+| --- | --- | --- |
+| I/O sources / stream wrappers / error wrappers | 512 / 512 / 128 | Slots; reject before taking ownership |
+| Subscriptions / routes / members per route | 1024 / 64 / 64 | Slots; failed arm preserves all handles |
+| TCP owners / accepts per listener | 64 / 1 | Owners; socket-limit or backpressure |
+| TCP receive / send reservation per owner | 64 KiB / 64 KiB | Bytes; pause receive or return zero permit |
+| Shared adapter payload budget / read chunk | 16 MiB / 64 KiB | Bytes; checked reservation or bounded short read |
+| Native completions per host batch | 64 | Entries; host processes later batches without losing terminals |
+| Connect deadline / read and write deadlines | 30 seconds / disabled | Explicit timeout policy, independent of stream readiness |
+| Later UDP owners / inbound and outbound records per owner | 16 / 4 / 4 | Owners/messages within the shared payload budget |
+| Later max datagram / resolver queries / results per query | 65535 bytes / 16 / 64 | Hard maxima; explicit error on overflow |
+
+These defaults are a bounded starting configuration, not performance tuning.
+CNet command/event/request bounds must be derived and validated with these
+reservations at init, including accept/connect and retiring owners. If the
+borrowed NativeIO backend cannot cover simultaneous retained requests, fail
+initialization instead of promising permits that cannot be honored. IDNA name
+storage is bounded both before and after normalization (253 normalized DNS
+name bytes excluding a final root dot; a separately configured UTF-8 input cap).
+
+Pre-reserve callback output and retirement capacity: no receive/send terminal
+may need unbounded allocation to become recordable. Exhaustion before admission
+preserves input ownership and reports an explicit capacity/OOM result. Socket
+limits map to WIT `new-socket-limit`; ordinary pending finish maps to
+`would-block`. Stream backpressure is an empty read or zero permit, not an
+invented closed stream. Internal invalid handles/ABI errors remain TurboWasm
+status/traps; OS failures use the operation-specific network/stream error path.
+The stream error payload preserves its originating error code and bounded debug
+text; it is not reduced to closed or success.
+
+At the existing facade boundary, the last granted permit remains authoritative;
+the adapter's buffer reservation backs that grant rather than introducing a
+second independently mutable permit. Permit release, admission and facade
+accounting commit together. Error-wrapper capacity is reserved before a failed
+operation needs to publish its error payload.
+
+Network capabilities carry immutable copied policy: allowed address families,
+bind/connect destinations and port ranges, accept/UDP/name-resolution permissions,
+and bounded deadlines. Policy rule counts and copied bytes have hard limits too.
+The new concrete adapter denies operations not explicitly
+authorized by its config; this does not change existing custom-provider policy.
+Check policy before native admission, preserve the same network identity across
+bind/connect, and recheck DNS results when granting numeric destinations. A DNS
+answer alone grants no connect capability. IPv6 scope/flow-info remains lossless;
+mapped IPv6 and operation-specific invalid addresses follow the pinned WIT rules.
+Socket setting queries read actual CNet/platform values after permitted clamping.
+Platform unsupported settings report a real error rather than a successful no-op.
+
+### UDP and DNS prerequisites and contracts
+
+UDP adds separate provider callbacks/resource types for `udp-socket`, incoming
+and outgoing datagram streams, plus `udp-create-socket`; byte streams are not
+reused for messages. Add the public Salts portable unbound/bind, endpoint query,
+peer association/disassociation and socket-option capabilities first. Filtering
+in TurboWasm alone cannot replace native connected-UDP routing/error semantics.
+Keep only one current pair per socket, with generation-checked replacement after
+the old stream pair is released. Zero-length messages remain actual messages;
+oversized/truncated messages never become successful shortened results.
+
+Reserve room before admitting a receive callback. Each queued record owns its
+payload and copied peer; stop demand when full. UDP loss outside admitted host
+storage remains a transport property, not a silently dropped accepted callback.
+Receive publishes a bounded list transactionally, consuming only after result
+construction. Outgoing permits count datagrams. Send admits a prefix in order,
+returns its exact count, and records a later error for the next operation when
+the prefix is nonempty. An error before any accepted item returns that error.
+Callbacks and cancellation obey the same bounded terminal ownership as TCP.
+
+Name lookup requires a public Salts asynchronous resolver with a bounded query
+owner, ordered portable IPv4/IPv6 results, numeric parsing without network I/O,
+Unicode/IDNA validation, result iteration, deadline/progress integration and
+cancellation with explicit terminal acknowledgement. Reuse Salts' existing
+c-ares dependency behind that boundary; do not link TurboWasm to its private
+resolver header or call blocking `getaddrinfo` on the progress owner. Salts must
+review IDNA support in its existing dependency graph before adding a dependency;
+ASCII-only successful admission must not claim complete WIT name lookup.
+
+The WIT resolve-address-stream retains bounded copied name/result storage.
+`resolve-next-address` distinguishes pending, next address, exhausted and failure;
+subscribe tracks that source across results. Reject overflowing configured result
+limits explicitly instead of silently truncating the address list. A resolved
+result already accepted for delivery wins a later cancellation; otherwise keep
+the query slot and callback context until cancellation is terminal. DNS deadlines
+join the same host drive loop. Numeric fixtures and an injected resolver make
+tests deterministic; external Internet/DNS availability is not a CI prerequisite.
+
+### Alternatives, compatibility and delivery gates
+
+Direct platform sockets would duplicate CNet policy, cancellation and portability.
+A per-socket worker or executor would add another progress owner and complicate
+shutdown. Reusing one-shot request pollables would yield stale readiness after
+the first operation. A generic plugin registry or mutable global network facade
+would hide owner identity. The chosen explicit adapter plus bounded source domain
+solves the actual representation/wait-any composition boundary and preserves the
+existing CNet/Runtime responsibilities.
+
+The current sync WASI02 constructor and installed TCP provider layout stay
+unchanged for the TCP gate. New owners/async constructor are additive. UDP/DNS
+extend the public config through an explicitly versioned extended init/config
+entry point with the old initializer preserved; do not append fields to an
+unversioned struct and then read beyond an old caller's allocation. Consumers
+using new gates rebuild/relink; no persistent data migration is involved.
+Public API additions need approval of this concrete design before declaration.
+Already approved Component async ownership remains in force.
+
+| Gate | Complete implementation required before promotion | Qualification |
+| --- | --- | --- |
+| A: shared readiness | Source/domain tokens, wrapped stream/error owners, mixed wait-any, precise cancellation and retirement | Existing poll/stream tests plus reusable subscription, mixed source, duplicate/stale token, quota, reentry and OOM rollback cases |
+| B: native TCP | Every installed TCP provider method, real connect/accept/read/write/flush/half-close, async WASI02 constructor, installed IO/CNet targets | IPv4/IPv6 loopback client/server Component fixtures, options inheritance, memory32/64, pause/backpressure, partial sends, delayed cancellation and detached resource lifetime |
+| C: native UDP | Salts prerequisites, all stable UDP descriptors/providers/resources and publication paths | Empty and oversized messages, connected/unconnected peers, replacement, ordered partial batches, saturation, cancellation and loopback fixtures |
+| D: name lookup | Public Salts resolver contract, stable lookup descriptors/provider, IDNA and bounded ordered result stream | Numeric IPv4/IPv6, Unicode/invalid names, multiple results, deterministic failures/timeouts, source reuse and terminal cancellation |
+
+Tests must prove actual side effects and cleanup, not just non-NULL callbacks:
+scripted transport terminals exercise races; real loopback fixtures exercise
+the native owner. Include failed canonical result allocation after native accept,
+read-result preallocation failure before consumption, one-shot wait rejection,
+every destroy order,
+generation exhaustion and whole-domain teardown. Add existing installed C/C++
+consumer tests for the new targets and full public async socket round trips.
+Run the configured CTest graph on Windows/Linux/macOS, ASan locally, and MIR
+execution fixtures on Linux/macOS. Android qualification is build/install until
+a runtime runner exists. CI builds the complete configured graph and runs tests
+through CTest. No gate is advertised through placeholder methods.
+
+Before publication, the build options can keep new gates private. After a gate
+is published, disable its optional target/capability as the rollback path and
+reject affected imports before instance publication; retain the existing custom
+provider entry points. Reverting public declarations requires a versioned API
+change, not silent removal. UDP/DNS prerequisites and remaining Preview1/
+Preview3 work stay visible when the TCP gate alone is complete.
+
 ## Capability status
 
 ```text
