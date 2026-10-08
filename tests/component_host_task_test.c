@@ -34,6 +34,8 @@ static bool reenter_transfer_on_allocate;
 static const turbowasm_component_endpoint *copy_reentry_end;
 static bool shutdown_on_allocate;
 static bool shutdown_on_free;
+static bool endpoint_move_admitted;
+static bool endpoint_admit_on_allocate;
 
 static uint32_t endpoint_type(turbowasm_component_instance_public_impl *owner, bool future) {
     const turbowasm_component_type_graph *graph = &owner->exec.binary->type_graph;
@@ -87,6 +89,9 @@ static void close_pair(unsigned index) {
 
 static void *allocate(void *context, size_t size) {
     void *p; (void)context;
+    if (endpoint_admit_on_allocate) {
+        endpoint_admit_on_allocate = false; endpoint_move_admitted = true;
+    }
     if (shutdown_on_allocate) {
         bool closed = impl->admission_closed;
         shutdown_on_allocate = false;
@@ -368,6 +373,8 @@ spec("Retained Component host task owners") {
         close_on_allocate = false;
         shutdown_on_allocate = false;
         shutdown_on_free = false;
+        endpoint_move_admitted = false;
+        endpoint_admit_on_allocate = false;
         reenter_transfer_on_allocate = false;
         copy_reentry_end = NULL;
         turbowasm_runtime_config_init(&config);
@@ -380,6 +387,7 @@ spec("Retained Component host task owners") {
     after_each() {
         unsigned i;
         allocations.fail_at = 0u;
+        endpoint_admit_on_allocate = false;
         shutdown_on_allocate = false;
         shutdown_on_free = false;
         reenter_transfer_on_allocate = false;
@@ -1273,6 +1281,180 @@ spec("Retained Component host task owners") {
             check_equal(budget.used, (size_t)0); check_equal(impl->exec.task_domain.pair_count, 0u);
         }
         check_true(complete); check_greater(failure, (size_t)3);
+    }
+    it("preserves a prepared endpoint across failed admission and freezes every source operation") {
+        const turbowasm_component_endpoint *reader;
+        turbowasm_component_endpoint *taken = NULL;
+        turbowasm_component_value duplicate = {0};
+        size_t used;
+        uint32_t handle;
+        transfer_pair(endpoint_type(impl, false));
+        reader = turbowasm_component_host_endpoint_view(&host_ends[0]); used = budget.used;
+        reenter_endpoint_on_allocate = true;
+        check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[0], &endpoint_value,
+            &endpoint_move_admitted), TURBOWASM_OK);
+        check_false(reenter_endpoint_on_allocate); check_not_null(host_ends[0].impl);
+        check_equal(impl->host_activity, 1u); check_equal(budget.used, used);
+        check_null(turbowasm_component_host_endpoint_view(&host_ends[0]));
+        check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[0], &duplicate,
+            &endpoint_move_admitted), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_host_endpoint_move_commit(&host_ends[0], &endpoint_value), TURBOWASM_INVALID_ARGUMENT);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_INVALID_ARGUMENT);
+        check_false(impl->admission_closed);
+        check_equal(turbowasm_component_endpoint_take_value(&endpoint_value, &taken), TURBOWASM_TRAPPED);
+        endpoint_codec.table = &impl->exec.resource_table;
+        check_equal(turbowasm_component_endpoint_codec_lower(&endpoint_codec, reader->graph,
+            turbowasm_component_type_ref_indexed(reader->type), &endpoint_value, &handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_codec_commit(&endpoint_codec), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_endpoint_codec_rollback(&endpoint_codec), TURBOWASM_OK);
+        check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
+        check_equal(impl->host_activity, 0u); check_equal(budget.used, used);
+        check_equal(turbowasm_component_host_endpoint_view(&host_ends[0]), reader);
+        check_false(reader->closed); check_not_null(reader->peer);
+    }
+    it("returns an admitted endpoint tail to a fresh host owner without closing it") {
+        const turbowasm_component_endpoint *reader;
+        size_t used;
+        transfer_pair(endpoint_type(impl, true));
+        reader = turbowasm_component_host_endpoint_view(&host_ends[0]); used = budget.used;
+        check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[0], &endpoint_value,
+            &endpoint_move_admitted), TURBOWASM_OK);
+        endpoint_move_admitted = true;
+        check_equal(turbowasm_component_host_endpoint_move_commit(&host_ends[0], &endpoint_value), TURBOWASM_OK);
+        check_null(host_ends[0].impl); check_equal(budget.used, used);
+        allocations.fail_at = allocations.attempts + 1u;
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], impl, &endpoint_value, &budget), TURBOWASM_OUT_OF_MEMORY);
+        allocations.fail_at = 0u;
+        check_null(host_ends[2].impl); check_equal(budget.used, used);
+        check_equal(turbowasm_component_endpoint_value_get(&endpoint_value), reader);
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], impl, &endpoint_value, &budget), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_view(&host_ends[2]), reader);
+        check_false(reader->closed); check_equal(impl->host_activity, 0u); check_equal(budget.used, used);
+    }
+    it("retires committed unpublished host ownership once when its task input is discarded") {
+        const turbowasm_component_endpoint *reader, *writer;
+        size_t used;
+        transfer_pair(endpoint_type(impl, false));
+        reader = turbowasm_component_host_endpoint_view(&host_ends[0]);
+        writer = turbowasm_component_host_endpoint_view(&host_ends[1]); used = budget.used;
+        check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[0], &endpoint_value,
+            &endpoint_move_admitted), TURBOWASM_OK);
+        endpoint_move_admitted = true;
+        check_equal(turbowasm_component_host_endpoint_move_commit(&host_ends[0], &endpoint_value), TURBOWASM_OK);
+        check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
+        check_true(reader->closed); check_null(writer->peer);
+        check_equal(budget.used, used / 2u); check_equal(impl->host_activity, 0u);
+        check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
+        check_equal(budget.used, used / 2u);
+    }
+    it("releases host bookkeeping after guest publication while the peer keeps its creation instance") {
+        const turbowasm_component_endpoint *reader;
+        size_t used;
+        uint32_t handle;
+        transfer_pair(endpoint_type(impl, true));
+        reader = turbowasm_component_host_endpoint_view(&host_ends[0]); used = budget.used;
+        check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[0], &endpoint_value,
+            &endpoint_move_admitted), TURBOWASM_OK);
+        endpoint_codec.table = &impl->exec.resource_table;
+        check_equal(turbowasm_component_endpoint_codec_lower(&endpoint_codec, reader->graph,
+            turbowasm_component_type_ref_indexed(reader->type), &endpoint_value, &handle), TURBOWASM_OK);
+        endpoint_move_admitted = true;
+        check_equal(turbowasm_component_host_endpoint_move_commit(&host_ends[0], &endpoint_value), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_codec_commit(&endpoint_codec), TURBOWASM_OK);
+        check_null(host_ends[0].impl); check_equal(budget.used, used / 2u); check_equal(impl->host_activity, 0u);
+        check_equal(turbowasm_component_endpoint_get(&impl->exec.resource_table, handle,
+            TURBOWASM_COMPONENT_HANDLE_FUTURE_READ), reader);
+        turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
+        check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
+        check_false(reader->closed);
+        check_equal(turbowasm_component_endpoint_close((turbowasm_component_endpoint *)reader), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_OK);
+        endpoint_codec.table = NULL; impl = NULL;
+        check_equal(budget.used, (size_t)0);
+    }
+    it("preserves source output and activity when a prepared endpoint allocation fails") {
+        const turbowasm_component_endpoint *reader;
+        size_t used, live;
+        transfer_pair(endpoint_type(impl, false));
+        reader = turbowasm_component_host_endpoint_view(&host_ends[0]); used = budget.used; live = allocations.live;
+        allocations.fail_at = allocations.attempts + 1u;
+        check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[0], &endpoint_value,
+            &endpoint_move_admitted), TURBOWASM_OUT_OF_MEMORY);
+        allocations.fail_at = 0u;
+        check_equal(endpoint_value.kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+        check_equal(turbowasm_component_host_endpoint_view(&host_ends[0]), reader);
+        check_equal(budget.used, used); check_equal(allocations.live, live); check_equal(impl->host_activity, 0u);
+        check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[0], &endpoint_value,
+            &endpoint_move_admitted), TURBOWASM_OK);
+        check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
+    }
+    it("allows shutdown of a committed deferred endpoint and blocks cleanup allocator reentry") {
+        transfer_pair(endpoint_type(impl, false));
+        check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[0], &endpoint_value,
+            &endpoint_move_admitted), TURBOWASM_OK);
+        endpoint_move_admitted = true;
+        check_equal(turbowasm_component_host_endpoint_move_commit(&host_ends[0], &endpoint_value), TURBOWASM_OK);
+        check_equal(impl->host_activity, 0u);
+        check_equal(turbowasm_component_instance_request_shutdown_private(impl), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_YIELDED);
+        shutdown_on_free = true;
+        check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
+        check_false(shutdown_on_free); check_equal(impl->host_activity, 0u);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(impl, NULL), TURBOWASM_OK);
+    }
+    it("rolls back preparation when allocator reentry invalidates its admission flag") {
+        const turbowasm_component_endpoint *reader;
+        size_t used, live;
+        transfer_pair(endpoint_type(impl, false));
+        reader = turbowasm_component_host_endpoint_view(&host_ends[0]); used = budget.used; live = allocations.live;
+        endpoint_admit_on_allocate = true;
+        check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[0], &endpoint_value,
+            &endpoint_move_admitted), TURBOWASM_INVALID_ARGUMENT);
+        check_false(endpoint_admit_on_allocate); check_true(endpoint_move_admitted);
+        check_equal(endpoint_value.kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+        check_equal(turbowasm_component_host_endpoint_view(&host_ends[0]), reader);
+        check_null(reader->value_owner); check_false(reader->closed);
+        check_equal(budget.used, used); check_equal(allocations.live, live); check_equal(impl->host_activity, 0u);
+    }
+    it("guards receiver cleanup before closing a moved endpoint releases its foreign creation instance") {
+        turbowasm_component_instance_public_impl *receiver;
+        turbowasm_component_exec_async_limits limits = {2u, 16u};
+        transfer_pair(endpoint_type(impl, true));
+        check_equal(turbowasm_component_host_endpoint_into_value(&host_ends[0], &endpoint_value), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_create_async_private(&destination, &component, &limits), TURBOWASM_OK);
+        receiver = turbowasm_component_instance_public_impl_get(&destination);
+        check_equal(turbowasm_component_host_endpoint_from_value(&host_ends[2], receiver, &endpoint_value, &budget), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_OK);
+        turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
+        impl = receiver;
+        check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[2], &endpoint_value,
+            &endpoint_move_admitted), TURBOWASM_OK);
+        endpoint_move_admitted = true;
+        check_equal(turbowasm_component_host_endpoint_move_commit(&host_ends[2], &endpoint_value), TURBOWASM_OK);
+        check_equal(turbowasm_component_instance_request_shutdown_private(receiver), TURBOWASM_OK);
+        shutdown_on_free = true;
+        /* The reader is now the only creation-instance keepalive. Closing it
+         * frees the foreign instance and its endpoint storage inside close. */
+        check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
+        check_false(shutdown_on_free); check_equal(receiver->host_activity, 0u);
+        check_equal(budget.used, (size_t)0);
+        check_equal(turbowasm_component_instance_poll_shutdown_private(receiver, NULL), TURBOWASM_OK);
+    }
+    it("keeps a prepared endpoint alive when allocation closes both public instance and loader carriers") {
+        const turbowasm_component_endpoint *reader;
+        transfer_pair(endpoint_type(impl, true));
+        reader = turbowasm_component_host_endpoint_view(&host_ends[0]);
+        close_on_allocate = true;
+        check_equal(turbowasm_component_host_endpoint_move_prepare(&host_ends[0], &endpoint_value,
+            &endpoint_move_admitted), TURBOWASM_OK);
+        check_null(instance.impl); check_null(component.impl); check_false(close_on_allocate);
+        check_equal(turbowasm_component_value_destroy(&endpoint_value), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_view(&host_ends[0]), reader);
+        check_false(reader->closed);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[0]), TURBOWASM_OK);
+        check_equal(turbowasm_component_host_endpoint_destroy(&host_ends[1]), TURBOWASM_OK);
+        impl = NULL; check_equal(budget.used, (size_t)0);
     }
     it("preflights byte quota and retries canonical endpoint promotion after allocation failure") {
         size_t charge, attempts, used;

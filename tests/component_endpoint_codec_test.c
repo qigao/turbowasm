@@ -30,6 +30,29 @@ static uint64_t allocation_cursor;
 static bool probe_reentry;
 static turbowasm_status reentry_status;
 static uint32_t reentry_count;
+static bool move_admitted, destroy_on_publish;
+static unsigned move_finishes, move_transfers;
+static unsigned move_begins;
+
+static void begin_move(void *context) { (void)context; ++move_begins; }
+
+static void finish_move(void *context, bool transferred) {
+    (void)context; ++move_finishes;
+    if (transferred) ++move_transfers;
+    if (destroy_on_publish) {
+        unsigned i;
+        /* A cleanup callback observes the entire published transaction and can
+         * retire both its own canonical carrier and the next notification. */
+        check_null(codec.lower_head);
+        check_equal(move_begins, 2u);
+        for (i = 0u; i < 2u; ++i) {
+            check_equal(reader[i].waitable.table, &table);
+            check_equal(turbowasm_component_endpoint_get(&table, reader[i].waitable.handle,
+                TURBOWASM_COMPONENT_HANDLE_STREAM_READ), &reader[i]);
+            check_equal(turbowasm_component_value_destroy(&values[i]), TURBOWASM_OK);
+        }
+    }
+}
 
 static void *allocate(void *context, size_t size) {
     void *pointer; (void)context;
@@ -174,6 +197,8 @@ spec("Canonical endpoint handle ownership") {
     before_each() {
         allowed_allocations = SIZE_MAX; live_allocations = 0u;
         probe_reentry = false; reentry_count = 0u; reentry_status = TURBOWASM_OK;
+        move_admitted = destroy_on_publish = false; move_finishes = move_transfers = 0u;
+        move_begins = 0u;
         turbowasm_runtime_config_init(&config);
         config.allocator.allocate = allocate; config.allocator.deallocate = deallocate;
         scope = turbowasm_runtime_scope_enter(&config);
@@ -181,6 +206,71 @@ spec("Canonical endpoint handle ownership") {
     after_each() {
         cleanup(); turbowasm_runtime_scope_leave(scope);
         check_equal(live_allocations, 0u);
+    }
+
+    it("rolls back an unadmitted endpoint without closing it or consuming its peer") {
+        turbowasm_component_endpoint *taken = NULL;
+        uint32_t handle;
+        initialize(false, true, 4u); host_value(0u, &values[0]);
+        check_equal(turbowasm_component_endpoint_value_adopt(&values[0], &move_admitted,
+            NULL, finish_move, &move_finishes), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_value_adopt(&values[0], &move_admitted,
+            NULL, finish_move, &move_finishes), TURBOWASM_TRAPPED);
+        check_equal(turbowasm_component_endpoint_take_value(&values[0], &taken), TURBOWASM_TRAPPED);
+        check_null(taken);
+        check_equal(turbowasm_component_endpoint_codec_lower(&codec, &graph, indexed(0u), &values[0], &handle), TURBOWASM_OK);
+        check_equal(turbowasm_component_endpoint_codec_commit(&codec), TURBOWASM_TRAPPED);
+        check_equal(table.live_count, 1u); check_equal(move_finishes, 0u);
+        check_equal(turbowasm_component_endpoint_codec_rollback(&codec), TURBOWASM_OK);
+        check_equal(turbowasm_component_value_destroy(&values[0]), TURBOWASM_OK);
+        check_equal(move_finishes, 1u); check_equal(move_transfers, 0u);
+        check_false(reader[0].closed); check_null(reader[0].value_owner);
+        check_equal(reader[0].peer, &writer[0]); check_equal(table.live_count, 0u);
+        check_equal(turbowasm_component_endpoint_into_value(&reader[0], &values[0]), TURBOWASM_OK);
+    }
+
+    it("takes an admitted proxy once and restores direct ownership") {
+        turbowasm_component_endpoint *taken = NULL;
+        initialize(false, false, 4u); host_value(0u, &values[0]);
+        check_equal(turbowasm_component_endpoint_value_adopt(&values[0], &move_admitted,
+            NULL, finish_move, &move_finishes), TURBOWASM_OK);
+        move_admitted = true;
+        check_equal(turbowasm_component_endpoint_take_value(&values[0], &taken), TURBOWASM_OK);
+        check_equal(taken, &reader[0]); check_false(reader[0].closed); check_null(reader[0].value_owner);
+        check_equal(move_finishes, 1u); check_equal(move_transfers, 1u);
+        check_equal(turbowasm_component_value_destroy(&values[0]), TURBOWASM_OK);
+        check_equal(move_finishes, 1u);
+    }
+
+    it("closes an admitted unpublished proxy exactly once") {
+        initialize(false, true, 4u); host_value(0u, &values[0]);
+        check_equal(turbowasm_component_endpoint_value_adopt(&values[0], &move_admitted,
+            NULL, finish_move, &move_finishes), TURBOWASM_OK);
+        move_admitted = true;
+        check_equal(turbowasm_component_value_destroy(&values[0]), TURBOWASM_OK);
+        check_true(reader[0].closed); check_null(writer[0].peer);
+        check_equal(move_finishes, 1u); check_equal(move_transfers, 1u);
+        check_equal(turbowasm_component_value_destroy(&values[0]), TURBOWASM_OK);
+        check_equal(move_finishes, 1u);
+    }
+
+    it("publishes every handle before cleanup reentry retires both notification records") {
+        uint32_t handles[2]; unsigned i;
+        initialize(false, false, 4u);
+        for (i = 0u; i < 2u; ++i) {
+            host_value(i, &values[i]);
+            check_equal(turbowasm_component_endpoint_value_adopt(&values[i], &move_admitted,
+                begin_move, finish_move, &move_finishes), TURBOWASM_OK);
+            check_equal(turbowasm_component_endpoint_codec_lower(&codec, &graph, indexed(0u), &values[i], &handles[i]), TURBOWASM_OK);
+        }
+        move_admitted = true; destroy_on_publish = true;
+        check_equal(turbowasm_component_endpoint_codec_commit(&codec), TURBOWASM_OK);
+        destroy_on_publish = false;
+        check_equal(move_finishes, 2u); check_equal(move_transfers, 2u);
+        for (i = 0u; i < 2u; ++i) {
+            check_equal(reader[i].waitable.handle, handles[i]); check_false(reader[i].closed);
+            check_equal(values[i].kind, TURBOWASM_COMPONENT_TYPE_UNDEFINED);
+        }
     }
 
     it("uses one i32 carrier and four bytes for endpoints under both memory widths") {

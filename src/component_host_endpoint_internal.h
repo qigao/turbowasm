@@ -11,6 +11,7 @@ typedef struct component_host_endpoint_impl {
     turbowasm_component_endpoint *endpoint;
     turbowasm_component_host_registration registration;
     bool driving;
+    bool deferred_move, move_cleanup_activity;
 } component_host_endpoint_impl;
 
 /* Transfer ownership changes the cancellation root without duplicating it. */

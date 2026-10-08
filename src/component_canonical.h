@@ -107,6 +107,16 @@ typedef turbowasm_status (*turbowasm_component_value_release_fn)(void *context);
  * carrier can still be destroyed without touching a subsequent endpoint owner. */
 typedef struct turbowasm_component_endpoint_value_owner {
     void *endpoint;
+    /* A prepared host move borrows its admission flag until publication or
+     * cleanup. False cleanup restores the host owner; true cleanup retires it.
+     * Publication retires all host bodies only after all handles are committed. */
+    const bool *host_admitted;
+    void (*host_begin)(void *context);
+    void (*host_finish)(void *context, bool transferred);
+    void *host_context;
+    struct turbowasm_component_endpoint_value_owner *publish_next;
+    bool publishing;
+    bool release_pending;
 } turbowasm_component_endpoint_value_owner;
 
 struct turbowasm_component_value {

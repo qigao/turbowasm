@@ -304,21 +304,33 @@ static turbowasm_status release_endpoint_value(void *context) {
     turbowasm_component_endpoint_value_owner *owner = context;
     turbowasm_component_endpoint *endpoint;
     turbowasm_status status = TURBOWASM_OK;
+    void (*finish)(void *, bool);
+    void *host_context;
+    bool transferred;
     if (owner == NULL) return TURBOWASM_TRAPPED;
+    if (owner->publishing) {
+        owner->release_pending = true;
+        return TURBOWASM_OK;
+    }
+    finish = owner->host_finish; host_context = owner->host_context;
+    transferred = owner->host_admitted == NULL || *owner->host_admitted;
     endpoint = owner->endpoint;
     if (endpoint != NULL) {
         if (endpoint->value_owner != owner || endpoint->lower_scope != NULL)
             return TURBOWASM_TRAPPED;
+        if (transferred && owner->host_begin != NULL) owner->host_begin(host_context);
         endpoint->value_owner = NULL;
-        status = turbowasm_component_endpoint_close(endpoint);
+        if (transferred) status = turbowasm_component_endpoint_close(endpoint);
     }
     turbowasm_rt_free(owner);
+    if (finish != NULL) finish(host_context, transferred);
     return status;
 }
 
 static void bind_endpoint_value(turbowasm_component_endpoint *endpoint,
     turbowasm_component_endpoint_value_owner *owner, turbowasm_component_value *out) {
     turbowasm_component_value value = {0};
+    memset(owner, 0, sizeof(*owner));
     value.kind = endpoint->waitable.state.endpoint.future
         ? TURBOWASM_COMPONENT_TYPE_FUTURE : TURBOWASM_COMPONENT_TYPE_STREAM;
     value.as.endpoint.owner = owner;
@@ -362,17 +374,41 @@ static turbowasm_component_endpoint *owned_endpoint(const turbowasm_component_va
 const turbowasm_component_endpoint *turbowasm_component_endpoint_value_get(
     const turbowasm_component_value *value) { return owned_endpoint(value); }
 
+turbowasm_status turbowasm_component_endpoint_value_adopt(
+    turbowasm_component_value *value, const bool *admitted,
+    void (*begin)(void *),
+    void (*finish)(void *, bool), void *context) {
+    turbowasm_component_endpoint *endpoint = owned_endpoint(value);
+    if (endpoint == NULL || admitted == NULL || *admitted || finish == NULL || context == NULL)
+        return TURBOWASM_INVALID_ARGUMENT;
+    if (endpoint->lower_scope != NULL || endpoint->value_owner->host_finish != NULL)
+        return TURBOWASM_TRAPPED;
+    endpoint->value_owner->host_admitted = admitted;
+    endpoint->value_owner->host_begin = begin;
+    endpoint->value_owner->host_finish = finish;
+    endpoint->value_owner->host_context = context;
+    return TURBOWASM_OK;
+}
+
 turbowasm_status turbowasm_component_endpoint_take_value(
     turbowasm_component_value *value, turbowasm_component_endpoint **out) {
     turbowasm_component_endpoint *endpoint = owned_endpoint(value);
+    turbowasm_component_endpoint_value_owner *owner;
+    void (*finish)(void *, bool);
+    void *context;
     if (out == NULL || endpoint == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    if (endpoint->lower_scope != NULL)
+    owner = endpoint->value_owner;
+    if (endpoint->lower_scope != NULL || owner->publishing ||
+        (owner->host_admitted != NULL && !*owner->host_admitted))
         return TURBOWASM_TRAPPED;
-    turbowasm_rt_free(endpoint->value_owner);
+    finish = owner->host_finish; context = owner->host_context;
+    if (owner->host_begin != NULL) owner->host_begin(context);
     memset(value, 0, sizeof(*value));
     endpoint->value_owner = NULL;
     *out = endpoint;
+    turbowasm_rt_free(owner);
+    if (finish != NULL) finish(context, true);
     return TURBOWASM_OK;
 }
 
@@ -566,20 +602,28 @@ turbowasm_status turbowasm_component_endpoint_codec_lower(void *context,
 
 static turbowasm_status finish_codec(turbowasm_component_endpoint_codec *codec, bool commit) {
     turbowasm_component_endpoint *endpoint;
+    turbowasm_component_endpoint_value_owner *notifications = NULL;
     if (codec == NULL || codec->table == NULL) return TURBOWASM_INVALID_ARGUMENT;
     /* No allocation/callback between this preflight and the exclusive commit. */
     for (endpoint = codec->lower_head; endpoint != NULL; endpoint = endpoint->lower_next)
         if (endpoint->lower_scope != codec || endpoint->value_owner == NULL ||
             endpoint->value_owner->endpoint != endpoint || endpoint->waitable.table != NULL ||
+            (commit && endpoint->value_owner->host_admitted != NULL && !*endpoint->value_owner->host_admitted) ||
             turbowasm_component_handle_object(codec->table, endpoint->lower_handle,
                 endpoint_kind(endpoint)) != &endpoint->waitable)
             return TURBOWASM_TRAPPED;
     while ((endpoint = codec->lower_head) != NULL) {
         if (commit) {
+            turbowasm_component_endpoint_value_owner *owner = endpoint->value_owner;
             endpoint->waitable.table = codec->table;
             endpoint->waitable.handle = endpoint->lower_handle;
             endpoint->value_owner->endpoint = NULL;
             endpoint->value_owner = NULL;
+            if (owner->host_finish != NULL) {
+                owner->publishing = true;
+                owner->publish_next = notifications;
+                notifications = owner;
+            }
         } else {
             void *object;
             turbowasm_status status = turbowasm_component_handle_remove(codec->table,
@@ -590,6 +634,29 @@ static turbowasm_status finish_codec(turbowasm_component_endpoint_codec *codec, 
         endpoint->lower_scope = NULL;
         endpoint->lower_next = NULL;
         endpoint->lower_handle = 0u;
+    }
+    /* Establish every host cleanup guard before the first external cleanup can
+     * close another published endpoint or release its creation instance. */
+    {
+        turbowasm_component_endpoint_value_owner *owner;
+        for (owner = notifications; owner != NULL; owner = owner->publish_next) {
+            if (owner->host_begin != NULL) owner->host_begin(owner->host_context);
+            owner->host_begin = NULL;
+        }
+    }
+    /* Allocator cleanup can reenter and destroy any retired value. Keep these
+     * bounded intrusive records alive until their own notification finishes. */
+    while (notifications != NULL) {
+        turbowasm_component_endpoint_value_owner *owner = notifications;
+        void (*finish)(void *, bool) = owner->host_finish;
+        void *context = owner->host_context;
+        notifications = owner->publish_next;
+        owner->host_finish = NULL; owner->host_context = NULL;
+        owner->host_begin = NULL;
+        owner->host_admitted = NULL; owner->publish_next = NULL;
+        finish(context, true);
+        owner->publishing = false;
+        if (owner->release_pending) turbowasm_rt_free(owner);
     }
     return TURBOWASM_OK;
 }

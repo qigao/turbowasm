@@ -701,6 +701,44 @@ Linux MIR 213/213 in 3.22 s and macOS MIR 213/213 in 2.88 s, including both
 interpreted and compiled instance-options suites. This qualifies private quota
 ownership and constructor retention; the public async host boundary remains gated.
 
+The private endpoint argument adapter now separates preparation, admission and
+guest publication. Preparation allocates an authentic canonical owner record,
+freezes the source host body and holds an instance activity. The enclosing
+argument snapshot accounts for the record bytes; the existing host body retains
+its budget reservation and instance reference. Preparation failure preserves the
+source and output, including allocator reentry that invalidates the admission
+flag. The admission owns that flag and its stable lifetime; after whole-tree
+preflight it changes once from false to true and clears all prepared source
+carriers without allocation or callbacks. Commit returns preparation activity;
+the deferred canonical input remains an idle registered cancellation root, so
+it does not prevent instance shutdown requests before guest entry.
+
+Unadmitted proxy destruction restores source ownership without closing the
+reader. Admitted unpublished destruction closes it once and retires the host
+body. Taking an admitted tail restores direct endpoint ownership and retires
+the old body, permitting allocation-first promotion into another host owner.
+Taking or publishing unadmitted values is rejected; canonical lower rollback
+removes reservations and preserves both the canonical proxy and its host source.
+Guest publication first commits every endpoint handle, then invokes host cleanup
+through a bounded intrusive notification chain. Allocation-free begin hooks
+establish every receiver cleanup guard before the first cleanup callback; close
+also establishes its guard before the creation instance can release pair storage.
+Retired owner records defer
+release while notification is active, so cleanup reentry may destroy the current
+carrier or later carriers without freeing a pending notification. Host cleanup
+uses an activity guard or an already active shutdown/activity guard. Instance
+and original type-graph keepalives survive public carrier closure and publication.
+The existing immediate private `into_value` path retains its contract.
+Formal host-task and endpoint-codec suites cover prepare/commit/rollback, duplicate
+adoption, publication before admission, whole-codec publication with cleanup
+reentry, cancellation cleanup, tail-promotion OOM retry, preparation allocation
+failure, invalidated admission flags, public-handle closure and foreign creation
+instance teardown with receiver allocator reentry. Windows ASan passes 90
+host-task cases (61,398 assertions) and 18 endpoint-codec cases (743 assertions);
+related Component/WASI/Runtime regression passes 88/88 in 10.67 s.
+This supplies transactional endpoint ownership for the remaining whole-tree
+host-value conversion; public async values and owners remain under integration.
+
 Alternatives rejected: treating a fuel yield as async completion loses task
 state; detached threads violate instance affinity; implicitly cloning endpoints
 breaks unique ownership; unbounded buffering hides backpressure. The chosen

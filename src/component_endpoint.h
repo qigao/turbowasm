@@ -87,6 +87,19 @@ turbowasm_status turbowasm_component_endpoint_into_value(
     turbowasm_component_endpoint *endpoint, turbowasm_component_value *out);
 turbowasm_status turbowasm_component_endpoint_take_value(
     turbowasm_component_value *value, turbowasm_component_endpoint **out);
+/* Adopt an authentic idle canonical endpoint for transactional host admission.
+ * No allocation or ownership transfer. The flag/context stay alive until this
+ * value is released, taken, or published. Before admission, release restores
+ * direct ownership and take/publication are rejected. After admission, release
+ * closes the end and take/publication transfer it. Finish runs exactly once.
+ * Begin establishes the cleanup guard before endpoint close/take can release its
+ * creation instance. It must not allocate or call external code. It is optional.
+ * The enclosing snapshot accounts for the canonical owner record in its budget.
+ * All operations run exclusively on the instance execution owner thread. */
+turbowasm_status turbowasm_component_endpoint_value_adopt(
+    turbowasm_component_value *value, const bool *admitted,
+    void (*begin)(void *context),
+    void (*finish)(void *context, bool transferred), void *context);
 /* Borrowed authentic readable end; NULL for malformed/consumed values. The value
  * remains the owner and its graph/storage lifetime requirements still apply. */
 const turbowasm_component_endpoint *turbowasm_component_endpoint_value_get(

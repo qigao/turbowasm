@@ -251,6 +251,18 @@ turbowasm_status turbowasm_component_host_endpoint_cancel(turbowasm_component_ho
  * its host byte charge. Failure preserves ownership and output. */
 turbowasm_status turbowasm_component_host_endpoint_into_value(
     turbowasm_component_host_endpoint *owner, turbowasm_component_value *out);
+/* Transactional argument admission: prepare freezes the source and holds an
+ * instance activity until commit or rollback. Failure preserves out
+ * and source. Destroying an unadmitted proxy unlocks source without closing it.
+ * The flag is owned by the enclosing admission and must outlive its values.
+ * Commit follows whole-tree preflight: set the admission flag and clear every
+ * prepared source through move_commit without callbacks/allocations in between.
+ * The enclosing argument budget accounts for the canonical owner record. */
+turbowasm_status turbowasm_component_host_endpoint_move_prepare(
+    turbowasm_component_host_endpoint *owner, turbowasm_component_value *out,
+    const bool *admitted);
+turbowasm_status turbowasm_component_host_endpoint_move_commit(
+    turbowasm_component_host_endpoint *owner, const turbowasm_component_value *value);
 /* Fresh idle canonical readable end in retained domain storage. Allocates before
  * taking source; failure preserves source/budget/output. The receiving instance
  * stays alive while the host body exists; the pair retains its creation instance. */

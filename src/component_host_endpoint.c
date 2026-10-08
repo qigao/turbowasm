@@ -4,7 +4,10 @@
 
 static bool shutdown_busy(const void *context) {
     const component_host_endpoint_impl *impl = context;
-    return impl->driving || impl->endpoint->waitable.delivering || impl->endpoint->waitable.sync_waiter;
+    /* Committed, deferred input is an idle cancellation root. Preparing or
+     * retiring it still excludes shutdown reentry; its former carrier is frozen. */
+    bool driving = impl->driving && !impl->deferred_move;
+    return driving || impl->endpoint->waitable.delivering || impl->endpoint->waitable.sync_waiter;
 }
 static turbowasm_status shutdown_cancel(void *context) {
     component_host_endpoint_impl *impl = context;
@@ -16,13 +19,14 @@ void turbowasm_component_host_endpoint_register(component_host_endpoint_impl *im
     turbowasm_component_host_register(impl->instance, &impl->registration, impl, shutdown_busy, shutdown_cancel);
 }
 
-static void release_body(turbowasm_component_host_endpoint *owner, component_host_endpoint_impl *impl) {
+static void release_body(turbowasm_component_host_endpoint *owner, component_host_endpoint_impl *impl,
+    bool activity) {
     turbowasm_component_instance_public_impl *instance = impl->instance;
     impl->budget->used -= sizeof(*impl); owner->impl = NULL;
     turbowasm_component_host_unregister(&impl->registration);
     turbowasm_rt_free(impl);
     turbowasm_component_endpoint_domain_collect(&instance->exec.task_domain);
-    turbowasm_component_host_activity_leave(instance);
+    if (activity) turbowasm_component_host_activity_leave(instance);
     turbowasm_component_instance_public_impl_release(instance);
 }
 
@@ -135,7 +139,78 @@ turbowasm_status turbowasm_component_host_endpoint_into_value(
     if (status != TURBOWASM_OK) {
         impl->driving = false; turbowasm_component_host_activity_leave(impl->instance); return status;
     }
-    release_body(owner, impl);
+    release_body(owner, impl, true);
+    return TURBOWASM_OK;
+}
+
+static void begin_host_move_cleanup(void *context) {
+    component_host_endpoint_impl *impl = context;
+    impl->deferred_move = false;
+    /* Close can release the creation instance and invalidate the pair storage.
+     * Establish receiver exclusion before any allocator cleanup can reenter. */
+    impl->move_cleanup_activity = turbowasm_component_host_activity_enter(impl->instance, false);
+}
+
+static void finish_host_move(void *context, bool transferred) {
+    component_host_endpoint_impl *impl = context;
+    if (!transferred) {
+        impl->driving = false;
+        turbowasm_component_host_activity_leave(impl->instance);
+    } else {
+        turbowasm_component_host_endpoint retired = {impl};
+        /* Cleanup must also finish under a preexisting shutdown/activity guard.
+         * In that case enter rejects and the existing guard excludes reentry. */
+        turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(&impl->instance->exec.binary->config);
+        /* Canonical cleanup already closed, took or published the reader. */
+        release_body(&retired, impl, impl->move_cleanup_activity);
+        turbowasm_runtime_scope_leave(scope);
+    }
+}
+
+turbowasm_status turbowasm_component_host_endpoint_move_prepare(
+    turbowasm_component_host_endpoint *owner, turbowasm_component_value *out,
+    const bool *admitted) {
+    component_host_endpoint_impl *impl = owner != NULL ? owner->impl : NULL;
+    turbowasm_runtime_scope scope;
+    turbowasm_status status;
+    turbowasm_component_value prepared = {0};
+    if (out == NULL || out->kind != TURBOWASM_COMPONENT_TYPE_UNDEFINED || out->release != NULL ||
+        impl == NULL || impl->driving || admitted == NULL || *admitted ||
+        impl->instance->shutdown_driving || !impl->endpoint->readable ||
+        !turbowasm_component_endpoint_domain_pair_retained(impl->endpoint)) return TURBOWASM_INVALID_ARGUMENT;
+    if (!turbowasm_component_host_activity_enter(impl->instance, true)) return TURBOWASM_INVALID_ARGUMENT;
+    impl->driving = true;
+    scope = turbowasm_runtime_scope_enter(&impl->instance->exec.binary->config);
+    status = turbowasm_component_endpoint_into_value(impl->endpoint, &prepared);
+    if (status == TURBOWASM_OK) {
+        /* The fresh canonical record cannot already have another host hook. */
+        status = turbowasm_component_endpoint_value_adopt(&prepared, admitted,
+            begin_host_move_cleanup, finish_host_move, impl);
+        if (status != TURBOWASM_OK) {
+            turbowasm_component_endpoint *restored;
+            (void)turbowasm_component_endpoint_take_value(&prepared, &restored);
+        }
+    }
+    turbowasm_runtime_scope_leave(scope);
+    if (status != TURBOWASM_OK) {
+        impl->driving = false;
+        turbowasm_component_host_activity_leave(impl->instance);
+    }
+    else *out = prepared;
+    return status;
+}
+
+turbowasm_status turbowasm_component_host_endpoint_move_commit(
+    turbowasm_component_host_endpoint *owner, const turbowasm_component_value *value) {
+    component_host_endpoint_impl *impl = owner != NULL ? owner->impl : NULL;
+    const turbowasm_component_endpoint *endpoint = turbowasm_component_endpoint_value_get(value);
+    const turbowasm_component_endpoint_value_owner *record = endpoint != NULL ? endpoint->value_owner : NULL;
+    if (impl == NULL || !impl->driving || endpoint != impl->endpoint || record == NULL ||
+        record->host_finish != finish_host_move || record->host_context != impl ||
+        record->host_admitted == NULL || !*record->host_admitted) return TURBOWASM_INVALID_ARGUMENT;
+    owner->impl = NULL;
+    impl->deferred_move = true;
+    turbowasm_component_host_activity_leave(impl->instance);
     return TURBOWASM_OK;
 }
 
@@ -192,6 +267,6 @@ turbowasm_status turbowasm_component_host_endpoint_destroy(turbowasm_component_h
     if (status != TURBOWASM_OK) {
         impl->driving = false; turbowasm_component_host_activity_leave(impl->instance); return status;
     }
-    release_body(owner, impl);
+    release_body(owner, impl, true);
     return TURBOWASM_OK;
 }
