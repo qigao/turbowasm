@@ -337,6 +337,15 @@ static const cmeta_function_desc turbowasm_wasi_meta_poll_oneoff =
     TURBOWASM_WASI_META_FUNCTION("poll_oneoff", &cmeta_type_uint32,
         turbowasm_wasi_meta_poll_oneoff_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
 
+static const cmeta_param_desc turbowasm_wasi_meta_path_rename_params[] = {
+    TURBOWASM_WASI_META_PARAM32(old_fd), TURBOWASM_WASI_META_PARAM32(old_path),
+    TURBOWASM_WASI_META_PARAM32(old_length), TURBOWASM_WASI_META_PARAM32(new_fd),
+    TURBOWASM_WASI_META_PARAM32(new_path), TURBOWASM_WASI_META_PARAM32(new_length)
+};
+static const cmeta_function_desc turbowasm_wasi_meta_path_rename =
+    TURBOWASM_WASI_META_FUNCTION("path_rename", &cmeta_type_uint32,
+        turbowasm_wasi_meta_path_rename_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+
 static const cmeta_function_desc *const turbowasm_wasi_preview1_manifest[] = {
     &turbowasm_wasi_meta_args_sizes_get,
     &turbowasm_wasi_meta_args_get,
@@ -366,7 +375,8 @@ static const cmeta_function_desc *const turbowasm_wasi_preview1_manifest[] = {
     &turbowasm_wasi_meta_fd_fdstat_get,
     &turbowasm_wasi_meta_fd_fdstat_set_flags,
     &turbowasm_wasi_meta_fd_fdstat_set_rights,
-    &turbowasm_wasi_meta_poll_oneoff
+    &turbowasm_wasi_meta_poll_oneoff,
+    &turbowasm_wasi_meta_path_rename
 };
 
 #undef TURBOWASM_WASI_META_FUNCTION
@@ -1485,6 +1495,27 @@ static turbowasm_status turbowasm_wasi_path_unlink_file(
         turbowasm_wasi_fs_path_unlink_file);
 }
 
+static turbowasm_status turbowasm_wasi_path_rename(
+    void *context, turbowasm_host_call *call,
+    const turbowasm_value *arguments, size_t argument_count,
+    turbowasm_value *results, size_t result_capacity,
+    size_t *result_count, turbowasm_trap *trap) {
+    turbowasm_wasi_preview1_impl *impl = context;
+    if (!impl || !impl->allow_filesystem || !impl->filesystem || !call ||
+        !arguments || argument_count != 6) return TURBOWASM_INVALID_ARGUMENT;
+    for (size_t i = 0; i < 6; ++i)
+        if (arguments[i].kind != TURBOWASM_VALUE_I32) return TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_host_memory_span a = {0}, b = {0};
+    uint32_t error = turbowasm_wasi_memory_span(call, (uint32_t)arguments[1].as.i32,
+        (uint32_t)arguments[2].as.i32, &a);
+    if (!error) error = turbowasm_wasi_memory_span(call, (uint32_t)arguments[4].as.i32,
+        (uint32_t)arguments[5].as.i32, &b);
+    if (!error) error = turbowasm_wasi_fs_path_rename(impl->filesystem,
+        (uint32_t)arguments[0].as.i32, a.data, a.size,
+        (uint32_t)arguments[3].as.i32, b.data, b.size);
+    return turbowasm_wasi_return_errno(results, result_capacity, result_count, trap, error);
+}
+
 static turbowasm_status turbowasm_wasi_path_filestat_get(
     void *context,
     turbowasm_host_call *call,
@@ -1999,6 +2030,7 @@ turbowasm_status turbowasm_wasi_preview1_define(
         TURBOWASM_WASI_DEFINE(
             &turbowasm_wasi_meta_path_unlink_file,
             turbowasm_wasi_path_unlink_file);
+        TURBOWASM_WASI_DEFINE(&turbowasm_wasi_meta_path_rename, turbowasm_wasi_path_rename);
         TURBOWASM_WASI_DEFINE(
             &turbowasm_wasi_meta_fd_seek,
             turbowasm_wasi_fd_seek);

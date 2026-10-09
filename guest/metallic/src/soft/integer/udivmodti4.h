@@ -1,0 +1,36 @@
+#include "uldivmoddi5.h"
+#include <stdint.h>
+
+static unsigned __int128 udivmodti4_(unsigned __int128 a, unsigned __int128 b, unsigned __int128 r[static 1])
+{
+    uint64_t a1 = a >> 64;
+    uint64_t a0 = a;
+    uint64_t b1 = b >> 64;
+    uint64_t b0 = b;
+
+    if (a < b) {
+        *r = a;
+        return 0;
+    }
+
+    if (!b1) {
+        uint64_t r0;
+        uint64_t q0 = uldivmoddi5_(a1 % b0, a0, b0, &r0);
+
+        *r = r0;
+        return (unsigned __int128)(a1 / b0) << 64 | q0;
+    }
+
+    uint64_t q = 0;
+    int shift = __builtin_clzll(b1) - __builtin_clzll(a1);
+
+    for (b <<= shift & 63; shift >= 0; --shift) {
+        __int128 s = (__int128)(b - a - 1) >> 127;
+        q = (q << 1) | (s & 1);
+        a -= b & s;
+        b >>= 1;
+    }
+
+    *r = a;
+    return q;
+}

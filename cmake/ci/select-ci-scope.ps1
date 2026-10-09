@@ -40,6 +40,9 @@ if ($selected) {
         if ($SkipWindows -and $profileEntry.family -eq 'windows') { continue }
         if ($Profile -eq 'sdk' -and -not $profileEntry.ContainsKey('sdk_preset')) { continue }
         $entry = $profileEntry.Clone()
+        if ($Profile -eq 'ci' -and $env:CI_METALLIC_GUESTS -eq 'true' -and $entry.id -eq 'linux-release') {
+            $entry.preset = 'ci-metallic-user'
+        }
         if ($Profile -eq 'sdk') {
             $entry.preset = $entry.sdk_preset
             if ($entry.ContainsKey('sdk_id')) { $entry.id = $entry.sdk_id }

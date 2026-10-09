@@ -889,9 +889,33 @@ uint32_t tw_wasi_fd_set_flags(turbowasm_wasi_fs *fs, uint32_t fd, uint16_t flags
     turbowasm_wasi_fs_slot *s = turbowasm_wasi_fs_find_fd(turbowasm_wasi_fs_impl_mut(fs), fd);
     if (!s) return TURBOWASM_WASI_ERRNO_BADF;
     if (!(s->rights_base & TURBOWASM_WASI_RIGHT_FD_FDSTAT_SET_FLAGS)) return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
-    if (flags & ~TURBOWASM_WASI_FDFLAG_NONBLOCK) return TURBOWASM_WASI_ERRNO_NOTSUP;
-    if (!s->ops.recv && flags) return TURBOWASM_WASI_ERRNO_NOTSUP;
+    if (s->ops.recv) {
+        if (flags & ~TURBOWASM_WASI_FDFLAG_NONBLOCK) return TURBOWASM_WASI_ERRNO_NOTSUP;
+    } else if (s->ops.file.set_flags) {
+        uint32_t error = s->ops.file.set_flags(s->ops.file.context, s->file, flags);
+        if (error) return error;
+    } else if (flags != s->flags) return TURBOWASM_WASI_ERRNO_NOTSUP;
     s->flags = flags; return 0;
+}
+
+uint32_t turbowasm_wasi_fs_path_rename(turbowasm_wasi_fs *fs,
+    uint32_t source_fd, const uint8_t *source, size_t source_length,
+    uint32_t target_fd, const uint8_t *target, size_t target_length) {
+    turbowasm_wasi_fs_impl *p = turbowasm_wasi_fs_impl_mut(fs);
+    if (!p || !source || !target || !source_length || !target_length)
+        return TURBOWASM_WASI_ERRNO_INVAL;
+    turbowasm_wasi_fs_slot *a = turbowasm_wasi_fs_find_fd(p, source_fd);
+    turbowasm_wasi_fs_slot *b = turbowasm_wasi_fs_find_fd(p, target_fd);
+    if (!a || !b) return TURBOWASM_WASI_ERRNO_BADF;
+    if (!(a->rights_base & TURBOWASM_WASI_RIGHT_PATH_RENAME_SOURCE) ||
+        !(b->rights_base & TURBOWASM_WASI_RIGHT_PATH_RENAME_TARGET))
+        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+    if (a->ops.file.context != b->ops.file.context ||
+        a->ops.file.path_rename != b->ops.file.path_rename)
+        return TURBOWASM_WASI_ERRNO_XDEV;
+    if (!a->ops.file.path_rename) return TURBOWASM_WASI_ERRNO_NOTSUP;
+    return a->ops.file.path_rename(a->ops.file.context, a->file, source, source_length,
+        b->file, target, target_length);
 }
 
 uint32_t tw_wasi_fd_set_rights(turbowasm_wasi_fs *fs, uint32_t fd, uint64_t base, uint64_t inheriting) {

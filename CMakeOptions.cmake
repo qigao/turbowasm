@@ -1,4 +1,7 @@
 option(TURBOWASM_BUILD_TOOLS "Build TurboWasm command-line tools" ON)
+option(TURBOWASM_BUILD_METALLIC_GUESTS "Build the local Metallic wasm32 guest SDK and C11 guests" OFF)
+set(TURBOWASM_METALLIC_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/guest/metallic" CACHE PATH
+  "Absolute path to the local Metallic sources")
 option(TURBOWASM_BUILD_TESTS "Build TurboWasm tests" ON)
 option(TURBOWASM_BUILD_CONFORMANCE_RUNNER
   "Build the non-installed WebAssembly spec conformance runner" OFF)

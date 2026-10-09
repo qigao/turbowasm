@@ -22,6 +22,17 @@ endforeach()
 
 turbowasm_normalize_salts_c11_atomics()
 
+if(TurboWasm_HAS_METALLIC_GUEST_SDK)
+  include("${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuest.cmake")
+  turbowasm_add_c_guest(turbowasm_installed_c_guest "${CMAKE_CURRENT_SOURCE_DIR}/../../examples/guest/hello.c")
+  find_program(TURBOWASM_INSTALLED_RUNNER NAMES turbowasm-run
+    PATHS "$ENV{TURBOWASM_ROOT}/bin" NO_DEFAULT_PATH REQUIRED)
+  add_test(NAME turbowasm_installed_c_guest
+    COMMAND "${TURBOWASM_INSTALLED_RUNNER}" "${turbowasm_installed_c_guest_WASM}")
+  set_tests_properties(turbowasm_installed_c_guest PROPERTIES
+    PASS_REGULAR_EXPRESSION "guest cleanup complete" TIMEOUT 30)
+endif()
+
 add_executable(turbowasm_installed_consumer main.c)
 target_link_libraries(turbowasm_installed_consumer PRIVATE TurboWasm::Runtime)
 set_target_properties(turbowasm_installed_consumer PROPERTIES

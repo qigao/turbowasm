@@ -403,6 +403,19 @@
       }
     },
     {
+      "name": "win-metallic-user",
+      "inherits": "win-core3-asan-user",
+      "cacheVariables": {
+        "TURBOWASM_BUILD_METALLIC_GUESTS": true,
+        "TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND": true
+      }
+    },
+    {
+      "name": "ci-metallic-user",
+      "inherits": "ci-linux-user",
+      "cacheVariables": { "TURBOWASM_BUILD_METALLIC_GUESTS": true }
+    },
+    {
       "name": "ci-core3-mir-user",
       "inherits": "ci-core3-user",
       "cacheVariables": {
@@ -414,6 +427,17 @@
     }
   ],
   "buildPresets": [
+    { "name": "ci-metallic-user", "configurePreset": "ci-metallic-user" },
+    { "name": "install-ci-metallic-user", "configurePreset": "ci-metallic-user", "targets": ["install"] },
+    {
+      "name": "win-metallic-user",
+      "configurePreset": "win-metallic-user"
+    },
+    {
+      "name": "install-win-metallic-user",
+      "configurePreset": "win-metallic-user",
+      "targets": ["install"]
+    },
     {
       "name": "ci-macos-mir-user",
       "configurePreset": "ci-macos-mir-user"
@@ -618,6 +642,16 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "ci-metallic-user", "configurePreset": "ci-metallic-user",
+      "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "win-metallic-user",
+      "configurePreset": "win-metallic-user",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
     {
       "name": "ci-macos-mir-user",
       "configurePreset": "ci-macos-mir-user",

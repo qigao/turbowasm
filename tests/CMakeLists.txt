@@ -1,4 +1,12 @@
 add_executable(turbowasm_module_test module_test.c)
+if(TARGET TurboWasm::WASI)
+  add_executable(turbowasm_wasi_fs_rename_flags_test wasi_fs_rename_flags_test.c)
+  target_link_libraries(turbowasm_wasi_fs_rename_flags_test PRIVATE TurboWasm::WASI Salts::TinyTest)
+  target_include_directories(turbowasm_wasi_fs_rename_flags_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_features(turbowasm_wasi_fs_rename_flags_test PRIVATE c_std_11)
+  set_target_properties(turbowasm_wasi_fs_rename_flags_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_fs_rename_flags_test COMMAND turbowasm_wasi_fs_rename_flags_test)
+endif()
 target_link_libraries(turbowasm_module_test PRIVATE TurboWasm::Runtime)
 set_target_properties(turbowasm_module_test PROPERTIES
   C_STANDARD 11

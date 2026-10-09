@@ -166,7 +166,20 @@ typedef struct turbowasm_wasi_fs_provider {
     turbowasm_wasi_fs_path_mutation_fn path_remove_directory;
     turbowasm_wasi_fs_path_mutation_fn path_unlink_file;
     turbowasm_wasi_fs_readdir_fn readdir;
+    /* Optional extensions. Borrowed paths, atomic rename, Preview1 errno.
+     * Flags must remain unchanged on failure. Consumers must recompile. */
+    uint32_t (*path_rename)(void *context,
+        turbowasm_wasi_fs_file source_directory, const uint8_t *source, size_t source_length,
+        turbowasm_wasi_fs_file target_directory, const uint8_t *target, size_t target_length);
+    uint32_t (*set_flags)(void *context, turbowasm_wasi_fs_file file, uint16_t flags);
 } turbowasm_wasi_fs_provider;
+
+/* Requires RENAME_SOURCE / RENAME_TARGET on the respective directories.
+ * Paths are borrowed. Different providers return XDEV; absent callback returns
+ * NOTSUP. No descriptor ownership is transferred. */
+uint32_t turbowasm_wasi_fs_path_rename(turbowasm_wasi_fs *filesystem,
+    uint32_t source_fd, const uint8_t *source, size_t source_length,
+    uint32_t target_fd, const uint8_t *target, size_t target_length);
 
 typedef struct turbowasm_wasi_fs_config {
     size_t descriptor_capacity;

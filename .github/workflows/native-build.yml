@@ -84,6 +84,10 @@ jobs:
           if [ "$RUNNER_OS" = Linux ]; then
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends ninja-build pkg-config mono-runtime
+            if [ '${{ matrix.preset }}' = ci-metallic-user ]; then
+              sudo apt-get install -y --no-install-recommends clang-18 llvm-18 lld-18
+              echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+            fi
           else
             command -v ninja >/dev/null || brew install ninja
             # Match the published Salts SDK's GNU thread-local ABI (TinyTest).

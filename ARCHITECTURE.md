@@ -3690,3 +3690,53 @@ does not submit duplicate accepts, and cancellation cannot reuse the physical
 socket slot before its terminal completion is routed. Both ordinary close and
 adapter shutdown are covered. The Runtime static library also retains #419's
 position-independent-code setting for embedding in shared libraries.
+
+## Metallic C11 command guests
+
+The approved first three stages add an optional wasm32 guest SDK and a separate
+`turbowasm-run` command. Metallic is consumed directly from `guest/metallic`,
+with a local source override through `TURBOWASM_METALLIC_SOURCE_DIR`; its headers and allocator run inside
+guest linear memory. Salts remains a native host dependency, never a guest libc.
+Configuration does not fetch, copy or patch the sources. Libc fixes are maintained
+in the local source tree and the C guest tests qualify its behavior.
+The initial audit used upstream `66ea0f480a16a9341be94ed4e66be28b3c3802d5`.
+LLVM produces LTO objects in a conventional
+archive, with the command CRT linked explicitly. This avoids requiring
+`llvm-link` while retaining the upstream compilation model. wasi-sdk remains an
+alternative for applications needing its larger sysroot; importing another
+libc into the runtime would duplicate guest state and is unnecessary.
+
+The runner owns one module, instance, Preview1 adapter and bounded descriptor
+table. Arguments and explicitly supplied environment entries are copied by the
+adapter. Standard streams are borrowed host streams; guest close revokes their
+descriptor without closing the host stream. A directory is available only when
+explicitly passed by the user. Guest memory, module size, descriptor count and
+execution fuel are bounded. `proc_exit` is recorded separately from traps and
+fuel exhaustion. Cleanup destroys the instance before the adapter and closes
+every remaining descriptor before destroying the filesystem provider.
+
+The filesystem provider appends optional `path_rename` and `set_flags` callbacks.
+Existing zero-initialized source consumers retain their behavior but must
+recompile (provider struct size changes). Rename validates both descriptor
+rights and paths before dispatch; different provider contexts return XDEV.
+Flags are committed to the descriptor table only after the provider accepts
+them. HostFS uses secure Salts root-relative operations, never host path
+concatenation. Append is supported; unsupported flag combinations report NOTSUP.
+HostFS refuses rename while any child directory descriptor is live with BUSY,
+because these descriptors currently retain root-relative paths. The preopened
+root is exempt; ordinary C file streams do not open child directory descriptors.
+
+Metallic patches address command exit handlers, allocation failure, checked
+heap growth, aligned allocation admission and temporary-file lifetime. Temporary
+files are exclusively created in the explicitly preopened current directory and
+unlinked immediately; neither a global host temp directory nor shell execution
+is granted. Failed unlink closes the newly created descriptor and reports the
+error. This profile is single-threaded and does not claim complete C11: real
+setjmp/longjmp, threads, general locale/fenv behavior and upstream long-double
+soft-float gaps remain outside these stages.
+
+Validation uses compiled C guests through the real runner and formal filesystem
+tests, including exit order, allocation limits, args/environment, rename,
+append, temporary files and clock conversion. The dependency and profile are
+optional; disabling the guest build restores the native-only build graph.
+Reverting the provider extension requires rebuilding native consumers.

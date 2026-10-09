@@ -1,6 +1,7 @@
 #include <turbowasm/wasi_host_fs.h>
 
 #include <cmeta_fs.h>
+#include <tstr.h>
 
 #include <errno.h>
 #include <limits.h>
@@ -61,6 +62,7 @@ static uint32_t host_errno(int result) {
     if (error == EAGAIN) return TURBOWASM_WASI_ERRNO_AGAIN;
     if (error == EBADF) return TURBOWASM_WASI_ERRNO_BADF;
     if (error == EEXIST) return TURBOWASM_WASI_ERRNO_EXIST;
+    if (error == EXDEV) return TURBOWASM_WASI_ERRNO_XDEV;
     if (error == EFBIG || error == EOVERFLOW)
         return TURBOWASM_WASI_ERRNO_FBIG;
     if (error == EINTR) return TURBOWASM_WASI_ERRNO_INTR;
@@ -270,6 +272,8 @@ static uint32_t host_build_path(
     size_t total;
     uint32_t error;
 
+    if (path_length > impl->path_capacity)
+        return TURBOWASM_WASI_ERRNO_NAMETOOLONG;
     error = host_validate_guest_path(path, path_length);
     if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
         return error;
@@ -560,6 +564,10 @@ static int host_file_flags(
         flags |= SALTS_FS_O_TRUNC;
     if ((fdflags & TURBOWASM_HOST_FS_FDFLAGS_APPEND) != 0u)
         flags |= SALTS_FS_O_APPEND;
+#ifdef SALTS_FS_ROOT_MUTATION_VERSION
+    if ((oflags & TURBOWASM_HOST_FS_OFLAGS_EXCL) != 0u)
+        flags |= SALTS_FS_ROOT_O_EXCL;
+#endif
     *out_flags = flags;
     return 0;
 }
@@ -597,8 +605,10 @@ static uint32_t host_path_open(
         return TURBOWASM_WASI_ERRNO_INVAL;
     if ((dirflags & TURBOWASM_HOST_FS_LOOKUPFLAGS_SYMLINK_FOLLOW) != 0u)
         return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+#ifndef SALTS_FS_ROOT_MUTATION_VERSION
     if ((oflags & TURBOWASM_HOST_FS_OFLAGS_EXCL) != 0u)
         return TURBOWASM_WASI_ERRNO_NOSYS;
+#endif
 
     error = host_build_path(
         impl, directory, path, path_length, full_path);
@@ -751,6 +761,45 @@ static uint32_t host_path_unlink_file(
         (turbowasm_wasi_host_fs_impl *)context,
         directory, path, path_length, 2);
 }
+
+#ifdef SALTS_FS_ROOT_MUTATION_VERSION
+static uint32_t host_set_flags(void *context, turbowasm_wasi_fs_file file, uint16_t flags) {
+    turbowasm_wasi_host_fs_slot *slot = host_slot_from_file(context, file);
+    if (!slot) return TURBOWASM_WASI_ERRNO_BADF;
+    if (slot->directory) return TURBOWASM_WASI_ERRNO_ISDIR;
+    if (flags & ~TURBOWASM_HOST_FS_FDFLAGS_APPEND) return TURBOWASM_WASI_ERRNO_NOTSUP;
+    return host_errno(cmeta_fs_root_file_set_append(slot->file,
+        (flags & TURBOWASM_HOST_FS_FDFLAGS_APPEND) != 0));
+}
+
+static uint32_t host_path_rename(void *context,
+    turbowasm_wasi_fs_file from, const uint8_t *source, size_t source_length,
+    turbowasm_wasi_fs_file to, const uint8_t *target, size_t target_length) {
+    turbowasm_wasi_host_fs_impl *impl = context;
+    tstr a = tstr_new_len(NULL, impl->path_capacity);
+    tstr b = tstr_new_len(NULL, impl->path_capacity);
+    uint32_t error = TURBOWASM_WASI_ERRNO_NOMEM;
+    if (!a || !b) goto done;
+    error = host_build_path(impl, from, source, source_length, a);
+    if (!error) error = host_build_path(impl, to, target, target_length, b);
+    if (error) goto done;
+    for (size_t i = 0; i < impl->slot_capacity; ++i) {
+        turbowasm_wasi_host_fs_slot *slot = &impl->slots[i];
+        /* Directory operations currently resolve stored root-relative paths.
+         * Refuse mutation while any child directory is open rather than try
+         * to infer native path identity from spelling, case or separators. */
+        if (slot->used && slot->directory) {
+            error = TURBOWASM_WASI_ERRNO_BUSY;
+            goto done;
+        }
+    }
+    error = host_errno(cmeta_fs_root_rename(impl->root, a, impl->root, b));
+done:
+    tstr_free(a);
+    tstr_free(b);
+    return error;
+}
+#endif
 
 static uint32_t host_readdir(
     void *context,
@@ -944,6 +993,10 @@ bool turbowasm_wasi_host_fs_provider(
     out_provider->path_unlink_file =
         host_path_unlink_file;
     out_provider->readdir = host_readdir;
+#ifdef SALTS_FS_ROOT_MUTATION_VERSION
+    out_provider->path_rename = host_path_rename;
+    out_provider->set_flags = host_set_flags;
+#endif
     *out_root = (turbowasm_wasi_fs_file){
         UINT64_C(1), 1u
     };

@@ -46,7 +46,8 @@ The repository currently provides:
 - caller-owned Runtime allocation plus module/allocation/linear-memory/table
   resource limits for embedded deployments;
 - C/C++ public ABI tests;
-- an installed CMake package and a small module-validation CLI.
+- an installed CMake package, module-validation CLI and WASI command runner;
+- an optional local Metallic wasm32 guest SDK for C11 applications.
 
 The current implementation is intentionally scoped. Core shared-memory atomics,
 legacy WASI threads, the qualified Preview1 capability layer, and interpreter
@@ -344,6 +345,52 @@ c-ares storage until its real terminal. External DNS is unnecessary for tests.
 
 CNet's [WebSocket API](../salts/cnet/include/cnet/websocket.h) remains available
 to hosts. WASI sockets 0.2.8 does not define a WebSocket interface.
+
+## Local C11 guest SDK
+
+The optional C11 guest SDK uses the local sources in `guest/metallic`. It performs
+no Metallic download during configure or build. Origin, revision, license and
+local changes are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Build with LLVM's `clang`, `llvm-ar` and `wasm-ld` on PATH and a Salts SDK providing
+`SALTS_FS_ROOT_MUTATION_VERSION` (secure rename, exclusive create and append):
+
+```powershell
+# Run from a Visual Studio developer shell with the normal SDK environment.
+cmake --preset win-metallic-user
+cmake --build --preset win-metallic-user
+ctest --preset win-metallic-user -R guest --output-on-failure
+build/win-metallic-user/turbowasm-run.exe build/win-metallic-user/guest/guest_hello.wasm demo
+```
+
+`turbowasm-run [--dir absolute-host-directory] [--env KEY=VALUE] [--fuel N]
+[--memory-pages N] [--] module.wasm [arguments...]` invokes the exported `_start`.
+The default limits are 16 MiB linear memory, 16 MiB module bytes, 64 descriptors,
+65,536 table elements and 100 million instructions. Native blocking stdio is not
+a wall-clock deadline. No directory or environment is inherited; `--dir` grants
+read/write access beneath that root and maps it to guest `.`. HostFS never follows
+guest symlinks. The runner rejects command modules with a separate start section
+so instantiation cannot run unmetered guest code. Runtime failures return process
+status 125; guest `proc_exit` returns its low eight bits.
+
+`cmake --build --preset install-win-metallic-user` installs the runner and guest
+headers, `metallic.a`, `crt1.o`, license and `TurboWasmGuest.cmake`. Installed CMake
+consumers can include `${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuest.cmake` after
+`find_package(TurboWasm CONFIG REQUIRED)`, then call
+`turbowasm_add_c_guest(app /absolute/path/app.c)`. This emits `app.wasm` with a
+256 KiB shadow stack and 16 MiB declared maximum memory. LLVM versions must be
+compatible with the LTO archive used by that SDK.
+
+The profile supports command args/environment, stdio, ordinary files,
+rename/remove, exclusive creation, temporary files, append mutation, allocation,
+exit handlers and realtime `timespec_get`. Temporary files require a writable
+preopen and are unlinked immediately. Stdio is currently unbuffered.
+`freopen(NULL, ...)` permits append changes with unchanged read/write access;
+truncation or access changes return `ENOTSUP` and close the stream. Real
+`setjmp`/`longjmp`, threads, full locale/fenv and the documented upstream
+long-double gaps remain outside this profile; it is not complete C11 conformance.
+The Linux CI profile is `ci-metallic-user`; manual CI selects it with
+`metallic_guests=true` and the matching `salts_ci_run` prerequisite artifact.
 
 ## Dependency boundary
 
