@@ -423,7 +423,7 @@ static turbowasm_status turbowasm_wasi_threads_spawn(
     slot->start_arg = (uint32_t)arguments[0].as.i32;
 
     if (turbowasm_instance_create_sibling_internal(
-            &slot->child, caller) != TURBOWASM_OK) {
+            &slot->child, call) != TURBOWASM_OK) {
         turbowasm_wasi_threads_rollback(slot);
         spawn_result = TURBOWASM_WASI_THREADS_SPAWN_INSTANTIATE;
         goto done;

@@ -59,7 +59,7 @@ if(TARGET TurboWasm::WASIThreads)
     set(c11_cmeta_library "${guest_cmeta_threaded_ARCHIVE}")
     set(c11_cmeta_exports -Wl,--export=cmeta_concurrent)
   endif()
-  _turbowasm_guest_objects(guest_c11_threads SOURCES c11_threads.c c11_stdio.c c11_libc.c ${c11_cmeta_sources}
+  _turbowasm_guest_objects(guest_c11_threads SOURCES c11_threads.c c11_stdio.c c11_libc.c c11_atomics.c ${c11_cmeta_sources}
     INCLUDE_DIRECTORIES "${metallic_source}/threaded/include" "${metallic_source}/threaded/src"
     COMPILE_OPTIONS -U__STDC_NO_THREADS__ -D__METALLIC_THREADS__=1 -matomics -pthread -ftls-model=local-exec ${c11_cmeta_options})
   set(c11_threads_wasm "${CMAKE_CURRENT_BINARY_DIR}/guest_c11_threads.wasm")
@@ -72,6 +72,7 @@ if(TARGET TurboWasm::WASIThreads)
       -Wl,-z,stack-size=262144 -Wl,--initial-memory=1048576,--max-memory=16777216
       -Wl,--export=wasi_thread_start,--export=initialize,--export=lifecycle,--export=synchronization
       -Wl,--export=conditions,--export=thread_specific,--export=allocation,--export=capacity
+      -Wl,--export=atomics
       -Wl,--export=shared_io,--export=drain_join,--export=abnormal_join
       -Wl,--export=stdio_records,--export=stdio_progress,--export=stdio_close_flush,--export=stdio_error_release
       -Wl,--export=stdio_reopen_flush

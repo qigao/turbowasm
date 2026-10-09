@@ -6962,7 +6962,9 @@ static turbowasm_status turbowasm_instance_create_internal(
     const turbowasm_linker *linker,
     bool resolve_imports,
     bool preserve_failed_instance,
-    turbowasm_store_impl *store) {
+    turbowasm_store_impl *store,
+    const turbowasm_execution_options *start_options,
+    turbowasm_trap *start_trap) {
     const turbowasm_module_impl *module_impl;
     turbowasm_instance_impl *impl;
     turbowasm_status status;
@@ -7029,13 +7031,14 @@ static turbowasm_status turbowasm_instance_create_internal(
         size_t result_count = 0u;
         turbowasm_trap trap = TURBOWASM_TRAP_NONE;
 
-        status = turbowasm_instance_invoke(
+        status = turbowasm_instance_invoke_with_options(
             instance,
             module_impl->summary.start_function_index,
             NULL, 0u,
             NULL, 0u,
             &result_count,
-            &trap);
+            &trap, start_options);
+        if (start_trap != NULL) *start_trap = trap;
         if (status != TURBOWASM_OK) {
             if (preserve_failed_instance &&
                 status == TURBOWASM_TRAPPED)
@@ -7052,7 +7055,7 @@ turbowasm_status turbowasm_instance_create(
     turbowasm_instance *instance,
     const turbowasm_module *module) {
     return turbowasm_instance_create_internal(
-        instance, module, NULL, false, false, NULL);
+        instance, module, NULL, false, false, NULL, NULL, NULL);
 }
 
 turbowasm_status turbowasm_instance_create_linked(
@@ -7060,7 +7063,20 @@ turbowasm_status turbowasm_instance_create_linked(
     const turbowasm_module *module,
     const struct turbowasm_linker *linker) {
     return turbowasm_instance_create_internal(
-        instance, module, linker, true, false, NULL);
+        instance, module, linker, true, false, NULL, NULL, NULL);
+}
+
+turbowasm_status turbowasm_instance_create_linked_with_options(
+    turbowasm_instance *instance,
+    const turbowasm_module *module,
+    const struct turbowasm_linker *linker,
+    const turbowasm_execution_options *start_options,
+    turbowasm_trap *trap) {
+    if (trap == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    *trap = TURBOWASM_TRAP_NONE;
+    if (start_options == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    return turbowasm_instance_create_internal(
+        instance, module, linker, true, false, NULL, start_options, trap);
 }
 
 turbowasm_status turbowasm_instance_create_linked_preserve_failure(
@@ -7068,7 +7084,7 @@ turbowasm_status turbowasm_instance_create_linked_preserve_failure(
     const turbowasm_module *module,
     const struct turbowasm_linker *linker) {
     return turbowasm_instance_create_internal(
-        instance, module, linker, true, true, NULL);
+        instance, module, linker, true, true, NULL, NULL, NULL);
 }
 
 turbowasm_status turbowasm_instance_create_in_store(
@@ -7077,7 +7093,7 @@ turbowasm_status turbowasm_instance_create_in_store(
     if(store==NULL || !turbowasm_store_is_owner(store->impl))
         return TURBOWASM_INVALID_ARGUMENT;
     return turbowasm_instance_create_internal(instance,module,linker,
-        linker!=NULL,false,store->impl);
+        linker!=NULL,false,store->impl,NULL,NULL);
 }
 
 turbowasm_status turbowasm_instance_create_in_store_preserve_failure(
@@ -7086,12 +7102,13 @@ turbowasm_status turbowasm_instance_create_in_store_preserve_failure(
     if(store==NULL || !turbowasm_store_is_owner(store->impl))
         return TURBOWASM_INVALID_ARGUMENT;
     return turbowasm_instance_create_internal(instance,module,linker,
-        linker!=NULL,true,store->impl);
+        linker!=NULL,true,store->impl,NULL,NULL);
 }
 
 turbowasm_status turbowasm_instance_create_sibling_internal(
     turbowasm_instance *instance,
-    const turbowasm_instance *parent) {
+    turbowasm_host_call *call) {
+    const turbowasm_instance *parent = turbowasm_host_call_instance(call);
     const turbowasm_instance_impl *parent_impl;
     const turbowasm_module_impl *module_impl;
     turbowasm_instance_impl *impl;
@@ -7137,8 +7154,8 @@ turbowasm_status turbowasm_instance_create_sibling_internal(
         size_t result_count = 0u;
         turbowasm_trap trap = TURBOWASM_TRAP_NONE;
 
-        status = turbowasm_instance_invoke(
-            instance,
+        status = turbowasm_instance_invoke_from_host(
+            call, instance,
             module_impl->summary.start_function_index,
             NULL, 0u,
             NULL, 0u,

@@ -436,7 +436,12 @@ full locale/fenv and the documented upstream
 long-double gaps remain outside this profile; it is not complete C11 conformance.
 An internal, non-installed C11 threads profile is exercised by
 `turbowasm_guest_c11_threads_test`, including synchronization, TSS, allocation
-and shared Preview1 clock/args/environment/vector I/O. Its libc tests also cover
+and shared Preview1 clock/args/environment/vector I/O. Clang supplies C11
+language support and `stdatomic.h`; Metallic supplies the guest C library.
+Compiled tests cover 8/16/32/64-bit integer atomics, pointer arithmetic, CAS,
+flags, fences and release/acquire publication with real guest workers. This
+does not qualify arbitrary aggregate or wider-than-64-bit atomics.
+Its libc tests also cover
 per-stream byte/wide I/O serialization, close/reopen against flush-all, independent
 stream progress, exit callback registration, random state, signal handlers,
 thread-local string/calendar buffers and once-only preopen discovery. Filesystem
@@ -461,6 +466,14 @@ Compiled C11 guests exercise TCP/UDP and poll while the root joins children,
 including group `proc_exit`. Installed threaded command/Reactor/CMeta SDK
 qualification and remaining libc integration are tracked in
 [#426](https://github.com/qigao/turbowasm/issues/426); it is not yet a threaded SDK.
+
+Hosts accepting modules with a Wasm start section can use
+`turbowasm_instance_create_linked_with_options` to apply fuel and interruption
+to startup. The options apply only to start; later calls select their own
+policy. Failure empties the destination instance but does not undo imported
+state or host effects. WASI child startup shares the spawning invocation's
+remaining budget and interruption context. Existing creation APIs retain their
+behavior, and the single-thread Reactor example still rejects start sections.
 When the local CMeta source is configured, the internal threads test also builds
 a separate guest CMeta archive and runs four C11 workers through cross-TU
 metadata, checked calls, independent ObjectRef lifetimes and aligned allocation.

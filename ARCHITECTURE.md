@@ -4007,6 +4007,112 @@ Environment initialization uses checked allocator-owned storage and call_once
 publication in this profile; its established empty-on-provider-error behavior
 is retained. The allocator remains the sole owner of program-break mutation.
 
+### Installed threaded guest profile and bounded startup (#426, selected)
+
+Implementation status: the budgeted Runtime creation entry and inherited child
+startup control are implemented and covered by Runtime and installed-consumer
+tests. The guest close entry, threaded CRT/profile installation and installed
+threaded command/Reactor consumers below remain integration work; the existing
+private thread archive is not yet the published SDK profile.
+
+The private thread archive and compiled tests now cover C11 synchronization,
+libc state, native HostFS and owner-dispatched sockets. Installing that archive
+alone would leave startup, host resource ownership and Reactor shutdown to
+undocumented test conventions. LLVM shared-memory output also contains a
+guarded memory/TLS initialization start function. The single-thread Reactor
+example rejects every start section; existing Runtime creation invokes a start
+without invocation fuel. Neither rule is an adequate installed threaded profile.
+
+Selected additive interfaces and artifact contract (approved 2026-10-09):
+
+```c
+turbowasm_status turbowasm_instance_create_linked_with_options(
+    turbowasm_instance *instance, const turbowasm_module *module,
+    const struct turbowasm_linker *linker,
+    const turbowasm_execution_options *start_options,
+    turbowasm_trap *trap);
+
+/* Guest-only extension, declared by <metallic/threads.h>. */
+int metallic_threads_close(const struct timespec *utc_deadline);
+```
+
+The Runtime entry requires an empty instance, live validated module/linker,
+non-NULL start_options and trap. It uses the existing execution fuel and
+interruption policy for the start function only; later invocations keep their
+own options. No start means no guest execution. It returns ordinary linking,
+allocation and invocation errors, including FUEL_EXHAUSTED/INTERRUPTED/TRAPPED,
+and reports the start trap. Failure leaves the instance empty. Effects already
+performed on imported state or by host callbacks cannot be rolled back; their
+owners must outlive any admitted operations. GC still uses its existing explicit
+store entry; threaded managed GC remains excluded. Existing create functions
+retain their API and behavior. Child sibling startup uses the spawning host
+call's execution context internally, so its start cannot bypass that invocation's
+fuel/interrupt policy. No new host join API is introduced.
+
+Guest close is root-only and maps to the existing bounded registry drain. It
+permanently closes new thread admission, waits for actual stack-free child
+terminals, then reclaims retained child records. NULL waits cooperatively with
+no deadline; a supplied absolute TIME_UTC deadline returns thrd_timedout when
+expired and thrd_error on invalid clock/deadline or wrong thread. Timeout/error
+preserves live storage and closed admission; the root may retry close. Success
+is idempotent. This helper does not run application cleanup, flush FILEs, call
+atexit handlers, destroy the root, or terminate the process. Applications stop
+their own child work before close and release persistent objects afterwards.
+A fatal group is host-teardown-only after actual child terminals; guest code
+cannot recover damaged locks or publish missing guest terminal records.
+
+`TURBOWASM_BUILD_METALLIC_THREADS` is an OFF-by-default root CMake option,
+requiring the Metallic guest SDK and WASIThreads adapter. Its installation adds
+separate thread headers, `metallic-threaded.a`, command/Reactor CRT objects and
+profile metadata; it does not replace existing single-thread files. The guest
+helpers accept an additive `THREADS` flag for commands, Reactors and static
+libraries, including `turbowasm_add_cmeta_guest_library(name source_dir THREADS)`.
+Threaded library targets carry an ABI/profile property; threaded programs reject
+single-thread or unannotated absolute archives before linking. Existing absolute
+archive support remains available to the single-thread helper. Compiler/linker
+settings select wasm32 atomics, bulk memory, native TLS, standard EH/SJLJ and
+imported `env.memory` with a declared maximum. Initial memory is 1 MiB, maximum
+16 MiB, root shadow stack 256 KiB; existing bounded child/TSS limits remain.
+All threaded objects must relink together; mixing CRT, TLS or libc profiles is
+unsupported. CMeta metadata remains guest-local, with native thunks excluded.
+
+The separate threaded CRT initializes shared data/TLS through the metered Wasm
+start, then claims root initialization once, seeds the allocator, initializes
+the root thread record, and runs constructors. Duplicate/recursive CRT entry
+traps before heap mutation. Command `_start` calls main and retains normal
+process-exit semantics; it does not silently turn main return into an unbounded
+join. Host group exit interrupts children, and the owner must continue provider
+progress until they terminate. Reactor `_initialize` returns for repeated root
+calls. Child entry installs its private stack/TLS and never reruns root CRT or
+constructors. One root call is admitted at a time even when children are active.
+
+Host integration starts as an embedding example and installed consumers over
+existing Runtime/WASIThreads/Preview1 APIs, not a second public session ABI.
+The group owner retains module bytes, shared-memory provider, root and child
+instances, callbacks and transports through actual termination. Creation,
+initialization, business calls and graceful close have explicit fuel/interrupt
+policies. A timed-out close retains the group and can be retried; failure/trap
+skips arbitrary guest cleanup. The transport owner never joins a worker that
+still needs its progress. The existing single-thread command CLI remains explicit
+about its supported input; automatic profile guessing is not introduced.
+
+Alternatives rejected: trusting a start-function name/custom marker would not
+bound arbitrary guest code; matching one LLVM instruction sequence is brittle;
+rewriting compiled modules needs another binary transformation and provenance
+contract; a second libc or native pthread dependency duplicates existing work.
+The additive budgeted Runtime entry reuses existing execution machinery and
+retains compatibility, at the cost of explicit start-policy adoption by hosts.
+
+Qualification must include installed threaded command and persistent Reactor
+consumers, threaded CMeta archives, mixed-profile build rejection, root/child
+constructor/TLS identity, startup budget/interrupt/trap failures, duplicate CRT
+entry, close timeout/retry with live resources, detached children and fatal
+host teardown. Existing single-thread installed consumers remain regression
+gates. Run the configured Linux/macOS graph and document native/guest sanitizer
+limits. Publish the option/artifacts only after the advertised C11 thread
+surface and libc audit are qualified. Rollback disables this optional profile;
+no existing guest artifact or default CLI mode changes.
+
 ### Shared-memory host copies for threaded WASI (#426, selected)
 
 The first compiled C11 timed-wait test exposed an integration gap: Preview1

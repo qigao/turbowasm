@@ -40,9 +40,19 @@ Implemented C11 hosted-environment headers:
   `<stddef.h>` `<stdint.h>` `<stdio.h>` `<stdlib.h>` `<stdnoreturn.h>`
   `<string.h>` `<tgmath.h>` `<time.h>` `<uchar.h>` `<wchar.h>` `<wctype.h>`
 
-Opted out via `__STDC_NO_THREADS__`: `<threads.h>` is intentionally not
-shipped.  `<stdatomic.h>` comes from clang's freestanding headers and
-lowers to plain operations on single-threaded WASI.
+The default installed profile opts out of C11 threads through
+`__STDC_NO_THREADS__`. This TurboWasm checkout also has a separate internal
+threaded profile under `threaded/`, currently qualified through the containing
+project's tests; its SDK installation is tracked in #426.
+
+`<stdatomic.h>` comes from Clang's compiler headers. Metallic provides the C
+library, while Clang supplies C11 language support and atomic code generation.
+The threaded profile enables `-matomics -pthread`, imports shared Wasm memory
+and uses actual Wasm atomic instructions. The default single-thread profile
+does not provide inter-thread synchronization. Compiled guest tests exercise
+8/16/32/64-bit unsigned integer atomics, pointer arithmetic, compare-exchange,
+atomic flags, fences and release/acquire publication. This coverage does not
+claim arbitrary aggregate or wider-than-64-bit atomic support.
 
 ## Math accuracy
 
@@ -94,10 +104,11 @@ hammers the published hard-to-round cases plus a broad random sample. See
   preview1 delivers no signals. `raise(SIGABRT)` is correctly routed.
 * `localtime` aliases `gmtime` — WASI preview1 has no timezone info.
 * Only the `C` locale is supported.
-* No threads.  `__STDC_NO_THREADS__` is predefined, so `<threads.h>` is
-  absent and feature-test code routes around the C11 thread API.  Atomics
-  use clang's freestanding `<stdatomic.h>`; on single-threaded WASI they
-  lower to plain loads and stores.
+* The installed default remains single-threaded (`__STDC_NO_THREADS__`). The
+  separate threaded implementation must be built with its matching libc, TLS,
+  shared-memory and host thread configuration; adding `<threads.h>` to a
+  single-thread program's include path is insufficient. It is not a pthread
+  compatibility implementation.
 
 ## Testing
 

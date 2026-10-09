@@ -345,6 +345,7 @@ spec("Metallic C11 threads internal profile") {
         check_true(turbowasm_wasi_threads_group_fatal(&threads, &status, &trap));
         check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_equal(trap, TURBOWASM_TRAP_NONE);
     }
+    it("executes C11 integer and pointer atomics and publishes across real guest threads") { call_test("atomics"); }
     it("serializes complete byte and wide records and input lines under contention") {
         stdio_mode = STDIO_RECORDS; call_test("stdio_records");
         check_stdio_records(0, 64); check_stdio_records(1, 16);

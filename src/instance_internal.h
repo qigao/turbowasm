@@ -368,10 +368,12 @@ turbowasm_status turbowasm_instance_create_linked_preserve_failure(
  * The sibling gets fresh defined state but copies the parent's already-resolved
  * import bindings, preserving provider identity for imported memories/tables/
  * globals/tags/functions without retaining or rebuilding a linker.
+ * Start executes synchronously within the spawning call's fuel, interruption
+ * and call-depth context. The call is borrowed only until this function returns.
  */
 turbowasm_status turbowasm_instance_create_sibling_internal(
     turbowasm_instance *instance,
-    const turbowasm_instance *parent);
+    turbowasm_host_call *call);
 
 void turbowasm_instance_state_destroy(
     turbowasm_instance_impl *instance);

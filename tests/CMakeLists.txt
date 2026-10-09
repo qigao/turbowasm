@@ -1603,6 +1603,13 @@ add_test(NAME turbowasm_simd_conversion_instance_test
 
 add_executable(turbowasm_execution_control_test
   execution_control_test.c)
+add_executable(turbowasm_instance_start_test instance_start_test.c)
+target_link_libraries(turbowasm_instance_start_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_instance_start_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_compile_features(turbowasm_instance_start_test PRIVATE c_std_11)
+set_target_properties(turbowasm_instance_start_test PROPERTIES FOLDER "tests/runtime")
+add_test(NAME turbowasm_instance_start_test COMMAND turbowasm_instance_start_test)
+set_tests_properties(turbowasm_instance_start_test PROPERTIES TIMEOUT 15)
 target_link_libraries(turbowasm_execution_control_test
   PRIVATE TurboWasm::Runtime)
 set_target_properties(turbowasm_execution_control_test PROPERTIES
