@@ -5,6 +5,7 @@
 
 off_t __ftello(FILE stream[static 1])
 {
+    METALLIC_STDIO_GUARD(stream, 0);
     off_t position = stream->seek(stream, 0,
         (stream->state & appbit_) && stream->write_end ? SEEK_END : SEEK_CUR);
     if (position == -1) return -1;

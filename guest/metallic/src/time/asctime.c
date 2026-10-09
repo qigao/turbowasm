@@ -10,7 +10,7 @@ extern size_t strftime(char* __restrict, size_t, const char* __restrict, const s
  * exotic inputs. */
 char* asctime(const struct tm* tm)
 {
-    static char buf[26];
+    static _Thread_local char buf[26];
     strftime(buf, sizeof buf, "%a %b %e %H:%M:%S %Y\n", tm);
     return buf;
 }

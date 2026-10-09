@@ -5,6 +5,7 @@
 
 wint_t fgetwc(FILE* stream)
 {
+    METALLIC_STDIO_GUARD(stream, 1);
     if (stream->orient == 0)
         stream->orient = 1;
 

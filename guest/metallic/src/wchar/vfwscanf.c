@@ -47,6 +47,7 @@ static size_t wsource_read(FILE* base, void* out, size_t size)
 
 int vfwscanf(FILE* restrict stream, const wchar_t* restrict format, va_list list)
 {
+    METALLIC_STDIO_GUARD(stream, 1);
     if (stream->orient == 0)
         stream->orient = 1;
 

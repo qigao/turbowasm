@@ -45,7 +45,7 @@ if(TARGET turbowasm_guest_cmeta)
 endif()
 
 if(TARGET TurboWasm::WASIThreads)
-  _turbowasm_guest_objects(guest_c11_threads SOURCES c11_threads.c
+  _turbowasm_guest_objects(guest_c11_threads SOURCES c11_threads.c c11_stdio.c c11_libc.c
     INCLUDE_DIRECTORIES "${metallic_source}/threaded/include" "${metallic_source}/threaded/src"
     COMPILE_OPTIONS -U__STDC_NO_THREADS__ -D__METALLIC_THREADS__=1 -matomics -pthread -ftls-model=local-exec)
   set(c11_threads_wasm "${CMAKE_CURRENT_BINARY_DIR}/guest_c11_threads.wasm")
@@ -59,6 +59,10 @@ if(TARGET TurboWasm::WASIThreads)
       -Wl,--export=wasi_thread_start,--export=initialize,--export=lifecycle,--export=synchronization
       -Wl,--export=conditions,--export=thread_specific,--export=allocation,--export=capacity
       -Wl,--export=shared_io,--export=drain_join
+      -Wl,--export=stdio_records,--export=stdio_progress,--export=stdio_close_flush,--export=stdio_error_release
+      -Wl,--export=stdio_reopen_flush
+      -Wl,--export=libc_state,--export=libc_exit_callbacks,--export=libc_signals,--export=libc_abort_default
+      -Wl,--export=libc_preopens,--export=libc_preopen_denied,--export=libc_preopen_large,--export=libc_preopen_invalid
       ${guest_c11_threads_OBJECTS} "${TURBOWASM_GUEST_THREADED_LIBRARY}" -o "${c11_threads_wasm}"
     DEPENDS ${guest_c11_threads_OBJECTS} "${TURBOWASM_GUEST_THREADED_LIBRARY}" VERBATIM COMMAND_EXPAND_LISTS)
   add_custom_target(guest_c11_threads ALL DEPENDS "${c11_threads_wasm}")

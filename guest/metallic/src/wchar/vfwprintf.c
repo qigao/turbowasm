@@ -16,6 +16,7 @@
 
 int vfwprintf(FILE* restrict stream, const wchar_t* restrict format, va_list list)
 {
+    METALLIC_STDIO_GUARD(stream, 0);
     if (stream->orient == 0)
         stream->orient = 1;
 

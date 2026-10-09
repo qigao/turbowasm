@@ -6,6 +6,7 @@
 
 size_t __stdio_write_raw(FILE *stream, const void *buffer, size_t size)
 {
+    METALLIC_STDIO_GUARD(stream, 0);
     size_t total = 0;
     while (total < size) {
         __wasi_ciovec_t iov = { (const unsigned char*)buffer + total, size - total };
@@ -23,6 +24,7 @@ size_t __stdio_write_raw(FILE *stream, const void *buffer, size_t size)
 
 size_t __stdio_write(FILE stream[restrict static 1], const void* restrict buffer, size_t size)
 {
+    METALLIC_STDIO_GUARD(stream, 0);
     stream->io_started = 1;
     if (!size) return 0;
     if (stream->read_end != stream->read_pos || stream->avail) {

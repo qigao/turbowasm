@@ -15,8 +15,8 @@ int raise(int sig)
         /* Default action for the C11 terminating signals: abort the
          * process. For anything else (including SIGUSR1 when the user
          * has not installed a handler), the default action is to do
-         * nothing. M5b will revisit so that abort() itself routes
-         * through raise(SIGABRT) without infinite recursion.
+         * nothing. Terminate directly: abort itself raises SIGABRT and must
+         * not recurse back through abort when the default action is selected.
          */
         switch (sig) {
         case SIGABRT:
@@ -25,7 +25,7 @@ int raise(int sig)
         case SIGINT:
         case SIGSEGV:
         case SIGTERM:
-            abort();
+            _Exit(128 + sig);
         default:
             return 0;
         }

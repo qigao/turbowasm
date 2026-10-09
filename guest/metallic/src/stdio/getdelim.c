@@ -5,6 +5,7 @@
 
 ssize_t getdelim(char** restrict line, size_t* restrict cap, int delim, FILE* restrict stream)
 {
+    METALLIC_STDIO_GUARD(stream, 1);
     if (!line || !cap) {
         errno = EINVAL;
         return -1;

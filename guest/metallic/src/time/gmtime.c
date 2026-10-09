@@ -3,7 +3,7 @@
 
 struct tm* gmtime(const time_t* t)
 {
-    static struct tm result;
+    static _Thread_local struct tm result;
 
     time_t secs_total = *t;
 

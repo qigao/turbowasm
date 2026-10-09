@@ -10,7 +10,7 @@ struct tm* gmtime(const time_t*);
 
 struct tm* localtime(const time_t* t)
 {
-    static struct tm result;
+    static _Thread_local struct tm result;
     result = *gmtime(t);
     return &result;
 }

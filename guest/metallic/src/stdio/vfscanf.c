@@ -435,6 +435,7 @@ static void store_n_(unsigned length, void* arg, size_t count)
 
 int vfscanf(FILE* restrict stream, const char* restrict format, va_list list)
 {
+    METALLIC_STDIO_GUARD(stream, 1);
     struct Scanner sc = { .stream = stream };
     int assigned = 0;
     int any_input = 0;

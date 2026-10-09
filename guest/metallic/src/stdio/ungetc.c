@@ -3,6 +3,7 @@
 
 int ungetc(int c, FILE stream[static 1])
 {
+    METALLIC_STDIO_GUARD(stream, 0);
     if (stream->avail < sizeof(stream->cache) && c != EOF) {
         ++stream->avail;
         stream->cache[sizeof(stream->cache) - stream->avail] = c;

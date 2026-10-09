@@ -40,7 +40,8 @@ if(variant STREQUAL "threaded")
   set(variant_directory thread-objects)
   set(variant_options -D__METALLIC_THREADS__=1 -matomics -pthread -ftls-model=local-exec
     -I "${metallic_source}/threaded/include")
-  list(APPEND variant_sources threaded/src/threads.c threaded/src/sync.c threaded/src/entry.S)
+  list(APPEND variant_sources threaded/src/threads.c threaded/src/sync.c threaded/src/entry.S
+    threaded/src/stdio_lock.c)
 endif()
 foreach(source IN LISTS variant_sources)
   if(variant STREQUAL "threaded" AND source MATCHES "^src/crt/")

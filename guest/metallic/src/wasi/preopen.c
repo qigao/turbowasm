@@ -4,7 +4,12 @@
 #include <string.h>
 
 #include "wasi.h"
+#include "errno.h"
 #include "preopen.h"
+#ifdef __METALLIC_THREADS__
+#include <threads.h>
+static once_flag preopen_once = ONCE_FLAG_INIT;
+#endif
 
 #define MAX_PREOPENS 16
 #define POOL_SIZE    1024
@@ -13,6 +18,7 @@ static struct preopen entries[MAX_PREOPENS];
 static int count = -1;
 static char pool[POOL_SIZE];
 static size_t pool_used = 0;
+static int init_error;
 
 static const char *pool_dup(const uint8_t *buf, size_t len)
 {
@@ -39,26 +45,27 @@ static void ensure_init(void)
         __wasi_errno_t e = __wasi_fd_prestat_get(fd, &pst);
         if (e == __WASI_ERRNO_BADF)
             break;
-        if (e != 0)
-            continue;
-        if (pst.tag != 0)
-            continue;
+        if (e != 0) {
+            init_error = e < sizeof(wasi_to_posix) / sizeof(wasi_to_posix[0]) ? wasi_to_posix[e] : EIO;
+            break;
+        }
+        if (pst.tag != 0) { init_error = EIO; break; }
 
         size_t plen = pst.u.dir.pr_name_len;
         uint8_t buf[256];
-        if (plen > sizeof(buf))
-            plen = sizeof(buf);
+        if (plen > sizeof(buf)) { init_error = ENAMETOOLONG; break; }
         e = __wasi_fd_prestat_dir_name(fd, buf, plen);
-        if (e != 0)
-            continue;
+        if (e != 0) {
+            init_error = e < sizeof(wasi_to_posix) / sizeof(wasi_to_posix[0]) ? wasi_to_posix[e] : EIO;
+            break;
+        }
 
         /* Trim any trailing '/' for consistent comparison. */
         while (plen > 0 && buf[plen - 1] == '/')
             plen--;
 
         const char *p = pool_dup(buf, plen);
-        if (!p)
-            break;
+        if (!p) { init_error = ENOMEM; break; }
 
         entries[n].fd = (int)fd;
         entries[n].prefix = p;
@@ -82,7 +89,13 @@ static const char *strip_dotslash(const char *path)
 int preopen_lookup(const char *path, int *out_basefd,
                    const char **out_rel, size_t *out_rel_len)
 {
+#ifdef __METALLIC_THREADS__
+    call_once(&preopen_once, ensure_init);
+#else
     ensure_init();
+#endif
+
+    if (init_error) { errno = init_error; return -1; }
 
     if (!path || !*path) {
         errno = ENOENT;

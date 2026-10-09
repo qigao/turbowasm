@@ -34,7 +34,13 @@ The private, non-installed `guest/metallic/threaded` profile adds C11 thread
 records, generation-checked handles, TSS, synchronization and a Wasm TLS/stack
 entry trampoline. dlmalloc uses its custom-lock hook in that profile; lazy
 environment storage now uses checked malloc allocation, with once publication
-for threads. Full threaded libc qualification remains in progress.
+for threads. Threaded stdio adds recursive per-FILE operation locks and retained
+flush-list traversal, including close/reopen synchronization. Local libc changes
+also synchronize exit callback registries, random state and signal handlers;
+string/calendar scratch state is thread-local. Preopen discovery publishes once
+and preserves initialization errors instead of scanning indefinitely or exposing
+partial results. Default terminating signals avoid recursive abort calls.
+Full threaded libc qualification remains in progress.
 
 This is an optional wasm32, single-threaded guest library, not a native runtime
 dependency. It does not provide a shell, threads or arbitrary

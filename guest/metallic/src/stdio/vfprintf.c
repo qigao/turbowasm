@@ -1226,6 +1226,7 @@ static struct Spec parse_(const char* restrict s[restrict static 1], va_list lis
 
 int vfprintf(FILE stream[restrict static 1], const char format[restrict static 1], va_list list)
 {
+    METALLIC_STDIO_GUARD(stream, 0);
     size_t count = 0;
 
     for (const char* s = format; ; ++s) {

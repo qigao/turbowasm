@@ -11,13 +11,21 @@
  * preopened directory bounds authority. Unlink before exposing the stream. */
 FILE* tmpfile(void)
 {
+#ifdef __METALLIC_THREADS__
+    static _Atomic uint32_t serial;
+#else
     static uint32_t serial;
+#endif
     static const char hex[] = "0123456789abcdef";
     char path[] = ".metallic-00000000.tmp";
     FILE *file = malloc(sizeof(*file));
     if (!file) { errno = ENOMEM; return NULL; }
     for (unsigned attempt = 0; attempt < 128; ++attempt) {
+#ifdef __METALLIC_THREADS__
+        uint32_t id = atomic_fetch_add_explicit(&serial, 1, memory_order_relaxed) + 1;
+#else
         uint32_t id = ++serial;
+#endif
         for (unsigned i = 0; i < 8; ++i)
             path[10 + i] = hex[(id >> (28 - 4 * i)) & 15];
         int base;

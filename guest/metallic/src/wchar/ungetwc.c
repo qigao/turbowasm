@@ -4,6 +4,7 @@
 
 wint_t ungetwc(wint_t c, FILE* stream)
 {
+    METALLIC_STDIO_GUARD(stream, 0);
     if (c == WEOF || stream->state & wpushbit_)
         return WEOF;
 

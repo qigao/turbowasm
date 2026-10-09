@@ -4048,3 +4048,55 @@ boundary, rejection above it, OOB before provider effects, zero vectors, and
 provider errors/over-reported reads without publishing output. Random, file
 metadata/path/readdir and v2 socket/poll projections still require migration;
 this checkpoint does not qualify complete threaded Preview1 or libc support.
+
+### Threaded Metallic libc synchronization (#426, internal)
+
+The internal threaded archive appends a recursive lock and flush-reference
+state to its private FILE layout; the single-threaded archive keeps its layout.
+Each public stream operation holds that FILE lock for its complete operation,
+including provider I/O. Different FILEs remain independently usable; there is
+no process-wide lock held across blocking I/O. Nested byte/wide formatting uses
+the same recursive owner. LLVM cleanup attributes release guards on ordinary
+C returns; guest traps/process termination retire the entire group and do not
+permit subsequent use of abandoned libc state. Non-local jumps across libc or
+live provider frames remain outside the supported contract.
+
+The existing buffered-stream list has a separate short-held lock. A flush-all
+walk selects its next live stream in guest-address order and acquires a bounded
+temporary reference while holding only the list lock, then drops that lock
+before locking/flushing the FILE. Concurrently removed streams are skipped;
+streams added during traversal may or may not participate. No snapshot array,
+unbounded allocation or borrowed next pointer crosses the list lock. A stream
+close marks retirement and removes the stream before releasing its FILE lock,
+then waits for outstanding flush references before freeing it. This prevents
+both use-after-free and a close/flush lock cycle. Lock order is FILE -> list or
+allocator; flush traversal never holds the list lock while acquiring a FILE.
+Reopen resets ordinary stream state while preserving its live lock/reference
+metadata. Application calls still must not use a FILE after it is closed.
+
+Automatic line-buffer flushing occurs at the outermost input operation before
+acquiring its FILE lock. Nested reads do not start a second cross-stream walk.
+This avoids opposite FILE lock ordering between concurrent input operations.
+Error flags, wide orientation, pushback, buffering and stream-list mutation are
+covered by the same operation locks. Tests must include indivisible formatted
+records, concurrent reads/writes on distinct streams, close against flush-all,
+wide I/O, short/error returns and lock release after failure.
+
+The two bounded exit-handler registries serialize push/pop independently and
+release their locks before calling application handlers, including handlers
+that register further callbacks. The random generator preserves its existing
+sequence with an atomic state transition; signal-handler publication uses an
+atomic function pointer and raise calls it without internal locks. Default
+terminating signals call _Exit directly so abort cannot recursively raise
+SIGABRT forever. Implicit strtok and calendar/text-time buffers are TLS;
+the fixed C locale remains immutable. Preopen discovery uses once publication,
+and temporary-file sequence allocation is atomic (exclusive creation remains
+the authority against pathname collisions). These changes do not qualify the
+still-pending shared filesystem/provider path or asynchronous host signals.
+
+Preopen initialization retains provider errors, unknown tags, oversized names
+and exhausted name storage as terminal initialization errors; callers never see
+a partially discovered set. Formal compiled-guest tests cover the synchronization
+above and controlled filesystem callbacks, including concurrent first lookup,
+error retention, unknown errno/tag admission and no truncated name request.
+They do not substitute for concurrent HostFS/provider qualification.

@@ -12,7 +12,8 @@ struct preopen {
 /* Look up the preopen that contains `path`.  On success: returns 0,
  * *out_basefd is the preopen fd, *out_rel and *out_rel_len point into
  * `path` for the path relative to the preopen.  On miss: sets errno
- * (ENOENT) and returns -1. */
+ * (ENOENT) and returns -1. Discovery failure is retained and returned with its
+ * errno; a failed discovery never publishes a partial preopen set. */
 int preopen_lookup(const char *path, int *out_basefd,
                    const char **out_rel, size_t *out_rel_len);
 

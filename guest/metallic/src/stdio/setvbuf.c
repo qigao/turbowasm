@@ -6,6 +6,7 @@
 
 int setvbuf(FILE* restrict stream, char* restrict buf, int mode, size_t size)
 {
+    METALLIC_STDIO_GUARD(stream, 0);
     if ((mode != _IONBF && mode != _IOLBF && mode != _IOFBF) || stream->io_started) {
         errno = EINVAL;
         return -1;

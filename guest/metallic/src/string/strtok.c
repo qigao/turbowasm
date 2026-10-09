@@ -20,7 +20,7 @@ char* strtok_r(char* restrict string, const char* restrict separators, char* sta
 
 char* strtok(char* restrict string, const char* restrict separators)
 {
-    static char* state;
+    static _Thread_local char* state;
 
     return strtok_r(string, separators, &state);
 }

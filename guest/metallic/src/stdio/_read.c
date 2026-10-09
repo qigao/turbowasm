@@ -6,7 +6,9 @@
 
 static size_t read_(FILE *stream, void *buffer, size_t size)
 {
+#ifndef __METALLIC_THREADS__
     if (!stream->buffer || stream->buffer_mode == _IOLBF) (void)__stdio_flush_all(1);
+#endif
     __wasi_iovec_t iov = { buffer, size };
     size_t nread = 0;
     __wasi_errno_t e = __wasi_fd_read((__wasi_fd_t)stream->fd, &iov, 1, &nread);
@@ -23,6 +25,7 @@ static size_t read_(FILE *stream, void *buffer, size_t size)
 
 size_t __stdio_read(FILE stream[restrict static 1], void* restrict buffer, size_t size)
 {
+    METALLIC_STDIO_GUARD(stream, 1);
     stream->io_started = 1;
     if (!size || __stdio_flush(stream) || (stream->state & eofbit_)) return 0;
     size_t total = 0;
