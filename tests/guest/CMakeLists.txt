@@ -58,7 +58,7 @@ if(TARGET TurboWasm::WASIThreads)
       -Wl,-z,stack-size=262144 -Wl,--initial-memory=1048576,--max-memory=16777216
       -Wl,--export=wasi_thread_start,--export=initialize,--export=lifecycle,--export=synchronization
       -Wl,--export=conditions,--export=thread_specific,--export=allocation,--export=capacity
-      -Wl,--export=shared_io,--export=drain_join
+      -Wl,--export=shared_io,--export=drain_join,--export=abnormal_join
       -Wl,--export=stdio_records,--export=stdio_progress,--export=stdio_close_flush,--export=stdio_error_release
       -Wl,--export=stdio_reopen_flush
       -Wl,--export=libc_state,--export=libc_exit_callbacks,--export=libc_signals,--export=libc_abort_default

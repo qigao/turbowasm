@@ -58,7 +58,10 @@ bool turbowasm_wasi_threads_execution_policy_apply(
 typedef struct turbowasm_wasi_threads_config {
     /*
      * Borrowed concurrent CFlow executor. It must outlive this capability and
-     * all admitted child tasks.
+     * all admitted child tasks. Before waiting for executor shutdown, publish
+     * group exit if children may be blocked: CANCEL_PENDING only cancels queued
+     * tasks when a worker can deliver their callbacks; it cannot stop running
+     * callbacks. The owner must also keep enough workers available for progress.
      */
     cflow_executor *executor;
 
@@ -111,8 +114,10 @@ size_t turbowasm_wasi_threads_active(
     const turbowasm_wasi_threads *threads);
 
 /*
- * Query the first fatal child terminal. A trapped child publishes group-fatal
- * exactly once; siblings/root executions using the group policy then leave
+ * Query the first fatal child terminal. Any unsuccessful child invocation
+ * (including an uncaught exception or host error) publishes group-fatal once.
+ * An accepted executor task cancelled before run publishes INTERRUPTED/NONE.
+ * Earlier fatal/proc_exit state is preserved. Siblings/root using the policy leave
  * with TURBOWASM_INTERRUPTED at the next checkpoint or interruptible wait.
  */
 bool turbowasm_wasi_threads_group_fatal(

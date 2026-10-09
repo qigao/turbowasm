@@ -280,14 +280,23 @@ static void turbowasm_wasi_threads_run(void *user) {
         &result_count, &trap,
         &options);
 
-    if (status == TURBOWASM_TRAPPED) {
+    /* Any unsuccessful invocation skips the guest's terminal epilogue. A join
+     * cannot wait for that epilogue, including after an uncaught exception or
+     * host failure. Publication preserves an earlier fatal/proc_exit result. */
+    if (status != TURBOWASM_OK) {
         turbowasm_wasi_threads_publish_fatal(
             slot->owner, &slot->child, status, trap);
     }
 }
 
 static void turbowasm_wasi_threads_cancel(void *user) {
-    (void)user;
+    turbowasm_wasi_thread_slot *slot = (turbowasm_wasi_thread_slot *)user;
+    if (slot == NULL || slot->owner == NULL || !slot->active)
+        return;
+    /* Accepted work cancelled before run still owns a live child. Wake the
+     * group before finalize releases it; no guest epilogue will execute. */
+    turbowasm_wasi_threads_publish_fatal(
+        slot->owner, &slot->child, TURBOWASM_INTERRUPTED, TURBOWASM_TRAP_NONE);
 }
 
 static void turbowasm_wasi_threads_finalize(void *user) {

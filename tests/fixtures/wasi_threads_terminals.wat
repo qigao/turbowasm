@@ -1,0 +1,16 @@
+(module
+  (import "wasi" "thread-spawn" (func $spawn (param i32) (result i32)))
+  (import "test" "failure" (func $failure))
+  (import "m" "mem" (memory 1 1 shared))
+  (tag $error)
+  (func (export "wasi_thread_start") (param $tid i32) (param $arg i32)
+    (if (i32.eq (local.get $arg) (i32.const 1)) (then unreachable))
+    (if (i32.eq (local.get $arg) (i32.const 2)) (then (throw $error)))
+    (if (i32.eq (local.get $arg) (i32.const 3)) (then (call $failure)))
+    (if (i32.eqz (local.get $arg))
+      (then
+        (drop (i32.atomic.rmw.add (i32.const 0) (i32.const 1)))
+        (drop (memory.atomic.wait32 (i32.const 4) (i32.const 0) (i64.const -1))))))
+  (func (export "spawn") (param i32) (result i32) (call $spawn (local.get 0)))
+  (func (export "marker") (result i32) (i32.atomic.load (i32.const 0)))
+  (func (export "after") (result i32) (i32.const 7)))

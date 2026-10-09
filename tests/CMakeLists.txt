@@ -2138,6 +2138,12 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
   set_tests_properties(turbowasm_wasi_threads_group_test PROPERTIES
     TIMEOUT 20)
 
+  add_executable(turbowasm_wasi_threads_terminal_test wasi_threads_terminal_test.c)
+  target_link_libraries(turbowasm_wasi_threads_terminal_test
+    PRIVATE TurboWasm::WASIThreads Salts::Platform Salts::TinyTest)
+  add_test(NAME turbowasm_wasi_threads_terminal_test COMMAND turbowasm_wasi_threads_terminal_test)
+  set_tests_properties(turbowasm_wasi_threads_terminal_test PROPERTIES TIMEOUT 20)
+
   add_executable(turbowasm_wasi_threads_header_cpp_test
     wasi_threads_header_cpp_test.cpp)
   target_link_libraries(turbowasm_wasi_threads_header_cpp_test

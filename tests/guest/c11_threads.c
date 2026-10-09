@@ -308,3 +308,19 @@ int drain_join(void) {
     REQUIRE(thrd_join(drain_target, NULL) == thrd_error);
     return 0;
 }
+
+__attribute__((import_module("test"), import_name("thread_failure")))
+extern void thread_failure(void);
+static int failing_child(void *argument) {
+    (void)argument;
+    thread_failure();
+    return 1;
+}
+int abnormal_join(void) {
+    thrd_t child;
+    REQUIRE(thrd_create(&child, failing_child, NULL) == thrd_success);
+    /* The host failure skips entry.S's terminal word. Group interruption must
+     * unwind this real libc join instead of waiting for an impossible result. */
+    (void)thrd_join(child, NULL);
+    return __LINE__;
+}

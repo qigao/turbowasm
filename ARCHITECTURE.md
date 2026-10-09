@@ -3921,6 +3921,20 @@ stack/TLS after publication. Destructors run before publication. Normal return
 and `thrd_exit` are local to a thread; process exit and abnormal termination
 remain group-terminal. SJLJ targets and errno belong to each thread's TLS.
 
+Every non-OK child invocation result is group-terminal, including uncaught Wasm
+exceptions and host callback failures. An accepted executor task cancelled before
+run publishes INTERRUPTED/NONE before finalization destroys its child instance.
+Neither path can publish the guest epilogue's join word, so both use the existing
+group interrupt and shared-memory waiter registry instead. The first fatal or
+proc_exit result wins; sibling unwind and later cancellations cannot replace it.
+Rejected task admission still rolls back only that spawn. This adds no asynchronous
+guest cancellation and never shuts down a borrowed executor from a child callback.
+Borrowed-executor cancellation is delivered by a worker; it does not interrupt
+already-running callbacks. A host shutting down a saturated borrowed pool must
+publish group exit before waiting for idle, so blocked children can unwind and
+workers can deliver queued cancellations. The owned pool's worker-per-child
+admission rule avoids dependency on an unrelated queued task for normal progress.
+
 Root startup initializes shared data, allocator, root TLS and constructors once.
 Child startup installs its own stack/TLS before entering C and never resets live
 shared data. Compiler-generated shared-data initialization must be examined and

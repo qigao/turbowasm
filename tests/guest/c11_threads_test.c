@@ -32,6 +32,14 @@ static uint32_t preopen_error;
 static bool preopen_large, preopen_invalid_tag;
 static atomic_uint preopen_probes, preopen_names;
 
+static turbowasm_status thread_failure(void *context, turbowasm_host_call *call,
+    const turbowasm_value *args, size_t argc, turbowasm_value *results,
+    size_t capacity, size_t *count, turbowasm_trap *trap) {
+    (void)context; (void)call; (void)args; (void)argc; (void)results; (void)capacity;
+    *count = 0; *trap = TURBOWASM_TRAP_NONE;
+    return TURBOWASM_OUT_OF_MEMORY;
+}
+
 static turbowasm_status preopen_provider(void *context, turbowasm_host_call *call,
     const turbowasm_value *args, size_t argc, turbowasm_value *results,
     size_t capacity, size_t *count, turbowasm_trap *trap) {
@@ -279,6 +287,9 @@ spec("Metallic C11 threads internal profile") {
         turbowasm_value_kind i32 = TURBOWASM_VALUE_I32;
         turbowasm_host_function_type close_type = {&i32, 1, &i32, 1};
         turbowasm_host_function_type stage_type = {NULL, 0, &i32, 1};
+        turbowasm_host_function_type failure_type = {0};
+        check_equal(turbowasm_linker_define_host_function(&linker, name("test"), name("thread_failure"),
+            &failure_type, thread_failure, NULL), TURBOWASM_OK);
         turbowasm_value_kind preopen_args[] = {TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I32,TURBOWASM_VALUE_I32};
         turbowasm_host_function_type prestat_type = {preopen_args, 2, &i32, 1}, dirname_type = {preopen_args, 3, &i32, 1};
         check_equal(turbowasm_linker_define_host_function(&linker, name("wasi_snapshot_preview1"), name("fd_fdstat_get"), &prestat_type, stdio_fdstat, NULL), TURBOWASM_OK);
@@ -320,6 +331,17 @@ spec("Metallic C11 threads internal profile") {
     }
     it("rolls back rejected spawn and recovers capacity after join and detach") { call_test("capacity"); }
     it("retains timed-out drain state and tolerates concurrent child joins") { call_test("drain_join"); }
+    it("interrupts a real C11 join when child host failure skips the terminal epilogue") {
+        turbowasm_execution_options options = {0};
+        check_true(turbowasm_wasi_threads_execution_policy_apply(&policy, &options));
+        turbowasm_value result = {0}; size_t count = 0; turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+        check_equal(turbowasm_instance_invoke_with_options(&root, export_index("abnormal_join"),
+            NULL, 0, &result, 1, &count, &trap, &options), TURBOWASM_INTERRUPTED);
+        check_equal(count, (size_t)0); check_equal(trap, TURBOWASM_TRAP_NONE);
+        turbowasm_status status = TURBOWASM_OK;
+        check_true(turbowasm_wasi_threads_group_fatal(&threads, &status, &trap));
+        check_equal(status, TURBOWASM_OUT_OF_MEMORY); check_equal(trap, TURBOWASM_TRAP_NONE);
+    }
     it("serializes complete byte and wide records and input lines under contention") {
         stdio_mode = STDIO_RECORDS; call_test("stdio_records");
         check_stdio_records(0, 64); check_stdio_records(1, 16);
