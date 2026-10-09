@@ -444,10 +444,13 @@ callbacks in these libc tests are controlled providers; they do not establish
 concurrent HostFS support. Its remaining libc,
 filesystem, async and lifecycle work is tracked in
 [#426](https://github.com/qigao/turbowasm/issues/426); it is not yet a threaded SDK.
-The Linux CI profile is `ci-metallic-user`; manual CI selects it with
-`metallic_guests=true` and the matching `salts_ci_run` prerequisite artifact.
+The guest CI profiles are `ci-metallic-user` (Linux) and
+`ci-macos-metallic-user` (macOS); manual CI selects both with
+`metallic_guests=true` and matching `salts_ci_run` prerequisite artifacts.
 Its parent `TURBOWASM_GUEST_LLVM_ROOT` selects the guest compiler tools explicitly;
 CI supplies LLVM 21 and also enables MIR and mixed-tier guest regression.
+macOS keeps GCC 15 for native SDK ABI compatibility and installs LLVM/linker 21
+separately for guest compilation. Both platforms run the installed consumer suite.
 
 The guest tests also cover restartable UTF-8/UTF-16/UTF-32 conversions: split
 sequences, independent implicit state, null-input semantics, surrogate pairing,

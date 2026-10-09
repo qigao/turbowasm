@@ -423,6 +423,16 @@
       }
     },
     {
+      "name": "ci-macos-metallic-user",
+      "inherits": "ci-macos-mir-user",
+      "cacheVariables": {
+        "TURBOWASM_BUILD_METALLIC_GUESTS": true,
+        "TURBOWASM_GUEST_CLANG": "$penv{TURBOWASM_GUEST_LLVM_ROOT}/bin/clang",
+        "TURBOWASM_GUEST_AR": "$penv{TURBOWASM_GUEST_LLVM_ROOT}/bin/llvm-ar",
+        "TURBOWASM_GUEST_CMETA_SOURCE_DIR": "$penv{TURBOWASM_GUEST_CMETA_SOURCE_DIR}"
+      }
+    },
+    {
       "name": "ci-core3-mir-user",
       "inherits": "ci-core3-user",
       "cacheVariables": {
@@ -434,6 +444,8 @@
     }
   ],
   "buildPresets": [
+    { "name": "ci-macos-metallic-user", "configurePreset": "ci-macos-metallic-user" },
+    { "name": "install-ci-macos-metallic-user", "configurePreset": "ci-macos-metallic-user", "targets": ["install"] },
     { "name": "ci-metallic-user", "configurePreset": "ci-metallic-user" },
     { "name": "install-ci-metallic-user", "configurePreset": "ci-metallic-user", "targets": ["install"] },
     {
@@ -649,6 +661,10 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "ci-macos-metallic-user", "configurePreset": "ci-macos-metallic-user",
+      "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" }
+    },
     {
       "name": "ci-metallic-user", "configurePreset": "ci-metallic-user",
       "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" }

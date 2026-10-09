@@ -36,6 +36,10 @@
       }
     },
     {
+      "name": "ci-macos-user",
+      "inherits": ["GccMac", "ci-user"]
+    },
+    {
       "name": "ci-android-user",
       "inherits": [
         "android-base",
@@ -48,6 +52,7 @@
     }
   ],
   "buildPresets": [
+    { "name": "ci-macos-user", "configurePreset": "ci-macos-user" },
     {
       "name": "ci-user",
       "configurePreset": "ci-user"
@@ -62,6 +67,10 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "ci-macos-user", "configurePreset": "ci-macos-user",
+      "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" }
+    },
     {
       "name": "ci-user",
       "configurePreset": "ci-user",
