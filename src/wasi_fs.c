@@ -1,4 +1,6 @@
 #include "wasi_fs_private.h"
+#include "wasi_provider_private.h"
+#include "wasi_dispatch_private.h"
 
 #include <salts/thread.h>
 #include <tstr.h>
@@ -24,6 +26,7 @@ typedef struct turbowasm_wasi_fs_impl {
     turbowasm_wasi_fs_slot *slots;
     uint32_t capacity, active_count;
     cmeta_mutex_t mutex;
+    tw_wasi_dispatch *dispatch;
 } turbowasm_wasi_fs_impl;
 
 /* A pin covers one synchronous callback (or preopen copy), not an async
@@ -35,6 +38,27 @@ typedef struct tw_fs_pin {
 
 static turbowasm_wasi_fs_impl *tw_fs_impl(const turbowasm_wasi_fs *fs) {
     return fs ? fs->impl : NULL;
+}
+static turbowasm_status tw_dispatch_attachment(turbowasm_wasi_fs *fs,
+    tw_wasi_dispatch *d, bool attach) {
+    turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
+    if (!p || !tw_wasi_dispatch_is_owner(d)) return TURBOWASM_INVALID_ARGUMENT;
+    cmeta_mutex_lock(&p->mutex);
+    bool busy = attach ? p->dispatch != NULL : p->dispatch != d;
+    for (uint32_t i = 0; i < p->capacity; ++i) {
+        const turbowasm_wasi_fs_slot *s = &p->slots[i];
+        busy |= s->pins || s->leases || s->reserved || s->closing || s->metadata_busy ||
+            (s->active && s->ops.recv != NULL);
+    }
+    if (!busy) p->dispatch = attach ? d : NULL;
+    cmeta_mutex_unlock(&p->mutex);
+    return busy ? TURBOWASM_INVALID_ARGUMENT : TURBOWASM_OK;
+}
+turbowasm_status tw_wasi_fs_attach_dispatch(turbowasm_wasi_fs *fs, tw_wasi_dispatch *d) {
+    return tw_dispatch_attachment(fs, d, true);
+}
+turbowasm_status tw_wasi_fs_detach_dispatch(turbowasm_wasi_fs *fs, tw_wasi_dispatch *d) {
+    return tw_dispatch_attachment(fs, d, false);
 }
 /* All slot helpers below require the table mutex. */
 static turbowasm_wasi_fs_slot *tw_fd(turbowasm_wasi_fs_impl *p, uint32_t fd) {
@@ -61,7 +85,7 @@ static void tw_snapshot(turbowasm_wasi_fs_impl *p, const turbowasm_wasi_fs_slot 
     tw_wasi_fd_lease *out) {
     *out = (tw_wasi_fd_lease){.descriptor = tw_descriptor(p, s), .file = s->file,
         .ops = s->ops, .rights_base = s->rights_base, .rights_inheriting = s->rights_inheriting,
-        .flags = s->flags, .type = s->type};
+        .flags = s->flags, .type = s->type, .dispatch = s->ops.recv ? p->dispatch : NULL};
 }
 static uint32_t tw_pin_locked(turbowasm_wasi_fs_impl *p, turbowasm_wasi_fs_slot *s,
     uint64_t rights, tw_fs_pin *out) {
@@ -147,7 +171,7 @@ turbowasm_status turbowasm_wasi_fs_destroy(turbowasm_wasi_fs *fs) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p) return TURBOWASM_OK;
     cmeta_mutex_lock(&p->mutex);
-    bool busy = p->active_count != 0;
+    bool busy = p->active_count != 0 || p->dispatch != NULL;
     for (uint32_t i = 0; i < p->capacity; ++i)
         busy |= p->slots[i].leases || p->slots[i].pins || p->slots[i].reserved;
     cmeta_mutex_unlock(&p->mutex);
@@ -169,6 +193,9 @@ static turbowasm_status tw_bind(turbowasm_wasi_fs *fs, uint32_t fd, bool next,
     if (preopen && !copy) return TURBOWASM_OUT_OF_MEMORY;
     turbowasm_status status = TURBOWASM_OK;
     cmeta_mutex_lock(&p->mutex);
+    if (ops && p->dispatch && !tw_wasi_dispatch_is_owner(p->dispatch)) {
+        cmeta_mutex_unlock(&p->mutex); tstr_free(copy); return TURBOWASM_INVALID_ARGUMENT;
+    }
     if (next) fd = tw_next_fd_locked(p);
     if (tw_fd_occupied(p, fd)) status = TURBOWASM_INVALID_ARGUMENT;
     else {
@@ -278,10 +305,11 @@ static uint32_t tw_close(turbowasm_wasi_fs_impl *p, bool by_fd, uint32_t fd,
         cmeta_mutex_unlock(&p->mutex); return TURBOWASM_WASI_ERRNO_BUSY;
     }
     s->closing = true;
-    turbowasm_wasi_fs_provider provider = s->ops.file;
-    turbowasm_wasi_fs_file file = s->file;
+    tw_wasi_fd_lease value;
+    tw_snapshot(p, s, &value);
     cmeta_mutex_unlock(&p->mutex);
-    uint32_t error = provider.close(provider.context, file);
+    uint32_t error = tw_wasi_provider_call(&value,
+        &(tw_wasi_provider_request){.operation = TW_PROVIDER_CLOSE});
     tstr path = NULL;
     cmeta_mutex_lock(&p->mutex);
     s->closing = false;
@@ -320,8 +348,8 @@ uint32_t turbowasm_wasi_fs_path_open(turbowasm_wasi_fs *fs, uint32_t fd, uint32_
     cmeta_mutex_unlock(&p->mutex);
     if (!child) return tw_unpin(p, &pin, TURBOWASM_WASI_ERRNO_MFILE);
     turbowasm_wasi_fs_file opened = {0};
-    error = pin.value.ops.file.path_open(pin.value.ops.file.context, pin.value.file,
-        dirflags, path, length, oflags, base, inheriting, flags, &opened);
+    error = tw_wasi_provider_call(&pin.value, &(tw_wasi_provider_request){.operation = TW_PROVIDER_PATH_OPEN,
+        .as.open = {dirflags, path, length, oflags, base, inheriting, flags, &opened}});
     /* Successful providers transfer a valid identity. A zero generation is a
      * provider contract violation, not a resource that can safely be closed. */
     if (!error && !opened.generation) error = TURBOWASM_WASI_ERRNO_IO;
@@ -342,7 +370,8 @@ uint32_t turbowasm_wasi_fs_fd_read(void *context, uint32_t fd,
     turbowasm_wasi_fs_impl *p = tw_fs_impl(context); tw_fs_pin pin = {0};
     uint32_t error = tw_pin_fd(p, fd, TURBOWASM_WASI_RIGHT_FD_READ, &pin);
     if (error) return error;
-    error = pin.value.ops.file.read(pin.value.ops.file.context, pin.value.file, buffers, count, out);
+    error = tw_wasi_provider_call(&pin.value, &(tw_wasi_provider_request){.operation = TW_PROVIDER_READ,
+        .as.read = {buffers, count, out}});
     return tw_unpin(p, &pin, error);
 }
 uint32_t turbowasm_wasi_fs_fd_write(void *context, uint32_t fd,
@@ -350,7 +379,8 @@ uint32_t turbowasm_wasi_fs_fd_write(void *context, uint32_t fd,
     turbowasm_wasi_fs_impl *p = tw_fs_impl(context); tw_fs_pin pin = {0};
     uint32_t error = tw_pin_fd(p, fd, TURBOWASM_WASI_RIGHT_FD_WRITE, &pin);
     if (error) return error;
-    error = pin.value.ops.file.write(pin.value.ops.file.context, pin.value.file, buffers, count, out);
+    error = tw_wasi_provider_call(&pin.value, &(tw_wasi_provider_request){.operation = TW_PROVIDER_WRITE,
+        .as.write = {buffers, count, out}});
     return tw_unpin(p, &pin, error);
 }
 uint32_t turbowasm_wasi_fs_fd_seek(turbowasm_wasi_fs *fs, uint32_t fd,
@@ -362,7 +392,8 @@ uint32_t turbowasm_wasi_fs_fd_seek(turbowasm_wasi_fs *fs, uint32_t fd,
     if (error) return error;
     if (whence > TURBOWASM_WASI_WHENCE_END) error = TURBOWASM_WASI_ERRNO_INVAL;
     else if (!pin.value.ops.file.seek) error = TURBOWASM_WASI_ERRNO_NOSYS;
-    else error = pin.value.ops.file.seek(pin.value.ops.file.context, pin.value.file, offset, whence, out);
+    else error = tw_wasi_provider_call(&pin.value, &(tw_wasi_provider_request){.operation = TW_PROVIDER_SEEK,
+        .as.seek = {offset, whence, out}});
     return tw_unpin(p, &pin, error);
 }
 uint32_t turbowasm_wasi_fs_fd_tell(turbowasm_wasi_fs *fs, uint32_t fd, uint64_t *out) {
@@ -374,7 +405,8 @@ uint32_t turbowasm_wasi_fs_fd_tell(turbowasm_wasi_fs *fs, uint32_t fd, uint64_t 
     if (!(pin.value.rights_base & (TURBOWASM_WASI_RIGHT_FD_TELL | TURBOWASM_WASI_RIGHT_FD_SEEK)))
         error = TURBOWASM_WASI_ERRNO_NOTCAPABLE;
     else if (!pin.value.ops.file.tell) error = TURBOWASM_WASI_ERRNO_NOSYS;
-    else error = pin.value.ops.file.tell(pin.value.ops.file.context, pin.value.file, out);
+    else error = tw_wasi_provider_call(&pin.value,
+        &(tw_wasi_provider_request){.operation = TW_PROVIDER_TELL, .as.tell = out});
     return tw_unpin(p, &pin, error);
 }
 uint32_t turbowasm_wasi_fs_fd_stat(turbowasm_wasi_fs *fs, uint32_t fd, turbowasm_wasi_fs_stat *out) {
@@ -383,7 +415,8 @@ uint32_t turbowasm_wasi_fs_fd_stat(turbowasm_wasi_fs *fs, uint32_t fd, turbowasm
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs); tw_fs_pin pin = {0};
     uint32_t error = tw_pin_fd(p, fd, TURBOWASM_WASI_RIGHT_FD_FILESTAT_GET, &pin);
     if (error) return error;
-    error = pin.value.ops.file.stat ? pin.value.ops.file.stat(pin.value.ops.file.context, pin.value.file, out) :
+    error = pin.value.ops.file.stat ? tw_wasi_provider_call(&pin.value,
+        &(tw_wasi_provider_request){.operation = TW_PROVIDER_STAT, .as.stat = out}) :
         TURBOWASM_WASI_ERRNO_NOSYS;
     return tw_unpin(p, &pin, error);
 }
@@ -395,7 +428,8 @@ uint32_t turbowasm_wasi_fs_path_stat(turbowasm_wasi_fs *fs, uint32_t fd, uint32_
     uint32_t error = tw_pin_fd(p, fd, TURBOWASM_WASI_RIGHT_PATH_FILESTAT_GET, &pin);
     if (error) return error;
     error = pin.value.ops.file.path_stat ?
-        pin.value.ops.file.path_stat(pin.value.ops.file.context, pin.value.file, flags, path, length, out) :
+        tw_wasi_provider_call(&pin.value, &(tw_wasi_provider_request){.operation = TW_PROVIDER_PATH_STAT,
+            .as.path_stat = {flags, path, length, out}}) :
         TURBOWASM_WASI_ERRNO_NOSYS;
     return tw_unpin(p, &pin, error);
 }
@@ -407,7 +441,8 @@ static uint32_t tw_path_mutate(turbowasm_wasi_fs *fs, uint32_t fd, const uint8_t
     if (error) return error;
     turbowasm_wasi_fs_path_mutation_fn fn = operation == 0 ? pin.value.ops.file.path_create_directory :
         operation == 1 ? pin.value.ops.file.path_remove_directory : pin.value.ops.file.path_unlink_file;
-    error = fn ? fn(pin.value.ops.file.context, pin.value.file, path, length) : TURBOWASM_WASI_ERRNO_NOSYS;
+    error = fn ? tw_wasi_provider_call(&pin.value, &(tw_wasi_provider_request){.operation = TW_PROVIDER_PATH_MUTATE,
+        .as.mutate = {fn, path, length}}) : TURBOWASM_WASI_ERRNO_NOSYS;
     return tw_unpin(p, &pin, error);
 }
 uint32_t turbowasm_wasi_fs_path_create_directory(turbowasm_wasi_fs *fs, uint32_t fd,
@@ -430,7 +465,8 @@ uint32_t turbowasm_wasi_fs_fd_readdir(turbowasm_wasi_fs *fs, uint32_t fd, uint64
     uint32_t error = tw_pin_fd(p, fd, TURBOWASM_WASI_RIGHT_FD_READDIR, &pin);
     if (error) return error;
     error = pin.value.ops.file.readdir ?
-        pin.value.ops.file.readdir(pin.value.ops.file.context, pin.value.file, cookie, out, has_entry) :
+        tw_wasi_provider_call(&pin.value, &(tw_wasi_provider_request){.operation = TW_PROVIDER_READDIR,
+            .as.readdir = {cookie, out, has_entry}}) :
         TURBOWASM_WASI_ERRNO_NOSYS;
     tw_unpin(p, &pin, error);
     if (error || !*has_entry) return error;
@@ -455,8 +491,13 @@ uint32_t turbowasm_wasi_fs_path_rename(turbowasm_wasi_fs *fs,
         if (a.value.ops.file.context != b.value.ops.file.context ||
             a.value.ops.file.path_rename != b.value.ops.file.path_rename) error = TURBOWASM_WASI_ERRNO_XDEV;
         else if (!a.value.ops.file.path_rename) error = TURBOWASM_WASI_ERRNO_NOTSUP;
-        else error = a.value.ops.file.path_rename(a.value.ops.file.context, a.value.file,
-            source, source_length, b.value.file, target, target_length);
+        else {
+            /* A socket on either side makes this an owner operation. Provider
+             * context equality above still compares the original contexts. */
+            if (!a.value.dispatch) a.value.dispatch = b.value.dispatch;
+            error = tw_wasi_provider_call(&a.value, &(tw_wasi_provider_request){.operation = TW_PROVIDER_RENAME,
+                .as.rename = {source, source_length, b.value.file, target, target_length}});
+        }
     }
     tw_unpin(p, &b, error);
     return tw_unpin(p, &a, error);
@@ -484,10 +525,12 @@ uint32_t tw_wasi_fd_acquire(turbowasm_wasi_fs *fs, uint32_t fd, uint64_t rights,
     uint8_t type = pin.value.type;
     if (!type && pin.value.ops.file.stat) {
         turbowasm_wasi_fs_stat stat = {0};
-        error = pin.value.ops.file.stat(pin.value.ops.file.context, pin.value.file, &stat);
+        error = tw_wasi_provider_call(&pin.value,
+            &(tw_wasi_provider_request){.operation = TW_PROVIDER_STAT, .as.stat = &stat});
         type = stat.file_type;
     }
-    if (!error && pin.value.ops.retain) error = pin.value.ops.retain(pin.value.ops.file.context, pin.value.file);
+    if (!error && pin.value.ops.retain) error = tw_wasi_provider_call(&pin.value,
+        &(tw_wasi_provider_request){.operation = TW_PROVIDER_RETAIN});
     cmeta_mutex_lock(&p->mutex);
     if (error) --pin.slot->leases;
     else { *out = pin.value; out->type = type; out->held = true; }
@@ -499,8 +542,8 @@ void tw_wasi_fd_release(turbowasm_wasi_fs *fs, tw_wasi_fd_lease *lease) {
     if (!lease || !lease->held) return;
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p) return;
-    if (lease->claimed && lease->ops.finish) lease->ops.finish(lease->ops.file.context, lease->file, lease->direction);
-    if (lease->ops.release) lease->ops.release(lease->ops.file.context, lease->file);
+    if ((lease->claimed && lease->ops.finish) || lease->ops.release)
+        (void)tw_wasi_provider_call(lease, &(tw_wasi_provider_request){.operation = TW_PROVIDER_CLEANUP});
     cmeta_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_identity(p, lease->descriptor);
     if (s) {
@@ -546,7 +589,8 @@ uint32_t tw_wasi_fd_set_flags(turbowasm_wasi_fs *fs, uint32_t fd, uint16_t flags
     if (error) return error;
     if (pin.value.ops.recv) {
         if (flags & ~TURBOWASM_WASI_FDFLAG_NONBLOCK) error = TURBOWASM_WASI_ERRNO_NOTSUP;
-    } else if (pin.value.ops.file.set_flags) error = pin.value.ops.file.set_flags(pin.value.ops.file.context, pin.value.file, flags);
+    } else if (pin.value.ops.file.set_flags) error = tw_wasi_provider_call(&pin.value,
+        &(tw_wasi_provider_request){.operation = TW_PROVIDER_FLAGS, .as.flags = flags});
     else if (flags != pin.value.flags) error = TURBOWASM_WASI_ERRNO_NOTSUP;
     cmeta_mutex_lock(&p->mutex);
     if (!error) pin.slot->flags = flags;
@@ -608,14 +652,17 @@ uint32_t tw_wasi_fd_ready(turbowasm_wasi_fs *fs, const tw_wasi_fd_lease *lease, 
     uint32_t error = tw_pin_locked(p, tw_identity(p, lease->descriptor), TURBOWASM_WASI_RIGHT_POLL_FD_READWRITE, &pin);
     cmeta_mutex_unlock(&p->mutex);
     if (error) return error;
-    if (lease->ops.ready) error = lease->ops.ready(lease->ops.file.context, lease->file, direction, out);
+    if (lease->ops.ready) error = tw_wasi_provider_call(lease,
+        &(tw_wasi_provider_request){.operation = TW_PROVIDER_READY, .as.ready = {direction, out}});
     else if (lease->type == TURBOWASM_WASI_FILETYPE_REGULAR_FILE || lease->type == TURBOWASM_WASI_FILETYPE_DIRECTORY) {
         out->ready = true;
         if (direction == TURBOWASM_WASI_EVENT_FD_READ && lease->ops.file.stat) {
             turbowasm_wasi_fs_stat stat = {0};
-            error = lease->ops.file.stat(lease->ops.file.context, lease->file, &stat);
+            error = tw_wasi_provider_call(lease,
+                &(tw_wasi_provider_request){.operation = TW_PROVIDER_STAT, .as.stat = &stat});
             uint64_t offset = 0;
-            if (!error && lease->ops.file.tell) error = lease->ops.file.tell(lease->ops.file.context, lease->file, &offset);
+            if (!error && lease->ops.file.tell) error = tw_wasi_provider_call(lease,
+                &(tw_wasi_provider_request){.operation = TW_PROVIDER_TELL, .as.tell = &offset});
             if (!error) out->bytes = stat.size > offset ? stat.size - offset : 0;
         }
     } else error = TURBOWASM_WASI_ERRNO_NOTSUP;

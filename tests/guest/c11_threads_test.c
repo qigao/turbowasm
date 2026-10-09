@@ -323,6 +323,9 @@ spec("Metallic C11 threads internal profile") {
     it("waits for predicates, broadcasts and honors real clock deadlines") { call_test("conditions"); }
     it("isolates TSS keys and runs bounded destructor iterations on return and exit") { call_test("thread_specific"); }
     it("preserves allocator contents and alignment under contention") { call_test("allocation"); }
+#if defined(GUEST_CMETA_THREADED)
+    it("shares CMeta descriptors while isolating calls, object ownership and aligned temporary storage") { call_test("cmeta_concurrent"); }
+#endif
     it("copies shared vector IO with short reads and bounds before provider effects") {
         call_test("shared_io");
         check_equal(atomic_load(&writes), 6u);

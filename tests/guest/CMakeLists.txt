@@ -45,9 +45,23 @@ if(TARGET turbowasm_guest_cmeta)
 endif()
 
 if(TARGET TurboWasm::WASIThreads)
-  _turbowasm_guest_objects(guest_c11_threads SOURCES c11_threads.c c11_stdio.c c11_libc.c
+  set(c11_cmeta_sources)
+  set(c11_cmeta_options)
+  set(c11_cmeta_library)
+  set(c11_cmeta_exports)
+  if(TARGET turbowasm_guest_cmeta)
+    _turbowasm_cmeta_guest_sources(guest_cmeta_threaded "${TURBOWASM_GUEST_CMETA_SOURCE_DIR}" cmeta_sources)
+    turbowasm_add_c_guest_library(guest_cmeta_threaded SOURCES ${cmeta_sources}
+      INCLUDE_DIRECTORIES "${TURBOWASM_GUEST_CMETA_SOURCE_DIR}/include" "${metallic_source}/threaded/include"
+      COMPILE_OPTIONS -U__STDC_NO_THREADS__ -D__METALLIC_THREADS__=1 -matomics -pthread -ftls-model=local-exec)
+    set(c11_cmeta_sources c11_cmeta.c cmeta.c cmeta_peer.c)
+    set(c11_cmeta_options -DGUEST_CMETA_THREADED=1 -I "${TURBOWASM_GUEST_CMETA_SOURCE_DIR}/include")
+    set(c11_cmeta_library "${guest_cmeta_threaded_ARCHIVE}")
+    set(c11_cmeta_exports -Wl,--export=cmeta_concurrent)
+  endif()
+  _turbowasm_guest_objects(guest_c11_threads SOURCES c11_threads.c c11_stdio.c c11_libc.c ${c11_cmeta_sources}
     INCLUDE_DIRECTORIES "${metallic_source}/threaded/include" "${metallic_source}/threaded/src"
-    COMPILE_OPTIONS -U__STDC_NO_THREADS__ -D__METALLIC_THREADS__=1 -matomics -pthread -ftls-model=local-exec)
+    COMPILE_OPTIONS -U__STDC_NO_THREADS__ -D__METALLIC_THREADS__=1 -matomics -pthread -ftls-model=local-exec ${c11_cmeta_options})
   set(c11_threads_wasm "${CMAKE_CURRENT_BINARY_DIR}/guest_c11_threads.wasm")
   add_custom_command(OUTPUT "${c11_threads_wasm}"
     COMMAND "${TURBOWASM_GUEST_CLANG}" --target=wasm32-unknown-unknown
@@ -63,14 +77,17 @@ if(TARGET TurboWasm::WASIThreads)
       -Wl,--export=stdio_reopen_flush
       -Wl,--export=libc_state,--export=libc_exit_callbacks,--export=libc_signals,--export=libc_abort_default
       -Wl,--export=libc_preopens,--export=libc_preopen_denied,--export=libc_preopen_large,--export=libc_preopen_invalid
-      ${guest_c11_threads_OBJECTS} "${TURBOWASM_GUEST_THREADED_LIBRARY}" -o "${c11_threads_wasm}"
-    DEPENDS ${guest_c11_threads_OBJECTS} "${TURBOWASM_GUEST_THREADED_LIBRARY}" VERBATIM COMMAND_EXPAND_LISTS)
+      ${c11_cmeta_exports} ${guest_c11_threads_OBJECTS} ${c11_cmeta_library} "${TURBOWASM_GUEST_THREADED_LIBRARY}" -o "${c11_threads_wasm}"
+    DEPENDS ${guest_c11_threads_OBJECTS} ${c11_cmeta_library} "${TURBOWASM_GUEST_THREADED_LIBRARY}" VERBATIM COMMAND_EXPAND_LISTS)
   add_custom_target(guest_c11_threads ALL DEPENDS "${c11_threads_wasm}")
   set_target_properties(guest_c11_threads PROPERTIES FOLDER "tests/guest")
   add_executable(turbowasm_guest_c11_threads_test c11_threads_test.c)
   target_link_libraries(turbowasm_guest_c11_threads_test PRIVATE TurboWasm::WASIThreads TurboWasm::WASI Salts::TinyTest Salts::Platform)
   target_compile_features(turbowasm_guest_c11_threads_test PRIVATE c_std_11)
   target_compile_definitions(turbowasm_guest_c11_threads_test PRIVATE GUEST_C11_THREADS_PATH="${c11_threads_wasm}")
+  if(c11_cmeta_library)
+    target_compile_definitions(turbowasm_guest_c11_threads_test PRIVATE GUEST_CMETA_THREADED=1)
+  endif()
   set_target_properties(turbowasm_guest_c11_threads_test PROPERTIES FOLDER "tests/guest")
   add_dependencies(turbowasm_guest_c11_threads_test guest_c11_threads)
   add_test(NAME turbowasm_guest_c11_threads_test COMMAND turbowasm_guest_c11_threads_test)

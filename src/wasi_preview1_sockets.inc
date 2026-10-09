@@ -50,7 +50,8 @@ static bool tw_p1_subscription_ready(turbowasm_wasi_preview1_impl *p, tw_p1_subs
     if (s->right == TURBOWASM_WASI_RIGHT_POLL_FD_READWRITE)
         s->error = tw_wasi_fd_ready(p->filesystem, &s->lease, s->type, &s->readiness);
     else if (s->lease.ops.ready)
-        s->error = s->lease.ops.ready(s->lease.ops.file.context, s->lease.file, s->type, &s->readiness);
+        s->error = tw_wasi_provider_call(&s->lease,
+            &(tw_wasi_provider_request){.operation = TW_PROVIDER_READY, .as.ready = {s->type, &s->readiness}});
     else s->error = TURBOWASM_WASI_ERRNO_NOTSUP;
     if (!s->error && s->minimum && s->readiness.bytes < s->minimum &&
         !(s->readiness.flags & TURBOWASM_WASI_EVENT_HANGUP)) return false;
@@ -194,7 +195,8 @@ static turbowasm_status tw_p1_sock_accept(TW_P1_HOST_ARGS) {
         e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[2].as.i32, sizeof(output));
         if (e) break;
         turbowasm_wasi_fs_file child={0};
-        e=sub.lease.ops.accept(sub.lease.ops.file.context, sub.lease.file, &child);
+        e=tw_wasi_provider_call(&sub.lease,
+            &(tw_wasi_provider_request){.operation = TW_PROVIDER_ACCEPT, .as.accept = &child});
         if (!e) {
             tw_wasi_fd_publish(p->filesystem, reserved, child, &sub.lease, (uint16_t)flags);
             reserved=(turbowasm_wasi_fs_descriptor){0};
@@ -259,11 +261,13 @@ static turbowasm_status tw_p1_socket_io(turbowasm_wasi_preview1_impl *p, turbowa
         uint32_t n=0;
         if (receive) {
             turbowasm_wasi_buffer b={staging+transferred, (size_t)capacity-transferred};
-            e=sub.lease.ops.recv(sub.lease.ops.file.context, sub.lease.file, &b, 1, (uint16_t)flags,
-                (sub.lease.flags & TURBOWASM_WASI_FDFLAG_NONBLOCK) != 0, &n, &returned_flags);
+            e=tw_wasi_provider_call(&sub.lease, &(tw_wasi_provider_request){.operation = TW_PROVIDER_RECV,
+                .as.recv = {&b, 1, (uint16_t)flags,
+                    (sub.lease.flags & TURBOWASM_WASI_FDFLAG_NONBLOCK) != 0, &n, &returned_flags}});
         } else {
             turbowasm_wasi_const_buffer b={staging, (size_t)capacity};
-            e=sub.lease.ops.send(sub.lease.ops.file.context, sub.lease.file, &b, 1, &n);
+            e=tw_wasi_provider_call(&sub.lease,
+                &(tw_wasi_provider_request){.operation = TW_PROVIDER_SEND, .as.write = {&b, 1, &n}});
         }
         if (!e) {
             if (n > capacity-transferred) { e=TURBOWASM_WASI_ERRNO_IO; break; }
@@ -323,7 +327,8 @@ static turbowasm_status tw_p1_sock_shutdown(TW_P1_HOST_ARGS) {
     uint32_t how=(uint32_t)arguments[1].as.i32, e=0; tw_wasi_fd_lease lease={0};
     if (!how || (how & ~3u)) e=TURBOWASM_WASI_ERRNO_INVAL;
     if (!e) e=tw_wasi_fd_acquire(p->filesystem, (uint32_t)arguments[0].as.i32, TURBOWASM_WASI_RIGHT_SOCK_SHUTDOWN, &lease);
-    if (!e) e=lease.ops.shutdown ? lease.ops.shutdown(lease.ops.file.context, lease.file, (uint8_t)how) : TURBOWASM_WASI_ERRNO_NOTSOCK;
+    if (!e) e=lease.ops.shutdown ? tw_wasi_provider_call(&lease,
+        &(tw_wasi_provider_request){.operation = TW_PROVIDER_SHUTDOWN, .as.shutdown = (uint8_t)how}) : TURBOWASM_WASI_ERRNO_NOTSOCK;
     tw_wasi_fd_release(p->filesystem, &lease); return TW_P1_RETURN(e);
 }
 

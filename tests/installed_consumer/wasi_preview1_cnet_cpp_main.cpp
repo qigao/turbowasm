@@ -4,6 +4,7 @@
 static_assert(std::is_standard_layout_v<turbowasm_wasi_preview1_config_v2>);
 static_assert(std::is_standard_layout_v<turbowasm_wasi_descriptor_ops>);
 int main() {
+    if (turbowasm_host_call_check_interrupt(nullptr) != TURBOWASM_INVALID_ARGUMENT) return 6;
     turbowasm_wasi_preview1_config_v2 config{};
     turbowasm_wasi_preview1_config_v2_init(&config);
     if (config.size != sizeof(config) || config.api_version != 2 || config.allow_sockets || config.allow_poll) return 1;

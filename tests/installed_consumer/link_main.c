@@ -19,6 +19,7 @@ static turbowasm_status host_inc(
     (void)context;
 
     if (call == NULL ||
+        turbowasm_host_call_check_interrupt(call) != TURBOWASM_OK ||
         turbowasm_instance_module(turbowasm_host_call_instance(call)) == NULL ||
         argument_count != 1u ||
         result_capacity < 1u ||

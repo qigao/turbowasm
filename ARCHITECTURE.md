@@ -4180,6 +4180,173 @@ including MIR where enabled, and adds provider-time memory growth, argument
 mutation, output boundaries, suspension and cleanup checks. This qualifies
 shared memory transport only, not concurrent provider ownership.
 
+### Threaded Preview1 socket owner dispatch (#426, selected)
+
+The protected projection above does not change CNet ownership. The current
+Preview1 wait registry and payload accounting also assume one progress thread,
+and WASI children use synchronous `instance_invoke_with_options`: their host
+callbacks cannot use resumable `host_call_wait`. A threaded guest therefore
+needs both provider dispatch and an interruptible native waiting path. Root
+joins must not occupy the only thread that advances transports.
+
+Approved public additions (existing v1/v2 initialization and layouts remain):
+
+```c
+typedef struct turbowasm_wasi_preview1_threaded_config {
+    size_t request_capacity;
+    uint64_t interrupt_interval_ns;
+    void (*wake_owner)(void *context);
+    void *wake_context;
+} turbowasm_wasi_preview1_threaded_config;
+
+turbowasm_status turbowasm_wasi_preview1_init_threaded(
+    turbowasm_wasi_preview1 *wasi,
+    const turbowasm_wasi_preview1_config_v2 *base,
+    const turbowasm_wasi_preview1_threaded_config *threaded);
+
+turbowasm_status turbowasm_host_call_check_interrupt(
+    turbowasm_host_call *call);
+```
+
+The new initializer belongs to `TurboWasm::WASI`; the interruption query belongs
+to Runtime. No CFlow/CNet dependency is added to WASI or Runtime. This reuses
+Salts Core storage and Platform mutex/condition/thread identity primitives.
+Initialize on the transport owner thread with an empty WASI handle and a live,
+quiescent filesystem table. The table must have no existing socket identities,
+reservations, pins, leases, or attached dispatcher. Ordinary preopens may
+already exist. The initializer copies both configurations, creates its bounded
+state, and exclusively attaches socket dispatch to that table. Failure leaves
+both handles unchanged. Zero capacity/interval, an interval above one second,
+a null wake callback, or overflowing allocation sizes return INVALID_ARGUMENT;
+allocation failure returns OUT_OF_MEMORY. The callback/context and configured
+providers are borrowed through successful destruction. There is no hidden
+thread, native event loop, transport poll, or default retry queue.
+
+Example configuration: request_capacity=64, interrupt_interval_ns=10000000,
+wake_owner=an event/condition notifier, wake_context=the host event loop. Bind
+socket identities through the existing `fs_bind_socket_move` on that owner
+after initialization. Run the root on another host worker, children on the
+approved bounded pool, and progress transports followed by Preview1 `advance`
+on the owner. The wake callback executes on a submitting worker, must be
+thread-safe/nonblocking, and must neither reenter this adapter nor wait for its
+owner. The host must retain a wake condition until observed; notification is
+not permission to free submitted storage. Existing resumable owner-thread
+calls remain supported. A synchronous owner-thread call which would wait
+returns AGAIN rather than blocking its own progress loop.
+
+#### Dispatch ownership and capacity
+
+- One table has one attached dispatcher. All callbacks for its socket
+  identities, including retain/release/finish, stat, close, read/write, ready,
+  accept/recv/send/shutdown and optional file-provider operations, execute on
+  that owner. Binding rejects wrong-owner entry in this opt-in mode. Decisions
+  use pinned table identities; a close/rebind race cannot bypass dispatch by
+  changing a previously classified fd. Ordinary filesystem providers keep
+  their concurrent-call contract and do not run on the transport owner.
+- Each command borrows an immutable typed argument/result frame from its
+  submitting call. The caller cannot return, release its lease, free staging,
+  or abandon that frame until terminal acknowledgement. Provider callbacks are
+  nonblocking and borrow buffers only during their callback. No guest pointer
+  enters the queue; existing protected snapshots own all transport bytes.
+- Reuse `ring_data_type` for the fixed FIFO of command pointers, with **every**
+  ring operation under one external mutex; no lock-free/SPSC claim is made.
+  Checked storage includes the ring's required empty-space allowance.
+  `request_capacity` bounds queued plus running commands. The owner removes
+  commands under the mutex, executes callbacks without any adapter/table lock,
+  publishes terminal results under the mutex, then wakes callers. It never
+  accesses a caller's frame after terminal publication. Owner-local callbacks
+  execute directly and cannot block on this queue.
+- Full admission for an ordinary fallible provider operation returns BUSY
+  before that callback's effects; it does not replay an already admitted
+  operation. Existing io_bytes/pending_bytes/subscription/wait bounds and their
+  MSGSIZE/NOMEM/AGAIN results remain. Payload accounting becomes synchronized.
+  Void finish/release cannot drop cleanup when full: they wait for bounded
+  command capacity and then acknowledgement, even after admission closes.
+  Cleanup waiters count as in-flight users for destruction. They allocate no
+  extra queue entries. Progress requires the owner to keep draining; it must
+  never synchronously join a worker waiting for owner acknowledgement.
+
+#### Blocking, interruption and terminal ownership
+
+- The Runtime query is valid only on the invoking thread inside a live host
+  callback. It returns INVALID_ARGUMENT for an invalid context, INTERRUPTED
+  when that invocation's existing interruption callback requests termination,
+  and OK otherwise (including no interruption callback). It does not consume
+  fuel, create a cancellation token, run on the provider owner, or interrupt a
+  native provider callback. The existing WASI thread execution policy supplies
+  group fatal/proc_exit interruption without adding a reverse dependency.
+- Worker calls register a bounded wait before sleeping on a condition and use
+  predicate loops. They query interruption on their own thread at the configured
+  interval, outside adapter locks. The interval bounds polling opportunity,
+  not OS scheduling latency or time to finish an accepted provider operation.
+  Worker waits do not migrate a Runtime execution/coroutine to the owner.
+- Registration, owner selection, completion, cancellation request and worker
+  acknowledgement are distinct synchronized states. The owner pins a wait
+  before accessing its subscriptions outside the mutex. A cancelling worker
+  marks cancellation, notifies the owner and retains its frame until the owner
+  stops reading it and acknowledges cancellation. If readiness wins first,
+  the worker rechecks interruption before further effects/publication. Effects
+  already accepted are not rolled back or repeated. Cancellation releases all
+  leases/claims on the provider owner before the host callback returns.
+- `advance`, `next_timeout` and shutdown/progress queries are owner-only and
+  reject wrong-thread/reentrant calls in this mode. `advance` processes a
+  bounded command batch and scans registered waits without holding a mutex
+  across provider/clock callbacks. Existing resumable owner waits continue to
+  complete through Runtime; synchronous worker waits use condition signalling.
+  Clock callbacks reachable from both roles must satisfy the existing provider
+  concurrency contract. Registry state, borrowed subscription access and
+  payload accounting each have one synchronized source of truth.
+
+#### Shutdown, alternatives and qualification
+
+Owner shutdown closes ordinary command/call admission and wakes parked callers
+with INTR. Already accepted commands reach terminal acknowledgement; cleanup
+and socket close remain admissible until all consumers have drained. Shutdown
+poll is true only after queued/running commands, cleanup waiters, active calls
+and parked waits reach zero; it does not imply that bound sockets were closed.
+Continue progressing the native transport while it retains native operations.
+After consumers are quiescent, close all socket descriptors, complete their
+lease cleanup, destroy the threaded Preview1 adapter (detaching the dispatcher),
+then destroy the table and providers in their existing dependency order.
+Checked WASI destruction rejects wrong-owner entry, active users, or remaining
+socket identities/leases; filesystem destruction rejects an attached dispatcher.
+Rejected destruction preserves ownership. Host lifecycle admission remains
+exclusive: counters do not make concurrent destruction and new entry valid.
+
+A single global lock around CNet calls was rejected because it cannot transfer
+thread ownership or drive progress. Routing all filesystem calls through the
+owner was rejected because a blocking HostFS operation would stall unrelated
+transports. A hidden I/O thread changes native-provider ownership and deployment.
+A coroutine/executor migration of WASI children is much wider than the required
+bridge and does not by itself resolve blocking atomic join/wait. The chosen
+opt-in mode keeps provider code on its current owner and guest instances on
+their workers, at the cost of bounded cross-thread command/wait coordination.
+
+Validation must cover native-thread identity for every callback class, ordinary
+file progress independent of sockets, queue full before effects, mandatory
+cleanup at full capacity, lost-wakeup barriers, many blocked workers, cancelled
+wait versus owner scan, group fatal/proc_exit, close/rebind/rights contraction,
+wrong-owner/reentrant calls, failed init rollback and destroy rejection. Real
+compiled threaded guests must perform TCP/UDP socket I/O and poll with the
+existing CNet provider while the root joins children; use deterministic native
+barriers, bounded capacities and CTest timeouts. Run installed C/C++ consumers,
+shared/unshared and interpreter/MIR regressions on Linux/macOS. Sanitizer results
+must distinguish native instrumentation from guest Wasm code.
+
+The additions are opt-in; v1/v2 callers and existing public struct layouts do
+not change. Threaded callers must adopt the explicit owner loop and shutdown
+order. Rollback disables this initializer and leaves the private threaded SDK
+profile, protected copies, and existing single-owner v2 adapter intact. Do not
+publish placeholder declarations before the complete implementation and tests.
+
+Implementation is staged under #426: Runtime's interruption query and the
+private bounded owner queue/provider routing are implemented, including table
+attachment and owner-only socket binding. Native barrier tests cover admission,
+cleanup after stop, callback thread identity, ordinary-file independence and
+acknowledgement lifetime. The public threaded initializer is not exposed yet:
+interruptible Preview1 wait registration, owner scan cancellation, active-call
+accounting and real threaded CNet guest qualification still have to be integrated.
+
 ### Concurrent filesystem admission and provider lifetime (#426, selected)
 
 Protected guest copies alone do not protect the descriptor table: provider calls

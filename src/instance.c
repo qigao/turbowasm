@@ -4854,6 +4854,14 @@ bool turbowasm_host_call_can_wait(
            impl->execution->host_wait != NULL;
 }
 
+turbowasm_status turbowasm_host_call_check_interrupt(turbowasm_host_call *call) {
+    if (call == NULL || call->impl == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    const turbowasm_host_call_impl *impl = call->impl;
+    return impl->execution != NULL && impl->execution->should_interrupt != NULL &&
+        impl->execution->should_interrupt(impl->execution->interrupt_context)
+        ? TURBOWASM_INTERRUPTED : TURBOWASM_OK;
+}
+
 static turbowasm_instance_impl *turbowasm_host_copy_caller(
     turbowasm_host_call *call, turbowasm_trap *trap) {
     if (trap == NULL) return NULL;

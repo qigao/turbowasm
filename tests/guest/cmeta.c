@@ -5,7 +5,14 @@
 #include <stdint.h>
 #include <string.h>
 
-static int invoked, destroyed, restored;
+#if defined(GUEST_CMETA_THREADED)
+#define GUEST_CMETA_LOCAL _Thread_local
+#else
+#define GUEST_CMETA_LOCAL
+#endif
+/* Application state is per-thread in the threaded qualification. Sharing
+ * immutable descriptors does not make mutable application objects thread-safe. */
+static GUEST_CMETA_LOCAL int invoked, destroyed, restored;
 FunctionInvokeDecl(value, int, guest_increment, (int, input, CMETA_PARAM_IN));
 int guest_increment(int input) { ++invoked; return input + 1; }
 
@@ -38,7 +45,7 @@ static void destroy_int(void *context, void *object) {
 static const cmeta_object_lifecycle lifetime = {
     .size = sizeof(cmeta_object_lifecycle), .destroy = destroy_int
 };
-static cmeta_object_ref persistent = CMETA_OBJECT_REF_INIT;
+static GUEST_CMETA_LOCAL cmeta_object_ref persistent = CMETA_OBJECT_REF_INIT;
 
 int cmeta_object_open(void) {
     if (persistent.object) return -1;

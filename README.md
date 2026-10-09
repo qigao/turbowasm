@@ -454,6 +454,11 @@ limits. Its calls still require one host progress thread. Socket owner-thread
 dispatch and installed threaded command/Reactor/CMeta qualification
 remain open. The remaining integration work is tracked in
 [#426](https://github.com/qigao/turbowasm/issues/426); it is not yet a threaded SDK.
+When the local CMeta source is configured, the internal threads test also builds
+a separate guest CMeta archive and runs four C11 workers through cross-TU
+metadata, checked calls, independent ObjectRef lifetimes and aligned allocation.
+Immutable descriptors are shared; the test's mutable counters and objects use
+TLS. This qualifies independent objects, not concurrent mutation of one object.
 The guest CI profiles are `ci-metallic-user` (Linux) and
 `ci-macos-metallic-user` (macOS); manual CI selects both with
 `metallic_guests=true` and matching `salts_ci_run` prerequisite artifacts.

@@ -56,6 +56,17 @@ turbowasm_instance *turbowasm_host_call_instance(
 bool turbowasm_host_call_can_wait(
     const turbowasm_host_call *call);
 
+/* Query the current invocation's interruption callback on its invoking thread,
+ * inside the live host callback. Returns INTERRUPTED when requested, otherwise
+ * OK (also when no interruption callback exists); an empty/NULL call returns
+ * INVALID_ARGUMENT. No fuel is consumed, no trap is set, and no native operation
+ * is cancelled. Callers must finish accepted operations and cleanup before
+ * propagating interruption. Do not retain call or query it from an IO owner.
+ * Example: status = turbowasm_host_call_check_interrupt(call); if status is
+ * INTERRUPTED, stop admitting work, drain owned operations, then return status.
+ */
+turbowasm_status turbowasm_host_call_check_interrupt(turbowasm_host_call *call);
+
 typedef struct turbowasm_host_memory_span {
     uint8_t *data;
     size_t size;

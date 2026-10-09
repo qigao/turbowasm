@@ -1235,6 +1235,10 @@ add_test(NAME turbowasm_host_function_test
 
 add_executable(turbowasm_host_memory_test
   host_memory_test.c)
+add_executable(turbowasm_host_interrupt_test host_interrupt_test.c)
+target_link_libraries(turbowasm_host_interrupt_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+set_target_properties(turbowasm_host_interrupt_test PROPERTIES FOLDER "tests/runtime")
+add_test(NAME turbowasm_host_interrupt_test COMMAND turbowasm_host_interrupt_test)
 add_executable(turbowasm_host_memory_copy_test host_memory_copy_test.c)
 target_link_libraries(turbowasm_host_memory_copy_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
 set_target_properties(turbowasm_host_memory_copy_test PROPERTIES
@@ -1346,6 +1350,12 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
   set_tests_properties(turbowasm_wasi_path_memory_test PROPERTIES TIMEOUT 60)
 
   add_executable(turbowasm_wasi_fs_concurrency_test wasi_fs_concurrency_test.c)
+  add_executable(turbowasm_wasi_dispatch_test wasi_dispatch_test.c)
+  target_link_libraries(turbowasm_wasi_dispatch_test PRIVATE TurboWasm::WASI Salts::Core Salts::TinyTest Salts::Platform)
+  target_include_directories(turbowasm_wasi_dispatch_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_wasi_dispatch_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_dispatch_test COMMAND turbowasm_wasi_dispatch_test)
+  set_tests_properties(turbowasm_wasi_dispatch_test PROPERTIES TIMEOUT 30)
   target_link_libraries(turbowasm_wasi_fs_concurrency_test PRIVATE TurboWasm::WASI Salts::TinyTest Salts::Platform)
   target_include_directories(turbowasm_wasi_fs_concurrency_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
   set_target_properties(turbowasm_wasi_fs_concurrency_test PROPERTIES FOLDER "tests/wasi")

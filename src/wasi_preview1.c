@@ -1,5 +1,6 @@
 #include <turbowasm/wasi.h>
 #include "wasi_fs_private.h"
+#include "wasi_provider_private.h"
 
 #include "wasi_preview1_adapter_plan.h"
 
