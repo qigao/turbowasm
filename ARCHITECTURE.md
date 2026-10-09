@@ -3945,10 +3945,106 @@ a `__wasm_init_memory` start function with an atomic once guard, passive data
 segments and a per-instance `__tls_base`. The tests verify repeated siblings
 preserve initialized and zero-filled data after mutation, run constructors only
 on the root, reset child TLS on reuse, isolate errno/SJLJ/stack addresses, reject
-root and nested over-capacity spawn, and reject live/worker destruction. Full
-C11 thread operations and the libc locking audit remain required by #426.
+root and nested over-capacity spawn, and reject live/worker destruction. The
+internal C11 implementation below adds actual compiled guest qualification;
+the full libc locking audit and installed profile remain required by #426.
 The conversion-state portion of that audit now uses `_Thread_local mbstate_t`
 for implicit UTF-8/UTF-16/UTF-32 and legacy multibyte conversion state. The
 thread fixture interleaves distinct incomplete sequences/surrogate pairs on
 the root and both children, including child TLS reuse. Explicit state still
 belongs to the caller and must not be shared concurrently without coordination.
+
+The internal C11 implementation uses 32 child records plus one root record,
+128 generation-checked TSS keys and four destructor passes. A child reserves
+128 KiB of shadow stack and at most 64 KiB of TLS, with linker-provided size
+and alignment checked before allocation. A thread handle is a slot/generation
+pair, never a host TID or native pointer; exhausted generations are retired.
+One registry lock protects admission, join/detach claims and key identities.
+Join waits on a release-published terminal word; only the stack-free assembly
+epilogue can publish it. Detached records are reclaimed at subsequent admission
+or explicit group drain, so retained storage remains bounded. A join claim
+excludes detach and another join, and failed spawn frees only its reservation.
+During drain, completed joinable records remain available until every child
+has terminated, allowing live children to finish their own joins. Reclamation
+preserves the terminal word until later admission, so a drain waiter cannot
+miss completion when a concurrent join releases the same record.
+
+Mutex owners use the current guest slot identity; recursive depth overflow is
+an error. Lock/unlock use acquire/release atomics and predicate-loop wait/notify.
+Conditions capture an atomic 64-bit sequence before unlocking their mutex,
+wait only while that sequence matches, and reacquire before returning on either
+success or timeout. Sequence exhaustion fails rather than wrapping. Timed
+mutex/condition operations use absolute TIME_UTC deadlines and checked values;
+sleep uses a monotonic deadline. Yield uses a short timed atomic wait to offer
+the native worker to other runnable threads without requiring a nonstandard
+host import. It is not a coroutine suspension facility.
+
+Internal allocator locking uses dlmalloc's custom-lock hook, with no pthread
+dependency. Registry/libc locks may acquire allocator locks, never the reverse.
+Callbacks and TSS destructors run outside the registry lock. The root initializes
+its record before constructors. Child return and thrd_exit converge on one TSS
+destructor path; root thrd_exit drains children and exits the process with zero.
+The implementation remains under a private, non-installed threaded include/source
+directory until command/Reactor integration and the complete libc audit pass.
+`tests/guest/c11_threads.c` exercises create/join/detach/exit, stale handles,
+once, recursive/contended mutexes, timed condition waits, broadcast, sleep,
+TSS deletion/destructor passes, concurrent allocation and admission recovery.
+Environment initialization uses checked allocator-owned storage and call_once
+publication in this profile; its established empty-on-provider-error behavior
+is retained. The allocator remains the sole owner of program-break mutation.
+
+### Shared-memory host copies for threaded WASI (#426, selected)
+
+The first compiled C11 timed-wait test exposed an integration gap: Preview1
+clock output uses `turbowasm_host_call_memory_span`, whereas Runtime deliberately
+rejects shared-memory raw spans. Removing that guard would expose data races and
+growth-invalidated pointers. WASI needs protected copies across its public
+Runtime boundary, rather than including Runtime's private instance structures.
+
+Approved additive entries in `link.h` use the existing host-call context:
+
+```c
+turbowasm_status turbowasm_host_call_memory_check64(
+    turbowasm_host_call *call, uint32_t memory, uint64_t address,
+    uint64_t length, turbowasm_trap *trap);
+turbowasm_status turbowasm_host_call_memory_read64(
+    turbowasm_host_call *call, uint32_t memory, uint64_t address,
+    void *destination, size_t length, turbowasm_trap *trap);
+turbowasm_status turbowasm_host_call_memory_write64(
+    turbowasm_host_call *call, uint32_t memory, uint64_t address,
+    const void *source, size_t length, turbowasm_trap *trap);
+```
+
+They support shared and unshared memories and memory32/64 addresses, reuse
+Runtime's existing range checks/read-write locks, and allocate nothing. NULL
+buffers are valid only for zero length. Host buffers must not alias guest
+storage. OOB returns TRAPPED with MEMORY_OUT_OF_BOUNDS; invalid arguments return
+INVALID_ARGUMENT. The trap is NONE on other outcomes. Failed copies do not
+partially transfer. No pointer or lock survives the call. Check validates one
+range without accessing data; subsequent operations recheck their own ranges.
+The existing span functions remain unshared-only and unchanged.
+
+Preview1 scalar output, arguments/environment, paths and vector I/O migrate to
+these entries. Input descriptors/payloads are snapshotted before provider calls;
+outputs are copied back only after provider completion. No memory lock is held
+across callbacks, filesystem I/O, suspension or wait. Existing transfer limits
+are retained where present; newly copied synchronous vector transfers use a
+1 MiB per-call bound and return Preview1 NOMEM when over budget, without invoking
+the provider. This limit and its compatibility cost must be documented for the
+opt-in shared profile; unshared calls retain their existing behavior. Input
+snapshots do not make concurrently mutated application buffers meaningful C.
+
+Tests must cover actual shared-memory clock/stdio, imported memory identity,
+OOB/overflow, zero length, failed copy preservation, limits before side effects,
+and growth/concurrent access. Rollback removes the additive entries and leaves
+the threaded profile private; it must not relax the raw-span guard.
+
+The protected Runtime APIs, Preview1 clock, args/environment and vector
+fd_read/fd_write are implemented. Tests cover shared and unshared memory32/64,
+two importers observing the same storage before/after growth, failed-copy
+preservation, and compiled guest threads concurrently performing short vector
+I/O and first-time environment lookup. The vector tests check the exact 1 MiB
+boundary, rejection above it, OOB before provider effects, zero vectors, and
+provider errors/over-reported reads without publishing output. Random, file
+metadata/path/readdir and v2 socket/poll projections still require migration;
+this checkpoint does not qualify complete threaded Preview1 or libc support.

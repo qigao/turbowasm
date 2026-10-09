@@ -404,6 +404,10 @@ turbowasm_status turbowasm_instance_memory_shared(
 bool turbowasm_instance_memory_same(const turbowasm_instance_impl *left, uint32_t left_index,
     const turbowasm_instance_impl *right, uint32_t right_index);
 
+turbowasm_status turbowasm_instance_memory_check_bytes(
+    turbowasm_instance_impl *instance, uint32_t memory_index,
+    uint64_t address, uint64_t length);
+
 turbowasm_status turbowasm_instance_memory_read_bytes(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,

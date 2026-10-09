@@ -27,19 +27,37 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/TurboWasmGuest.cmake)
 # Match upstream's explicit two-depth source selection, restricted to vendor code.
 file(GLOB metallic_sources RELATIVE "${metallic_source}" "${metallic_source}/src/*/*.c" "${metallic_source}/src/*/*/*.c")
 set(metallic_objects)
-foreach(source IN LISTS metallic_sources)
+set(metallic_variants single)
+if(TURBOWASM_BUILD_TESTS AND TARGET TurboWasm::WASIThreads)
+  list(APPEND metallic_variants threaded)
+endif()
+foreach(variant IN LISTS metallic_variants)
+set(variant_objects)
+set(variant_sources ${metallic_sources})
+set(variant_directory objects)
+set(variant_options -D__STDC_NO_THREADS__=1)
+if(variant STREQUAL "threaded")
+  set(variant_directory thread-objects)
+  set(variant_options -D__METALLIC_THREADS__=1 -matomics -pthread -ftls-model=local-exec
+    -I "${metallic_source}/threaded/include")
+  list(APPEND variant_sources threaded/src/threads.c threaded/src/sync.c threaded/src/entry.S)
+endif()
+foreach(source IN LISTS variant_sources)
+  if(variant STREQUAL "threaded" AND source MATCHES "^src/crt/")
+    continue()
+  endif()
   set(metallic_unit_options)
   if(source MATCHES "^src/setjmp/")
     # LLVM creates these helper declarations during late SJLJ lowering. Keep
     # their definitions outside that LTO module to avoid renamed duplicates.
     set(metallic_unit_options -fno-lto)
   endif()
-  set(object "${CMAKE_CURRENT_BINARY_DIR}/objects/${source}.o")
+  set(object "${CMAKE_CURRENT_BINARY_DIR}/${variant_directory}/${source}.o")
   get_filename_component(object_dir "${object}" DIRECTORY)
   add_custom_command(OUTPUT "${object}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${object_dir}"
     COMMAND "${TURBOWASM_GUEST_CLANG}" --target=wasm32-unknown-unknown -mbulk-memory
-      -O2 -flto -std=gnu11 -D__STDC_NO_THREADS__=1 ${TURBOWASM_GUEST_SJLJ_OPTIONS} ${metallic_unit_options} -I "${metallic_source}/include"
+      -O2 -flto -std=gnu11 ${variant_options} ${TURBOWASM_GUEST_SJLJ_OPTIONS} ${metallic_unit_options} -I "${metallic_source}/include"
       -MMD -MF "${object}.d" -MT "${object}"
       -c "${metallic_source}/${source}" -o "${object}"
     DEPENDS "${metallic_source}/${source}" DEPFILE "${object}.d" VERBATIM)
@@ -48,9 +66,12 @@ foreach(source IN LISTS metallic_sources)
   elseif(source STREQUAL "src/crt/crt1-reactor.c")
     set(TURBOWASM_GUEST_REACTOR_CRT "${object}")
   else()
-    list(APPEND metallic_objects "${object}")
+    list(APPEND variant_objects "${object}")
   endif()
 endforeach()
+set(metallic_${variant}_objects ${variant_objects})
+endforeach()
+set(metallic_objects ${metallic_single_objects})
 set(TURBOWASM_GUEST_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/metallic.a")
 set(metallic_response "")
 foreach(object IN LISTS metallic_objects)
@@ -62,6 +83,20 @@ add_custom_command(OUTPUT "${TURBOWASM_GUEST_LIBRARY}"
   COMMAND "${TURBOWASM_GUEST_AR}" rcs "${TURBOWASM_GUEST_LIBRARY}" "@${CMAKE_CURRENT_BINARY_DIR}/metallic-objects.rsp"
   DEPENDS ${metallic_objects} "${CMAKE_CURRENT_BINARY_DIR}/metallic-objects.rsp" VERBATIM)
 add_custom_target(turbowasm_guest_sdk ALL DEPENDS "${TURBOWASM_GUEST_LIBRARY}" "${TURBOWASM_GUEST_CRT}" "${TURBOWASM_GUEST_REACTOR_CRT}")
+if(metallic_threaded_objects)
+  set(TURBOWASM_GUEST_THREADED_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/metallic-threaded-internal.a")
+  set(threaded_response "")
+  foreach(object IN LISTS metallic_threaded_objects)
+    string(APPEND threaded_response "\"${object}\"\n")
+  endforeach()
+  file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/metallic-threaded-objects.rsp" CONTENT "${threaded_response}")
+  add_custom_command(OUTPUT "${TURBOWASM_GUEST_THREADED_LIBRARY}"
+    COMMAND "${CMAKE_COMMAND}" -E rm -f "${TURBOWASM_GUEST_THREADED_LIBRARY}"
+    COMMAND "${TURBOWASM_GUEST_AR}" rcs "${TURBOWASM_GUEST_THREADED_LIBRARY}" "@${CMAKE_CURRENT_BINARY_DIR}/metallic-threaded-objects.rsp"
+    DEPENDS ${metallic_threaded_objects} "${CMAKE_CURRENT_BINARY_DIR}/metallic-threaded-objects.rsp" VERBATIM)
+  add_custom_target(turbowasm_guest_threads_internal ALL DEPENDS "${TURBOWASM_GUEST_THREADED_LIBRARY}")
+  set_target_properties(turbowasm_guest_threads_internal PROPERTIES FOLDER "tests/guest")
+endif()
 set_target_properties(turbowasm_guest_sdk PROPERTIES FOLDER "guest")
 set(TURBOWASM_GUEST_INCLUDE "${metallic_source}/include")
 include(${CMAKE_CURRENT_SOURCE_DIR}/TurboWasmGuest.cmake)

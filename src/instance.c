@@ -4854,6 +4854,44 @@ bool turbowasm_host_call_can_wait(
            impl->execution->host_wait != NULL;
 }
 
+static turbowasm_instance_impl *turbowasm_host_copy_caller(
+    turbowasm_host_call *call, turbowasm_trap *trap) {
+    if (trap == NULL) return NULL;
+    *trap = TURBOWASM_TRAP_NONE;
+    if (call == NULL || call->impl == NULL) return NULL;
+    return (turbowasm_instance_impl *)((turbowasm_host_call_impl *)call->impl)->caller.impl;
+}
+
+turbowasm_status turbowasm_host_call_memory_check64(
+    turbowasm_host_call *call, uint32_t memory_index, uint64_t address,
+    uint64_t length, turbowasm_trap *trap) {
+    turbowasm_instance_impl *instance = turbowasm_host_copy_caller(call, trap);
+    if (instance == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_status status = turbowasm_instance_memory_check_bytes(instance, memory_index, address, length);
+    if (status == TURBOWASM_TRAPPED) *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+    return status;
+}
+
+turbowasm_status turbowasm_host_call_memory_read64(
+    turbowasm_host_call *call, uint32_t memory_index, uint64_t address,
+    void *destination, size_t length, turbowasm_trap *trap) {
+    turbowasm_instance_impl *instance = turbowasm_host_copy_caller(call, trap);
+    if (instance == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_status status = turbowasm_instance_memory_read_bytes(instance, memory_index, address, 0, destination, length);
+    if (status == TURBOWASM_TRAPPED) *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+    return status;
+}
+
+turbowasm_status turbowasm_host_call_memory_write64(
+    turbowasm_host_call *call, uint32_t memory_index, uint64_t address,
+    const void *source, size_t length, turbowasm_trap *trap) {
+    turbowasm_instance_impl *instance = turbowasm_host_copy_caller(call, trap);
+    if (instance == NULL) return TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_status status = turbowasm_instance_memory_write_bytes(instance, memory_index, address, 0, source, length);
+    if (status == TURBOWASM_TRAPPED) *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+    return status;
+}
+
 turbowasm_status turbowasm_host_call_memory_span64(
     turbowasm_host_call *call,
     uint32_t memory_index,

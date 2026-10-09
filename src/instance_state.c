@@ -1445,6 +1445,21 @@ static void turbowasm_instance_memory_wrunlock(
         cmeta_rwlock_wrunlock(&memory->access_lock);
 }
 
+turbowasm_status turbowasm_instance_memory_check_bytes(
+    turbowasm_instance_impl *instance, uint32_t memory_index,
+    uint64_t address, uint64_t length) {
+    if (instance == NULL || memory_index >= instance->memory_count)
+        return TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_instance_memory *memory = turbowasm_instance_memory_resolve(instance, memory_index);
+    if (memory == NULL) return TURBOWASM_UNSUPPORTED;
+    size_t effective = 0u;
+    turbowasm_instance_memory_rdlock(memory);
+    turbowasm_status status = turbowasm_instance_memory_storage_range(
+        memory, address, 0u, length, &effective);
+    turbowasm_instance_memory_rdunlock(memory);
+    return status;
+}
+
 turbowasm_status turbowasm_instance_memory_read_bytes(
     turbowasm_instance_impl *instance,
     uint32_t memory_index,

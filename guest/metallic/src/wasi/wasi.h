@@ -152,6 +152,9 @@ typedef struct {
 
 #define __WASI_ERRNO_BADF ((__wasi_errno_t)8)
 #define __WASI_ERRNO_EXIST ((__wasi_errno_t)20)
+#define __WASI_ERRNO_FAULT ((__wasi_errno_t)21)
+#define __WASI_ERRNO_IO ((__wasi_errno_t)29)
+#define __WASI_ERRNO_NOMEM ((__wasi_errno_t)48)
 
 WASI_IMPORT(fd_prestat_get)
 __wasi_errno_t __wasi_fd_prestat_get(__wasi_fd_t fd, __wasi_prestat_t* buf);

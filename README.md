@@ -434,6 +434,11 @@ read-ahead and output buffering, and successful seek discards pushback and EOF.
 truncation or access changes return `ENOTSUP` and close the stream. Threads,
 full locale/fenv and the documented upstream
 long-double gaps remain outside this profile; it is not complete C11 conformance.
+An internal, non-installed C11 threads profile is exercised by
+`turbowasm_guest_c11_threads_test`, including synchronization, TSS, allocation
+and shared Preview1 clock/args/environment/vector I/O. Its remaining libc,
+filesystem, async and lifecycle work is tracked in
+[#426](https://github.com/qigao/turbowasm/issues/426); it is not yet a threaded SDK.
 The Linux CI profile is `ci-metallic-user`; manual CI selects it with
 `metallic_guests=true` and the matching `salts_ci_run` prerequisite artifact.
 Its parent `TURBOWASM_GUEST_LLVM_ROOT` selects the guest compiler tools explicitly;

@@ -127,6 +127,11 @@ int main(void) {
         return 25;
     trap = TURBOWASM_TRAP_NONE;
 
+    if (turbowasm_host_call_memory_check64(NULL, 0, 0, 0, &trap) != TURBOWASM_INVALID_ARGUMENT ||
+        turbowasm_host_call_memory_read64(NULL, 0, 0, NULL, 0, &trap) != TURBOWASM_INVALID_ARGUMENT ||
+        turbowasm_host_call_memory_write64(NULL, 0, 0, NULL, 0, &trap) != TURBOWASM_INVALID_ARGUMENT)
+        return 26;
+
     if (turbowasm_module_load_borrowed(
             &provider_module,
             provider_bytes,

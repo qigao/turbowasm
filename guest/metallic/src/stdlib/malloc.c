@@ -10,7 +10,21 @@ void* __sbrk(intptr_t);
 #define LACKS_SYS_TYPES_H
 #define MORECORE(x) __sbrk(x)
 #define NO_MALLOC_STATS 1
+#ifdef __METALLIC_THREADS__
+#include "../internal/thread_lock.h"
+#define USE_LOCKS 2
+#define USE_SPIN_LOCKS 1
+#define LACKS_SCHED_H 1
+#define MLOCK_T metallic_lock
+#define INITIAL_LOCK(lk) (atomic_init((lk), 0), 0)
+#define DESTROY_LOCK(lk) (0)
+#define ACQUIRE_LOCK(lk) metallic_lock_acquire(lk)
+#define RELEASE_LOCK(lk) metallic_lock_release(lk)
+#define TRY_LOCK(lk) metallic_try_lock(lk)
+static MLOCK_T malloc_global_mutex;
+#else
 #define USE_LOCKS 0
+#endif
 
 #define malloc_getpagesize 65536
 

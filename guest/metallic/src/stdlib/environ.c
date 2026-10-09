@@ -1,12 +1,16 @@
+#include "../wasi/wasi.h"
 #include <stddef.h>
 #include <stdint.h>
-
-#include "../wasi/wasi.h"
+#include <stdlib.h>
+#ifdef __METALLIC_THREADS__
+#include <threads.h>
+static once_flag environ_once = ONCE_FLAG_INIT;
+#endif
 
 /* Lazy initialization of the process environment.
  *
  * On the first lookup we ask WASI for the size of the environ pointer array
- * plus its flat string buffer, allocate both via `__sbrk` (one contiguous
+ * plus its flat string buffer, allocate both via malloc (one contiguous
  * arena), and call `environ_get` to populate them.
  *
  * Storage layout in the arena:
@@ -16,10 +20,8 @@
  * The pointer array is null-terminated by WASI (it writes `environc`
  * entries; the (environc+1)th slot we leave NULL ourselves, defensively).
  *
- * Failure modes (sizes_get error, sbrk failure, get error) all degrade to an
+ * Failure modes (sizes_get error, allocation failure, get error) all degrade to an
  * empty environment so callers consistently see `NULL` from lookups. */
-
-extern void* __sbrk(intptr_t increment);
 
 static int s_state = 0;       /* 0 = not yet tried, 1 = ready, 2 = empty/failed */
 static size_t s_environc = 0;
@@ -42,35 +44,26 @@ static void environ_init(void)
         return;
     }
 
-    /* WASI host validates that the pointer-array address is aligned for
-     * `uint8_t**` (4 bytes on wasm32).  `__sbrk` returns whatever value
-     * `__metallic_brk` currently holds, which prior increments may have
-     * left unaligned; we explicitly realign here. */
-    const size_t align = _Alignof(uint8_t*);
-    void* head = __sbrk(0);
-    uintptr_t addr = (uintptr_t)head;
-    uintptr_t pad = (-addr) & (align - 1);
-    if (pad && __sbrk((intptr_t)pad) == (void*)-1) {
+    /* Keep the program break exclusively under the allocator's lock. The
+     * environment is immutable after publication and lives until process exit. */
+    if (environc > SIZE_MAX / sizeof(uint8_t*) - 1) {
         s_state = 2;
         return;
     }
-
     size_t ptrs_bytes = sizeof(uint8_t*) * (environc + 1);
-    void* ptrs_mem = __sbrk((intptr_t)ptrs_bytes);
-    if (ptrs_mem == (void*)-1) {
+    if (buf_size > SIZE_MAX - ptrs_bytes) {
         s_state = 2;
         return;
     }
-    void* buf_mem = __sbrk((intptr_t)buf_size);
-    if (buf_mem == (void*)-1) {
+    uint8_t** ptrs = malloc(ptrs_bytes + buf_size);
+    if (!ptrs) {
         s_state = 2;
         return;
     }
-
-    uint8_t** ptrs = (uint8_t**)ptrs_mem;
-    uint8_t* buf = (uint8_t*)buf_mem;
+    uint8_t* buf = (uint8_t*)ptrs + ptrs_bytes;
 
     if (__wasi_environ_get(ptrs, buf) != 0) {
+        free(ptrs);
         s_state = 2;
         return;
     }
@@ -98,7 +91,11 @@ static int matches(const char* entry, const char* name)
  * past it (mirroring glibc's behaviour). */
 char* __environ_find(const char* name)
 {
+#ifdef __METALLIC_THREADS__
+    call_once(&environ_once, environ_init);
+#else
     environ_init();
+#endif
     if (s_state != 1)
         return NULL;
 

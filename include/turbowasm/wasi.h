@@ -212,6 +212,12 @@ typedef struct turbowasm_wasi_preview1_config {
  *
  * argv/environment strings are copied and owned by the object. Each environment
  * entry is passed to the guest verbatim (normally "KEY=VALUE").
+ * Shared-memory fd_read/fd_write snapshot vector descriptors and payloads;
+ * their aggregate payload capacity is limited to 1 MiB per call. A larger
+ * valid range returns NOMEM before invoking the provider. Successful reads
+ * copy only the reported byte count back to the original guest ranges.
+ * Unshared-memory vector calls retain their existing capacity behavior.
+ * Providers used by concurrently executing guests must support that concurrency.
  */
 turbowasm_status turbowasm_wasi_preview1_init(
     turbowasm_wasi_preview1 *wasi,
