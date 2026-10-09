@@ -121,7 +121,7 @@ static turbowasm_wasi_fs_config fs_config(
     return config;
 }
 
-static void test_low_level_path_open_rights_and_rollback(void) {
+static void test_low_level_path_open_rights_and_reservation(void) {
     fake_provider provider = {0};
     turbowasm_wasi_fs filesystem = {0};
     turbowasm_wasi_fs_config config = fs_config(&provider, 2u);
@@ -204,10 +204,7 @@ static void test_low_level_path_open_rights_and_rollback(void) {
                &opened_fd) == TURBOWASM_WASI_ERRNO_NOTCAPABLE);
     assert(provider.open_calls == 1u);
 
-    /*
-     * Capacity is full. Provider open succeeds, descriptor bind fails, and the
-     * newly returned provider identity is closed exactly once.
-     */
+    /* Full capacity rejects admission before the provider has side effects. */
     assert(turbowasm_wasi_fs_path_open(
                &filesystem,
                3u, 0u,
@@ -216,14 +213,13 @@ static void test_low_level_path_open_rights_and_rollback(void) {
                TURBOWASM_WASI_RIGHT_FD_WRITE,
                0u, 0u,
                &opened_fd) == TURBOWASM_WASI_ERRNO_MFILE);
-    assert(provider.open_calls == 2u);
-    assert(provider.close_calls == 1u);
-    assert(provider.last_closed.object == 1002u);
+    assert(provider.open_calls == 1u);
+    assert(provider.close_calls == 0u);
 
     assert(turbowasm_wasi_fs_close_fd(
                &filesystem, 4u) ==
            TURBOWASM_WASI_ERRNO_SUCCESS);
-    assert(provider.close_calls == 2u);
+    assert(provider.close_calls == 1u);
 
     /* Lowest available guest fd is deterministically reused. */
     assert(turbowasm_wasi_fs_path_open(
@@ -235,7 +231,7 @@ static void test_low_level_path_open_rights_and_rollback(void) {
                0u, 0u,
                &opened_fd) == TURBOWASM_WASI_ERRNO_SUCCESS);
     assert(opened_fd == 4u);
-    assert(provider.open_calls == 3u);
+    assert(provider.open_calls == 2u);
 
     assert(turbowasm_wasi_fs_close_fd(
                &filesystem, 4u) ==
@@ -504,7 +500,7 @@ static void test_path_open_provider_missing(void) {
 }
 
 int main(void) {
-    test_low_level_path_open_rights_and_rollback();
+    test_low_level_path_open_rights_and_reservation();
     test_guest_path_open_abi();
     test_path_open_provider_missing();
     return 0;

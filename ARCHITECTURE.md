@@ -4060,7 +4060,7 @@ preservation, and compiled guest threads concurrently performing short vector
 I/O and first-time environment lookup. The vector tests check the exact 1 MiB
 boundary, rejection above it, OOB before provider effects, zero vectors, and
 provider errors/over-reported reads without publishing output. Random,
-path/readdir and v2 socket/poll projections still require migration;
+path and v2 socket/poll projections still require migration;
 this checkpoint does not qualify complete threaded Preview1 or libc support.
 
 Fixed filesystem outputs (`fd_seek`, `fd_tell`, `fd_filestat_get`,
@@ -4074,6 +4074,100 @@ output location. Error precedence and little-endian layouts remain unchanged
 for unshared guests. This migration does not make the descriptor table or its
 borrowed preopen names safe against concurrent close/rebind; that lifetime
 protocol remains separate work before the threaded filesystem is qualified.
+
+`fd_readdir` checks the complete caller buffer and byte-count output before
+provider calls, then publishes each successful entry from the existing bounded
+24-byte header plus at most 255 name bytes. It holds no guest pointer while
+enumerating and allocates no transfer buffer. Truncated headers/names, cookies,
+embedded NUL name bytes and zero-length enumeration keep their existing ABI.
+As before, a later provider failure leaves any already-written prefix in the
+buffer and leaves the byte-count output unchanged; this is not an all-or-nothing
+directory snapshot. A failed entry itself is never published. Different entries
+are separate protected copies and do not promise an atomic directory listing.
+
+### Concurrent filesystem admission and provider lifetime (#426, selected)
+
+Protected guest copies alone do not protect the descriptor table: provider calls
+previously borrowed a slot while close could consume its file and a later bind
+could reuse its metadata. `path_open` opened the provider resource before finding
+descriptor capacity, then ignored a rollback-close error. Threaded guests need
+one lifetime protocol across WASI FS, HostFS and Preview1 preopen projection.
+
+The approved change uses the existing public functions and opaque owners; it
+does not change public struct layouts. Initialization and destruction remain
+exclusive host lifecycle operations. Destruction still requires all identities,
+reservations and in-flight calls to have drained. The caller must prevent new
+API entry while destroying an owner; a mutex cannot keep a freed owner alive.
+
+A single lock across provider I/O was rejected because one blocked file would
+stop unrelated descriptors and provider reentry could deadlock. Waiting inside
+close was also rejected: a callback may need its caller to make progress. Short
+admission plus BUSY preserves explicit ownership and independent progress at the
+cost of caller-visible retry, while per-file HostFS locks serialize only native
+state that cannot safely overlap.
+
+- A short-held table mutex protects slot state, generation, rights, flags,
+  reservations, reference counts and lookup. An admitted synchronous call pins
+  the generation and copies provider operations/identity before dropping the
+  mutex. Provider callbacks, allocation, native I/O and waiting never execute
+  under the table mutex. Pins are bounded checked counters, not heap records.
+- Close with an in-flight synchronous operation, another close, or a pending
+  metadata transaction returns BUSY without invoking the provider or consuming
+  the descriptor. Close otherwise marks CLOSING, invokes the provider without
+  the mutex, then commits retirement on success or restores LIVE on error.
+  Calls attempting admission while CLOSING also return BUSY. This preserves
+  the existing retryable-close ownership contract without waiting on a callback
+  which might itself need the closing caller to make progress.
+- Different descriptors can execute concurrently. The table does not serialize
+  arbitrary custom provider I/O: providers admitted to concurrent execution
+  must support that concurrency. Flags use a per-slot metadata transaction so
+  provider acceptance and the table value cannot commit in opposite orders.
+  Rights only decrease; already-admitted operations retain their admitted
+  authority. Child publication intersects requested rights with the parent's
+  current inheriting rights, as the existing socket accept path does.
+- `path_open` reserves a free descriptor and fd before the provider callback.
+  A full table returns MFILE with no create/truncate/open effects. Provider
+  failure aborts the reservation; success publishes into that reservation with
+  no further allocation or fallible bind. A successful provider open must
+  produce a valid owned identity, and an error must transfer no identity.
+  This deliberately changes full-table error precedence and removes the
+  ignored rollback-close path. Reserved slots and retired generations cannot
+  be reused; generation exhaustion fails admission rather than wrapping.
+- Existing socket retain/release leases remain distinct from synchronous pins.
+  They retain their close-while-parked behavior and same-progress-thread callback
+  contract. Table locking does not authorize CNet callbacks on guest workers;
+  the threaded owner-dispatch bridge is a separate integration requirement.
+- Public descriptor-info/preopen enumeration keeps its borrowed-name contract:
+  callers must coordinate close while consuming that pointer. Preview1 uses an
+  internal pinned preopen snapshot through the protected copy, so no freed
+  name crosses its callback boundary. No new public lifetime carrier is added.
+
+HostFS mirrors operation admission for its root and bounded child identities.
+Its table mutex only manages identity state and admission. Per-identity locks
+serialize native file-position/append operations and directory cursors without
+blocking unrelated files. Root-directory lazy initialization uses the same
+root-operation serialization. A separate namespace admission transaction makes
+the existing no-live-child-directory rename rule atomic against directory
+open/close; native filesystem calls run outside the table mutex. All temporary
+paths remain bounded by the configured path capacity. Close retains the
+existing ownership-consuming native-close translation. External providers keep
+their own cancellation/progress contracts; these locks introduce no asynchronous
+cancellation guarantee for blocking native I/O.
+
+Validation must include barrier-controlled blocked read versus close/rebind,
+independent descriptor progress, callback reentry, duplicate close, close error
+retry, full-table open with no provider effects, reserved-slot races, rights
+reduction during open, flags commit ordering, retained preopen copies and stale
+generations. HostFS tests cover concurrent files, cursor/append consistency,
+root readdir initialization and rename/open exclusion. Existing v2 socket,
+Preview1, WASI 0.2 and installed consumers remain regression gates; native race
+diagnostics are additional evidence and do not instrument guest C code.
+
+Migration requires callers racing close with synchronous operations to handle
+BUSY and retry after their in-flight operation finishes; no ABI rebuild is
+required solely for this internal layout change. Rollback keeps the threaded
+profile private and removes its concurrent-filesystem claim; the single-owner
+socket protocol and protected Runtime memory APIs remain independent.
 
 ### Threaded Metallic libc synchronization (#426, internal)
 

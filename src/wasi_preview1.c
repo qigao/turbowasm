@@ -1124,20 +1124,6 @@ static turbowasm_status turbowasm_wasi_fd_read(
         results, result_capacity, result_count, trap, error);
 }
 
-static uint32_t turbowasm_wasi_fs_descriptor_errno(
-    turbowasm_wasi_fs *filesystem,
-    uint32_t fd,
-    turbowasm_wasi_fs_descriptor_info *out_info) {
-    if (filesystem == NULL || out_info == NULL)
-        return TURBOWASM_WASI_ERRNO_INVAL;
-    if (!turbowasm_wasi_fs_descriptor_info_get(
-            filesystem, fd, out_info))
-        return TURBOWASM_WASI_ERRNO_BADF;
-    if (!out_info->preopen)
-        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
-    return TURBOWASM_WASI_ERRNO_SUCCESS;
-}
-
 static turbowasm_status turbowasm_wasi_fd_seek(
     void *context,
     turbowasm_host_call *call,
@@ -1297,8 +1283,9 @@ static turbowasm_status turbowasm_wasi_fd_readdir(
     turbowasm_trap *trap) {
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
-    turbowasm_host_memory_span buffer = {0};
-    turbowasm_host_memory_span bufused = {0};
+    uint8_t bufused[4];
+    uint32_t buffer_address;
+    uint32_t buffer_size;
     uint64_t cookie;
     size_t used = 0u;
     uint32_t error;
@@ -1313,22 +1300,19 @@ static turbowasm_status turbowasm_wasi_fd_readdir(
         arguments[4].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_memory_span(
-        call,
-        (uint32_t)arguments[1].as.i32,
-        (uint32_t)arguments[2].as.i32,
-        &buffer);
+    buffer_address = (uint32_t)arguments[1].as.i32;
+    buffer_size = (uint32_t)arguments[2].as.i32;
+    error = turbowasm_wasi_memory_check(call, buffer_address, buffer_size);
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        error = turbowasm_wasi_memory_span(
+        error = turbowasm_wasi_memory_check(
             call,
             (uint32_t)arguments[4].as.i32,
-            4u,
-            &bufused);
+            sizeof(bufused));
     }
 
     cookie = (uint64_t)arguments[3].as.i64;
     while (error == TURBOWASM_WASI_ERRNO_SUCCESS &&
-           used < buffer.size) {
+           used < buffer_size) {
         turbowasm_wasi_fs_dirent entry = {0};
         bool has_entry = false;
         uint8_t record[24u + TURBOWASM_WASI_FS_DIRENT_NAME_MAX];
@@ -1356,9 +1340,12 @@ static turbowasm_status turbowasm_wasi_fd_readdir(
         }
 
         record_size = 24u + (size_t)entry.name_length;
-        remaining = buffer.size - used;
+        remaining = buffer_size - used;
         copy_size = record_size < remaining ? record_size : remaining;
-        memcpy(buffer.data + used, record, copy_size);
+        error = turbowasm_wasi_memory_write(
+            call, (uint64_t)buffer_address + used, record, copy_size);
+        if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
+            break;
         used += copy_size;
         if (copy_size != record_size)
             break;
@@ -1366,7 +1353,9 @@ static turbowasm_status turbowasm_wasi_fd_readdir(
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        turbowasm_wasi_store_u32(bufused.data, (uint32_t)used);
+        turbowasm_wasi_store_u32(bufused, (uint32_t)used);
+        error = turbowasm_wasi_memory_write(
+            call, (uint32_t)arguments[4].as.i32, bufused, sizeof(bufused));
     }
 
     return turbowasm_wasi_return_errno(
@@ -1423,10 +1412,11 @@ static turbowasm_status turbowasm_wasi_fd_prestat_get(
         arguments[1].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_fs_descriptor_errno(
+    error = tw_wasi_fd_preopen_pin(
         impl->filesystem,
         (uint32_t)arguments[0].as.i32,
         &info);
+    bool pinned = error == TURBOWASM_WASI_ERRNO_SUCCESS;
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
         name_length = strlen(info.guest_path);
         if (name_length > UINT32_MAX) {
@@ -1447,6 +1437,7 @@ static turbowasm_status turbowasm_wasi_fd_prestat_get(
             call, (uint32_t)arguments[1].as.i32, output, sizeof(output));
     }
 
+    if (pinned) tw_wasi_fd_preopen_unpin(impl->filesystem, info.descriptor);
     return turbowasm_wasi_return_errno(
         results, result_capacity, result_count, trap, error);
 }
@@ -1475,10 +1466,11 @@ static turbowasm_status turbowasm_wasi_fd_prestat_dir_name(
         arguments[2].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_fs_descriptor_errno(
+    error = tw_wasi_fd_preopen_pin(
         impl->filesystem,
         (uint32_t)arguments[0].as.i32,
         &info);
+    bool pinned = error == TURBOWASM_WASI_ERRNO_SUCCESS;
     path_length = (uint32_t)arguments[2].as.i32;
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
@@ -1499,6 +1491,7 @@ static turbowasm_status turbowasm_wasi_fd_prestat_dir_name(
             call, (uint32_t)arguments[1].as.i32, info.guest_path, name_length);
     }
 
+    if (pinned) tw_wasi_fd_preopen_unpin(impl->filesystem, info.descriptor);
     return turbowasm_wasi_return_errno(
         results, result_capacity, result_count, trap, error);
 }

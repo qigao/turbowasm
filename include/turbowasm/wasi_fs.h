@@ -11,6 +11,14 @@
 extern "C" {
 #endif
 
+/* Concurrent synchronous calls are admitted under a short table lock. An
+ * admitted operation pins its identity through the provider callback; distinct
+ * descriptors may progress independently. Providers must synchronize mutable
+ * state for every concurrent callback they accept. Socket providers retain
+ * their separate owner-thread requirement.
+ *
+ * Init/destroy require exclusive caller lifecycle ownership: stop all new
+ * entrants and drain calls/leases before destroying the object. */
 typedef struct turbowasm_wasi_fs {
     void *impl;
 } turbowasm_wasi_fs;
@@ -119,6 +127,8 @@ typedef uint32_t (*turbowasm_wasi_fs_stat_fn)(
     turbowasm_wasi_fs_file file,
     turbowasm_wasi_fs_stat *out_stat);
 
+/* Success transfers one valid (nonzero generation) owned identity. Failure
+ * transfers none. The table reserves capacity before calling the provider. */
 typedef uint32_t (*turbowasm_wasi_fs_path_open_fn)(
     void *context,
     turbowasm_wasi_fs_file directory,
@@ -201,7 +211,8 @@ turbowasm_status turbowasm_wasi_fs_init(
     const turbowasm_wasi_fs_config *config);
 
 /*
- * Destroy requires all descriptors to have been closed explicitly.
+ * Destroy requires all descriptors to have been closed explicitly, all
+ * reservations/calls/leases drained, and no concurrent new entrants.
  * Retriable provider close errors remain observable and exactly-once; an
  * ownership-consuming provider reports success once its identity is consumed.
  */
@@ -238,6 +249,10 @@ turbowasm_status turbowasm_wasi_fs_bind_next_descriptor(
     turbowasm_wasi_fs_descriptor *out_descriptor,
     uint32_t *out_guest_fd);
 
+/* Reserves a slot and guest fd before provider effects; full capacity returns
+ * MFILE. On failure *out_guest_fd is zero. Successful child rights intersect
+ * the parent's inheriting rights at publication if they were reduced during
+ * the callback; already admitted provider work retains its admitted authority. */
 uint32_t turbowasm_wasi_fs_path_open(
     turbowasm_wasi_fs *filesystem,
     uint32_t directory_fd,
@@ -250,11 +265,14 @@ uint32_t turbowasm_wasi_fs_path_open(
     uint32_t fdflags,
     uint32_t *out_guest_fd);
 
+/* Copies metadata, but guest_path remains borrowed. Coordinate descriptor
+ * close with use of that pointer; this query does not retain the identity. */
 bool turbowasm_wasi_fs_descriptor_info_get(
     const turbowasm_wasi_fs *filesystem,
     uint32_t guest_fd,
     turbowasm_wasi_fs_descriptor_info *out_info);
 
+/* Same borrowed-path contract; validates an existing generation identity. */
 bool turbowasm_wasi_fs_retained_descriptor_info_get(
     const turbowasm_wasi_fs *filesystem,
     turbowasm_wasi_fs_descriptor descriptor,
@@ -265,7 +283,8 @@ bool turbowasm_wasi_fs_retained_descriptor_info_get(
  *
  * preopen_at uses dense preopen ordinals [0, count). The returned guest_path
  * pointer is borrowed from the filesystem table and remains valid until that
- * descriptor is closed or the filesystem is destroyed.
+ * descriptor is closed or the filesystem is destroyed. Concurrent callers
+ * must coordinate close with pointer use; count/at are separate snapshots.
  */
 size_t turbowasm_wasi_fs_preopen_count(
     const turbowasm_wasi_fs *filesystem);
@@ -275,12 +294,16 @@ bool turbowasm_wasi_fs_preopen_at(
     size_t preopen_index,
     turbowasm_wasi_fs_descriptor_info *out_info);
 
-/* Generation-safe close for retained async/internal descriptor identities. */
+/* Generation-safe close for retained async/internal descriptor identities.
+ * An in-flight synchronous call, metadata transaction or another close returns
+ * BUSY without provider effects and preserves the handle. Retry once that
+ * operation finishes. Provider errors also preserve the handle for retry.
+ * Example: finish/join a reader, then retry a close that returned BUSY. */
 uint32_t turbowasm_wasi_fs_close_descriptor(
     turbowasm_wasi_fs *filesystem,
     turbowasm_wasi_fs_descriptor descriptor);
 
-/* Guest-facing close by current fd identity. */
+/* Guest-facing close by current fd identity, with the same BUSY/retry contract. */
 uint32_t turbowasm_wasi_fs_close_fd(
     turbowasm_wasi_fs *filesystem,
     uint32_t guest_fd);

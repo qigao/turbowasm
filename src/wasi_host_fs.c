@@ -1,6 +1,7 @@
 #include <turbowasm/wasi_host_fs.h>
 
 #include <cmeta_fs.h>
+#include <salts/thread.h>
 #include <tstr.h>
 
 #include <errno.h>
@@ -30,6 +31,9 @@ enum {
 
 typedef struct turbowasm_wasi_host_fs_slot {
     bool used;
+    bool reserved, closing;
+    uint32_t pins;
+    cmeta_mutex_t io_mutex;
     bool directory;
     uint32_t generation;
     cmeta_fs_root_file_t *file;
@@ -46,7 +50,15 @@ typedef struct turbowasm_wasi_host_fs_impl {
     size_t slot_capacity;
     size_t path_capacity;
     bool root_open;
+    bool root_closing, renaming;
+    uint32_t root_pins, opening;
+    cmeta_mutex_t mutex, root_mutex;
 } turbowasm_wasi_host_fs_impl;
+
+typedef struct host_pin {
+    turbowasm_wasi_host_fs_slot *slot;
+    bool held, serialized;
+} host_pin;
 
 static bool host_is_root(turbowasm_wasi_fs_file file) {
     return file.object == UINT64_C(1) && file.generation == 1u;
@@ -123,13 +135,43 @@ static turbowasm_wasi_host_fs_slot *host_slot_from_file(
 
     if (impl == NULL || file.object < UINT64_C(2))
         return NULL;
-    index = (size_t)(file.object - UINT64_C(2));
-    if (index >= impl->slot_capacity)
+    if (file.object - UINT64_C(2) >= impl->slot_capacity)
         return NULL;
+    index = (size_t)(file.object - UINT64_C(2));
     slot = &impl->slots[index];
     if (!slot->used || slot->generation != file.generation)
         return NULL;
     return slot;
+}
+
+/* Table admission protects native identities even for direct provider callers.
+ * Never wait on an I/O mutex while holding the identity table mutex. */
+static uint32_t host_pin_file(turbowasm_wasi_host_fs_impl *impl,
+    turbowasm_wasi_fs_file file, bool serialize, host_pin *pin) {
+    if (!impl) return TURBOWASM_WASI_ERRNO_INVAL;
+    cmeta_mutex_lock(&impl->mutex);
+    turbowasm_wasi_host_fs_slot *slot = host_slot_from_file(impl, file);
+    bool root = host_is_root(file);
+    uint32_t error = 0;
+    if (root ? !impl->root_open : slot == NULL) error = TURBOWASM_WASI_ERRNO_BADF;
+    else if (root ? (impl->root_closing || impl->root_pins == UINT32_MAX) :
+        (slot->closing || slot->pins == UINT32_MAX)) error = TURBOWASM_WASI_ERRNO_BUSY;
+    else {
+        if (root) ++impl->root_pins; else ++slot->pins;
+        *pin = (host_pin){.slot = slot, .held = true, .serialized = serialize};
+    }
+    cmeta_mutex_unlock(&impl->mutex);
+    if (!error && serialize) cmeta_mutex_lock(slot ? &slot->io_mutex : &impl->root_mutex);
+    return error;
+}
+static uint32_t host_unpin(turbowasm_wasi_host_fs_impl *impl, host_pin *pin, uint32_t error) {
+    if (!pin->held) return error;
+    if (pin->serialized) cmeta_mutex_unlock(pin->slot ? &pin->slot->io_mutex : &impl->root_mutex);
+    cmeta_mutex_lock(&impl->mutex);
+    if (pin->slot) --pin->slot->pins; else --impl->root_pins;
+    cmeta_mutex_unlock(&impl->mutex);
+    pin->held = false;
+    return error;
 }
 
 static turbowasm_wasi_fs_file host_file_from_slot(
@@ -151,12 +193,10 @@ static turbowasm_wasi_host_fs_slot *host_reserve_slot(
         turbowasm_wasi_host_fs_slot *slot = &impl->slots[index];
         uint32_t generation;
 
-        if (slot->used)
+        if (slot->used || slot->reserved || slot->generation == UINT32_MAX)
             continue;
         generation = slot->generation + 1u;
-        if (generation == 0u)
-            generation = 1u;
-        slot->used = true;
+        slot->reserved = true;
         slot->directory = false;
         slot->generation = generation;
         slot->file = NULL;
@@ -172,6 +212,7 @@ static void host_release_slot(turbowasm_wasi_host_fs_slot *slot) {
     if (slot == NULL)
         return;
     slot->used = false;
+    slot->reserved = slot->closing = false;
     slot->directory = false;
     slot->file = NULL;
     slot->dir = NULL;
@@ -307,10 +348,18 @@ static uint32_t host_close(
 
     if (impl == NULL)
         return TURBOWASM_WASI_ERRNO_INVAL;
+    cmeta_mutex_lock(&impl->mutex);
     if (host_is_root(file)) {
-        if (!impl->root_open)
+        if (!impl->root_open) {
+            cmeta_mutex_unlock(&impl->mutex);
             return TURBOWASM_WASI_ERRNO_BADF;
-        impl->root_open = false;
+        }
+        if (impl->root_closing || impl->root_pins) {
+            cmeta_mutex_unlock(&impl->mutex);
+            return TURBOWASM_WASI_ERRNO_BUSY;
+        }
+        impl->root_closing = true;
+        cmeta_mutex_unlock(&impl->mutex);
         if (impl->root_dir != NULL) {
             /*
              * Salts root-directory close consumes the opaque identity even
@@ -322,12 +371,23 @@ static uint32_t host_close(
             (void)cmeta_fs_root_closedir(impl->root_dir);
             impl->root_dir = NULL;
         }
+        cmeta_mutex_lock(&impl->mutex);
+        impl->root_open = impl->root_closing = false;
+        cmeta_mutex_unlock(&impl->mutex);
         return TURBOWASM_WASI_ERRNO_SUCCESS;
     }
 
     slot = host_slot_from_file(impl, file);
-    if (slot == NULL)
+    if (slot == NULL) {
+        cmeta_mutex_unlock(&impl->mutex);
         return TURBOWASM_WASI_ERRNO_BADF;
+    }
+    if (slot->closing || slot->pins) {
+        cmeta_mutex_unlock(&impl->mutex);
+        return TURBOWASM_WASI_ERRNO_BUSY;
+    }
+    slot->closing = true;
+    cmeta_mutex_unlock(&impl->mutex);
 
     /*
      * cmeta_fs_root_file_close()/closedir() always consume their opaque
@@ -339,11 +399,13 @@ static uint32_t host_close(
         (void)cmeta_fs_root_closedir(slot->dir);
     else
         (void)cmeta_fs_root_file_close(slot->file);
+    cmeta_mutex_lock(&impl->mutex);
     host_release_slot(slot);
+    cmeta_mutex_unlock(&impl->mutex);
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
-static uint32_t host_read(
+static uint32_t host_read_admitted(
     void *context,
     turbowasm_wasi_fs_file file,
     const turbowasm_wasi_buffer *buffers,
@@ -386,7 +448,7 @@ static uint32_t host_read(
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
-static uint32_t host_write(
+static uint32_t host_write_admitted(
     void *context,
     turbowasm_wasi_fs_file file,
     const turbowasm_wasi_const_buffer *buffers,
@@ -429,7 +491,7 @@ static uint32_t host_write(
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
-static uint32_t host_seek(
+static uint32_t host_seek_admitted(
     void *context,
     turbowasm_wasi_fs_file file,
     int64_t offset,
@@ -470,7 +532,7 @@ static uint32_t host_seek(
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
-static uint32_t host_tell(
+static uint32_t host_tell_admitted(
     void *context,
     turbowasm_wasi_fs_file file,
     uint64_t *out_offset) {
@@ -494,7 +556,7 @@ static uint32_t host_tell(
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
-static uint32_t host_stat(
+static uint32_t host_stat_admitted(
     void *context,
     turbowasm_wasi_fs_file file,
     turbowasm_wasi_fs_stat *out_stat) {
@@ -572,7 +634,7 @@ static int host_file_flags(
     return 0;
 }
 
-static uint32_t host_path_open(
+static uint32_t host_path_open_admitted(
     void *context,
     turbowasm_wasi_fs_file directory,
     uint32_t dirflags,
@@ -615,7 +677,9 @@ static uint32_t host_path_open(
     if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
         return error;
 
+    cmeta_mutex_lock(&impl->mutex);
     slot = host_reserve_slot(impl);
+    cmeta_mutex_unlock(&impl->mutex);
     if (slot == NULL)
         return TURBOWASM_WASI_ERRNO_MFILE;
     memcpy(slot->path, full_path, strlen(full_path) + 1u);
@@ -623,36 +687,36 @@ static uint32_t host_path_open(
     if ((oflags & TURBOWASM_HOST_FS_OFLAGS_DIRECTORY) != 0u) {
         if ((oflags & (TURBOWASM_HOST_FS_OFLAGS_CREAT |
                        TURBOWASM_HOST_FS_OFLAGS_TRUNC)) != 0u) {
-            host_release_slot(slot);
-            return TURBOWASM_WASI_ERRNO_INVAL;
+            error = TURBOWASM_WASI_ERRNO_INVAL;
+            goto abort;
         }
         result = cmeta_fs_root_lstat(
             impl->root, slot->path, &slot->stat_snapshot);
         if (result < 0) {
-            host_release_slot(slot);
-            return host_errno(result);
+            error = host_errno(result);
+            goto abort;
         }
         if (slot->stat_snapshot.is_symlink) {
-            host_release_slot(slot);
-            return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+            error = TURBOWASM_WASI_ERRNO_NOTCAPABLE;
+            goto abort;
         }
         if (!slot->stat_snapshot.is_directory) {
-            host_release_slot(slot);
-            return TURBOWASM_WASI_ERRNO_NOTDIR;
+            error = TURBOWASM_WASI_ERRNO_NOTDIR;
+            goto abort;
         }
         result = cmeta_fs_root_opendir(
             impl->root, slot->path, &slot->dir);
         if (result < 0) {
-            host_release_slot(slot);
-            return host_errno(result);
+            error = host_errno(result);
+            goto abort;
         }
         slot->directory = true;
     } else {
         result = host_file_flags(
             rights_base, oflags, fdflags, &file_flags);
         if (result < 0) {
-            host_release_slot(slot);
-            return host_errno(result);
+            error = host_errno(result);
+            goto abort;
         }
         result = cmeta_fs_root_file_open(
             impl->root,
@@ -661,16 +725,25 @@ static uint32_t host_path_open(
             0644,
             &slot->file);
         if (result < 0) {
-            host_release_slot(slot);
-            return host_errno(result);
+            error = host_errno(result);
+            goto abort;
         }
     }
 
+    cmeta_mutex_lock(&impl->mutex);
+    slot->reserved = false;
+    slot->used = true;
     *out_file = host_file_from_slot(impl, slot);
+    cmeta_mutex_unlock(&impl->mutex);
     return TURBOWASM_WASI_ERRNO_SUCCESS;
+abort:
+    cmeta_mutex_lock(&impl->mutex);
+    host_release_slot(slot);
+    cmeta_mutex_unlock(&impl->mutex);
+    return error;
 }
 
-static uint32_t host_path_stat(
+static uint32_t host_path_stat_admitted(
     void *context,
     turbowasm_wasi_fs_file directory,
     uint32_t lookup_flags,
@@ -706,7 +779,7 @@ static uint32_t host_path_stat(
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
-static uint32_t host_path_mutation(
+static uint32_t host_path_mutation_admitted(
     turbowasm_wasi_host_fs_impl *impl,
     turbowasm_wasi_fs_file directory,
     const uint8_t *path,
@@ -730,6 +803,14 @@ static uint32_t host_path_mutation(
     else
         result = cmeta_fs_root_unlink(impl->root, full_path);
     return host_errno(result);
+}
+
+static uint32_t host_path_mutation(turbowasm_wasi_host_fs_impl *impl,
+    turbowasm_wasi_fs_file directory, const uint8_t *path, size_t length, int operation) {
+    host_pin pin = {0};
+    uint32_t error = host_pin_file(impl, directory, false, &pin);
+    if (!error) error = host_path_mutation_admitted(impl, directory, path, length, operation);
+    return host_unpin(impl, &pin, error);
 }
 
 static uint32_t host_path_create_directory(
@@ -763,7 +844,7 @@ static uint32_t host_path_unlink_file(
 }
 
 #ifdef SALTS_FS_ROOT_MUTATION_VERSION
-static uint32_t host_set_flags(void *context, turbowasm_wasi_fs_file file, uint16_t flags) {
+static uint32_t host_set_flags_admitted(void *context, turbowasm_wasi_fs_file file, uint16_t flags) {
     turbowasm_wasi_host_fs_slot *slot = host_slot_from_file(context, file);
     if (!slot) return TURBOWASM_WASI_ERRNO_BADF;
     if (slot->directory) return TURBOWASM_WASI_ERRNO_ISDIR;
@@ -772,7 +853,7 @@ static uint32_t host_set_flags(void *context, turbowasm_wasi_fs_file file, uint1
         (flags & TURBOWASM_HOST_FS_FDFLAGS_APPEND) != 0));
 }
 
-static uint32_t host_path_rename(void *context,
+static uint32_t host_path_rename_admitted(void *context,
     turbowasm_wasi_fs_file from, const uint8_t *source, size_t source_length,
     turbowasm_wasi_fs_file to, const uint8_t *target, size_t target_length) {
     turbowasm_wasi_host_fs_impl *impl = context;
@@ -783,17 +864,24 @@ static uint32_t host_path_rename(void *context,
     error = host_build_path(impl, from, source, source_length, a);
     if (!error) error = host_build_path(impl, to, target, target_length, b);
     if (error) goto done;
-    for (size_t i = 0; i < impl->slot_capacity; ++i) {
+    cmeta_mutex_lock(&impl->mutex);
+    if (impl->renaming || impl->opening) error = TURBOWASM_WASI_ERRNO_BUSY;
+    for (size_t i = 0; !error && i < impl->slot_capacity; ++i) {
         turbowasm_wasi_host_fs_slot *slot = &impl->slots[i];
         /* Directory operations currently resolve stored root-relative paths.
          * Refuse mutation while any child directory is open rather than try
          * to infer native path identity from spelling, case or separators. */
         if (slot->used && slot->directory) {
             error = TURBOWASM_WASI_ERRNO_BUSY;
-            goto done;
         }
     }
+    if (!error) impl->renaming = true;
+    cmeta_mutex_unlock(&impl->mutex);
+    if (error) goto done;
     error = host_errno(cmeta_fs_root_rename(impl->root, a, impl->root, b));
+    cmeta_mutex_lock(&impl->mutex);
+    impl->renaming = false;
+    cmeta_mutex_unlock(&impl->mutex);
 done:
     tstr_free(a);
     tstr_free(b);
@@ -801,7 +889,7 @@ done:
 }
 #endif
 
-static uint32_t host_readdir(
+static uint32_t host_readdir_admitted(
     void *context,
     turbowasm_wasi_fs_file directory,
     uint64_t cookie,
@@ -866,6 +954,104 @@ static uint32_t host_readdir(
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
+/* Keep admission and release in one place per entry point, so native error
+ * returns cannot bypass the pin or I/O lock cleanup. Path operations only pin
+ * immutable directory identity; they do not lock its readdir cursor. */
+static uint32_t host_read(void *context, turbowasm_wasi_fs_file file,
+    const turbowasm_wasi_buffer *buffers, size_t count, uint32_t *out) {
+    host_pin pin = {0};
+    uint32_t error = host_pin_file(context, file, true, &pin);
+    if (!error) error = host_read_admitted(context, file, buffers, count, out);
+    return host_unpin(context, &pin, error);
+}
+static uint32_t host_write(void *context, turbowasm_wasi_fs_file file,
+    const turbowasm_wasi_const_buffer *buffers, size_t count, uint32_t *out) {
+    host_pin pin = {0};
+    uint32_t error = host_pin_file(context, file, true, &pin);
+    if (!error) error = host_write_admitted(context, file, buffers, count, out);
+    return host_unpin(context, &pin, error);
+}
+static uint32_t host_seek(void *context, turbowasm_wasi_fs_file file,
+    int64_t offset, uint8_t whence, uint64_t *out) {
+    host_pin pin = {0};
+    uint32_t error = host_pin_file(context, file, true, &pin);
+    if (!error) error = host_seek_admitted(context, file, offset, whence, out);
+    return host_unpin(context, &pin, error);
+}
+static uint32_t host_tell(void *context, turbowasm_wasi_fs_file file, uint64_t *out) {
+    host_pin pin = {0};
+    uint32_t error = host_pin_file(context, file, true, &pin);
+    if (!error) error = host_tell_admitted(context, file, out);
+    return host_unpin(context, &pin, error);
+}
+static uint32_t host_stat(void *context, turbowasm_wasi_fs_file file, turbowasm_wasi_fs_stat *out) {
+    host_pin pin = {0};
+    uint32_t error = host_pin_file(context, file, true, &pin);
+    if (!error) error = host_stat_admitted(context, file, out);
+    return host_unpin(context, &pin, error);
+}
+static uint32_t host_readdir(void *context, turbowasm_wasi_fs_file file,
+    uint64_t cookie, turbowasm_wasi_fs_dirent *out, bool *has_entry) {
+    host_pin pin = {0};
+    uint32_t error = host_pin_file(context, file, true, &pin);
+    if (!error) error = host_readdir_admitted(context, file, cookie, out, has_entry);
+    return host_unpin(context, &pin, error);
+}
+static uint32_t host_path_stat(void *context, turbowasm_wasi_fs_file directory,
+    uint32_t flags, const uint8_t *path, size_t length, turbowasm_wasi_fs_stat *out) {
+    host_pin pin = {0};
+    uint32_t error = host_pin_file(context, directory, false, &pin);
+    if (!error) error = host_path_stat_admitted(context, directory, flags, path, length, out);
+    return host_unpin(context, &pin, error);
+}
+static uint32_t host_path_open(void *context, turbowasm_wasi_fs_file directory,
+    uint32_t dirflags, const uint8_t *path, size_t length, uint32_t oflags,
+    uint64_t base, uint64_t inheriting, uint32_t flags, turbowasm_wasi_fs_file *out) {
+    turbowasm_wasi_host_fs_impl *impl = context;
+    if (!out) return TURBOWASM_WASI_ERRNO_INVAL;
+    *out = (turbowasm_wasi_fs_file){0};
+    host_pin pin = {0};
+    uint32_t error = host_pin_file(impl, directory, false, &pin);
+    if (error) return error;
+    cmeta_mutex_lock(&impl->mutex);
+    if (impl->renaming || impl->opening == UINT32_MAX) error = TURBOWASM_WASI_ERRNO_BUSY;
+    else ++impl->opening;
+    cmeta_mutex_unlock(&impl->mutex);
+    if (!error) {
+        error = host_path_open_admitted(impl, directory, dirflags, path, length,
+            oflags, base, inheriting, flags, out);
+        cmeta_mutex_lock(&impl->mutex);
+        --impl->opening;
+        cmeta_mutex_unlock(&impl->mutex);
+    }
+    return host_unpin(impl, &pin, error);
+}
+#ifdef SALTS_FS_ROOT_MUTATION_VERSION
+static uint32_t host_set_flags(void *context, turbowasm_wasi_fs_file file, uint16_t flags) {
+    host_pin pin = {0};
+    uint32_t error = host_pin_file(context, file, true, &pin);
+    if (!error) error = host_set_flags_admitted(context, file, flags);
+    return host_unpin(context, &pin, error);
+}
+static uint32_t host_path_rename(void *context,
+    turbowasm_wasi_fs_file from, const uint8_t *source, size_t source_length,
+    turbowasm_wasi_fs_file to, const uint8_t *target, size_t target_length) {
+    host_pin a = {0}, b = {0};
+    uint32_t error = host_pin_file(context, from, false, &a);
+    if (!error) error = host_pin_file(context, to, false, &b);
+    if (!error) error = host_path_rename_admitted(context, from, source, source_length, to, target, target_length);
+    host_unpin(context, &b, error);
+    return host_unpin(context, &a, error);
+}
+#endif
+
+static void host_destroy_mutexes(turbowasm_wasi_host_fs_impl *impl) {
+    for (size_t i = 0; i < impl->slot_capacity; ++i)
+        if (impl->slots[i].io_mutex) cmeta_mutex_destroy(&impl->slots[i].io_mutex);
+    if (impl->root_mutex) cmeta_mutex_destroy(&impl->root_mutex);
+    if (impl->mutex) cmeta_mutex_destroy(&impl->mutex);
+}
+
 turbowasm_status turbowasm_wasi_host_fs_init(
     turbowasm_wasi_host_fs *adapter,
     const turbowasm_wasi_host_fs_config *config) {
@@ -912,8 +1098,18 @@ turbowasm_status turbowasm_wasi_host_fs_init(
         impl->slots[index].path =
             impl->path_storage + index * path_stride;
 
-    result = cmeta_fs_root_open(config->host_root, &impl->root);
+    impl->slot_capacity = config->file_capacity;
+    impl->path_capacity = config->path_capacity;
+    cmeta_mutex_init(&impl->mutex);
+    cmeta_mutex_init(&impl->root_mutex);
+    result = impl->mutex && impl->root_mutex ? 0 : -ENOMEM;
+    for (index = 0; result == 0 && index < impl->slot_capacity; ++index) {
+        cmeta_mutex_init(&impl->slots[index].io_mutex);
+        if (!impl->slots[index].io_mutex) result = -ENOMEM;
+    }
+    if (!result) result = cmeta_fs_root_open(config->host_root, &impl->root);
     if (result < 0) {
+        host_destroy_mutexes(impl);
         free(impl->path_storage);
         free(impl->slots);
         free(impl);
@@ -937,12 +1133,13 @@ turbowasm_status turbowasm_wasi_host_fs_destroy(
     if (adapter == NULL || adapter->impl == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
     impl = (turbowasm_wasi_host_fs_impl *)adapter->impl;
-    if (impl->root_open)
-        return TURBOWASM_INVALID_ARGUMENT;
+    cmeta_mutex_lock(&impl->mutex);
+    bool busy = impl->root_open || impl->root_closing || impl->root_pins || impl->opening || impl->renaming;
     for (index = 0u; index < impl->slot_capacity; ++index) {
-        if (impl->slots[index].used)
-            return TURBOWASM_INVALID_ARGUMENT;
+        busy |= impl->slots[index].used || impl->slots[index].reserved || impl->slots[index].pins;
     }
+    cmeta_mutex_unlock(&impl->mutex);
+    if (busy) return TURBOWASM_INVALID_ARGUMENT;
 
     if (impl->root_dir != NULL) {
         (void)cmeta_fs_root_closedir(impl->root_dir);
@@ -958,6 +1155,7 @@ turbowasm_status turbowasm_wasi_host_fs_destroy(
     (void)cmeta_fs_root_close(impl->root);
     impl->root = NULL;
 
+    host_destroy_mutexes(impl);
     free(impl->path_storage);
     free(impl->slots);
     free(impl);

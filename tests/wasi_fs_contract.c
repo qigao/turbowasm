@@ -494,6 +494,7 @@ static void contract_run_capacity_and_generation(
     const uint8_t two_path[] = {'t','w','o'};
     uint32_t file_fd = 0u;
     uint32_t close_before;
+    uint32_t open_before;
 
     contract_setup_probe(
         fixture, &probe, &provider, &root_file);
@@ -524,6 +525,7 @@ static void contract_run_capacity_and_generation(
         &filesystem, file_fd, &old_info));
 
     close_before = probe.close_calls;
+    open_before = probe.path_open_calls;
     assert(turbowasm_wasi_fs_path_open(
         &filesystem, 3u, 0u,
         overflow_path, sizeof(overflow_path),
@@ -531,12 +533,13 @@ static void contract_run_capacity_and_generation(
         TURBOWASM_WASI_RIGHT_FD_WRITE,
         0u, 0u,
         &file_fd) == TURBOWASM_WASI_ERRNO_MFILE);
-    assert(probe.close_calls == close_before + 1u);
+    assert(probe.close_calls == close_before);
+    assert(probe.path_open_calls == open_before);
 
     assert(turbowasm_wasi_fs_close_descriptor(
         &filesystem,
         old_info.descriptor) == TURBOWASM_WASI_ERRNO_SUCCESS);
-    assert(probe.close_calls == close_before + 2u);
+    assert(probe.close_calls == close_before + 1u);
 
     assert(turbowasm_wasi_fs_path_open(
         &filesystem, 3u, 0u,

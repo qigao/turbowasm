@@ -4,13 +4,13 @@
 #include <string.h>
 #include "fixtures/wasi_fs_memory.h"
 
-enum { SEEK, TELL, STAT, PRESTAT, PRENAME, READ8, WRITE8 };
+enum { SEEK, TELL, STAT, PRESTAT, PRENAME, READDIR, READ8, WRITE8 };
 static turbowasm_module memory_module, guest_module;
 static turbowasm_instance memory_owner, guest;
 static turbowasm_linker linker;
 static turbowasm_wasi_fs filesystem;
 static turbowasm_wasi_preview1 wasi;
-static struct { unsigned calls, pages; uint32_t error; bool grow; } probe;
+static struct { unsigned calls, pages; uint32_t error; bool grow, fail_second_entry; } probe;
 
 /* Export one bounded memory and a grow-by-one-page function. The memory flags
  * select shared/unshared without changing the tested Preview1 program. */
@@ -65,8 +65,8 @@ static uint64_t read_u64(uint32_t address) {
     for (unsigned i = 0; i < 8; ++i) result |= (uint64_t)read_byte(address + i) << (8 * i);
     return result;
 }
-static void provider_effect(turbowasm_wasi_fs_file file) {
-    check_equal(file.object, UINT64_C(4));
+static void provider_effect(turbowasm_wasi_fs_file file, uint64_t expected) {
+    check_equal(file.object, expected);
     ++probe.calls;
     if (probe.grow) {
         /* A second instance owns the same memory. Growing it inside the
@@ -94,7 +94,7 @@ static uint32_t write_file(void *context, turbowasm_wasi_fs_file file,
 static uint32_t seek_file(void *context, turbowasm_wasi_fs_file file,
     int64_t offset, uint8_t whence, uint64_t *out) {
     (void)context;
-    provider_effect(file);
+    provider_effect(file, 4);
     check_equal(offset, INT64_C(-9));
     check_equal(whence, (uint8_t)TURBOWASM_WASI_WHENCE_END);
     *out = UINT64_C(0x1122334455667788);
@@ -102,18 +102,31 @@ static uint32_t seek_file(void *context, turbowasm_wasi_fs_file file,
 }
 static uint32_t tell_file(void *context, turbowasm_wasi_fs_file file, uint64_t *out) {
     (void)context;
-    provider_effect(file);
+    provider_effect(file, 4);
     *out = UINT64_C(0x8877665544332211);
     return probe.error;
 }
 static uint32_t stat_file(void *context, turbowasm_wasi_fs_file file, turbowasm_wasi_fs_stat *out) {
     (void)context;
-    provider_effect(file);
+    provider_effect(file, 4);
     *out = (turbowasm_wasi_fs_stat){
         .device = 11, .inode = 22, .file_type = TURBOWASM_WASI_FILETYPE_REGULAR_FILE,
         .link_count = 3, .size = UINT64_C(0x1020304050607080),
         .accessed_ns = 100, .modified_ns = 200, .changed_ns = 300
     };
+    return probe.error;
+}
+static uint32_t read_directory(void *context, turbowasm_wasi_fs_file file,
+    uint64_t cookie, turbowasm_wasi_fs_dirent *out, bool *has_entry) {
+    (void)context;
+    provider_effect(file, 3);
+    *has_entry = cookie < 20;
+    *out = (turbowasm_wasi_fs_dirent){
+        .next_cookie = cookie ? 20 : 10, .inode = cookie ? 22 : 11,
+        .file_type = TURBOWASM_WASI_FILETYPE_REGULAR_FILE,
+        .name_length = 3, .name = {'a', 0, 'b'}
+    };
+    if (cookie && probe.fail_second_entry) return TURBOWASM_WASI_ERRNO_IO;
     return probe.error;
 }
 static void setup(bool shared) {
@@ -127,7 +140,7 @@ static void setup(bool shared) {
     check_equal(turbowasm_module_load_borrowed(&guest_module, program, length), TURBOWASM_OK);
     turbowasm_wasi_fs_config fs = {.descriptor_capacity = 2,
         .provider = {.close = close_file, .read = read_file, .write = write_file,
-            .seek = seek_file, .tell = tell_file, .stat = stat_file}};
+            .seek = seek_file, .tell = tell_file, .stat = stat_file, .readdir = read_directory}};
     check_equal(turbowasm_wasi_fs_init(&filesystem, &fs), TURBOWASM_OK);
     turbowasm_wasi_fs_descriptor descriptor = {0};
     check_equal(turbowasm_wasi_fs_bind_descriptor(&filesystem, 3,
@@ -196,6 +209,78 @@ static void errors(bool shared) {
     for (unsigned i = 0; i < 8; ++i) check_equal(read_byte(65528 + i), (uint8_t)0xa5);
 }
 
+static uint32_t readdir_call(uint32_t address, uint32_t size, uint64_t cookie, uint32_t used) {
+    turbowasm_value args[] = {i32(3), i32(address), i32(size), i64((int64_t)cookie), i32(used)};
+    return invoke(&guest, READDIR, args, 5, true);
+}
+static uint32_t read_u32(uint32_t address) {
+    uint32_t result = 0;
+    for (unsigned i = 0; i < 4; ++i) result |= (uint32_t)read_byte(address + i) << (8 * i);
+    return result;
+}
+static void directory_outputs(bool shared, bool grow) {
+    setup(shared);
+    /* Fill exactly the old end of memory; each callback can grow the same
+     * imported storage before the adapter publishes its next directory record. */
+    uint32_t address = 65536u - 64u;
+    fill(address, 64, 0xa5);
+    probe.grow = grow;
+    check_equal(readdir_call(address, 64, 0, 32), (uint32_t)TURBOWASM_WASI_ERRNO_SUCCESS);
+    check_equal(probe.calls, 3u);
+    check_equal(probe.pages, grow ? 4u : 1u);
+    check_equal(read_u32(32), 54u);
+    for (unsigned entry = 0; entry < 2; ++entry) {
+        uint32_t record = address + entry * 27u;
+        check_equal(read_u64(record), entry ? UINT64_C(20) : UINT64_C(10));
+        check_equal(read_u64(record + 8), entry ? UINT64_C(22) : UINT64_C(11));
+        check_equal(read_u32(record + 16), 3u);
+        check_equal(read_byte(record + 20), (uint8_t)TURBOWASM_WASI_FILETYPE_REGULAR_FILE);
+        for (unsigned i = 21; i < 24; ++i) check_equal(read_byte(record + i), (uint8_t)0);
+        check_equal(read_byte(record + 24), (uint8_t)'a');
+        check_equal(read_byte(record + 25), (uint8_t)0);
+        check_equal(read_byte(record + 26), (uint8_t)'b');
+    }
+    for (unsigned i = 54; i < 64; ++i) check_equal(read_byte(address + i), (uint8_t)0xa5);
+    probe.grow = false;
+    /* Both header and filename truncation consume only one provider entry. */
+    const uint32_t sizes[] = {1, 10, 24, 26, 27};
+    for (unsigned i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
+        probe.calls = 0;
+        fill(128, 28, 0xa5);
+        check_equal(readdir_call(128, sizes[i], 10, 32), (uint32_t)TURBOWASM_WASI_ERRNO_SUCCESS);
+        check_equal(probe.calls, 1u);
+        check_equal(read_u32(32), sizes[i]);
+        check_equal(read_byte(128), (uint8_t)20);
+        check_equal(read_byte(128 + sizes[i]), (uint8_t)0xa5);
+    }
+}
+static void directory_errors(bool shared) {
+    setup(shared);
+    fill(64, 64, 0xa5);
+    fill(32, 4, 0xa5);
+    check_equal(readdir_call(65535, 2, 0, 32), (uint32_t)TURBOWASM_WASI_ERRNO_FAULT);
+    check_equal(readdir_call(UINT32_MAX, 2, 0, 32), (uint32_t)TURBOWASM_WASI_ERRNO_FAULT);
+    check_equal(readdir_call(64, 64, 0, 65533), (uint32_t)TURBOWASM_WASI_ERRNO_FAULT);
+    check_equal(probe.calls, 0u);
+    probe.error = TURBOWASM_WASI_ERRNO_IO;
+    check_equal(readdir_call(64, 64, 0, 32), probe.error);
+    check_equal(probe.calls, 1u);
+    for (unsigned i = 0; i < 64; ++i) check_equal(read_byte(64 + i), (uint8_t)0xa5);
+    check_equal(read_u32(32), UINT32_C(0xa5a5a5a5));
+    probe.error = 0;
+    probe.fail_second_entry = true;
+    check_equal(readdir_call(64, 64, 0, 32), (uint32_t)TURBOWASM_WASI_ERRNO_IO);
+    check_equal(probe.calls, 3u);
+    check_equal(read_u64(64), UINT64_C(10));
+    for (unsigned i = 27; i < 64; ++i) check_equal(read_byte(64 + i), (uint8_t)0xa5);
+    check_equal(read_u32(32), UINT32_C(0xa5a5a5a5));
+    check_equal(readdir_call(65536, 0, UINT64_MAX, 32), (uint32_t)TURBOWASM_WASI_ERRNO_SUCCESS);
+    check_equal(read_u32(32), 0u);
+    check_equal(probe.calls, 3u);
+    check_equal(readdir_call(65537, 0, 0, 32), (uint32_t)TURBOWASM_WASI_ERRNO_FAULT);
+    check_equal(probe.calls, 3u);
+}
+
 spec("Preview1 protected filesystem output") {
     after_each() {
         turbowasm_instance_destroy(&guest);
@@ -216,4 +301,10 @@ spec("Preview1 protected filesystem output") {
     it("preserves unshared error precedence and bytes on failure") { errors(false); }
     it("publishes to shared memory after growth inside each provider callback") { outputs(true, true); }
     it("rechecks unshared storage after growth inside each provider callback") { outputs(false, true); }
+    it("copies shared directory entries with cookies, NUL bytes and truncation") { directory_outputs(true, false); }
+    it("preserves unshared directory serialization and truncation") { directory_outputs(false, false); }
+    it("keeps shared directory copies valid across provider-triggered growth") { directory_outputs(true, true); }
+    it("keeps unshared directory copies valid across provider-triggered growth") { directory_outputs(false, true); }
+    it("checks shared directory bounds before effects and preserves error prefixes") { directory_errors(true); }
+    it("preserves unshared directory error and zero-length behavior") { directory_errors(false); }
 }

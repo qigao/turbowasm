@@ -363,7 +363,8 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<INSTALL_INTERFACE:include>)
   target_link_libraries(turbowasm_wasi
-    PUBLIC TurboWasm::Runtime)
+    PUBLIC TurboWasm::Runtime
+    PRIVATE Salts::Core Salts::Platform)
   if(MSVC)
     target_compile_options(turbowasm_wasi PRIVATE /W4)
   else()

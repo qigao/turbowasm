@@ -13,6 +13,12 @@ typedef struct tw_wasi_fd_lease {
     uint8_t direction;
 } tw_wasi_fd_lease;
 
+/* A successful preopen pin owns one synchronous table admission. The borrowed
+ * guest_path remains valid through unpin; no provider callback is invoked. */
+uint32_t tw_wasi_fd_preopen_pin(turbowasm_wasi_fs *, uint32_t,
+    turbowasm_wasi_fs_descriptor_info *);
+void tw_wasi_fd_preopen_unpin(turbowasm_wasi_fs *, turbowasm_wasi_fs_descriptor);
+
 uint32_t tw_wasi_fd_acquire(turbowasm_wasi_fs *, uint32_t, uint64_t, tw_wasi_fd_lease *);
 bool tw_wasi_fd_is_socket(turbowasm_wasi_fs *, uint32_t);
 void tw_wasi_fd_release(turbowasm_wasi_fs *, tw_wasi_fd_lease *);

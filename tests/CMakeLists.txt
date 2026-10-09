@@ -1330,6 +1330,13 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
   set_target_properties(turbowasm_wasi_fs_memory_test PROPERTIES FOLDER "tests/wasi")
   add_test(NAME turbowasm_wasi_fs_memory_test COMMAND turbowasm_wasi_fs_memory_test)
   set_tests_properties(turbowasm_wasi_fs_memory_test PROPERTIES TIMEOUT 30)
+
+  add_executable(turbowasm_wasi_fs_concurrency_test wasi_fs_concurrency_test.c)
+  target_link_libraries(turbowasm_wasi_fs_concurrency_test PRIVATE TurboWasm::WASI Salts::TinyTest Salts::Platform)
+  target_include_directories(turbowasm_wasi_fs_concurrency_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_wasi_fs_concurrency_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_fs_concurrency_test COMMAND turbowasm_wasi_fs_concurrency_test)
+  set_tests_properties(turbowasm_wasi_fs_concurrency_test PROPERTIES TIMEOUT 30)
 endif()
 
 add_executable(turbowasm_host_wait_test
@@ -1982,6 +1989,12 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
 endif()
 
 if(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER)
+  add_executable(turbowasm_wasi_fs_host_concurrency_test wasi_fs_host_concurrency_test.c)
+  target_link_libraries(turbowasm_wasi_fs_host_concurrency_test PRIVATE TurboWasm::WASIHostFS Salts::TinyTest Salts::Platform Salts::Core)
+  set_target_properties(turbowasm_wasi_fs_host_concurrency_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_fs_host_concurrency_test COMMAND turbowasm_wasi_fs_host_concurrency_test)
+  set_tests_properties(turbowasm_wasi_fs_host_concurrency_test PROPERTIES TIMEOUT 60)
+
   add_executable(turbowasm_wasi_fs_contract_host_test
     wasi_fs_contract.c
     wasi02_fs_contract.c
