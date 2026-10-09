@@ -28,6 +28,7 @@ typedef struct turbowasm_wasi_thread_slot {
 
 struct turbowasm_wasi_threads_impl {
     cflow_executor *executor;
+    bool owns_executor;
     turbowasm_wasi_thread_slot *slots;
     size_t capacity;
     size_t active;
@@ -526,6 +527,37 @@ turbowasm_status turbowasm_wasi_threads_init(
     return TURBOWASM_OK;
 }
 
+turbowasm_status turbowasm_wasi_threads_init_pool(
+    turbowasm_wasi_threads *threads, size_t capacity) {
+    cflow_executor *executor;
+    turbowasm_status status;
+    turbowasm_wasi_threads_config config;
+
+    if (threads == NULL || threads->impl != NULL || capacity == 0u ||
+        capacity >= TURBOWASM_WASI_THREADS_TID_LIMIT ||
+        capacity > SIZE_MAX / sizeof(turbowasm_wasi_thread_slot))
+        return TURBOWASM_INVALID_ARGUMENT;
+
+    executor = (cflow_executor *)calloc(1u, sizeof(*executor));
+    if (executor == NULL)
+        return TURBOWASM_OUT_OF_MEMORY;
+    if (!cflow_executor_worker_init_with_capacity(executor, capacity, capacity)) {
+        free(executor);
+        return TURBOWASM_OUT_OF_MEMORY;
+    }
+    config.executor = executor;
+    config.capacity = capacity;
+    status = turbowasm_wasi_threads_init(threads, &config);
+    if (status != TURBOWASM_OK) {
+        cflow_executor_shutdown(executor);
+        cflow_executor_destroy(executor);
+        free(executor);
+        return status;
+    }
+    ((turbowasm_wasi_threads_impl *)threads->impl)->owns_executor = true;
+    return TURBOWASM_OK;
+}
+
 bool turbowasm_wasi_threads_destroy(
     turbowasm_wasi_threads *threads) {
     turbowasm_wasi_threads_impl *impl;
@@ -534,6 +566,8 @@ bool turbowasm_wasi_threads_destroy(
         return false;
 
     impl = (turbowasm_wasi_threads_impl *)threads->impl;
+    if (impl->owns_executor && cflow_executor_is_current(impl->executor))
+        return false;
     cmeta_mutex_lock(&impl->mutex);
     if (impl->active != 0u) {
         cmeta_mutex_unlock(&impl->mutex);
@@ -541,6 +575,15 @@ bool turbowasm_wasi_threads_destroy(
     }
     cmeta_mutex_unlock(&impl->mutex);
 
+    if (impl->owns_executor) {
+        /* active becomes zero inside the finalizer, before the executor has
+         * finished accounting for that task. Join it before releasing owner. */
+        if (!cflow_executor_wait_idle(impl->executor) ||
+            !cflow_executor_shutdown(impl->executor))
+            return false;
+        cflow_executor_destroy(impl->executor);
+        free(impl->executor);
+    }
     if (impl->mutex_initialized)
         cmeta_mutex_destroy(&impl->mutex);
     free(impl->slots);

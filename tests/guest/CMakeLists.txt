@@ -44,6 +44,36 @@ if(TARGET turbowasm_guest_cmeta)
   target_compile_definitions(turbowasm_guest_reactor_test PRIVATE GUEST_CMETA_PATH="${guest_cmeta_WASM}")
 endif()
 
+if(TARGET TurboWasm::WASIThreads)
+  # Private #426 startup qualification, not an installed partial C11 profile.
+  # Compile errno and SJLJ with native Wasm TLS; the single-thread SDK archive
+  # cannot be linked into a shared-memory program.
+  _turbowasm_guest_objects(guest_thread_abi SOURCES thread_abi.c thread_entry.S sjlj_leaf.c
+    "${metallic_source}/src/errno/errno.c"
+    "${metallic_source}/src/setjmp/setjmp.c"
+    "${metallic_source}/src/setjmp/longjmp.c"
+    COMPILE_OPTIONS -matomics -pthread -ftls-model=local-exec -fno-lto)
+  set(thread_abi_wasm "${CMAKE_CURRENT_BINARY_DIR}/guest_thread_abi.wasm")
+  add_custom_command(OUTPUT "${thread_abi_wasm}"
+    COMMAND "${TURBOWASM_GUEST_CLANG}" --target=wasm32-unknown-unknown
+      -matomics -mbulk-memory -pthread -nostdlib -mexception-handling
+      -Wl,--no-entry,--shared-memory,--import-memory,--stack-first
+      -Wl,-z,stack-size=262144 -Wl,--initial-memory=1048576,--max-memory=1048576
+      -Wl,--export=wasi_thread_start,--export=setup,--export=spawn,--export=root_intact,--export=results
+      ${guest_thread_abi_OBJECTS} -o "${thread_abi_wasm}"
+    DEPENDS ${guest_thread_abi_OBJECTS} VERBATIM COMMAND_EXPAND_LISTS)
+  add_custom_target(guest_thread_abi ALL DEPENDS "${thread_abi_wasm}")
+  set_target_properties(guest_thread_abi PROPERTIES FOLDER "tests/guest")
+  add_executable(turbowasm_guest_thread_abi_test thread_abi_test.c)
+  target_link_libraries(turbowasm_guest_thread_abi_test PRIVATE TurboWasm::WASIThreads Salts::TinyTest Salts::Platform)
+  target_compile_features(turbowasm_guest_thread_abi_test PRIVATE c_std_11)
+  target_compile_definitions(turbowasm_guest_thread_abi_test PRIVATE GUEST_THREAD_ABI_PATH="${thread_abi_wasm}")
+  set_target_properties(turbowasm_guest_thread_abi_test PROPERTIES FOLDER "tests/guest")
+  add_dependencies(turbowasm_guest_thread_abi_test guest_thread_abi)
+  add_test(NAME turbowasm_guest_thread_abi_test COMMAND turbowasm_guest_thread_abi_test)
+  set_tests_properties(turbowasm_guest_thread_abi_test PROPERTIES TIMEOUT 45)
+endif()
+
 foreach(mode IN ITEMS optimized unoptimized)
   set(sjlj_options)
   if(mode STREQUAL "unoptimized")

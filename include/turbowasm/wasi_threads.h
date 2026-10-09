@@ -71,8 +71,30 @@ turbowasm_status turbowasm_wasi_threads_init(
     const turbowasm_wasi_threads_config *config);
 
 /*
+ * Own a private pool with capacity workers and capacity live-child slots.
+ * The root must execute outside this pool. Each admitted child can then run
+ * even when other children block in guest join or atomic wait. Excess spawn
+ * returns SPAWN_CAPACITY; application-level lock cycles can still deadlock.
+ *
+ * threads must be zero-initialized. NULL/nonempty threads, zero capacity or
+ * capacity outside the TID/slot representable range return INVALID_ARGUMENT.
+ * Allocation/worker creation failure returns OUT_OF_MEMORY and leaves threads
+ * empty. Destroy drains finalizers and joins this owned pool after children
+ * become inactive; it never shuts down a borrowed executor.
+ *
+ * Example: turbowasm_wasi_threads threads = {0};
+ *   status = turbowasm_wasi_threads_init_pool(&threads, 4);
+ *   // Define imports, run root, then quiesce all consumers/children.
+ *   if (status == TURBOWASM_OK) turbowasm_wasi_threads_destroy(&threads);
+ */
+turbowasm_status turbowasm_wasi_threads_init_pool(
+    turbowasm_wasi_threads *threads, size_t capacity);
+
+/*
  * Destroy succeeds only when no child task is active. Consumer instances whose
  * imported host function borrows this object must already be quiescent.
+ * Calls from an owned pool worker are rejected. A rejected destroy preserves
+ * the capability. External lifecycle operations must be serialized.
  */
 bool turbowasm_wasi_threads_destroy(
     turbowasm_wasi_threads *threads);

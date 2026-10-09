@@ -26,6 +26,8 @@ Additional guest extensions provide a separate Reactor CRT and LLVM-assisted
 `setjmp`/`longjmp` using standard Wasm EH. The SJLJ helpers implement the ABI
 documented by LLVM's `WebAssemblyLowerEmscriptenEHSjLj.cpp` (LLVM 21.1.1);
 the architecture document records references and compiler requirements.
+`stddef.h` additionally defines the required C `wchar_t` type, including when
+consumed independently by the compiler's `stdatomic.h`.
 
 This is an optional wasm32, single-threaded guest library, not a native runtime
 dependency. It does not provide a shell, threads or arbitrary

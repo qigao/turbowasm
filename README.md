@@ -42,7 +42,9 @@ The repository currently provides:
 - a bounded generation-safe WASI filesystem provider ABI with Salts HostFS and
   optional littlefs implementations;
 - optional `TurboWasm::WASINativeIO` async fd projection and
-  `TurboWasm::WASIThreads` CFlow-backed thread-spawn/group lifecycle;
+  `TurboWasm::WASIThreads` CFlow-backed thread-spawn/group lifecycle, with
+  borrowed executors or `turbowasm_wasi_threads_init_pool` for an owned pool
+  reserving one worker per admitted child (the root runs outside that pool);
 - caller-owned Runtime allocation plus module/allocation/linear-memory/table
   resource limits for embedded deployments;
 - C/C++ public ABI tests;

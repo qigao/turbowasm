@@ -3871,3 +3871,79 @@ volatile-local rules apply, and longjmp does not perform application cleanup:
 in particular it cannot bypass outstanding CMeta structured-scope obligations.
 Rollback requires rebuilding the SDK and all affected guests, not mixing old
 four-byte placeholder buffers with the new helpers.
+
+### Metallic C11 threads and bounded worker ownership (#426, selected)
+
+The thread-enabled SDK is a separate wasm32 profile using imported shared
+memory, Wasm atomics, bulk memory, native TLS and the existing legacy
+`wasi.thread-spawn` / `wasi_thread_start` ABI. The single-threaded archive and
+CRT remain separate. The full C11 surface is required before installing or
+advertising this profile: thread lifecycle, plain/recursive/timed mutexes,
+conditions, once and thread-specific storage with destructor iterations.
+
+Runtime atomic waits currently block a native worker in
+`turbowasm_instance_memory_wait_internal`. The borrowed CFlow Executor protocol
+does not expose a reserved-worker count. Queuing a child on a saturated pool
+while its parent waits can therefore prevent progress. Making more queue slots
+available does not solve this. Converting all waits to coroutine suspension
+would additionally require owner-affine resumption and wake/cancel integration.
+
+The approved additive host entry is:
+
+```c
+turbowasm_status turbowasm_wasi_threads_init_pool(
+    turbowasm_wasi_threads *threads, size_t capacity);
+```
+
+It creates a private CFlow worker pool with exactly `capacity` workers and an
+admission limit of `capacity` live children. The pool is not exposed for unrelated
+tasks. The root executes outside this pool. A queued admitted child always has
+a worker not occupied by another live child once short task-finalization work
+finishes; excess/nested spawn fails with the existing capacity error before
+guest join can depend on an unadmitted child. Application lock cycles can still
+deadlock. This bounds workers and avoids claiming coroutine scheduling that does
+not exist. The existing initializer retains its borrowed-executor semantics.
+
+`threads` must be zero-initialized; zero/unsupported capacity returns
+`INVALID_ARGUMENT`, resource setup failure returns `OUT_OF_MEMORY`, and failure
+leaves it empty. Destruction rejects live children and calls from the owned
+pool. Once quiescent, it drains task finalizers before joining/destroying only
+its owned executor. Module, imported backing and providers must outlive all
+actual child terminals. Group exit interrupts/wakes children but does not prove
+quiescence. The borrowed variant never shuts down its caller's executor.
+
+Guest records have bounded slot/generation identities distinct from host TIDs.
+Stacks/TLS are allocated before spawn with checked alignment and size arithmetic.
+A failed spawn rolls back the uncommitted record. Joinable results remain until
+join or detach; detached records may be reaped only after a stack-free completion
+epilogue publishes terminal state. The epilogue must not access the released
+stack/TLS after publication. Destructors run before publication. Normal return
+and `thrd_exit` are local to a thread; process exit and abnormal termination
+remain group-terminal. SJLJ targets and errno belong to each thread's TLS.
+
+Root startup initializes shared data, allocator, root TLS and constructors once.
+Child startup installs its own stack/TLS before entering C and never resets live
+shared data. Compiler-generated shared-data initialization must be examined and
+tested, including repeated child instantiation. Reactor close stops admission
+and drains actual terminals before releasing the shared group; timeout retains
+live resources instead of pretending teardown completed.
+
+The libc audit covers allocator/heap locks, FILE operations and the stream list,
+environment/preopen initialization, implicit conversion/time buffers, random
+state and exit-handler registration. Timed waits use real clock values and
+predicate loops. CMeta metadata remains guest-local; reflection neither makes
+mutable objects thread-safe nor enables cross-thread managed GC stores.
+Tests must include saturated/nested spawn, rollback and slot reuse, TLS/stack
+isolation, destructor iterations, contended allocation/I/O and terminal wakeup.
+Rollback disables the optional profile; existing guest artifacts do not relink
+to its ABI implicitly.
+
+The owned host pool is implemented. The private `tests/guest/thread_abi.c`
+qualification uses fixed per-child stacks/TLS and compiler-generated shared
+initialization; it does not install a partial C11 threads library. LLVM 21 emits
+a `__wasm_init_memory` start function with an atomic once guard, passive data
+segments and a per-instance `__tls_base`. The tests verify repeated siblings
+preserve initialized and zero-filled data after mutation, run constructors only
+on the root, reset child TLS on reuse, isolate errno/SJLJ/stack addresses, reject
+root and nested over-capacity spawn, and reject live/worker destruction. Full
+C11 thread operations and the libc locking audit remain required by #426.

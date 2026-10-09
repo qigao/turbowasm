@@ -71,5 +71,10 @@ int main(void) {
     if (!cflow_executor_shutdown(&executor))
         return 6;
     cflow_executor_destroy(&executor);
+    if (turbowasm_wasi_threads_init_pool(&threads, 2u) != TURBOWASM_OK)
+        return 10;
+    if (turbowasm_wasi_threads_active(&threads) != 0u ||
+        !turbowasm_wasi_threads_destroy(&threads))
+        return 11;
     return 0;
 }
