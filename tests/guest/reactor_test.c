@@ -109,6 +109,10 @@ static turbowasm_status control(void *context, turbowasm_host_call *host,
     size_t capacity, size_t *count, turbowasm_trap *out_trap) {
     (void)context; (void)host;
     if (argc != 1 || !args || capacity != 1 || !results) return TURBOWASM_INVALID_ARGUMENT;
+    if (args[0].as.i32 == 2) {
+        *count = 0; *out_trap = TURBOWASM_TRAP_NONE;
+        return TURBOWASM_INTERRUPTED;
+    }
     int value = init_mode;
     if (args[0].as.i32 == 1) {
         value = 42;
@@ -382,6 +386,27 @@ spec("Metallic Reactor lifecycle") {
             int32_t result;
             check_equal(call(sessions[mode], "sjlj_unrelated_exception", NULL, &result), TURBOWASM_EXCEPTION);
             check_equal(sessions[mode]->state, REACTOR_FAILED);
+        }
+    }
+    it("propagates host cancellation through an active setjmp at O0 and LTO") {
+        reactor_session *sessions[] = {&session, &other};
+        for (int mode = 0; mode < 2; ++mode) {
+            check_equal(open_sjlj(sessions[mode], mode, 1000000), TURBOWASM_OK);
+            int32_t result;
+            check_equal(call(sessions[mode], "sjlj_cancel", NULL, &result), TURBOWASM_INTERRUPTED);
+            check_equal(sessions[mode]->state, REACTOR_FAILED);
+            check_false(exited);
+        }
+    }
+    it("preserves proc_exit through an active setjmp at O0 and LTO") {
+        reactor_session *sessions[] = {&session, &other};
+        for (int mode = 0; mode < 2; ++mode) {
+            check_equal(open_sjlj(sessions[mode], mode, 1000000), TURBOWASM_OK);
+            int32_t result;
+            exited = false;
+            check_equal(call(sessions[mode], "sjlj_exit", NULL, &result), TURBOWASM_INTERRUPTED);
+            check_equal(sessions[mode]->state, REACTOR_FAILED);
+            check_true(exited); check_equal(exit_code, 29u);
         }
     }
 #ifdef GUEST_CMETA_PATH

@@ -28,6 +28,8 @@ documented by LLVM's `WebAssemblyLowerEmscriptenEHSjLj.cpp` (LLVM 21.1.1);
 the architecture document records references and compiler requirements.
 `stddef.h` additionally defines the required C `wchar_t` type, including when
 consumed independently by the compiler's `stdatomic.h`.
+Implicit multibyte conversion states use C11 thread-local storage; explicit
+caller-owned `mbstate_t` behavior remains unchanged.
 
 This is an optional wasm32, single-threaded guest library, not a native runtime
 dependency. It does not provide a shell, threads or arbitrary

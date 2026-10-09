@@ -9,7 +9,7 @@
 
 size_t c16rtomb(char* restrict s, char16_t c, mbstate_t* restrict ps)
 {
-    static mbstate_t internal;
+    static _Thread_local mbstate_t internal;
     if (!ps)
         ps = &internal;
 

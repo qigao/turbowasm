@@ -3,7 +3,7 @@
 
 int mblen(const char* s, size_t n)
 {
-    static mbstate_t state;
+    static _Thread_local mbstate_t state;
 
     if (!s) {
         state = (mbstate_t){0};

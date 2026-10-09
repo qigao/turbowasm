@@ -22,7 +22,7 @@ static size_t fail_(void)
 
 size_t mbrtowc(wchar_t* restrict pwc, const char* restrict s, size_t n, mbstate_t* restrict ps)
 {
-    static mbstate_t internal;
+    static _Thread_local mbstate_t internal;
     if (!ps)
         ps = &internal;
 

@@ -52,6 +52,11 @@ if(TARGET TurboWasm::WASIThreads)
     "${metallic_source}/src/errno/errno.c"
     "${metallic_source}/src/setjmp/setjmp.c"
     "${metallic_source}/src/setjmp/longjmp.c"
+    "${metallic_source}/src/wchar/mbrtowc.c"
+    "${metallic_source}/src/wchar/wcrtomb.c"
+    "${metallic_source}/src/uchar/mbrtoc16.c"
+    "${metallic_source}/src/uchar/mbrtoc32.c"
+    "${metallic_source}/src/uchar/c16rtomb.c"
     COMPILE_OPTIONS -matomics -pthread -ftls-model=local-exec -fno-lto)
   set(thread_abi_wasm "${CMAKE_CURRENT_BINARY_DIR}/guest_thread_abi.wasm")
   add_custom_command(OUTPUT "${thread_abi_wasm}"
@@ -59,7 +64,7 @@ if(TARGET TurboWasm::WASIThreads)
       -matomics -mbulk-memory -pthread -nostdlib -mexception-handling
       -Wl,--no-entry,--shared-memory,--import-memory,--stack-first
       -Wl,-z,stack-size=262144 -Wl,--initial-memory=1048576,--max-memory=1048576
-      -Wl,--export=wasi_thread_start,--export=setup,--export=spawn,--export=root_intact,--export=results
+      -Wl,--export=wasi_thread_start,--export=setup,--export=spawn,--export=root_intact,--export=results,--export=root_conversions
       ${guest_thread_abi_OBJECTS} -o "${thread_abi_wasm}"
     DEPENDS ${guest_thread_abi_OBJECTS} VERBATIM COMMAND_EXPAND_LISTS)
   add_custom_target(guest_thread_abi ALL DEPENDS "${thread_abi_wasm}")
@@ -81,7 +86,7 @@ foreach(mode IN ITEMS optimized unoptimized)
   endif()
   turbowasm_add_c_reactor(guest_sjlj_${mode} SOURCES sjlj.c sjlj_leaf.c
     COMPILE_OPTIONS ${sjlj_options}
-    EXPORTS sjlj_values sjlj_nested sjlj_repeated sjlj_restore_stack sjlj_callback sjlj_trap sjlj_fuel sjlj_leaf sjlj_unrelated_exception)
+    EXPORTS sjlj_values sjlj_nested sjlj_repeated sjlj_restore_stack sjlj_callback sjlj_trap sjlj_fuel sjlj_leaf sjlj_unrelated_exception sjlj_cancel sjlj_exit)
   add_dependencies(turbowasm_guest_reactor_test guest_sjlj_${mode})
 endforeach()
 target_compile_definitions(turbowasm_guest_reactor_test PRIVATE

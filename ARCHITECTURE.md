@@ -3947,3 +3947,8 @@ preserve initialized and zero-filled data after mutation, run constructors only
 on the root, reset child TLS on reuse, isolate errno/SJLJ/stack addresses, reject
 root and nested over-capacity spawn, and reject live/worker destruction. Full
 C11 thread operations and the libc locking audit remain required by #426.
+The conversion-state portion of that audit now uses `_Thread_local mbstate_t`
+for implicit UTF-8/UTF-16/UTF-32 and legacy multibyte conversion state. The
+thread fixture interleaves distinct incomplete sequences/surrogate pairs on
+the root and both children, including child TLS reuse. Explicit state still
+belongs to the caller and must not be shared concurrently without coordination.

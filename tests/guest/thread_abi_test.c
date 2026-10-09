@@ -158,6 +158,7 @@ spec("Metallic thread ABI") {
             check_equal(self_destroy_rejections, 4u);
             check_false(timed_out);
         }
+        check_equal(call("root_conversions", NULL), 1);
         turbowasm_instance_destroy(&root);
         check_true(turbowasm_wasi_threads_destroy(&threads));
         turbowasm_linker_destroy(&linker);

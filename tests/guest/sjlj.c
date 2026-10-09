@@ -1,6 +1,7 @@
 #include <setjmp.h>
 #include <stdint.h>
 #include <limits.h>
+#include <stdlib.h>
 
 void sjlj_leaf(jmp_buf target, int value);
 void sjlj_recursive(jmp_buf target, unsigned depth);
@@ -80,5 +81,20 @@ int sjlj_fuel(void) {
     jmp_buf target;
     if (setjmp(target) == 0) sjlj_leaf(target, 7);
     sjlj_leaf(target, 7);
+    return -1;
+}
+
+int sjlj_cancel(void) {
+    jmp_buf target;
+    if (setjmp(target) == 0) {
+        control(2);
+        sjlj_leaf(target, 7);
+    }
+    return -1;
+}
+
+int sjlj_exit(void) {
+    jmp_buf target;
+    if (setjmp(target) == 0) _Exit(29);
     return -1;
 }

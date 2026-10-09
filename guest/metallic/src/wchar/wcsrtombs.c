@@ -3,7 +3,7 @@
 
 size_t wcsrtombs(char* restrict dst, const wchar_t** restrict src, size_t len, mbstate_t* restrict ps)
 {
-    static mbstate_t internal;
+    static _Thread_local mbstate_t internal;
     if (!ps)
         ps = &internal;
 
