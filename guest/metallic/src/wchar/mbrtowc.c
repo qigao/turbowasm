@@ -27,8 +27,11 @@ size_t mbrtowc(wchar_t* restrict pwc, const char* restrict s, size_t n, mbstate_
         ps = &internal;
 
     if (!s) {
-        *ps = (mbstate_t){0};
-        return 0;
+        /* C11 specifies an empty-string conversion with no output. A pending
+         * UTF-8 sequence followed by NUL is an encoding error, not a reset. */
+        pwc = NULL;
+        s = "";
+        n = 1;
     }
 
     if (!n)
@@ -80,6 +83,13 @@ size_t mbrtowc(wchar_t* restrict pwc, const char* restrict s, size_t n, mbstate_
         unsigned char byte = p[consumed++];
 
         if ((byte & 0xC0) != 0x80)
+            return fail_();
+
+        /* Reject prefixes that cannot become a Unicode scalar even when the
+         * remaining bytes arrive in another call. */
+        if (absorbed == 1 &&
+            ((total == 3 && ((code == 0 && byte < 0xA0) || (code == 13 && byte >= 0xA0))) ||
+             (total == 4 && ((code == 0 && byte < 0x90) || (code == 4 && byte >= 0x90)))))
             return fail_();
 
         code = (code << 6) | (byte & 0x3F);

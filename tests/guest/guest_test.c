@@ -101,4 +101,31 @@ spec("local Metallic C11 command guests") {
         tw_command_result r = run("loop");
         check_equal(r.status, TURBOWASM_FUEL_EXHAUSTED); check_false(r.exited);
     }
+    it("executes every 128-bit shift count against an independent bit oracle") {
+        options.module_path = GUEST_NUMERIC_PATH;
+        tw_command_result r = run("shifts"); diagnostics();
+        check_equal(r.status, TURBOWASM_OK); check_equal(r.exit_code, 0u);
+    }
+    it("honors null-input semantics in restartable C11 character conversions") {
+        tw_command_result r = run("unicode-null"); diagnostics();
+        check_equal(r.status, TURBOWASM_OK); check_equal(r.exit_code, 0u);
+    }
+    it("preserves UTF-16 surrogate pairs and rejects invalid sequences") {
+        tw_command_result r = run("unicode-surrogates"); diagnostics();
+        check_equal(r.status, TURBOWASM_OK); check_equal(r.exit_code, 0u);
+    }
+    it("keeps implicit character state independent and resumes bounded strings") {
+        tw_command_result r = run("unicode-restart"); diagnostics();
+        check_equal(r.status, TURBOWASM_OK); check_equal(r.exit_code, 0u);
+    }
+    it("truncates binary128 to integers without intermediate double rounding") {
+        options.module_path = GUEST_NUMERIC_PATH;
+        tw_command_result r = run("conversions"); diagnostics();
+        check_equal(r.status, TURBOWASM_OK); check_equal(r.exit_code, 0u);
+    }
+    it("rounds binary128 division including subnormal halfway values") {
+        options.module_path = GUEST_NUMERIC_PATH;
+        tw_command_result r = run("division"); diagnostics();
+        check_equal(r.status, TURBOWASM_OK); check_equal(r.exit_code, 0u);
+    }
 }

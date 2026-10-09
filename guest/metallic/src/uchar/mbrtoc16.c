@@ -14,6 +14,12 @@ size_t mbrtoc16(char16_t* restrict pc, const char* restrict s, size_t n, mbstate
     if (!ps)
         ps = &internal;
 
+    if (!s) {
+        pc = NULL;
+        s = "";
+        n = 1;
+    }
+
     if (ps->__code - 0xDC00u < 0x400u) {
         if (pc)
             *pc = (char16_t)ps->__code;

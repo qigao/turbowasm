@@ -18,6 +18,8 @@ admission, fopen allocation failure, temporary files, zero-length stdio, standar
 stream lifetime, stdio error propagation, freopen admission, an ENOTSUP alias
 and corrected Preview1 rights. The filesystem profile uses no-follow opens to match TurboWasm HostFS
 capabilities. Changes are maintained directly in this local source tree.
+Additional corrections cover unsigned assembly of 128-bit shift results and
+restartable Unicode conversion state, null-input handling and invalid prefixes.
 
 This is an optional wasm32, single-threaded guest library, not a native runtime
 dependency. It does not provide a shell, real setjmp/longjmp, threads or arbitrary

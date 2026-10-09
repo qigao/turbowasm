@@ -3740,3 +3740,16 @@ tests, including exit order, allocation limits, args/environment, rename,
 append, temporary files and clock conversion. The dependency and profile are
 optional; disabling the guest build restores the native-only build graph.
 Reverting the provider extension requires rebuilding native consumers.
+
+Restartable character conversions retain the existing UTF-8 encoding and
+32-bit `mbstate_t` layout. The caller owns explicit state; each API owns its
+separate implicit state when `ps` is null. Input and output arrays are borrowed
+only for the call, and a conversion retains at most one partial UTF-8 sequence
+or UTF-16 surrogate in that state. Encoding uses at most four output bytes and
+does not allocate. Incomplete input returns `(size_t)-2`, a pending low surrogate
+returns `(size_t)-3` without consuming input, and invalid sequences report
+`EILSEQ`. State after an encoding error is unspecified; callers must reinitialize
+it before reuse. Null input follows the equivalent empty-string/NUL conversion
+specified by C11, rather than discarding a pending partial sequence. This does
+not add locale selection or thread support. The governing contracts are
+[N1570 sections 7.28 and 7.29.6](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf).

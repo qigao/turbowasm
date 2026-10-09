@@ -392,6 +392,13 @@ long-double gaps remain outside this profile; it is not complete C11 conformance
 The Linux CI profile is `ci-metallic-user`; manual CI selects it with
 `metallic_guests=true` and the matching `salts_ci_run` prerequisite artifact.
 
+The guest tests also cover restartable UTF-8/UTF-16/UTF-32 conversions: split
+sequences, independent implicit state, null-input semantics, surrogate pairing,
+invalid prefixes and bounded wide-string conversion. Numeric regression uses a
+64-bit bit-by-bit oracle for all 128 shift counts, integer conversion boundaries
+and fixed binary128 division results (including subnormal ties). These bounded
+checks do not replace the upstream complete math/oracle suite.
+
 ## Dependency boundary
 
 ```text

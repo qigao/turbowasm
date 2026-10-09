@@ -3,6 +3,14 @@
 
 size_t mbrtoc32(char32_t* restrict pc, const char* restrict s, size_t n, mbstate_t* restrict ps)
 {
+    static mbstate_t internal;
+    if (!ps)
+        ps = &internal;
+    if (!s) {
+        pc = NULL;
+        s = "";
+        n = 1;
+    }
     wchar_t wc;
     size_t r = mbrtowc(&wc, s, n, ps);
 
