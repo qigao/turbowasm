@@ -51,7 +51,7 @@ foreach(mode IN ITEMS optimized unoptimized)
   endif()
   turbowasm_add_c_reactor(guest_sjlj_${mode} SOURCES sjlj.c sjlj_leaf.c
     COMPILE_OPTIONS ${sjlj_options}
-    EXPORTS sjlj_values sjlj_nested sjlj_repeated sjlj_restore_stack sjlj_callback sjlj_trap sjlj_fuel sjlj_leaf)
+    EXPORTS sjlj_values sjlj_nested sjlj_repeated sjlj_restore_stack sjlj_callback sjlj_trap sjlj_fuel sjlj_leaf sjlj_unrelated_exception)
   add_dependencies(turbowasm_guest_reactor_test guest_sjlj_${mode})
 endforeach()
 target_compile_definitions(turbowasm_guest_reactor_test PRIVATE

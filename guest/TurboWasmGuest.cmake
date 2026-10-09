@@ -9,7 +9,7 @@ if(NOT guest_clang_status EQUAL 0 OR NOT guest_clang_version MATCHES "clang vers
   message(FATAL_ERROR "Cannot identify the Metallic guest Clang toolchain")
 endif()
 if(CMAKE_MATCH_1 LESS 20)
-  message(FATAL_ERROR "Metallic guests require LLVM 20 or newer for standard Wasm EH and SJLJ")
+  message(FATAL_ERROR "Metallic guests require LLVM 20 or newer for standard Wasm EH and SJLJ; selected ${TURBOWASM_GUEST_CLANG} (LLVM ${CMAKE_MATCH_1})")
 endif()
 set(TURBOWASM_GUEST_SJLJ_OPTIONS -mexception-handling
   -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false)

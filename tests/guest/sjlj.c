@@ -69,6 +69,13 @@ int sjlj_trap(void) {
     return -1;
 }
 
+int sjlj_unrelated_exception(void) {
+    jmp_buf target;
+    static int payload;
+    if (setjmp(target) == 0) __builtin_wasm_throw(0, &payload);
+    return -1;
+}
+
 int sjlj_fuel(void) {
     jmp_buf target;
     if (setjmp(target) == 0) sjlj_leaf(target, 7);

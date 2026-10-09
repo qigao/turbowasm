@@ -363,6 +363,15 @@ spec("Metallic Reactor lifecycle") {
         check_equal(call(&other, "sjlj_fuel", NULL, &result), TURBOWASM_FUEL_EXHAUSTED);
         check_equal(other.state, REACTOR_FAILED);
     }
+    it("preserves the identity of an unrelated Wasm exception at O0 and LTO") {
+        reactor_session *sessions[] = {&session, &other};
+        for (int mode = 0; mode < 2; ++mode) {
+            check_equal(open_sjlj(sessions[mode], mode, 1000000), TURBOWASM_OK);
+            int32_t result;
+            check_equal(call(sessions[mode], "sjlj_unrelated_exception", NULL, &result), TURBOWASM_EXCEPTION);
+            check_equal(sessions[mode]->state, REACTOR_FAILED);
+        }
+    }
 #ifdef GUEST_CMETA_PATH
     it("runs CMeta metadata, exact call admission and over-aligned lifecycle in a Metallic guest") {
         check_equal(reactor_session_open(&session, &cmeta_module, NULL, 10000000, &trap), TURBOWASM_OK);

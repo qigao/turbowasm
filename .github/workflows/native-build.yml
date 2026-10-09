@@ -100,6 +100,7 @@ jobs:
               sudo apt-get update
               sudo apt-get install -y --no-install-recommends clang-21 llvm-21 lld-21
               echo /usr/lib/llvm-21/bin >> "$GITHUB_PATH"
+              echo TURBOWASM_GUEST_LLVM_ROOT=/usr/lib/llvm-21 >> "$GITHUB_ENV"
             fi
           else
             command -v ninja >/dev/null || brew install ninja

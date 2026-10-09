@@ -434,6 +434,8 @@ full locale/fenv and the documented upstream
 long-double gaps remain outside this profile; it is not complete C11 conformance.
 The Linux CI profile is `ci-metallic-user`; manual CI selects it with
 `metallic_guests=true` and the matching `salts_ci_run` prerequisite artifact.
+Its parent `TURBOWASM_GUEST_LLVM_ROOT` selects the guest compiler tools explicitly;
+CI supplies LLVM 21 and also enables MIR and mixed-tier guest regression.
 
 The guest tests also cover restartable UTF-8/UTF-16/UTF-32 conversions: split
 sequences, independent implicit state, null-input semantics, surrogate pairing,
