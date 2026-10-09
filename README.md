@@ -383,6 +383,59 @@ consumers can include `${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuest.cmake` after
 256 KiB shadow stack and 16 MiB declared maximum memory. LLVM versions must be
 compatible with the LTO archive used by that SDK.
 
+The opt-in `TURBOWASM_BUILD_METALLIC_THREADS` option also installs
+`threaded/include`, `threaded/lib/metallic-threaded.a`, separate command/Reactor
+CRTs and profile metadata beneath the guest SDK directory. It requires the guest
+SDK and WASIThreads adapter; the Metallic qualification presets enable it.
+Existing helpers remain single-threaded unless explicitly passed `THREADS`:
+
+```cmake
+turbowasm_add_c_guest_library(worker_code THREADS SOURCES worker.c)
+turbowasm_add_c_guest(app "${CMAKE_CURRENT_SOURCE_DIR}/main.c" THREADS
+  LIBRARIES worker_code)
+turbowasm_add_c_reactor(tool THREADS SOURCES tool.c
+  EXPORTS tool_step tool_close LIBRARIES worker_code)
+# After including TurboWasmGuestCMeta.cmake:
+turbowasm_add_cmeta_guest_library(guest_cmeta /absolute/path/salts/cmeta THREADS)
+```
+
+Threaded programs require library targets carrying the matching guest profile;
+mixed single/threaded targets and unannotated absolute archives are rejected.
+All objects must use the matching Clang/LTO, native TLS and standard Wasm EH/SJLJ
+configuration. The output imports shared `env.memory` (initial 1 MiB, maximum
+16 MiB), exports `wasi_thread_start`, and keeps a 256 KiB root shadow stack.
+The host supplies one shared memory provider to the entire group, calls the
+budgeted creation API, then invokes `_start` or `_initialize` once. Do not send
+these modules to the single-thread `turbowasm-run` CLI. See the
+[threaded embedding session](examples/guest/threaded_session.h) and run
+`turbowasm_threaded_reactor_example path/to/guest_threaded_counter.wasm` for a
+persistent worker example. These are embedding examples, not an installed host
+session ABI.
+
+The C11 thread profile provides lifecycle, plain/recursive/timed mutexes,
+conditions, once and TSS. It bounds guest child records at 32, each with a 128 KiB
+stack and up to 64 KiB TLS; retained joinable results count against that bound.
+There are 128 TSS keys and four destructor passes. Host admission can impose a
+smaller capacity. Prefer `turbowasm_wasi_threads_init_pool`: the root runs outside
+its pool and every admitted child has a worker available even during blocking
+join/wait. Capacity exhaustion returns `thrd_nomem`, while stale handles and
+closed admission return `thrd_error`. These limits do not prevent application
+lock cycles. Timed calls require a working realtime clock provider.
+
+Guest `<metallic/threads.h>` adds `metallic_threads_close(utc_deadline)`: root-only,
+permanently closes spawn admission and waits for stack-free child terminals.
+NULL waits without a deadline; an absolute `TIME_UTC` deadline can return
+`thrd_timedout`. Invalid deadlines or clock failure return `thrd_error`.
+Timeout/error retains live storage and permits retry; a wrong-thread call
+leaves admission unchanged. Stop application work before close, then release
+application objects afterwards. Close does not flush FILEs or run exit handlers.
+Main return/`exit` still terminates the process group, without an implicit join.
+After root/child failure, skip guest cleanup, request group exit and keep all
+providers, memory and modules alive until actual child termination. If sockets
+need owner dispatch, continue owner progress while workers execute or drain.
+One root call is admitted at a time. Shared managed GC and pthread compatibility
+are outside this profile; CMeta reflection does not synchronize user objects.
+
 For a persistent application, use `turbowasm_add_c_reactor(tool SOURCES tool.c
 EXPORTS tool_step tool_close)`. The host calls `_initialize` once, then retains
 the instance between business calls. Initialize before any allocation or
@@ -434,7 +487,7 @@ read-ahead and output buffering, and successful seek discards pushback and EOF.
 truncation or access changes return `ENOTSUP` and close the stream. Threads,
 full locale/fenv and the documented upstream
 long-double gaps remain outside this profile; it is not complete C11 conformance.
-An internal, non-installed C11 threads profile is exercised by
+The separate C11 threads profile is exercised by
 `turbowasm_guest_c11_threads_test`, including synchronization, TSS, allocation
 and shared Preview1 clock/args/environment/vector I/O. Clang supplies C11
 language support and `stdatomic.h`; Metallic supplies the guest C library.
@@ -463,9 +516,14 @@ their Runtime invocation policy; cancellation retains borrowed state until the
 owner acknowledges it. The host must keep advancing native transports and
 Preview1 while workers run or drain, then close sockets before destroying WASI.
 Compiled C11 guests exercise TCP/UDP and poll while the root joins children,
-including group `proc_exit`. Installed threaded command/Reactor/CMeta SDK
-qualification and remaining libc integration are tracked in
-[#426](https://github.com/qigao/turbowasm/issues/426); it is not yet a threaded SDK.
+including group `proc_exit`. The same formal threaded command/Reactor/CMeta
+consumer suite runs against the build tree and installed SDK. It covers
+constructor/TLS identity, recursive/duplicate CRT, close timeout/error/retry,
+detached children, root admission, fuel/interruption and group exit/failure.
+Final platform and acceptance qualification is tracked in
+[#426](https://github.com/qigao/turbowasm/issues/426). Native ASan instrumentation
+does not instrument guest C code or prove freedom from guest data races;
+ThreadSanitizer qualification has not been performed.
 
 Hosts accepting modules with a Wasm start section can use
 `turbowasm_instance_create_linked_with_options` to apply fuel and interruption

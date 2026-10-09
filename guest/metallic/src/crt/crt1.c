@@ -63,8 +63,13 @@ extern unsigned char __heap_base;
 
 _Noreturn void _start(void)
 {
+#ifdef __METALLIC_THREADS__
+    void __metallic_threads_start(void);
+    __metallic_threads_start();
+#else
     __metallic_brk = (uintptr_t)&__heap_base;
     __wasm_call_ctors();
+#endif
 
     int rc = main();
 

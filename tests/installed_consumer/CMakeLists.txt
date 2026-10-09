@@ -24,6 +24,12 @@ turbowasm_normalize_salts_c11_atomics()
 
 if(TurboWasm_HAS_METALLIC_GUEST_SDK)
   include("${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuest.cmake")
+  if(TurboWasm_HAS_METALLIC_THREADS)
+    include("${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuestCMeta.cmake")
+    set(threaded_profile_prefix turbowasm_installed_threaded_profile)
+    set(threaded_cmeta_source "$ENV{TURBOWASM_GUEST_CMETA_SOURCE_DIR}")
+    include(../guest/threaded_profile.cmake)
+  endif()
   turbowasm_add_c_guest(turbowasm_installed_c_guest "${CMAKE_CURRENT_SOURCE_DIR}/../../examples/guest/hello.c")
   find_program(TURBOWASM_INSTALLED_RUNNER NAMES turbowasm-run
     PATHS "$ENV{TURBOWASM_ROOT}/bin" NO_DEFAULT_PATH REQUIRED)

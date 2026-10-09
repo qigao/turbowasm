@@ -1,4 +1,5 @@
 #include "internal.h"
+#include <metallic/threads.h>
 #include <setjmp.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -210,6 +211,7 @@ int __metallic_threads_drain(const struct timespec *deadline) {
     metallic_lock_acquire(&registry);
     closed = 1;
     metallic_lock_release(&registry);
+    if (deadline && __metallic_deadline_ns(deadline) < 0) return thrd_error;
     for (;;) {
         metallic_lock_acquire(&registry);
         thread_record *waiting = NULL;
@@ -231,6 +233,9 @@ int __metallic_threads_drain(const struct timespec *deadline) {
         if (deadline && timeout <= 0) return timeout == 0 ? thrd_timedout : thrd_error;
         __builtin_wasm_memory_atomic_wait32((int *)&waiting->terminal, 0, timeout);
     }
+}
+int metallic_threads_close(const struct timespec *deadline) {
+    return __metallic_threads_drain(deadline);
 }
 _Noreturn void thrd_exit(int result) {
     if (!current || destructing) __builtin_trap();

@@ -407,6 +407,7 @@
       "inherits": "win-core3-asan-user",
       "cacheVariables": {
         "TURBOWASM_BUILD_METALLIC_GUESTS": true,
+        "TURBOWASM_BUILD_METALLIC_THREADS": true,
         "TURBOWASM_GUEST_CMETA_SOURCE_DIR": "$penv{TURBOWASM_GUEST_CMETA_SOURCE_DIR}",
         "TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND": true
       }
@@ -416,6 +417,7 @@
       "inherits": "ci-linux-user",
       "cacheVariables": {
         "TURBOWASM_BUILD_METALLIC_GUESTS": true,
+        "TURBOWASM_BUILD_METALLIC_THREADS": true,
         "TURBOWASM_ENABLE_MIR_JIT": true,
         "TURBOWASM_GUEST_CLANG": "$penv{TURBOWASM_GUEST_LLVM_ROOT}/bin/clang",
         "TURBOWASM_GUEST_AR": "$penv{TURBOWASM_GUEST_LLVM_ROOT}/bin/llvm-ar",
@@ -427,6 +429,7 @@
       "inherits": "ci-macos-mir-user",
       "cacheVariables": {
         "TURBOWASM_BUILD_METALLIC_GUESTS": true,
+        "TURBOWASM_BUILD_METALLIC_THREADS": true,
         "TURBOWASM_GUEST_CLANG": "$penv{TURBOWASM_GUEST_LLVM_ROOT}/bin/clang",
         "TURBOWASM_GUEST_AR": "$penv{TURBOWASM_GUEST_LLVM_ROOT}/bin/llvm-ar",
         "TURBOWASM_GUEST_CMETA_SOURCE_DIR": "$penv{TURBOWASM_GUEST_CMETA_SOURCE_DIR}"

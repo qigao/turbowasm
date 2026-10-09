@@ -7,6 +7,7 @@ find_dependency(Salts CONFIG)
 include("${CMAKE_CURRENT_LIST_DIR}/TurboWasmTargets.cmake")
 
 set(TurboWasm_HAS_METALLIC_GUEST_SDK @TURBOWASM_BUILD_METALLIC_GUESTS@)
+set(TurboWasm_HAS_METALLIC_THREADS @TURBOWASM_BUILD_METALLIC_THREADS@)
 if(TurboWasm_HAS_METALLIC_GUEST_SDK)
   set_and_check(TurboWasm_GUEST_SDK_DIR "${_turbowasm_package_prefix}/share/turbowasm/guest")
 endif()

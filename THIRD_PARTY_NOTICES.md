@@ -30,7 +30,7 @@ the architecture document records references and compiler requirements.
 consumed independently by the compiler's `stdatomic.h`.
 Implicit multibyte conversion states use C11 thread-local storage; explicit
 caller-owned `mbstate_t` behavior remains unchanged.
-The private, non-installed `guest/metallic/threaded` profile adds C11 thread
+The optional `guest/metallic/threaded` profile adds C11 thread
 records, generation-checked handles, TSS, synchronization and a Wasm TLS/stack
 entry trampoline. dlmalloc uses its custom-lock hook in that profile; lazy
 environment storage now uses checked malloc allocation, with once publication
@@ -40,9 +40,13 @@ also synchronize exit callback registries, random state and signal handlers;
 string/calendar scratch state is thread-local. Preopen discovery publishes once
 and preserves initialization errors instead of scanning indefinitely or exposing
 partial results. Default terminating signals avoid recursive abort calls.
-Full threaded libc qualification remains in progress.
+Separate threaded CRT objects guard root initialization before heap mutation;
+the `metallic_threads_close` extension drains guest child storage with explicit
+deadline/retry semantics. The containing project installs this profile only
+when requested and qualifies threaded command/Reactor/CMeta consumers.
 
-This is an optional wasm32, single-threaded guest library, not a native runtime
-dependency. It does not provide a shell, threads or arbitrary
+This is an optional wasm32 guest library, not a native runtime dependency.
+The default profile remains single-threaded; the opt-in C11 threads profile
+does not provide pthread compatibility. Neither profile provides a shell or arbitrary
 locales/rounding modes. Upstream documents ten failing soft-float/128-bit shift
 tests; importing its sources does not establish complete C11 conformance.

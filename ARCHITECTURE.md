@@ -3998,8 +3998,8 @@ dependency. Registry/libc locks may acquire allocator locks, never the reverse.
 Callbacks and TSS destructors run outside the registry lock. The root initializes
 its record before constructors. Child return and thrd_exit converge on one TSS
 destructor path; root thrd_exit drains children and exits the process with zero.
-The implementation remains under a private, non-installed threaded include/source
-directory until command/Reactor integration and the complete libc audit pass.
+The implementation is kept in a separate threaded include/source directory;
+the opt-in SDK installation and command/Reactor integration are described below.
 `tests/guest/c11_threads.c` exercises create/join/detach/exit, stale handles,
 once, recursive/contended mutexes, timed condition waits, broadcast, sleep,
 TSS deletion/destructor passes, concurrent allocation and admission recovery.
@@ -4011,11 +4011,12 @@ is retained. The allocator remains the sole owner of program-break mutation.
 
 Implementation status: the budgeted Runtime creation entry and inherited child
 startup control are implemented and covered by Runtime and installed-consumer
-tests. The guest close entry, threaded CRT/profile installation and installed
-threaded command/Reactor consumers below remain integration work; the existing
-private thread archive is not yet the published SDK profile.
+tests. The guest close entry, separate threaded CRT/profile installation and
+threaded command/Reactor/CMeta consumers are now implemented. The formal profile
+suite runs both in-tree and against installed headers, helpers and archives.
+Final cross-platform qualification and the full #426 acceptance audit remain.
 
-The private thread archive and compiled tests now cover C11 synchronization,
+The thread archive and compiled tests cover C11 synchronization,
 libc state, native HostFS and owner-dispatched sockets. Installing that archive
 alone would leave startup, host resource ownership and Reactor shutdown to
 undocumented test conventions. LLVM shared-memory output also contains a
@@ -4075,6 +4076,12 @@ imported `env.memory` with a declared maximum. Initial memory is 1 MiB, maximum
 16 MiB, root shadow stack 256 KiB; existing bounded child/TSS limits remain.
 All threaded objects must relink together; mixing CRT, TLS or libc profiles is
 unsupported. CMeta metadata remains guest-local, with native thunks excluded.
+The concrete property is `TURBOWASM_GUEST_PROFILE`, with
+`metallic-wasm32-single-v1` and `metallic-wasm32-threads-v1` values. Installed
+thread headers, archives, CRTs and `TurboWasmGuestThreads.cmake` live under
+`share/turbowasm/guest/threaded`; package metadata exposes
+`TurboWasm_HAS_METALLIC_THREADS`. The configuration rejects THREADS when profile
+metadata is absent. Custom compile options must not override its ABI flags.
 
 The separate threaded CRT initializes shared data/TLS through the metered Wasm
 start, then claims root initialization once, seeds the allocator, initializes
@@ -4156,8 +4163,8 @@ snapshots do not make concurrently mutated application buffers meaningful C.
 
 Tests must cover actual shared-memory clock/stdio, imported memory identity,
 OOB/overflow, zero length, failed copy preservation, limits before side effects,
-and growth/concurrent access. Rollback removes the additive entries and leaves
-the threaded profile private; it must not relax the raw-span guard.
+and growth/concurrent access. Rollback removes the additive entries and disables
+the threaded SDK profile that depends on them; it must not relax the raw-span guard.
 
 The protected Runtime APIs, Preview1 clock, args/environment and vector
 fd_read/fd_write are implemented. Tests cover shared and unshared memory32/64,
@@ -4244,8 +4251,8 @@ four C11 workers against the production HostFS provider: create, append, seek,
 read, stat, rename, remove and temporary-file cleanup. Its deterministic random
 provider qualifies transfer behavior, not entropy quality.
 Rollback removes only the new
-shared projections and retains the private threaded SDK profile and protected
-Runtime APIs; it never exposes raw shared memory spans.
+shared projections and disables SDK configurations requiring concurrent access,
+while retaining protected Runtime APIs; it never exposes raw shared memory spans.
 
 ### Socket/poll protected projection (#426)
 
@@ -4279,7 +4286,7 @@ use. No Runtime memory lock crosses a callback. Reusing existing parsed records
 avoids another payload allocation or a second capacity policy. Keeping raw spans
 was rejected because they reject shared memory and can expire during callbacks.
 Rollback reverts this projection and retains the existing single-owner socket
-API and private threaded guest profile.
+API; threaded socket callers must disable that capability when rolling back.
 
 Qualification runs the same socket ABI suite with shared and unshared memory,
 including MIR where enabled, and adds provider-time memory growth, argument
@@ -4441,8 +4448,8 @@ must distinguish native instrumentation from guest Wasm code.
 
 The additions are opt-in; v1/v2 callers and existing public struct layouts do
 not change. Threaded callers must adopt the explicit owner loop and shutdown
-order. Rollback disables this initializer and leaves the private threaded SDK
-profile, protected copies, and existing single-owner v2 adapter intact. Do not
+order. Rollback disables this initializer and its threaded socket integration,
+leaving protected copies and the existing single-owner v2 adapter intact. Do not
 publish placeholder declarations before the complete implementation and tests.
 
 The initializer now integrates the private bounded queue with the Preview1 wait
@@ -4539,13 +4546,13 @@ diagnostics are additional evidence and do not instrument guest C code.
 
 Migration requires callers racing close with synchronous operations to handle
 BUSY and retry after their in-flight operation finishes; no ABI rebuild is
-required solely for this internal layout change. Rollback keeps the threaded
-profile private and removes its concurrent-filesystem claim; the single-owner
+required solely for this internal layout change. Rollback disables the threaded
+filesystem profile and removes its concurrent-filesystem claim; the single-owner
 socket protocol and protected Runtime memory APIs remain independent.
 
-### Threaded Metallic libc synchronization (#426, internal)
+### Threaded Metallic libc synchronization (#426)
 
-The internal threaded archive appends a recursive lock and flush-reference
+The threaded archive appends a recursive lock and flush-reference
 state to its private FILE layout; the single-threaded archive keeps its layout.
 Each public stream operation holds that FILE lock for its complete operation,
 including provider I/O. Different FILEs remain independently usable; there is

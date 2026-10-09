@@ -17,8 +17,16 @@ function(_turbowasm_cmeta_guest_sources name source_dir out_sources)
 endfunction()
 
 function(turbowasm_add_cmeta_guest_library name source_dir)
+  cmake_parse_arguments(PARSE_ARGV 2 arg "THREADS" "" "")
+  if(arg_UNPARSED_ARGUMENTS)
+    message(FATAL_ERROR "${name}: expected only an optional THREADS flag")
+  endif()
+  set(mode_options)
+  if(arg_THREADS)
+    set(mode_options THREADS)
+  endif()
   _turbowasm_cmeta_guest_sources(${name} "${source_dir}" sources)
-  turbowasm_add_c_guest_library(${name} SOURCES ${sources}
+  turbowasm_add_c_guest_library(${name} ${mode_options} SOURCES ${sources}
     INCLUDE_DIRECTORIES "${source_dir}/include")
   set(${name}_ARCHIVE "${${name}_ARCHIVE}" PARENT_SCOPE)
 endfunction()

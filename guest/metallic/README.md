@@ -41,9 +41,12 @@ Implemented C11 hosted-environment headers:
   `<string.h>` `<tgmath.h>` `<time.h>` `<uchar.h>` `<wchar.h>` `<wctype.h>`
 
 The default installed profile opts out of C11 threads through
-`__STDC_NO_THREADS__`. This TurboWasm checkout also has a separate internal
-threaded profile under `threaded/`, currently qualified through the containing
-project's tests; its SDK installation is tracked in #426.
+`__STDC_NO_THREADS__`. This TurboWasm checkout also has a separate opt-in
+threaded profile under `threaded/`, built and installed by the containing
+project's `TURBOWASM_BUILD_METALLIC_THREADS` option. Its helpers require `THREADS`
+on the program and every guest library; the upstream Makefile does not provide
+this integration. See the containing project's README for ABI, capacities,
+host ownership and the `<metallic/threads.h>` close extension.
 
 `<stdatomic.h>` comes from Clang's compiler headers. Metallic provides the C
 library, while Clang supplies C11 language support and atomic code generation.

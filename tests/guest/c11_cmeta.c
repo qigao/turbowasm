@@ -1,8 +1,6 @@
-#include "../../guest/metallic/src/wasi/wasi.h"
-#include <threads.h>
+#include <metallic/threads.h>
 #include <stdatomic.h>
 #include <stdint.h>
-#include "internal.h"
 
 int cmeta_metadata(void);
 int cmeta_calls(void);
@@ -53,7 +51,7 @@ int cmeta_concurrent(void) {
         REQUIRE(thrd_join(children[i], &result) == thrd_success);
         if (result) return result;
     }
-    REQUIRE(__metallic_threads_drain(NULL) == thrd_success);
+    REQUIRE(metallic_threads_close(NULL) == thrd_success);
     REQUIRE(cmeta_metadata() == 0 && cmeta_calls() == 0);
     REQUIRE(cmeta_object_read() == 42);
     REQUIRE(cmeta_object_close() == 1);
