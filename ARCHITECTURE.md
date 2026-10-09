@@ -4059,9 +4059,21 @@ two importers observing the same storage before/after growth, failed-copy
 preservation, and compiled guest threads concurrently performing short vector
 I/O and first-time environment lookup. The vector tests check the exact 1 MiB
 boundary, rejection above it, OOB before provider effects, zero vectors, and
-provider errors/over-reported reads without publishing output. Random, file
-metadata/path/readdir and v2 socket/poll projections still require migration;
+provider errors/over-reported reads without publishing output. Random,
+path/readdir and v2 socket/poll projections still require migration;
 this checkpoint does not qualify complete threaded Preview1 or libc support.
+
+Fixed filesystem outputs (`fd_seek`, `fd_tell`, `fd_filestat_get`,
+`fd_prestat_get`) use an 8- or 64-byte call-local record. Output ranges are
+checked before provider effects; the record is published with a protected
+copy only on success. `fd_prestat_dir_name` checks the full requested range
+but copies only the actual preopen name, leaving trailing bytes unchanged.
+These paths allocate no transfer storage and retain no guest pointer across
+callbacks. Provider-triggered memory growth therefore cannot invalidate the
+output location. Error precedence and little-endian layouts remain unchanged
+for unshared guests. This migration does not make the descriptor table or its
+borrowed preopen names safe against concurrent close/rebind; that lifetime
+protocol remains separate work before the threaded filesystem is qualified.
 
 ### Threaded Metallic libc synchronization (#426, internal)
 

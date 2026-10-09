@@ -1324,6 +1324,12 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_wasi_fs_test
            COMMAND turbowasm_wasi_fs_test)
+
+  add_executable(turbowasm_wasi_fs_memory_test wasi_fs_memory_test.c)
+  target_link_libraries(turbowasm_wasi_fs_memory_test PRIVATE TurboWasm::WASI Salts::TinyTest)
+  set_target_properties(turbowasm_wasi_fs_memory_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_fs_memory_test COMMAND turbowasm_wasi_fs_memory_test)
+  set_tests_properties(turbowasm_wasi_fs_memory_test PROPERTIES TIMEOUT 30)
 endif()
 
 add_executable(turbowasm_host_wait_test

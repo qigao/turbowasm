@@ -217,6 +217,9 @@ typedef struct turbowasm_wasi_preview1_config {
  * valid range returns NOMEM before invoking the provider. Successful reads
  * copy only the reported byte count back to the original guest ranges.
  * Unshared-memory vector calls retain their existing capacity behavior.
+ * Fixed filesystem outputs and preopen names also use protected copies;
+ * failed provider calls leave those guest outputs unchanged. The filesystem
+ * table and borrowed preopen names still require coordination with close/rebind.
  * Providers used by concurrently executing guests must support that concurrency.
  */
 turbowasm_status turbowasm_wasi_preview1_init(
