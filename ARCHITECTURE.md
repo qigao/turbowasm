@@ -4141,6 +4141,45 @@ Rollback removes only the new
 shared projections and retains the private threaded SDK profile and protected
 Runtime APIs; it never exposes raw shared memory spans.
 
+### Socket/poll protected projection (#426)
+
+The v2 socket layer already stages transport bytes and bounds each transfer by
+`io_bytes`, aggregate retained storage by `pending_bytes`, subscriptions by
+`subscription_capacity`, and parked calls by `wait_capacity`. Extend its existing
+projection to shared memory through the approved Runtime copy APIs, preserving
+those limits and errors. This does not add the synchronous filesystem's 1 MiB
+limit to socket transfers or change the public configuration/layout.
+
+Copy the bounded iovec table once, validate every payload/output range, then use
+those saved addresses through callback and suspension. Send bytes are copied
+into the existing owned staging allocation. Receive publishes only the admitted
+prefix to the saved destinations, followed by count/flags. Accept validates its
+fixed output before reserving/provider effects and publishes a local fd record.
+No raw guest pointer survives a provider callback or wait.
+
+Poll decodes each 48-byte record into its existing owned subscription array
+before any provider retain or clock callback. Clock and fd arguments, userdata,
+and flags are no longer reread from guest memory after validation. Selected
+events are serialized one at a time into local 32-byte records; the event count
+is written last. These protected copies are not an atomic multi-buffer result.
+Applications must synchronize concurrent access to argument/result storage.
+Provider errors, rights loss, descriptor reuse, cancellation, partial reads,
+PEEK/WAITALL, shutdown and lease cleanup keep their existing contracts.
+
+The adapter and descriptor callbacks still execute on one host progress thread;
+shared backing alone does not authorize concurrent entry into the wait registry
+or CNet. A worker-to-owner dispatch bridge remains required for threaded socket
+use. No Runtime memory lock crosses a callback. Reusing existing parsed records
+avoids another payload allocation or a second capacity policy. Keeping raw spans
+was rejected because they reject shared memory and can expire during callbacks.
+Rollback reverts this projection and retains the existing single-owner socket
+API and private threaded guest profile.
+
+Qualification runs the same socket ABI suite with shared and unshared memory,
+including MIR where enabled, and adds provider-time memory growth, argument
+mutation, output boundaries, suspension and cleanup checks. This qualifies
+shared memory transport only, not concurrent provider ownership.
+
 ### Concurrent filesystem admission and provider lifetime (#426, selected)
 
 Protected guest copies alone do not protect the descriptor table: provider calls

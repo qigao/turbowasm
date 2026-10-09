@@ -2,9 +2,10 @@
  * Transport progress belongs to the host; these callbacks never poll OS IO. */
 typedef struct tw_p1_subscription {
     uint64_t userdata, deadline, precision, minimum;
-    uint32_t clock, error;
+    union { uint32_t clock, fd; };
+    uint32_t error;
     uint8_t type;
-    bool selected;
+    bool selected, absolute_deadline;
     tw_wasi_fd_lease lease;
     uint64_t right;
     turbowasm_wasi_readiness readiness;
@@ -178,10 +179,10 @@ static turbowasm_status tw_p1_sock_accept(TW_P1_HOST_ARGS) {
     if (!p || !p->async || !tw_p1_arguments(arguments, argument_count, 3)) return TURBOWASM_INVALID_ARGUMENT;
     uint32_t flags=(uint32_t)arguments[1].as.i32, e=0, fd=0;
     turbowasm_status status=TURBOWASM_OK;
-    turbowasm_host_memory_span span={0}; tw_p1_subscription sub={0}; turbowasm_wasi_fs_descriptor reserved={0};
+    uint8_t output[4]; tw_p1_subscription sub={0}; turbowasm_wasi_fs_descriptor reserved={0};
     sub.type=TURBOWASM_WASI_EVENT_FD_READ; sub.right=TURBOWASM_WASI_RIGHT_SOCK_ACCEPT;
     if (flags & ~TURBOWASM_WASI_FDFLAG_NONBLOCK) e=TURBOWASM_WASI_ERRNO_INVAL;
-    if (!e) e=turbowasm_wasi_memory_span(call, (uint32_t)arguments[2].as.i32, 4, &span);
+    if (!e) e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[2].as.i32, sizeof(output));
     if (!e) e=tw_wasi_fd_acquire(p->filesystem, (uint32_t)arguments[0].as.i32, sub.right, &sub.lease);
     if (!e && !sub.lease.ops.accept) e=TURBOWASM_WASI_ERRNO_NOTSOCK;
     if (!e) e=tw_wasi_fd_claim(p->filesystem, &sub.lease, 0);
@@ -190,14 +191,15 @@ static turbowasm_status tw_p1_sock_accept(TW_P1_HOST_ARGS) {
         if (p->async->stopping) { e=TURBOWASM_WASI_ERRNO_INTR; break; }
         e=tw_wasi_fd_check(p->filesystem, &sub.lease, sub.right);
         if (e) break;
-        e=turbowasm_wasi_memory_span(call, (uint32_t)arguments[2].as.i32, 4, &span);
+        e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[2].as.i32, sizeof(output));
         if (e) break;
         turbowasm_wasi_fs_file child={0};
         e=sub.lease.ops.accept(sub.lease.ops.file.context, sub.lease.file, &child);
         if (!e) {
             tw_wasi_fd_publish(p->filesystem, reserved, child, &sub.lease, (uint16_t)flags);
             reserved=(turbowasm_wasi_fs_descriptor){0};
-            turbowasm_wasi_store_u32(span.data, fd); break;
+            turbowasm_wasi_store_u32(output, fd);
+            e=turbowasm_wasi_memory_write(call, (uint32_t)arguments[2].as.i32, output, sizeof(output)); break;
         }
         if (e != TURBOWASM_WASI_ERRNO_AGAIN || (sub.lease.flags & TURBOWASM_WASI_FDFLAG_NONBLOCK)) break;
         status=tw_p1_park(p, call, &sub, 1, &e); if (status != TURBOWASM_OK) break;
@@ -218,8 +220,7 @@ static turbowasm_status tw_p1_socket_io(turbowasm_wasi_preview1_impl *p, turbowa
     uint32_t result_address=(uint32_t)arguments[socket_import ? 4 : 3].as.i32;
     uint32_t flags=socket_import ? (uint32_t)arguments[3].as.i32 : 0;
     uint32_t flags_address=receive && socket_import ? (uint32_t)arguments[5].as.i32 : 0;
-    turbowasm_host_memory_span output={0}, flag_output={0}, table={0};
-    turbowasm_wasi_buffer buffers[TURBOWASM_WASI_IOV_MAX]={{0}};
+    uint8_t output[4], flag_output[2], table[TURBOWASM_WASI_IOV_MAX * 8u];
     uint32_t addresses[TURBOWASM_WASI_IOV_MAX]={0}, lengths[TURBOWASM_WASI_IOV_MAX]={0};
     uint64_t capacity=0; uint32_t transferred=0; uint16_t returned_flags=0;
     uint8_t *staging=NULL; size_t allocation=0;
@@ -228,15 +229,17 @@ static turbowasm_status tw_p1_socket_io(turbowasm_wasi_preview1_impl *p, turbowa
     turbowasm_status status=TURBOWASM_OK;
     if ((receive && (flags & ~(TURBOWASM_WASI_RECV_PEEK|TURBOWASM_WASI_RECV_WAITALL))) || (!receive && flags))
         e=TURBOWASM_WASI_ERRNO_INVAL;
-    if (!e) e=turbowasm_wasi_memory_span(call, result_address, 4, &output);
-    if (!e && receive && socket_import) e=turbowasm_wasi_memory_span(call, flags_address, 2, &flag_output);
-    if (!e) e=turbowasm_wasi_collect_iovecs(call, (uint32_t)arguments[1].as.i32, count, true, NULL, buffers, &capacity);
-    if (!e && capacity > p->async->io_bytes) e=TURBOWASM_WASI_ERRNO_MSGSIZE;
-    if (!e) e=turbowasm_wasi_memory_span(call, (uint32_t)arguments[1].as.i32, (size_t)count*8, &table);
-    if (!e) for (uint32_t i=0; i<count; ++i) {
-        addresses[i]=turbowasm_wasi_load_u32(table.data+(size_t)i*8);
-        lengths[i]=turbowasm_wasi_load_u32(table.data+(size_t)i*8+4);
+    if (!e) e=turbowasm_wasi_memory_check(call, result_address, sizeof(output));
+    if (!e && receive && socket_import) e=turbowasm_wasi_memory_check(call, flags_address, sizeof(flag_output));
+    if (!e && count > TURBOWASM_WASI_IOV_MAX) e=TURBOWASM_WASI_ERRNO_INVAL;
+    if (!e) e=turbowasm_wasi_memory_read(call, (uint32_t)arguments[1].as.i32, table, (size_t)count*8);
+    for (uint32_t i=0; i<count && !e; ++i) {
+        addresses[i]=turbowasm_wasi_load_u32(table+(size_t)i*8);
+        lengths[i]=turbowasm_wasi_load_u32(table+(size_t)i*8+4);
+        e=turbowasm_wasi_memory_check(call, addresses[i], lengths[i]);
+        capacity+=lengths[i]; /* At most 64 uint32_t lengths. */
     }
+    if (!e && capacity > p->async->io_bytes) e=TURBOWASM_WASI_ERRNO_MSGSIZE;
     if (!e) e=tw_wasi_fd_acquire(p->filesystem, (uint32_t)arguments[0].as.i32, sub.right, &sub.lease);
     if (!e && (!sub.lease.ops.recv || !sub.lease.ops.send)) e=TURBOWASM_WASI_ERRNO_NOTSOCK;
     if (!e && receive && (flags & 3u) == 3u &&
@@ -246,7 +249,9 @@ static turbowasm_status tw_p1_socket_io(turbowasm_wasi_preview1_impl *p, turbowa
     if (!e) { allocation=(size_t)capacity; staging=tw_p1_allocate(p, allocation); if (!staging) e=TURBOWASM_WASI_ERRNO_NOMEM; }
     if (!e && !receive) {
         size_t pos=0;
-        for (uint32_t i=0; i<count; ++i) { if (lengths[i]) memcpy(staging+pos, buffers[i].data, lengths[i]); pos+=lengths[i]; }
+        for (uint32_t i=0; i<count && !e; ++i) {
+            e=turbowasm_wasi_memory_read(call, addresses[i], staging+pos, lengths[i]); pos+=lengths[i];
+        }
     }
     while (!e) {
         if (p->async->stopping) { e=TURBOWASM_WASI_ERRNO_INTR; break; }
@@ -276,20 +281,26 @@ static turbowasm_status tw_p1_socket_io(turbowasm_wasi_preview1_impl *p, turbowa
     if (transferred && e && e != TURBOWASM_WASI_ERRNO_INTR && e != TURBOWASM_WASI_ERRNO_BADF &&
         e != TURBOWASM_WASI_ERRNO_NOTCAPABLE && receive) e=0;
     if (status == TURBOWASM_OK && !e) {
-        e=turbowasm_wasi_memory_span(call, result_address, 4, &output);
-        if (!e && receive && socket_import) e=turbowasm_wasi_memory_span(call, flags_address, 2, &flag_output);
+        e=turbowasm_wasi_memory_check(call, result_address, sizeof(output));
+        if (!e && receive && socket_import) e=turbowasm_wasi_memory_check(call, flags_address, sizeof(flag_output));
         if (!e && receive) {
             for (uint32_t i=0; i<count && !e; ++i)
-                e=turbowasm_wasi_memory_span(call, addresses[i], lengths[i], &table);
+                e=turbowasm_wasi_memory_check(call, addresses[i], lengths[i]);
             size_t pos=0;
             for (uint32_t i=0; i<count && !e && pos<transferred; ++i) {
                 size_t n=lengths[i]; if (n > transferred-pos) n=transferred-pos;
-                e=turbowasm_wasi_memory_span(call, addresses[i], lengths[i], &table);
-                if (!e && n) memcpy(table.data, staging+pos, n);
+                e=turbowasm_wasi_memory_write(call, addresses[i], staging+pos, n);
                 pos+=n;
             }
         }
-        if (!e) { turbowasm_wasi_store_u32(output.data, transferred); if (receive && socket_import) tw_p1_store16(flag_output.data, returned_flags); }
+        if (!e) {
+            turbowasm_wasi_store_u32(output, transferred);
+            e=turbowasm_wasi_memory_write(call, result_address, output, sizeof(output));
+            if (!e && receive && socket_import) {
+                tw_p1_store16(flag_output, returned_flags);
+                e=turbowasm_wasi_memory_write(call, flags_address, flag_output, sizeof(flag_output));
+            }
+        }
     }
     tw_p1_free(p, staging, allocation); tw_wasi_fd_release(p->filesystem, &sub.lease);
     return status == TURBOWASM_OK ? TW_P1_RETURN(e) : status;
@@ -321,27 +332,35 @@ static turbowasm_status tw_p1_poll_oneoff(TW_P1_HOST_ARGS) {
     if (!p || !p->async || !tw_p1_arguments(arguments, argument_count, 4)) return TURBOWASM_INVALID_ARGUMENT;
     uint32_t count=(uint32_t)arguments[2].as.i32, e=0, events=0;
     size_t allocation=0; tw_p1_subscription *subs=NULL;
-    turbowasm_host_memory_span input={0}, output={0}, nevents={0};
+    uint8_t input[48], output[32], nevents[4];
     turbowasm_status status=TURBOWASM_OK;
     if (!count || count > p->async->subscriptions) e=TURBOWASM_WASI_ERRNO_INVAL;
-    if (!e) e=turbowasm_wasi_memory_span(call, (uint32_t)arguments[0].as.i32, (size_t)count*48, &input);
-    if (!e) e=turbowasm_wasi_memory_span(call, (uint32_t)arguments[1].as.i32, (size_t)count*32, &output);
-    if (!e) e=turbowasm_wasi_memory_span(call, (uint32_t)arguments[3].as.i32, 4, &nevents);
+    if (!e) e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[0].as.i32, (uint64_t)count*sizeof(input));
+    if (!e) e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[1].as.i32, (uint64_t)count*sizeof(output));
+    if (!e) e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[3].as.i32, sizeof(nevents));
     if (!e) { allocation=(size_t)count*sizeof(*subs); subs=tw_p1_allocate(p, allocation); if (!subs) e=TURBOWASM_WASI_ERRNO_NOMEM; }
-    /* Validate the whole vector before retaining providers or querying clocks. */
+    /* Decode the whole vector before callbacks can mutate/grow guest memory.
+     * The owned subscription records also survive suspension. */
     for (uint32_t i=0; i<count && !e; ++i) {
-        const uint8_t *in=input.data+(size_t)i*48;
-        subs[i].userdata=tw_p1_load64(in); subs[i].type=in[8];
-        if (in[8] > TURBOWASM_WASI_EVENT_FD_WRITE) e=TURBOWASM_WASI_ERRNO_INVAL;
-        if (in[8] == TURBOWASM_WASI_EVENT_CLOCK && (tw_p1_load16(in+40) & ~1u)) e=TURBOWASM_WASI_ERRNO_INVAL;
+        e=turbowasm_wasi_memory_read(call, (uint64_t)(uint32_t)arguments[0].as.i32+(uint64_t)i*sizeof(input), input, sizeof(input));
+        if (e) break;
+        tw_p1_subscription *s=&subs[i];
+        s->userdata=tw_p1_load64(input); s->type=input[8];
+        if (s->type > TURBOWASM_WASI_EVENT_FD_WRITE) e=TURBOWASM_WASI_ERRNO_INVAL;
+        if (s->type == TURBOWASM_WASI_EVENT_CLOCK) {
+            uint16_t flags=tw_p1_load16(input+40);
+            if (flags & ~1u) e=TURBOWASM_WASI_ERRNO_INVAL;
+            s->absolute_deadline=(flags & 1u) != 0;
+            s->clock=turbowasm_wasi_load_u32(input+16);
+            s->deadline=tw_p1_load64(input+24); s->precision=tw_p1_load64(input+32);
+        } else s->fd=turbowasm_wasi_load_u32(input+16);
     }
     for (uint32_t i=0; i<count && !e; ++i) {
-        const uint8_t *in=input.data+(size_t)i*48; tw_p1_subscription *s=&subs[i];
+        tw_p1_subscription *s=&subs[i];
         if (s->type == TURBOWASM_WASI_EVENT_CLOCK) {
-            s->clock=turbowasm_wasi_load_u32(in+16); s->deadline=tw_p1_load64(in+24); s->precision=tw_p1_load64(in+32);
             if (!p->allow_clock) s->error=TURBOWASM_WASI_ERRNO_NOTCAPABLE;
             else if (s->clock > TURBOWASM_WASI_CLOCKID_MONOTONIC) s->error=TURBOWASM_WASI_ERRNO_INVAL;
-            else if (!(tw_p1_load16(in+40)&1u)) {
+            else if (!s->absolute_deadline) {
                 uint64_t now=0; s->error=p->clock_time(p->clock_context, s->clock, s->precision, &now);
                 if (!s->error) {
                     if (UINT64_MAX-now < s->deadline) s->error=TURBOWASM_WASI_ERRNO_INVAL;
@@ -350,7 +369,7 @@ static turbowasm_status tw_p1_poll_oneoff(TW_P1_HOST_ARGS) {
             }
         } else {
             s->right=TURBOWASM_WASI_RIGHT_POLL_FD_READWRITE;
-            s->error=tw_wasi_fd_acquire(p->filesystem, turbowasm_wasi_load_u32(in+16), s->right, &s->lease);
+            s->error=tw_wasi_fd_acquire(p->filesystem, s->fd, s->right, &s->lease);
         }
     }
     while (!e) {
@@ -361,20 +380,25 @@ static turbowasm_status tw_p1_poll_oneoff(TW_P1_HOST_ARGS) {
         status=tw_p1_park(p, call, subs, count, &e); if (status != TURBOWASM_OK) break;
     }
     if (!e && status == TURBOWASM_OK) {
-        e=turbowasm_wasi_memory_span(call, (uint32_t)arguments[1].as.i32, (size_t)count*32, &output);
-        if (!e) e=turbowasm_wasi_memory_span(call, (uint32_t)arguments[3].as.i32, 4, &nevents);
+        e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[1].as.i32, (uint64_t)count*sizeof(output));
+        if (!e) e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[3].as.i32, sizeof(nevents));
         events=0;
         for (uint32_t i=0; i<count && !e; ++i) {
             tw_p1_subscription *s=&subs[i];
             /* Use the readiness snapshot taken together above. */
             if (!s->selected) continue;
-            uint8_t *out=output.data+(size_t)events++*32; memset(out, 0, 32);
+            uint8_t *out=output; memset(out, 0, sizeof(output));
             turbowasm_wasi_store_u64(out, s->userdata); tw_p1_store16(out+8, (uint16_t)s->error); out[10]=s->type;
             if (!s->error && s->type != TURBOWASM_WASI_EVENT_CLOCK) {
                 turbowasm_wasi_store_u64(out+16, s->readiness.bytes); tw_p1_store16(out+24, s->readiness.flags);
             }
+            e=turbowasm_wasi_memory_write(call, (uint64_t)(uint32_t)arguments[1].as.i32+(uint64_t)events*sizeof(output), output, sizeof(output));
+            ++events;
         }
-        if (!e) turbowasm_wasi_store_u32(nevents.data, events);
+        if (!e) {
+            turbowasm_wasi_store_u32(nevents, events);
+            e=turbowasm_wasi_memory_write(call, (uint32_t)arguments[3].as.i32, nevents, sizeof(nevents));
+        }
     }
     if (subs) for (uint32_t i=0; i<count; ++i) tw_wasi_fd_release(p->filesystem, &subs[i].lease);
     tw_p1_free(p, subs, allocation); return status == TURBOWASM_OK ? TW_P1_RETURN(e) : status;

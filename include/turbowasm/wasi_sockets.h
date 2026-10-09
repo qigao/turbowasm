@@ -77,6 +77,18 @@ typedef struct turbowasm_wasi_preview1_config_v2 {
     size_t pending_bytes;
 } turbowasm_wasi_preview1_config_v2;
 
+/* Socket/poll imports use protected copies for shared and unshared memory.
+ * Iovec addresses and poll arguments are saved before transport/clock effects;
+ * no guest pointer crosses a provider callback or wait. Transfer payloads use
+ * io_bytes (MSGSIZE on excess) and pending_bytes (NOMEM on exhausted storage).
+ * Receive copies only the returned prefix; errors before successful publication
+ * preserve output. Result buffers must be synchronized by the guest: separate
+ * protected writes do not make a multi-buffer result atomic.
+ * Socket/poll calls and progress/lifecycle functions still require the same
+ * host progress thread, even when instances import shared memory. For example,
+ * execute/resume a socket guest and advance its providers on that owner thread;
+ * shared-memory support alone does not admit calls from guest worker threads.
+ */
 void turbowasm_wasi_preview1_config_v2_init(turbowasm_wasi_preview1_config_v2 *);
 turbowasm_status turbowasm_wasi_preview1_init_v2(turbowasm_wasi_preview1 *,
     const turbowasm_wasi_preview1_config_v2 *);

@@ -19,10 +19,21 @@ static turbowasm_value p1_i32(uint32_t x) {
 static turbowasm_value p1_i64(uint64_t x) {
     turbowasm_value v={0}; v.kind=TURBOWASM_VALUE_I64; v.as.i64=(int64_t)x; return v;
 }
-static void p1_guest_init(p1_guest *g, turbowasm_wasi_preview1 *wasi) {
+static void p1_guest_init_with_memory(p1_guest *g, turbowasm_wasi_preview1 *wasi, p1_guest *owner) {
     turbowasm_linker linker={0};
-    check_equal(turbowasm_module_load_borrowed(&g->module,tw_p1_socket_module,sizeof(tw_p1_socket_module)),TURBOWASM_OK);
+#if defined(TW_P1_SHARED)
+    const uint8_t *bytes=owner ? tw_p1_socket_module_shared_peer : tw_p1_socket_module_shared;
+    size_t length=owner ? sizeof(tw_p1_socket_module_shared_peer) : sizeof(tw_p1_socket_module_shared);
+#else
+    const uint8_t *bytes=owner ? tw_p1_socket_module_peer : tw_p1_socket_module;
+    size_t length=owner ? sizeof(tw_p1_socket_module_peer) : sizeof(tw_p1_socket_module);
+#endif
+    check_equal(turbowasm_module_load_borrowed(&g->module,bytes,length),TURBOWASM_OK);
     check_equal(turbowasm_linker_init(&linker),TURBOWASM_OK);
+    if (owner) {
+        turbowasm_name name={(const uint8_t *)"p1",2};
+        check_equal(turbowasm_linker_define_instance(&linker,name,&owner->instance),TURBOWASM_OK);
+    }
     check_equal(turbowasm_wasi_preview1_define(wasi,&linker),TURBOWASM_OK);
     check_equal(turbowasm_instance_create_linked(&g->instance,&g->module,&linker),TURBOWASM_OK);
     turbowasm_linker_destroy(&linker);
@@ -31,6 +42,9 @@ static void p1_guest_init(p1_guest *g, turbowasm_wasi_preview1 *wasi) {
     check_equal(turbowasm_mir_backend_create(&backend),TURBOWASM_OK);
     check_equal(turbowasm_jit_instance_attach_backend(g->instance.impl,&backend,1),TURBOWASM_OK);
 #endif
+}
+static void p1_guest_init(p1_guest *g, turbowasm_wasi_preview1 *wasi) {
+    p1_guest_init_with_memory(g,wasi,NULL);
 }
 static void p1_guest_destroy(p1_guest *g) {
 #if defined(TW_P1_MIR)

@@ -448,8 +448,10 @@ Metallic guest runs four C11 workers against production HostFS, covering create,
 append, seek, read, stat, rename, remove and temporary-file cleanup. Shared
 Preview1 paths/random use bounded snapshots; fixed fdstat output uses protected
 copies. Concurrent close can return `BUSY` while synchronous calls are in flight;
-callers retry after those calls finish. Socket/poll shared-memory projections,
-socket owner-thread dispatch, and installed threaded command/Reactor/CMeta qualification
+callers retry after those calls finish. Socket/poll also uses protected copies
+and owned arguments across callbacks and waits, with the existing v2 capacity
+limits. Its calls still require one host progress thread. Socket owner-thread
+dispatch and installed threaded command/Reactor/CMeta qualification
 remain open. The remaining integration work is tracked in
 [#426](https://github.com/qigao/turbowasm/issues/426); it is not yet a threaded SDK.
 The guest CI profiles are `ci-metallic-user` (Linux) and

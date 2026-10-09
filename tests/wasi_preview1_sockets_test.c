@@ -9,15 +9,38 @@ typedef struct p1_file {
 static p1_file files[8];
 static turbowasm_wasi_fs fs;
 static turbowasm_wasi_preview1 wasi;
-static p1_guest guest;
+static p1_guest guest, peer;
 static turbowasm_execution execution, second;
 static turbowasm_wasi_descriptor_ops ops;
 static uint64_t now, last_precision;
+enum { EFFECT_RETAIN=1, EFFECT_RECV, EFFECT_SEND, EFFECT_ACCEPT, EFFECT_CLOCK };
+enum { GROW_MEMORY=1, MUTATE_IOV=2, MUTATE_POLL=4, MUTATE_PAYLOAD=8 };
+static unsigned effect_callback, effect_flags, effects;
+static uint8_t sent[32];
+static size_t sent_count;
+static bool send_again;
+static uint32_t recv_error;
+static bool recv_overreport;
+/* Another instance owns the memory instructions: callbacks never reenter the
+ * currently executing guest instance to mutate/grow its backing storage. */
+static void effect(unsigned callback) {
+    if (callback != effect_callback) return;
+    effect_callback=0; ++effects;
+    if (effect_flags & MUTATE_IOV) { p1_store(&peer,0,700); p1_store(&peer,4,32); }
+    if (effect_flags & MUTATE_POLL) {
+        p1_store(&peer,1072,99); p1_store(&peer,1080,255); p1_store(&peer,1088,99);
+    }
+    if (effect_flags & MUTATE_PAYLOAD) p1_store(&peer,512,0);
+    if (effect_flags & GROW_MEMORY) {
+        turbowasm_value pages=p1_i32(1);
+        check_equal(p1_invoke(&peer,P1_GROW,&pages,1).as.i32,1);
+    }
+}
 static uint32_t mock_close(void *ctx, turbowasm_wasi_fs_file f) {
     (void)ctx; if (!files[f.object].open) return TURBOWASM_WASI_ERRNO_BADF;
     files[f.object].open=false; ++files[f.object].closes; return 0;
 }
-static uint32_t mock_retain(void *ctx, turbowasm_wasi_fs_file f) { (void)ctx; ++files[f.object].leases; return 0; }
+static uint32_t mock_retain(void *ctx, turbowasm_wasi_fs_file f) { (void)ctx; effect(EFFECT_RETAIN); ++files[f.object].leases; return 0; }
 static void mock_release(void *ctx, turbowasm_wasi_fs_file f) { (void)ctx; --files[f.object].leases; }
 static void mock_finish(void *ctx, turbowasm_wasi_fs_file f, uint8_t direction) { (void)ctx; if (direction==1) files[f.object].target=0; }
 static uint32_t mock_ready(void *ctx, turbowasm_wasi_fs_file f, uint8_t direction, turbowasm_wasi_readiness *r) {
@@ -30,6 +53,9 @@ static uint32_t mock_recv(void *ctx, turbowasm_wasi_fs_file f, const turbowasm_w
     uint16_t flags, bool nonblock, uint32_t *out, uint16_t *roflags) {
     (void)ctx; p1_file *p=&files[f.object]; *out=0; *roflags=0; ++p->reads;
     size_t total=0; for (size_t i=0; i<count; ++i) total+=b[i].size;
+    effect(EFFECT_RECV);
+    if (recv_error) return recv_error;
+    if (recv_overreport) { *out=(uint32_t)total+1; return 0; }
     if (!total) return 0;
     if ((flags&3)==3 && !nonblock && p->size<total && !p->eof) { p->target=total; return TURBOWASM_WASI_ERRNO_AGAIN; }
     if (!p->size) return p->eof ? 0 : TURBOWASM_WASI_ERRNO_AGAIN;
@@ -46,7 +72,15 @@ static uint32_t mock_read(void *ctx, turbowasm_wasi_fs_file f, const turbowasm_w
     uint16_t flags; return mock_recv(ctx,f,b,n,0,true,out,&flags);
 }
 static uint32_t mock_write(void *ctx, turbowasm_wasi_fs_file f, const turbowasm_wasi_const_buffer *b, size_t n, uint32_t *out) {
-    (void)ctx; ++files[f.object].writes; *out=0; for (size_t i=0; i<n; ++i) *out+=(uint32_t)b[i].size; return 0;
+    (void)ctx; ++files[f.object].writes; *out=0; effect(EFFECT_SEND);
+    sent_count=0;
+    for (size_t i=0; i<n; ++i) {
+        check(b[i].size <= sizeof(sent)-sent_count);
+        memcpy(sent+sent_count,b[i].data,b[i].size); sent_count+=b[i].size;
+        *out+=(uint32_t)b[i].size;
+    }
+    if (send_again) { send_again=false; *out=0; return TURBOWASM_WASI_ERRNO_AGAIN; }
+    return 0;
 }
 static uint32_t mock_stat(void *ctx, turbowasm_wasi_fs_file f, turbowasm_wasi_fs_stat *stat) {
     (void)ctx; *stat=(turbowasm_wasi_fs_stat){0};
@@ -55,11 +89,11 @@ static uint32_t mock_stat(void *ctx, turbowasm_wasi_fs_file f, turbowasm_wasi_fs
 }
 static uint32_t mock_shutdown(void *ctx, turbowasm_wasi_fs_file f, uint8_t how) { (void)ctx; (void)how; files[f.object].eof=true; return 0; }
 static uint32_t mock_accept(void *ctx, turbowasm_wasi_fs_file f, turbowasm_wasi_fs_file *out) {
-    (void)ctx; if (!files[f.object].accepts) return TURBOWASM_WASI_ERRNO_AGAIN;
+    (void)ctx; effect(EFFECT_ACCEPT); if (!files[f.object].accepts) return TURBOWASM_WASI_ERRNO_AGAIN;
     --files[f.object].accepts; files[4].open=true; *out=(turbowasm_wasi_fs_file){4,1}; return 0;
 }
 static uint32_t mock_clock(void *ctx, uint32_t id, uint64_t precision, uint64_t *out) {
-    (void)ctx; (void)id; last_precision=precision; *out=now; return 0;
+    (void)ctx; (void)id; effect(EFFECT_CLOCK); last_precision=precision; *out=now; return 0;
 }
 static void bind_socket(uint32_t fd, unsigned object, uint64_t base, uint64_t inherit) {
     turbowasm_wasi_fs_file file={object,1}; turbowasm_wasi_fs_descriptor d={0}; files[object].open=true;
@@ -77,6 +111,7 @@ static uint32_t rights_call(uint32_t fd, uint64_t base, uint64_t inherit) {
 }
 static void fixture_init(void) {
     memset(files,0,sizeof(files)); now=100; last_precision=0;
+    effect_callback=effect_flags=effects=0; sent_count=0; send_again=false; recv_error=0; recv_overreport=false;
     ops=(turbowasm_wasi_descriptor_ops){0}; ops.size=sizeof(ops); ops.api_version=1;
     ops.file=(turbowasm_wasi_fs_provider){0}; ops.file.close=mock_close; ops.file.read=mock_read;
     ops.file.write=mock_write; ops.file.stat=mock_stat; ops.retain=mock_retain; ops.release=mock_release;
@@ -91,9 +126,10 @@ static void fixture_init(void) {
     v.base.allow_clock=true; v.base.clock_time=mock_clock; v.allow_sockets=v.allow_poll=true;
     v.io_bytes=32; v.pending_bytes=4096; v.wait_capacity=1;
     check_equal(turbowasm_wasi_preview1_init_v2(&wasi,&v),TURBOWASM_OK); p1_guest_init(&guest,&wasi); p1_iovec(&guest,4);
+    p1_guest_init_with_memory(&peer,&wasi,&guest);
 }
 static void fixture_destroy(void) {
-    turbowasm_execution_destroy(&second); turbowasm_execution_destroy(&execution); p1_guest_destroy(&guest);
+    turbowasm_execution_destroy(&second); turbowasm_execution_destroy(&execution); p1_guest_destroy(&peer); p1_guest_destroy(&guest);
     check_equal(turbowasm_wasi_preview1_destroy_checked(&wasi),TURBOWASM_OK);
     for (uint32_t fd=0; fd<16; ++fd) { turbowasm_wasi_fs_descriptor_info info;
         if (turbowasm_wasi_fs_descriptor_info_get(&fs,fd,&info)) check_equal(turbowasm_wasi_fs_close_fd(&fs,fd),0u); }
@@ -235,5 +271,85 @@ suite("Preview1 descriptor and async socket ABI") {
         check_equal(p1_load(&guest,512),UINT32_C(0x6b636f73)); check_equal(files[2].size,0u);
         read[0]=3; data(1,"file",4); check_equal(p1_call(&guest,P1_READ,read,4),0u); check_equal(files[1].size,0u);
         check_equal(p1_call(&guest,P1_WRITE,read,4),0u); check_equal(files[1].writes,1u);
+    }
+    it("keeps send addresses valid when retain grows memory and changes the iovec") {
+        p1_store(&guest,512,UINT32_C(0x676e6970));
+        effect_callback=EFFECT_RETAIN; effect_flags=GROW_MEMORY|MUTATE_IOV;
+        uint32_t a[]={4,0,1,0,65532};
+        check_equal(p1_call(&guest,P1_SEND,a,5),0u);
+        check_equal(effects,1u); check_equal(sent_count,(size_t)4);
+        check(memcmp(sent,"ping",4)==0); check_equal(p1_load(&guest,65532),4u);
+    }
+    it("retains staged send bytes across provider mutation and suspension") {
+        p1_store(&guest,512,UINT32_C(0x676e6970));
+        effect_callback=EFFECT_SEND; effect_flags=GROW_MEMORY|MUTATE_PAYLOAD|MUTATE_IOV;
+        send_again=true; uint32_t a[]={4,0,1,0,128};
+        p1_start(&guest,&execution,P1_SEND,a,5);
+        check_equal(turbowasm_execution_resume(&execution,NULL),TURBOWASM_YIELDED);
+        check_equal(effects,1u); check_equal(p1_load(&guest,512),0u);
+        check_equal(turbowasm_wasi_preview1_advance(&wasi),TURBOWASM_OK);
+        check_equal(turbowasm_execution_resume(&execution,NULL),TURBOWASM_OK);
+        check_equal(p1_execution_result(&execution),0u);
+        check_equal(sent_count,(size_t)4); check(memcmp(sent,"ping",4)==0);
+        check_equal(files[2].writes,2u); check_equal(p1_load(&guest,128),4u);
+    }
+    it("scatters a short receive to saved ranges after callback memory growth") {
+        p1_store(&guest,0,65532); p1_store(&guest,4,4);
+        p1_store(&guest,8,512); p1_store(&guest,12,4);
+        p1_store(&guest,512,UINT32_C(0xa5a5a5a5)); p1_store(&guest,700,UINT32_C(0xa5a5a5a5));
+        data(2,"pingxy",6); effect_callback=EFFECT_RECV; effect_flags=GROW_MEMORY|MUTATE_IOV;
+        uint32_t a[]={4,0,2,0,128,132};
+        check_equal(p1_call(&guest,P1_RECV,a,6),0u); check_equal(effects,1u);
+        check_equal(p1_load(&guest,65532),UINT32_C(0x676e6970));
+        check_equal(p1_load(&guest,512),UINT32_C(0xa5a57978));
+        check_equal(p1_load(&guest,700),UINT32_C(0xa5a5a5a5)); check_equal(p1_load(&guest,128),6u);
+    }
+    it("keeps receive destinations and publication fixed while parked") {
+        recv_start(0); check_equal(turbowasm_execution_resume(&execution,NULL),TURBOWASM_YIELDED);
+        p1_iovec(&peer,1); p1_store(&peer,0,700); p1_store(&peer,700,UINT32_C(0xa5a5a5a5));
+        data(2,"ping",4); check_equal(turbowasm_wasi_preview1_advance(&wasi),TURBOWASM_OK);
+        check_equal(turbowasm_execution_resume(&execution,NULL),TURBOWASM_OK);
+        check_equal(p1_execution_result(&execution),0u);
+        check_equal(p1_load(&guest,512),UINT32_C(0x676e6970));
+        check_equal(p1_load(&guest,700),UINT32_C(0xa5a5a5a5)); check_equal(p1_load(&guest,128),4u);
+    }
+    it("preserves receive outputs on provider failure and over-reporting") {
+        p1_store(&guest,512,UINT32_C(0xa5a5a5a5));
+        p1_store(&guest,128,UINT32_C(0xa5a5a5a5)); p1_store(&guest,132,UINT32_C(0xa5a5a5a5));
+        recv_error=TURBOWASM_WASI_ERRNO_IO; check_equal(recv_call(0),recv_error);
+        recv_error=0; recv_overreport=true; check_equal(recv_call(0),TURBOWASM_WASI_ERRNO_IO);
+        check_equal(p1_load(&guest,512),UINT32_C(0xa5a5a5a5));
+        check_equal(p1_load(&guest,128),UINT32_C(0xa5a5a5a5)); check_equal(p1_load(&guest,132),UINT32_C(0xa5a5a5a5));
+    }
+    it("publishes accept after provider growth and rejects invalid output before effects") {
+        bind_socket(5,3,TURBOWASM_WASI_RIGHT_SOCK_ACCEPT,UINT64_MAX); files[3].accepts=1;
+        effect_callback=EFFECT_ACCEPT; effect_flags=GROW_MEMORY;
+        uint32_t a[]={5,0,65533}; check_equal(p1_call(&guest,P1_ACCEPT,a,3),TURBOWASM_WASI_ERRNO_FAULT);
+        check_equal(effects,0u); check_equal(files[3].accepts,1u);
+        a[2]=65532; check_equal(p1_call(&guest,P1_ACCEPT,a,3),0u); check_equal(effects,1u);
+        check_equal(p1_load(&guest,65532),6u); check_true(files[4].open);
+    }
+    it("decodes all poll arguments before clock callbacks mutate or grow memory") {
+        p1_subscription(&guest,0,1,TURBOWASM_WASI_EVENT_CLOCK,1);
+        p1_subscription(&guest,1,2,TURBOWASM_WASI_EVENT_FD_READ,4); data(2,"ping",4);
+        effect_callback=EFFECT_CLOCK; effect_flags=GROW_MEMORY|MUTATE_POLL;
+        uint32_t a[]={1024,65536-64,2,128}; check_equal(p1_call(&guest,P1_POLL,a,4),0u);
+        check_equal(effects,1u); check_equal(p1_load(&guest,128),2u);
+        check_equal(p1_load64(&guest,65536-64),UINT64_C(1));
+        check_equal(p1_load64(&guest,65536-32),UINT64_C(2));
+        check_equal(p1_load(&guest,65536-24)&65535u,0u);
+        check_equal(p1_load64(&guest,65536-16),UINT64_C(4));
+    }
+    it("validates the whole poll vector and outputs before retaining or querying") {
+        p1_subscription(&guest,0,1,TURBOWASM_WASI_EVENT_CLOCK,1);
+        p1_subscription(&guest,1,2,255,4);
+        effect_callback=EFFECT_CLOCK; effect_flags=GROW_MEMORY;
+        uint32_t a[]={1024,2048,2,128};
+        check_equal(p1_call(&guest,P1_POLL,a,4),TURBOWASM_WASI_ERRNO_INVAL);
+        check_equal(effects,0u); check_equal(files[2].leases,0u);
+        p1_subscription(&guest,1,2,TURBOWASM_WASI_EVENT_FD_READ,4);
+        a[1]=65536-63; check_equal(p1_call(&guest,P1_POLL,a,4),TURBOWASM_WASI_ERRNO_FAULT);
+        check_equal(effects,0u); a[1]=2048; a[3]=65533;
+        check_equal(p1_call(&guest,P1_POLL,a,4),TURBOWASM_WASI_ERRNO_FAULT); check_equal(effects,0u);
     }
 }
