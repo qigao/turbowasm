@@ -450,9 +450,16 @@ Preview1 paths/random use bounded snapshots; fixed fdstat output uses protected
 copies. Concurrent close can return `BUSY` while synchronous calls are in flight;
 callers retry after those calls finish. Socket/poll also uses protected copies
 and owned arguments across callbacks and waits, with the existing v2 capacity
-limits. Its calls still require one host progress thread. Socket owner-thread
-dispatch and installed threaded command/Reactor/CMeta qualification
-remain open. The remaining integration work is tracked in
+limits. The v2 initializer still requires one host progress thread. The opt-in
+`turbowasm_wasi_preview1_init_threaded` initializer admits guest worker calls:
+a bounded queue transfers socket callbacks to the initializing owner, while
+ordinary files remain concurrent. Workers can interrupt readiness waits through
+their Runtime invocation policy; cancellation retains borrowed state until the
+owner acknowledges it. The host must keep advancing native transports and
+Preview1 while workers run or drain, then close sockets before destroying WASI.
+Compiled C11 guests exercise TCP/UDP and poll while the root joins children,
+including group `proc_exit`. Installed threaded command/Reactor/CMeta SDK
+qualification and remaining libc integration are tracked in
 [#426](https://github.com/qigao/turbowasm/issues/426); it is not yet a threaded SDK.
 When the local CMeta source is configured, the internal threads test also builds
 a separate guest CMeta archive and runs four C11 workers through cross-TU

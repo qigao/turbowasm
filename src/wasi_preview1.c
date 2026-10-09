@@ -1,6 +1,7 @@
 #include <turbowasm/wasi.h>
 #include "wasi_fs_private.h"
 #include "wasi_provider_private.h"
+#include "wasi_dispatch_private.h"
 
 #include "wasi_preview1_adapter_plan.h"
 
@@ -1924,8 +1925,23 @@ turbowasm_status turbowasm_wasi_preview1_destroy_checked(turbowasm_wasi_preview1
     if (!wasi) return TURBOWASM_INVALID_ARGUMENT;
     if (!wasi->impl) return TURBOWASM_OK;
     turbowasm_wasi_preview1_impl *impl = wasi->impl;
-    if (impl->async && (impl->async->active || impl->async->used)) return TURBOWASM_INVALID_ARGUMENT;
-    if (impl->async) { free(impl->async->waits); free(impl->async); }
+    struct tw_p1_async *a = impl->async;
+    if (a) {
+        if (a->dispatch && !tw_wasi_dispatch_is_owner(a->dispatch)) return TURBOWASM_INVALID_ARGUMENT;
+        tw_p1_lock(a);
+        bool busy = a->active || a->used || a->calls || a->progressing ||
+            (a->dispatch && (!tw_wasi_dispatch_idle_locked(a->dispatch) || a->dispatch->advancing));
+        tw_p1_unlock(a);
+        if (busy) return TURBOWASM_INVALID_ARGUMENT;
+        if (a->dispatch) {
+            turbowasm_status status = tw_wasi_fs_detach_dispatch(impl->filesystem, a->dispatch);
+            if (status != TURBOWASM_OK) return status;
+            status = tw_wasi_dispatch_destroy(a->dispatch);
+            if (status != TURBOWASM_OK) return status;
+            free(a->dispatch);
+        }
+        free(a->bindings); free(a->waits); free(a);
+    }
     turbowasm_wasi_string_list_destroy(&impl->environment);
     turbowasm_wasi_string_list_destroy(&impl->args);
     free(impl); wasi->impl = NULL; return TURBOWASM_OK;
@@ -1972,6 +1988,32 @@ turbowasm_status turbowasm_wasi_preview1_init_v2(turbowasm_wasi_preview1 *wasi,
 size_t turbowasm_wasi_preview1_function_count(void) {
     return sizeof(turbowasm_wasi_preview1_manifest) /
            sizeof(turbowasm_wasi_preview1_manifest[0]);
+}
+
+turbowasm_status turbowasm_wasi_preview1_init_threaded(turbowasm_wasi_preview1 *wasi,
+    const turbowasm_wasi_preview1_config_v2 *base,
+    const turbowasm_wasi_preview1_threaded_config *threaded) {
+    if (!wasi || wasi->impl || !threaded || !threaded->request_capacity || !threaded->wake_owner ||
+        threaded->request_capacity >= SIZE_MAX / sizeof(void *) ||
+        !threaded->interrupt_interval_ns || threaded->interrupt_interval_ns > UINT64_C(1000000000))
+        return TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_wasi_preview1 temporary = {0};
+    turbowasm_status status = turbowasm_wasi_preview1_init_v2(&temporary, base);
+    if (status != TURBOWASM_OK) return status;
+    turbowasm_wasi_preview1_impl *p = temporary.impl;
+    tw_wasi_dispatch *d = calloc(1, sizeof(*d));
+    p->async->bindings = calloc(turbowasm_wasi_preview1_function_count(), sizeof(tw_p1_binding));
+    if (!d || !p->async->bindings) { status = TURBOWASM_OUT_OF_MEMORY; goto fail; }
+    status = tw_wasi_dispatch_init(d, threaded->request_capacity, threaded->wake_owner, threaded->wake_context);
+    if (status != TURBOWASM_OK) goto fail;
+    status = tw_wasi_fs_attach_dispatch(p->filesystem, d);
+    if (status != TURBOWASM_OK) { (void)tw_wasi_dispatch_destroy(d); goto fail; }
+    p->async->dispatch = d;
+    p->async->interrupt_interval_ns = threaded->interrupt_interval_ns;
+    *wasi = temporary;
+    return TURBOWASM_OK;
+fail:
+    free(d); turbowasm_wasi_preview1_destroy(&temporary); return status;
 }
 
 const cmeta_function_desc *turbowasm_wasi_preview1_function_at(
@@ -2036,6 +2078,33 @@ static bool turbowasm_wasi_adapter_value_kind(
     return false;
 }
 
+static turbowasm_status tw_p1_threaded_call(void *context, turbowasm_host_call *call,
+    const turbowasm_value *arguments, size_t argument_count, turbowasm_value *results,
+    size_t result_capacity, size_t *result_count, turbowasm_trap *trap) {
+    tw_p1_binding *binding = context;
+    turbowasm_wasi_preview1_impl *p = binding->owner;
+    struct tw_p1_async *a = p->async;
+    tw_wasi_dispatch *d = a->dispatch;
+    tw_p1_lock(a);
+    uint32_t error = a->calls == SIZE_MAX ? TURBOWASM_WASI_ERRNO_BUSY :
+        d->stopping && !binding->cleanup ? TURBOWASM_WASI_ERRNO_INTR : 0;
+    if (!error) ++a->calls;
+    tw_p1_unlock(a);
+    if (error) return turbowasm_wasi_return_errno(results, result_capacity, result_count, trap, error);
+    turbowasm_status status = binding->function(p, call, arguments, argument_count,
+        results, result_capacity, result_count, trap);
+    bool worker = !tw_wasi_dispatch_is_owner(d);
+    tw_p1_lock(a);
+    --a->calls;
+    if (worker) ++d->callers; /* Keep the final wake context alive through return. */
+    tw_p1_unlock(a);
+    if (worker) {
+        d->wake(d->wake_context);
+        tw_p1_lock(a); --d->callers; tw_p1_unlock(a);
+    }
+    return status;
+}
+
 static turbowasm_status turbowasm_wasi_define_cmeta_function(
     turbowasm_linker *linker,
     const cmeta_function_desc *metadata,
@@ -2073,6 +2142,15 @@ static turbowasm_status turbowasm_wasi_define_cmeta_function(
         type.result_count = 1u;
     }
 
+    turbowasm_wasi_preview1_impl *p = context;
+    if (p->async && p->async->dispatch) {
+        size_t binding_index = (size_t)(plan - turbowasm_wasi_preview1_adapter_functions);
+        tw_p1_binding *binding = &p->async->bindings[binding_index];
+        if (!binding->function) *binding = (tw_p1_binding){.owner = p, .function = function,
+            .cleanup = function == turbowasm_wasi_fd_close || function == turbowasm_wasi_proc_exit};
+        else if (binding->function != function) return TURBOWASM_INVALID_ARGUMENT;
+        function = tw_p1_threaded_call; context = binding;
+    }
     return turbowasm_linker_define_host_function(
         linker,
         turbowasm_wasi_namespace(),
@@ -2093,6 +2171,16 @@ turbowasm_status turbowasm_wasi_preview1_define(
         return TURBOWASM_INVALID_ARGUMENT;
 
     impl = (turbowasm_wasi_preview1_impl *)wasi->impl;
+
+    if (impl->async && impl->async->dispatch) {
+        struct tw_p1_async *a = impl->async;
+        if (!tw_wasi_dispatch_is_owner(a->dispatch)) return TURBOWASM_INVALID_ARGUMENT;
+        tw_p1_lock(a);
+        bool busy = a->progressing || a->calls || a->dispatch->advancing || a->dispatch->direct_calls ||
+            a->dispatch->stopping;
+        tw_p1_unlock(a);
+        if (busy) return TURBOWASM_INVALID_ARGUMENT;
+    }
 
 #define TURBOWASM_WASI_DEFINE(metadata_, function_) \
     do { \

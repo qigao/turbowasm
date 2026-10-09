@@ -12,7 +12,8 @@ typedef struct tw_p1_subscription {
 } tw_p1_subscription;
 
 typedef struct tw_p1_wait {
-    bool active, completed;
+    bool active, completed, worker, inspecting, cancelled;
+    uint32_t completion;
     turbowasm_host_call *call;
     turbowasm_host_wait handle;
     tw_p1_subscription *subscriptions;
@@ -20,10 +21,19 @@ typedef struct tw_p1_wait {
 } tw_p1_wait;
 
 struct tw_p1_async {
-    bool sockets, poll, stopping;
-    size_t capacity, subscriptions, io_bytes, budget, used, active;
+    bool sockets, poll, stopping, progressing;
+    size_t capacity, subscriptions, io_bytes, budget, used, active, calls;
     tw_p1_wait *waits;
+    tw_wasi_dispatch *dispatch;
+    uint64_t interrupt_interval_ns;
+    struct tw_p1_binding *bindings;
 };
+
+typedef struct tw_p1_binding {
+    turbowasm_wasi_preview1_impl *owner;
+    turbowasm_host_function_fn function;
+    bool cleanup;
+} tw_p1_binding;
 
 static uint64_t tw_p1_load64(const uint8_t *p) {
     return (uint64_t)turbowasm_wasi_load_u32(p) |
@@ -58,86 +68,7 @@ static bool tw_p1_subscription_ready(turbowasm_wasi_preview1_impl *p, tw_p1_subs
     return s->error || s->readiness.ready;
 }
 
-static turbowasm_status tw_p1_park(turbowasm_wasi_preview1_impl *p, turbowasm_host_call *call,
-    tw_p1_subscription *subs, size_t count, uint32_t *error) {
-    struct tw_p1_async *a = p->async;
-    if (a->stopping) { *error = TURBOWASM_WASI_ERRNO_INTR; return TURBOWASM_OK; }
-    if (!turbowasm_host_call_can_wait(call)) { *error = TURBOWASM_WASI_ERRNO_AGAIN; return TURBOWASM_OK; }
-    tw_p1_wait *w = NULL;
-    for (size_t i=0; i<a->capacity; ++i) if (!a->waits[i].active) { w=&a->waits[i]; break; }
-    if (!w) { *error=TURBOWASM_WASI_ERRNO_AGAIN; return TURBOWASM_OK; }
-    *w=(tw_p1_wait){0}; w->active=true; w->call=call; w->subscriptions=subs; w->count=count; ++a->active;
-    int completion = 0;
-    turbowasm_status status=turbowasm_host_call_wait(call, (uintptr_t)w, &w->handle, &completion);
-    *w=(tw_p1_wait){0}; --a->active;
-    if (status == TURBOWASM_OK) *error=(uint32_t)completion;
-    return status;
-}
-
-turbowasm_status turbowasm_wasi_preview1_advance(turbowasm_wasi_preview1 *wasi) {
-    if (!wasi || !wasi->impl) return TURBOWASM_INVALID_ARGUMENT;
-    turbowasm_wasi_preview1_impl *p=wasi->impl;
-    if (!p->async) return TURBOWASM_UNSUPPORTED;
-    for (size_t i=0; i<p->async->capacity; ++i) {
-        tw_p1_wait *w=&p->async->waits[i];
-        if (!w->active || w->completed) continue;
-        bool ready=p->async->stopping;
-        for (size_t j=0; j<w->count; ++j) if (tw_p1_subscription_ready(p, &w->subscriptions[j])) ready=true;
-        if (ready) {
-            turbowasm_status status=turbowasm_host_call_complete_wait(w->call, w->handle,
-                p->async->stopping ? TURBOWASM_WASI_ERRNO_INTR : 0);
-            if (status != TURBOWASM_OK) return status;
-            w->completed=true;
-        }
-    }
-    return TURBOWASM_OK;
-}
-
-turbowasm_status turbowasm_wasi_preview1_next_timeout(turbowasm_wasi_preview1 *wasi, uint64_t *out) {
-    if (!wasi || !wasi->impl || !out) return TURBOWASM_INVALID_ARGUMENT;
-    turbowasm_wasi_preview1_impl *p=wasi->impl;
-    if (!p->async) return TURBOWASM_UNSUPPORTED;
-    *out=UINT64_MAX;
-    for (size_t i=0; i<p->async->capacity; ++i) {
-        tw_p1_wait *w=&p->async->waits[i];
-        if (!w->active) continue;
-        if (w->completed || p->async->stopping) { *out=0; continue; }
-        for (size_t j=0; j<w->count; ++j) {
-            tw_p1_subscription *s=&w->subscriptions[j];
-            if (s->type != TURBOWASM_WASI_EVENT_CLOCK || s->error) continue;
-            uint64_t now=0;
-            uint32_t e=p->clock_time(p->clock_context, s->clock, s->precision, &now);
-            if (e) { s->error=e; *out=0; continue; }
-            uint64_t delay=now >= s->deadline ? 0 : s->deadline-now;
-            if (delay < *out) *out=delay;
-        }
-    }
-    return TURBOWASM_OK;
-}
-
-turbowasm_status turbowasm_wasi_preview1_shutdown_request(turbowasm_wasi_preview1 *wasi) {
-    if (!wasi || !wasi->impl) return TURBOWASM_INVALID_ARGUMENT;
-    turbowasm_wasi_preview1_impl *p=wasi->impl;
-    if (!p->async) return TURBOWASM_UNSUPPORTED;
-    p->async->stopping=true;
-    return turbowasm_wasi_preview1_advance(wasi);
-}
-turbowasm_status turbowasm_wasi_preview1_shutdown_poll(turbowasm_wasi_preview1 *wasi, bool *out) {
-    if (!wasi || !wasi->impl || !out) return TURBOWASM_INVALID_ARGUMENT;
-    turbowasm_wasi_preview1_impl *p=wasi->impl;
-    if (!p->async) return TURBOWASM_UNSUPPORTED;
-    *out=p->async->stopping && !p->async->active; return TURBOWASM_OK;
-}
-
-static void *tw_p1_allocate(turbowasm_wasi_preview1_impl *p, size_t bytes) {
-    if (bytes > p->async->budget-p->async->used) return NULL;
-    void *out=calloc(1, bytes ? bytes : 1);
-    if (out) p->async->used+=bytes;
-    return out;
-}
-static void tw_p1_free(turbowasm_wasi_preview1_impl *p, void *ptr, size_t bytes) {
-    if (ptr) { free(ptr); p->async->used-=bytes; }
-}
+#include "wasi_preview1_wait.inc"
 
 #define TW_P1_HOST_ARGS void *context, turbowasm_host_call *call, const turbowasm_value *arguments, \
     size_t argument_count, turbowasm_value *results, size_t result_capacity, size_t *result_count, turbowasm_trap *trap
@@ -189,7 +120,8 @@ static turbowasm_status tw_p1_sock_accept(TW_P1_HOST_ARGS) {
     if (!e) e=tw_wasi_fd_claim(p->filesystem, &sub.lease, 0);
     if (!e) e=tw_wasi_fd_reserve(p->filesystem, &reserved, &fd);
     while (!e) {
-        if (p->async->stopping) { e=TURBOWASM_WASI_ERRNO_INTR; break; }
+        status=tw_p1_interrupt(p->async, call); if (status != TURBOWASM_OK) break;
+        if (tw_p1_stopping(p->async)) { e=TURBOWASM_WASI_ERRNO_INTR; break; }
         e=tw_wasi_fd_check(p->filesystem, &sub.lease, sub.right);
         if (e) break;
         e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[2].as.i32, sizeof(output));
@@ -256,7 +188,8 @@ static turbowasm_status tw_p1_socket_io(turbowasm_wasi_preview1_impl *p, turbowa
         }
     }
     while (!e) {
-        if (p->async->stopping) { e=TURBOWASM_WASI_ERRNO_INTR; break; }
+        status=tw_p1_interrupt(p->async, call); if (status != TURBOWASM_OK) break;
+        if (tw_p1_stopping(p->async)) { e=TURBOWASM_WASI_ERRNO_INTR; break; }
         e=tw_wasi_fd_check(p->filesystem, &sub.lease, sub.right); if (e) break;
         uint32_t n=0;
         if (receive) {
@@ -284,6 +217,7 @@ static turbowasm_status tw_p1_socket_io(turbowasm_wasi_preview1_impl *p, turbowa
      * Cancellation/closed capability never publishes partially consumed data. */
     if (transferred && e && e != TURBOWASM_WASI_ERRNO_INTR && e != TURBOWASM_WASI_ERRNO_BADF &&
         e != TURBOWASM_WASI_ERRNO_NOTCAPABLE && receive) e=0;
+    if (status == TURBOWASM_OK && !e) status=tw_p1_interrupt(p->async, call);
     if (status == TURBOWASM_OK && !e) {
         e=turbowasm_wasi_memory_check(call, result_address, sizeof(output));
         if (!e && receive && socket_import) e=turbowasm_wasi_memory_check(call, flags_address, sizeof(flag_output));
@@ -378,12 +312,14 @@ static turbowasm_status tw_p1_poll_oneoff(TW_P1_HOST_ARGS) {
         }
     }
     while (!e) {
-        if (p->async->stopping) { e=TURBOWASM_WASI_ERRNO_INTR; break; }
+        status=tw_p1_interrupt(p->async, call); if (status != TURBOWASM_OK) break;
+        if (tw_p1_stopping(p->async)) { e=TURBOWASM_WASI_ERRNO_INTR; break; }
         events=0;
         for (uint32_t i=0; i<count; ++i) if ((subs[i].selected=tw_p1_subscription_ready(p, &subs[i]))) ++events;
         if (events) break;
         status=tw_p1_park(p, call, subs, count, &e); if (status != TURBOWASM_OK) break;
     }
+    if (!e && status == TURBOWASM_OK) status=tw_p1_interrupt(p->async, call);
     if (!e && status == TURBOWASM_OK) {
         e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[1].as.i32, (uint64_t)count*sizeof(output));
         if (!e) e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[3].as.i32, sizeof(nevents));

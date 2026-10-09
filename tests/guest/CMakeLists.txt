@@ -92,6 +92,32 @@ if(TARGET TurboWasm::WASIThreads)
   add_dependencies(turbowasm_guest_c11_threads_test guest_c11_threads)
   add_test(NAME turbowasm_guest_c11_threads_test COMMAND turbowasm_guest_c11_threads_test)
   set_tests_properties(turbowasm_guest_c11_threads_test PROPERTIES TIMEOUT 90)
+  if(TARGET TurboWasm::WASICNet)
+    _turbowasm_guest_objects(guest_c11_sockets SOURCES c11_sockets.c
+      INCLUDE_DIRECTORIES "${metallic_source}/threaded/include" "${metallic_source}/threaded/src"
+      COMPILE_OPTIONS -U__STDC_NO_THREADS__ -D__METALLIC_THREADS__=1 -matomics -pthread -ftls-model=local-exec)
+    set(c11_sockets_wasm "${CMAKE_CURRENT_BINARY_DIR}/guest_c11_sockets.wasm")
+    add_custom_command(OUTPUT "${c11_sockets_wasm}"
+      COMMAND "${TURBOWASM_GUEST_CLANG}" --target=wasm32-unknown-unknown
+        -matomics -mbulk-memory -pthread -nostdlib -flto -mexception-handling
+        -Wl,-mllvm,-wasm-enable-sjlj,-mllvm,-wasm-use-legacy-eh=false,-mllvm,-exception-model=wasm
+        -Wl,-u,__wasm_setjmp,-u,__wasm_setjmp_test,-u,__wasm_longjmp
+        -Wl,--no-entry,--shared-memory,--import-memory,--stack-first
+        -Wl,-z,stack-size=262144 -Wl,--initial-memory=1048576,--max-memory=16777216
+        -Wl,--export=wasi_thread_start,--export=initialize,--export=sockets,--export=exit_waiters
+        ${guest_c11_sockets_OBJECTS} "${TURBOWASM_GUEST_THREADED_LIBRARY}" -o "${c11_sockets_wasm}"
+      DEPENDS ${guest_c11_sockets_OBJECTS} "${TURBOWASM_GUEST_THREADED_LIBRARY}" VERBATIM COMMAND_EXPAND_LISTS)
+    add_custom_target(guest_c11_sockets ALL DEPENDS "${c11_sockets_wasm}")
+    set_target_properties(guest_c11_sockets PROPERTIES FOLDER "tests/guest")
+    add_executable(turbowasm_guest_c11_sockets_test ../wasi_preview1_cnet_test.c)
+    target_link_libraries(turbowasm_guest_c11_sockets_test PRIVATE TurboWasm::WASIThreads TurboWasm::WASICNet Salts::TinyTest Salts::Core Salts::Platform)
+    target_compile_features(turbowasm_guest_c11_sockets_test PRIVATE c_std_11)
+    target_compile_definitions(turbowasm_guest_c11_sockets_test PRIVATE GUEST_C11_SOCKET_PATH="${c11_sockets_wasm}")
+    set_target_properties(turbowasm_guest_c11_sockets_test PROPERTIES FOLDER "tests/guest")
+    add_dependencies(turbowasm_guest_c11_sockets_test guest_c11_sockets)
+    add_test(NAME turbowasm_guest_c11_sockets_test COMMAND turbowasm_guest_c11_sockets_test)
+    set_tests_properties(turbowasm_guest_c11_sockets_test PROPERTIES TIMEOUT 90)
+  endif()
   if(TARGET TurboWasm::WASIHostFS)
     _turbowasm_guest_objects(guest_c11_host_fs SOURCES c11_host_fs.c
       INCLUDE_DIRECTORIES "${metallic_source}/threaded/include" "${metallic_source}/threaded/src"

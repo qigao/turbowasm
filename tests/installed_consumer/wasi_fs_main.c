@@ -1,4 +1,6 @@
-#include <turbowasm/wasi_fs.h>
+#include <turbowasm/wasi_sockets.h>
+
+static void wake_owner(void *context) { (void)context; }
 
 static uint32_t close_file(
     void *context,
@@ -116,6 +118,19 @@ int main(void) {
             &filesystem, descriptor) !=
         TURBOWASM_WASI_ERRNO_SUCCESS)
         return 4;
+    {
+        turbowasm_wasi_preview1 threaded = {0};
+        turbowasm_wasi_preview1_config_v2 base;
+        turbowasm_wasi_preview1_config_v2_init(&base);
+        base.base.filesystem = &filesystem;
+        turbowasm_wasi_preview1_threaded_config config = {4, 1000000, wake_owner, NULL};
+        if (turbowasm_wasi_preview1_init_threaded(&threaded, &base, &config) != TURBOWASM_OK) return 9;
+        if (turbowasm_wasi_fs_destroy(&filesystem) != TURBOWASM_INVALID_ARGUMENT) return 10;
+        if (turbowasm_wasi_preview1_shutdown_request(&threaded) != TURBOWASM_OK) return 11;
+        bool complete = false;
+        if (turbowasm_wasi_preview1_shutdown_poll(&threaded, &complete) != TURBOWASM_OK || !complete) return 12;
+        if (turbowasm_wasi_preview1_destroy_checked(&threaded) != TURBOWASM_OK) return 13;
+    }
     if (turbowasm_wasi_fs_destroy(
             &filesystem) != TURBOWASM_OK)
         return 5;

@@ -2,6 +2,32 @@
 #include <turbowasm/wasi_cnet.h>
 #include <salts/error_codes.h>
 #include <string.h>
+#if defined(GUEST_C11_SOCKET_PATH)
+#include <turbowasm/wasi_threads.h>
+#include <cmeta_fs.h>
+#include <salts/thread.h>
+#include <stdatomic.h>
+static turbowasm_wasi_threads guest_threads;
+static atomic_bool owner_woken;
+static atomic_bool receive_pending;
+static uint32_t (*provider_recv)(void *, turbowasm_wasi_fs_file, const turbowasm_wasi_buffer *,
+    size_t, uint16_t, bool, uint32_t *, uint16_t *);
+static void wake_owner(void *context) { (void)context; atomic_store(&owner_woken, true); }
+static uint32_t observe_recv(void *context, turbowasm_wasi_fs_file file,
+    const turbowasm_wasi_buffer *buffers, size_t count, uint16_t flags, bool nonblock,
+    uint32_t *out, uint16_t *out_flags) {
+    uint32_t error = provider_recv(context, file, buffers, count, flags, nonblock, out, out_flags);
+    if (error == TURBOWASM_WASI_ERRNO_AGAIN) atomic_store(&receive_pending, true);
+    return error;
+}
+static turbowasm_status recv_pending(void *context, turbowasm_host_call *call,
+    const turbowasm_value *args, size_t argc, turbowasm_value *results, size_t capacity,
+    size_t *count, turbowasm_trap *trap) {
+    (void)context; (void)call; (void)args; (void)argc; (void)capacity;
+    results[0].kind = TURBOWASM_VALUE_I32; results[0].as.i32 = atomic_load(&receive_pending) ? 1 : 0;
+    *count = 1; *trap = TURBOWASM_TRAP_NONE; return TURBOWASM_OK;
+}
+#endif
 
 static turbowasm_wasi02_io io;
 static turbowasm_wasi02_cnet adapter;
@@ -25,6 +51,9 @@ static void pump(void) {
     size_t events=0, count=0; uint32_t timeout; native_io_completion batch[16];
     check_equal(turbowasm_wasi02_cnet_advance(&adapter,&events),TURBOWASM_OK);
     check_equal(turbowasm_wasi02_cnet_next_timeout(&adapter,5,&timeout),TURBOWASM_OK);
+#if defined(GUEST_C11_SOCKET_PATH)
+    if (atomic_exchange(&owner_woken, false)) timeout = 0;
+#endif
     int rc=native_io_backend_observe(&backend,batch,16,timeout,&count);
     check_true(rc==SALTS_OK || rc==SALTS_ETIMEDOUT);
     for (size_t i=0; i<count; ++i) {
@@ -174,11 +203,24 @@ static void fixture_init(void) {
     check_equal(turbowasm_wasi02_cnet_network_provider(&adapter,&net),TURBOWASM_OK);
     check_equal(tcp.instance_network(tcp.context,&network),TURBOWASM_OK);
     check_equal(turbowasm_wasi_cnet_descriptor_ops(&adapter,&ops),TURBOWASM_OK);
+#if defined(GUEST_C11_SOCKET_PATH)
+    provider_recv = ops.recv; ops.recv = observe_recv;
+    atomic_init(&receive_pending, false);
+#endif
     turbowasm_wasi_fs_config fc={8,ops.file}; check_equal(turbowasm_wasi_fs_init(&fs,&fc),TURBOWASM_OK);
     turbowasm_wasi_preview1_config_v2 v; turbowasm_wasi_preview1_config_v2_init(&v);
     v.base.filesystem=&fs; v.base.allow_fd_read=v.base.allow_fd_write=v.base.allow_clock=true; v.base.clock_time=clock_time;
     v.allow_sockets=v.allow_poll=true; v.io_bytes=16;
-    check_equal(turbowasm_wasi_preview1_init_v2(&wasi,&v),TURBOWASM_OK); p1_guest_init(&guest,&wasi);
+#if defined(GUEST_C11_SOCKET_PATH)
+    atomic_init(&owner_woken, false);
+    v.base.allow_proc_exit = true; v.base.proc_exit = turbowasm_wasi_threads_proc_exit;
+    v.base.proc_exit_context = &guest_threads;
+    turbowasm_wasi_preview1_threaded_config threaded = {32, 1000000, wake_owner, NULL};
+    check_equal(turbowasm_wasi_preview1_init_threaded(&wasi, &v, &threaded), TURBOWASM_OK);
+#else
+    check_equal(turbowasm_wasi_preview1_init_v2(&wasi,&v),TURBOWASM_OK);
+#endif
+    p1_guest_init(&guest,&wasi);
 }
 static void fixture_destroy(void) {
     if (!adapter.impl) {
@@ -203,14 +245,101 @@ static void fixture_destroy(void) {
     check_equal(turbowasm_wasi02_cnet_shutdown_request(&adapter),TURBOWASM_OK);
     bool complete=false;
     for (unsigned i=0; i<200 && !complete; ++i) { pump(); check_equal(turbowasm_wasi02_cnet_shutdown_poll(&adapter,&complete),TURBOWASM_OK); }
-    check_true(complete); check_equal(turbowasm_wasi02_cnet_destroy(&adapter),TURBOWASM_OK);
-    check_equal(turbowasm_wasi02_io_destroy(&io),TURBOWASM_OK);
+    check_true(complete);
     check_equal(turbowasm_wasi_preview1_destroy_checked(&wasi),TURBOWASM_OK); check_equal(turbowasm_wasi_fs_destroy(&fs),TURBOWASM_OK);
+    check_equal(turbowasm_wasi02_cnet_destroy(&adapter),TURBOWASM_OK);
+    check_equal(turbowasm_wasi02_io_destroy(&io),TURBOWASM_OK);
     check_equal(native_io_backend_close(&backend),SALTS_OK); check_equal(native_io_backend_destroy(&backend),SALTS_OK);
 }
+#if defined(GUEST_C11_SOCKET_PATH)
+static const uint8_t shared_memory_bytes[] = {
+    0,97,115,109,1,0,0,0, 5,5,1,3,16,0x80,2, 7,10,1,6,'m','e','m','o','r','y',2,0
+};
+typedef struct guest_work {
+    turbowasm_instance root;
+    turbowasm_wasi_threads_execution_policy policy;
+    uint32_t initialize, entry;
+    atomic_bool done;
+    turbowasm_status status;
+    turbowasm_trap trap;
+    int32_t line;
+} guest_work;
+static uint32_t exported(turbowasm_module *module, const char *symbol) {
+    for (size_t i = 0; i < turbowasm_module_export_count(module); ++i) {
+        const turbowasm_export_desc *e = turbowasm_module_export_at(module, i);
+        if (e->kind == TURBOWASM_EXTERN_FUNCTION && e->name.size == strlen(symbol) &&
+            !memcmp(e->name.bytes, symbol, e->name.size)) return e->item_index;
+    }
+    return UINT32_MAX;
+}
+static void guest_worker(void *context) {
+    guest_work *w = context;
+    turbowasm_execution_options options = {.has_fuel_limit = true, .fuel = 100000000};
+    (void)turbowasm_wasi_threads_execution_policy_apply(&w->policy, &options);
+    turbowasm_value result = {0}; size_t count = 0;
+    w->status = turbowasm_instance_invoke_with_options(&w->root, w->initialize, NULL, 0,
+        &result, 1, &count, &w->trap, &options);
+    if (w->status == TURBOWASM_OK && result.as.i32 == 0)
+        w->status = turbowasm_instance_invoke_with_options(&w->root, w->entry, NULL, 0,
+            &result, 1, &count, &w->trap, &options);
+    w->line = result.as.i32;
+    atomic_store(&w->done, true); wake_owner(NULL);
+}
+static void compiled_guest(bool exiting) {
+    cmeta_fs_buf_t program = {0}; turbowasm_module module = {0}, memory_module = {0};
+    turbowasm_instance memory = {0}; turbowasm_linker linker = {0}; guest_work w = {0};
+    atomic_init(&w.done, false);
+    check_equal(cmeta_fs_read_file(GUEST_C11_SOCKET_PATH, &program), 0);
+    check_equal(turbowasm_module_load_borrowed(&module, (const uint8_t *)program.base, program.len), TURBOWASM_OK);
+    check_equal(turbowasm_module_load_borrowed(&memory_module, shared_memory_bytes, sizeof(shared_memory_bytes)), TURBOWASM_OK);
+    check_equal(turbowasm_instance_create(&memory, &memory_module), TURBOWASM_OK);
+    check_equal(turbowasm_wasi_threads_init_pool(&guest_threads, 2), TURBOWASM_OK);
+    check(turbowasm_wasi_threads_execution_policy_init(&w.policy, &guest_threads));
+    check_equal(turbowasm_linker_init(&linker), TURBOWASM_OK);
+    check_equal(turbowasm_linker_define_instance(&linker, (turbowasm_name){(const uint8_t *)"env", 3}, &memory), TURBOWASM_OK);
+    check_equal(turbowasm_wasi_threads_define(&guest_threads, &linker), TURBOWASM_OK);
+    turbowasm_value_kind result_kind = TURBOWASM_VALUE_I32;
+    turbowasm_host_function_type pending_type = {.results = &result_kind, .result_count = 1};
+    check_equal(turbowasm_linker_define_host_function(&linker,
+        (turbowasm_name){(const uint8_t *)"test", 4}, (turbowasm_name){(const uint8_t *)"recv_pending", 12},
+        &pending_type, recv_pending, NULL), TURBOWASM_OK);
+    check_equal(turbowasm_wasi_preview1_define(&wasi, &linker), TURBOWASM_OK);
+    check_equal(turbowasm_instance_create_linked(&w.root, &module, &linker), TURBOWASM_OK);
+    w.initialize = exported(&module, "initialize"); w.entry = exported(&module, exiting ? "exit_waiters" : "sockets");
+    check_not_equal(w.initialize, UINT32_MAX); check_not_equal(w.entry, UINT32_MAX);
+    cmeta_thread_t worker; check_equal(cmeta_thread_create(&worker, guest_worker, &w), SALTS_OK);
+    /* Root joins C11 children on a separate native thread. The initializing
+     * owner keeps native transport and Preview1 cleanup moving throughout. */
+    while (!atomic_load(&w.done) || turbowasm_wasi_threads_active(&guest_threads)) pump();
+    check_equal(cmeta_thread_join(&worker), SALTS_OK); cmeta_thread_destroy(&worker);
+    info("threaded socket guest: status=%d trap=%d line=%d", w.status, w.trap, w.line);
+    if (exiting) {
+        uint32_t code = 0;
+        check_equal(w.status, TURBOWASM_INTERRUPTED);
+        check_true(atomic_load(&receive_pending));
+        check(turbowasm_wasi_threads_group_exit_code(&guest_threads, &code)); check_equal(code, 23u);
+    } else { check_equal(w.status, TURBOWASM_OK); check_equal(w.line, 0); }
+    check(!turbowasm_wasi_threads_group_fatal(&guest_threads, NULL, NULL));
+    turbowasm_instance_destroy(&w.root); check(turbowasm_wasi_threads_destroy(&guest_threads));
+    turbowasm_linker_destroy(&linker); turbowasm_instance_destroy(&memory);
+    turbowasm_module_destroy(&module); turbowasm_module_destroy(&memory_module); cmeta_fs_buf_free(&program);
+}
+#endif
+
 suite("Preview1 CNet transport") {
     before_each() { fixture_init(); }
     after_each() { fixture_destroy(); }
+#if defined(GUEST_C11_SOCKET_PATH)
+    it("runs a compiled C11 TCP guest while its root joins two children") {
+        tcp_pair(TURBOWASM_WASI02_IP_ADDRESS_IPV4); compiled_guest(false);
+    }
+    it("runs a compiled C11 UDP guest with poll and datagram exchange") {
+        udp_pair(TURBOWASM_WASI02_IP_ADDRESS_IPV4); compiled_guest(false);
+    }
+    it("drains socket work when a compiled C11 child calls proc_exit") {
+        tcp_pair(TURBOWASM_WASI02_IP_ADDRESS_IPV4); compiled_guest(true);
+    }
+#endif
     it("accepts and round trips IPv4 TCP with PEEK WAITALL and directional FIN") { tcp_roundtrip(TURBOWASM_WASI02_IP_ADDRESS_IPV4); }
     it("accepts and round trips IPv6 TCP with PEEK WAITALL and directional FIN") { tcp_roundtrip(TURBOWASM_WASI02_IP_ADDRESS_IPV6); }
     it("preserves IPv4 UDP packet boundaries, truncation, polling and empty messages") { udp_roundtrip(TURBOWASM_WASI02_IP_ADDRESS_IPV4); }

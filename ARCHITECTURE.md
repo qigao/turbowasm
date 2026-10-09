@@ -4339,13 +4339,19 @@ order. Rollback disables this initializer and leaves the private threaded SDK
 profile, protected copies, and existing single-owner v2 adapter intact. Do not
 publish placeholder declarations before the complete implementation and tests.
 
-Implementation is staged under #426: Runtime's interruption query and the
-private bounded owner queue/provider routing are implemented, including table
-attachment and owner-only socket binding. Native barrier tests cover admission,
-cleanup after stop, callback thread identity, ordinary-file independence and
-acknowledgement lifetime. The public threaded initializer is not exposed yet:
-interruptible Preview1 wait registration, owner scan cancellation, active-call
-accounting and real threaded CNet guest qualification still have to be integrated.
+The initializer now integrates the private bounded queue with the Preview1 wait
+registry, payload reservations and active-call accounting. Worker cancellation
+only marks its registered wait: owner scans pin the subscription frame and
+publish completion before the worker can retire it. Terminal call notifications
+retain the dispatch context until the wake callback returns; `next_timeout`
+reports immediate progress while those acknowledgements remain in flight.
+Native barrier tests cover admission, cleanup after stop, callback thread
+identity, ordinary-file independence, cancellation versus readiness, close/rebind,
+rights contraction and acknowledgement lifetime. Real compiled Metallic C11
+guests exchange TCP/UDP messages and poll while their root joins children on a
+separate worker, and exercise group proc_exit with socket work in flight.
+The threaded libc/command/Reactor SDK remains an internal #426 profile pending
+its separate installation and consumer qualification.
 
 ### Concurrent filesystem admission and provider lifetime (#426, selected)
 
