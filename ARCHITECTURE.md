@@ -4071,9 +4071,10 @@ but copies only the actual preopen name, leaving trailing bytes unchanged.
 These paths allocate no transfer storage and retain no guest pointer across
 callbacks. Provider-triggered memory growth therefore cannot invalidate the
 output location. Error precedence and little-endian layouts remain unchanged
-for unshared guests. This migration does not make the descriptor table or its
-borrowed preopen names safe against concurrent close/rebind; that lifetime
-protocol remains separate work before the threaded filesystem is qualified.
+for unshared guests. Protected copies alone do not protect the descriptor table
+or borrowed preopen names against concurrent close/rebind. The next section's
+admission protocol supplies that lifetime protection; remaining shared path
+projection and threaded guest integration are still qualification requirements.
 
 `fd_readdir` checks the complete caller buffer and byte-count output before
 provider calls, then publishes each successful entry from the existing bounded
