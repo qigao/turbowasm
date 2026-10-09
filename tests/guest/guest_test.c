@@ -13,6 +13,25 @@ static tw_command_result run(const char *mode) {
     args[1] = mode;
     return tw_command_run(&options);
 }
+static void run_buffering(const char *mode) {
+    options.module_path = GUEST_BUFFERING_PATH;
+    options.directory = root;
+    tw_command_result r = run(mode);
+    if (r.status != TURBOWASM_OK || r.exit_code) {
+        char message[1024]; rewind(streams[2]);
+        size_t n = fread(message, 1, sizeof(message) - 1, streams[2]); message[n] = 0;
+        info("buffer guest stderr: %s", message);
+    }
+    check_equal(r.status, TURBOWASM_OK); check_true(r.exited); check_equal(r.exit_code, 0u);
+}
+static void check_buffer_file(const char *expected) {
+    char path[1200], text[32] = {0};
+    check_equal(cmeta_fs_path_join(path, sizeof(path), root, "buffer"), 0);
+    FILE *f = fopen(path, "rb"); check_not_null(f);
+    size_t n = fread(text, 1, sizeof(text) - 1, f);
+    int error = ferror(f); fclose(f);
+    check_equal(error, 0); check_equal(n, strlen(expected)); check_equal(text, expected);
+}
 static void output(char *buffer, size_t size) {
     rewind(streams[1]);
     size_t n = fread(buffer, 1, size - 1, streams[1]);
@@ -44,9 +63,9 @@ spec("local Metallic C11 command guests") {
     }
     after_each() {
         for (int i = 0; i < 3; ++i) { if (streams[i]) fclose(streams[i]); streams[i] = NULL; }
-        const char *names[] = {"first", "second", "oom"};
+        const char *names[] = {"first", "second", "oom", "buffer", "buffer2"};
         char path[1200];
-        for (size_t i = 0; i < 3; ++i)
+        for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
             if (!cmeta_fs_path_join(path, sizeof(path), root, names[i]) &&
                 !cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS))
                 (void)cmeta_fs_unlink(path);
@@ -127,5 +146,43 @@ spec("local Metallic C11 command guests") {
         options.module_path = GUEST_NUMERIC_PATH;
         tw_command_result r = run("division"); diagnostics();
         check_equal(r.status, TURBOWASM_OK); check_equal(r.exit_code, 0u);
+    }
+    it("buffers complete blocks and flushes borrowed output on close") { run_buffering("full"); }
+    it("flushes line endings and all pending streams") { run_buffering("line"); }
+    it("tracks read-ahead, pushback, positions and EOF") { run_buffering("input"); }
+    it("synchronizes update streams and releases buffers on reopen") { run_buffering("update"); }
+    it("reports allocation and flush failures without retaining closed buffers") {
+        options.memory_bytes = 1024u * 1024u;
+        run_buffering("errors");
+    }
+    it("flushes a line-buffered prompt before unbuffered input") {
+        check_equal(fwrite("x", 1, 1, streams[0]), 1u); rewind(streams[0]);
+        run_buffering("prompt"); char text[32]; output(text, sizeof(text)); check_equal(text, "prompt");
+    }
+    it("flushes all files after normal exit handlers") {
+        run_buffering("exit"); check_buffer_file("file!");
+        char text[32]; output(text, sizeof(text)); check_equal(text, "exit");
+    }
+    it("quick_exit leaves pending buffers unflushed") { run_buffering("quick"); check_buffer_file(""); }
+    it("_Exit leaves pending buffers unflushed") { run_buffering("immediate"); check_buffer_file(""); }
+    it("retries only unwritten bytes after short writes and transient errors") {
+        options.module_path = GUEST_STDIO_FAULTS_PATH;
+        tw_command_result r = run("write");
+        check_equal(r.status, TURBOWASM_OK); check_true(r.exited); check_equal(r.exit_code, 0u);
+    }
+    it("does not treat short reads as EOF") {
+        options.module_path = GUEST_STDIO_FAULTS_PATH;
+        tw_command_result r = run("read");
+        check_equal(r.status, TURBOWASM_OK); check_true(r.exited); check_equal(r.exit_code, 0u);
+    }
+    it("reports partial fwrite progress when filling the buffer triggers an error") {
+        options.module_path = GUEST_STDIO_FAULTS_PATH;
+        tw_command_result r = run("write-fill");
+        check_equal(r.status, TURBOWASM_OK); check_true(r.exited); check_equal(r.exit_code, 0u);
+    }
+    it("recovers from read errors without inventing EOF or skipping bytes") {
+        options.module_path = GUEST_STDIO_FAULTS_PATH;
+        tw_command_result r = run("read-error");
+        check_equal(r.status, TURBOWASM_OK); check_true(r.exited); check_equal(r.exit_code, 0u);
     }
 }

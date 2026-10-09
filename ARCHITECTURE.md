@@ -3753,3 +3753,33 @@ it before reuse. Null input follows the equivalent empty-string/NUL conversion
 specified by C11, rather than discarding a pending partial sequence. This does
 not add locale selection or thread support. The governing contracts are
 [N1570 sections 7.28 and 7.29.6](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf).
+
+### Guest stdio buffering
+
+`setvbuf` selects unbuffered, full or line buffering before stream I/O starts.
+Existing streams remain unbuffered until explicitly configured. A caller buffer
+is borrowed until `fclose` or `freopen`; otherwise the stream allocates exactly
+the requested capacity (BUFSIZ when size is zero). Capacity never grows, must fit
+PTRDIFF_MAX, and is bounded by guest linear memory. Allocation failure leaves the
+previous configuration intact. `FILE` remains opaque in installed headers;
+only its private implementation changes, so guests relink the updated libc.
+
+The single-threaded stream owns its pending output and input read-ahead state.
+Only configured streams enter an intrusive list owned by guest stdio; no separate
+registry allocation or host-global state is introduced. Full buffers and line
+endings trigger writes; a short host write is retried, while an error retains
+the unwritten suffix and sets the stream error indicator. `clearerr` followed by
+`fflush` may retry that suffix. The caller must not resend a failed write's data
+without accounting for partial progress. Input refills retain unread bytes;
+EOF is set only after an actual zero-byte read. The pushback cache stays separate.
+
+Position queries account for buffered bytes and do not clear EOF. Successful
+position changes discard read-ahead and pushback, and clear EOF; failed seeks
+retain unread data. `fflush(NULL)` drains every buffered output stream. Normal
+exit runs handlers and then drains all outputs; quick exit and `_Exit` do not.
+Closing or reopening unregisters the stream and frees only libc-owned buffers,
+even when flushing fails. String-formatting pseudo-streams retain their existing
+callbacks and are never registered. No host runtime or public WASI API changes
+are needed. Regression covers visibility before/after flush, line endings,
+input positions, borrowed and owned buffers, allocation and write failures,
+and the three exit paths.

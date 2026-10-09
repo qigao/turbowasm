@@ -10,7 +10,10 @@ int open_path_(const char *path, int flags);
 FILE* freopen(const char *restrict path, const char mode[restrict static 1], FILE stream[restrict static 1])
 {
     int flags = modeflags_(mode);
-    flush_(stream);
+    if (flush_(stream)) goto failed;
+    if (!path && (stream->read_end != stream->read_pos || stream->avail) &&
+        __stdio_position(stream, 0, SEEK_CUR)) goto failed;
+    __stdio_buffer_release(stream);
 
     if (path) {
         stream->close(stream);
@@ -50,10 +53,17 @@ FILE* freopen(const char *restrict path, const char mode[restrict static 1], FIL
             return stream;
         }
         errno = wasi_to_posix[e];
-failed:
-        stream->close(stream);
+        goto failed;
     }
 
     if (stream != stdin && stream != stdout && stream != stderr) free(stream);
     return (void*)0;
+failed: {
+    int error = errno;
+    stream->close(stream);
+    __stdio_buffer_release(stream);
+    if (stream != stdin && stream != stdout && stream != stderr) free(stream);
+    errno = error;
+    return NULL;
+}
 }

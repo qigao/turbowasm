@@ -25,7 +25,22 @@ struct __FILE
     int fd;
     signed char orient;  /* -1 byte, 0 unset, +1 wide */
     unsigned pushback;   /* one-slot ungetwc buffer (live iff wpushbit_ in state) */
+
+    /* Descriptor streams only. Formatting pseudo-streams use base/ptr/end. */
+    unsigned char* buffer;
+    size_t capacity;
+    size_t read_pos, read_end, write_end;
+    unsigned buffer_owned, io_started;
+    int buffer_mode;
+    FILE* flush_next;
 };
+
+int __stdio_flush(FILE*);
+int __stdio_flush_all(int line_only);
+void __stdio_buffer_release(FILE*);
+void __stdio_buffer_register(FILE*);
+int __stdio_position(FILE*, off_t, int);
+size_t __stdio_write_raw(FILE*, const void*, size_t);
 
 enum
 {

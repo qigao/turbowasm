@@ -13,8 +13,7 @@ _Noreturn void _Exit(int rc)
 _Noreturn void exit(int rc)
 {
     __run_atexit_();
-    fflush(stdout);
-    fflush(stderr);
+    fflush(NULL);
     __wasi_proc_exit((__wasi_exitcode_t)(unsigned)rc);
 }
 

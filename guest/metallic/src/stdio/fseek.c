@@ -3,12 +3,5 @@
 
 int fseek(FILE stream[static 1], long offset, int origin)
 {
-    if (origin == SEEK_CUR)
-        offset -= stream->avail;
-
-    stream->avail = 0;
-
-    if (flush_(stream) || stream->seek(stream, offset, origin) == -1) return -1;
-    stream->state &= ~(eofbit_ | wpushbit_);
-    return 0;
+    return __stdio_position(stream, offset, origin);
 }

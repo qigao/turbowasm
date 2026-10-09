@@ -20,6 +20,8 @@ and corrected Preview1 rights. The filesystem profile uses no-follow opens to ma
 capabilities. Changes are maintained directly in this local source tree.
 Additional corrections cover unsigned assembly of 128-bit shift results and
 restartable Unicode conversion state, null-input handling and invalid prefixes.
+Stdio now supports explicit bounded buffering, stream-wide exit flushing,
+read-ahead-aware positioning, checked byte counts and short-I/O recovery.
 
 This is an optional wasm32, single-threaded guest library, not a native runtime
 dependency. It does not provide a shell, real setjmp/longjmp, threads or arbitrary

@@ -12,13 +12,9 @@ off_t __stdio_seek(FILE stream[static 1], off_t offset, int origin)
     if (e)
         return wasi_seterrno(e);
 
-#if LONG_MAX == 0x7FFFFFFF
-    if (newoff > (__wasi_filesize_t)0x7FFFFFFF) {
+    if (newoff > (__wasi_filesize_t)LLONG_MAX) {
         errno = EOVERFLOW;
         return -1;
     }
-#endif
-
-    stream->state &= ~eofbit_;
     return (off_t)newoff;
 }

@@ -384,7 +384,15 @@ compatible with the LTO archive used by that SDK.
 The profile supports command args/environment, stdio, ordinary files,
 rename/remove, exclusive creation, temporary files, append mutation, allocation,
 exit handlers and realtime `timespec_get`. Temporary files require a writable
-preopen and are unlinked immediately. Stdio is currently unbuffered.
+preopen and are unlinked immediately. Stdio defaults to unbuffered operation.
+Before I/O, `setvbuf`/`setbuf` can select full or line buffering; a supplied buffer
+must remain alive until the stream closes or reopens. With a null buffer, libc
+allocates the requested capacity (BUFSIZ for size zero), and frees it on close or
+reopen. Invalid settings and allocation failure return nonzero with errno set.
+`fflush(NULL)` and normal exit flush all buffered outputs; `quick_exit` and
+`_Exit` do not. Flush failures set the stream error indicator and retain the
+unwritten suffix for a `clearerr`/`fflush` retry. Positioning accounts for input
+read-ahead and output buffering, and successful seek discards pushback and EOF.
 `freopen(NULL, ...)` permits append changes with unchanged read/write access;
 truncation or access changes return `ENOTSUP` and close the stream. Real
 `setjmp`/`longjmp`, threads, full locale/fenv and the documented upstream
@@ -398,6 +406,9 @@ invalid prefixes and bounded wide-string conversion. Numeric regression uses a
 64-bit bit-by-bit oracle for all 128 shift counts, integer conversion boundaries
 and fixed binary128 division results (including subnormal ties). These bounded
 checks do not replace the upstream complete math/oracle suite.
+Buffering tests cover visibility, positioning, normal/quick/immediate exit,
+buffer lifetime, allocation failure, and scripted short I/O/error recovery at
+the guest's WASI import boundary.
 
 ## Dependency boundary
 
