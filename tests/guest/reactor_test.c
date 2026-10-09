@@ -96,7 +96,7 @@ static turbowasm_status call(reactor_session *s, const char *symbol, int *argume
         *out = result.as.i32;
     }
 #ifdef TURBOWASM_TEST_MIR
-    if (status == TURBOWASM_OK && s->instance.impl &&
+    if (s->instance.impl &&
         ((turbowasm_instance_impl *)s->instance.impl)->jit_backend_attached) {
         turbowasm_instance_impl *impl = s->instance.impl;
         check_equal(impl->jit_functions[exported_function(s->module, symbol)].state, TURBOWASM_JIT_COMPILED);
@@ -156,7 +156,7 @@ static turbowasm_status pipe_seek(void *context, turbowasm_host_call *host,
     *count = 1; *out_trap = TURBOWASM_TRAP_NONE;
     return TURBOWASM_OK;
 }
-static void on_exit(void *context, turbowasm_instance *instance, uint32_t code) {
+static void guest_process_exit(void *context, turbowasm_instance *instance, uint32_t code) {
     (void)context; (void)instance; exited = true; exit_code = code;
 }
 static void invoke_worker(void *arg) {
@@ -193,7 +193,7 @@ spec("Metallic Reactor lifecycle") {
         turbowasm_wasi_preview1_config wc = {0};
         wc.allow_fd_write = true; wc.fd_write = write_output;
         wc.allow_fd_read = true; wc.fd_read = read_input;
-        wc.allow_proc_exit = true; wc.proc_exit = on_exit;
+        wc.allow_proc_exit = true; wc.proc_exit = guest_process_exit;
         check_equal(turbowasm_wasi_preview1_init(&wasi, &wc), TURBOWASM_OK);
         check_equal(turbowasm_linker_init(&linker), TURBOWASM_OK);
         check_equal(turbowasm_wasi_preview1_define(&wasi, &linker), TURBOWASM_OK);
