@@ -144,13 +144,14 @@ static void tw_p1_free(turbowasm_wasi_preview1_impl *p, void *ptr, size_t bytes)
 static turbowasm_status tw_p1_fd_fdstat_get(TW_P1_HOST_ARGS) {
     turbowasm_wasi_preview1_impl *p=context;
     if (!p || !p->async || !tw_p1_arguments(arguments, argument_count, 2)) return TURBOWASM_INVALID_ARGUMENT;
-    turbowasm_host_memory_span span={0}; tw_wasi_fd_lease lease={0};
-    uint32_t e=turbowasm_wasi_memory_span(call, (uint32_t)arguments[1].as.i32, 24, &span);
+    uint8_t output[24] = {0}; tw_wasi_fd_lease lease={0};
+    uint32_t e=turbowasm_wasi_memory_check(call, (uint32_t)arguments[1].as.i32, sizeof(output));
     if (!e) e=tw_wasi_fd_acquire(p->filesystem, (uint32_t)arguments[0].as.i32, 0, &lease);
     if (!e) {
-        memset(span.data, 0, 24); span.data[0]=lease.type; tw_p1_store16(span.data+2, lease.flags);
-        turbowasm_wasi_store_u64(span.data+8, lease.rights_base);
-        turbowasm_wasi_store_u64(span.data+16, lease.rights_inheriting);
+        output[0]=lease.type; tw_p1_store16(output+2, lease.flags);
+        turbowasm_wasi_store_u64(output+8, lease.rights_base);
+        turbowasm_wasi_store_u64(output+16, lease.rights_inheriting);
+        e=turbowasm_wasi_memory_write(call, (uint32_t)arguments[1].as.i32, output, sizeof(output));
     }
     tw_wasi_fd_release(p->filesystem, &lease); return TW_P1_RETURN(e);
 }

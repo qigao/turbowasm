@@ -443,10 +443,13 @@ thread-local string/calendar buffers and once-only preopen discovery. Filesystem
 callbacks in these libc tests are controlled providers; they do not establish
 concurrent HostFS support by themselves. Separate native filesystem tests cover
 table admission/close races, per-file vector I/O and directory cursor ordering,
-bounded HostFS slot reservation and rename/open exclusion. Concurrent close can
-return `BUSY` while synchronous calls are in flight; callers retry after those
-calls finish. Shared Preview1 path/random and socket/poll projections, socket
-owner-thread dispatch, and installed threaded command/Reactor/CMeta qualification
+bounded HostFS slot reservation and rename/open exclusion. A separate compiled
+Metallic guest runs four C11 workers against production HostFS, covering create,
+append, seek, read, stat, rename, remove and temporary-file cleanup. Shared
+Preview1 paths/random use bounded snapshots; fixed fdstat output uses protected
+copies. Concurrent close can return `BUSY` while synchronous calls are in flight;
+callers retry after those calls finish. Socket/poll shared-memory projections,
+socket owner-thread dispatch, and installed threaded command/Reactor/CMeta qualification
 remain open. The remaining integration work is tracked in
 [#426](https://github.com/qigao/turbowasm/issues/426); it is not yet a threaded SDK.
 The guest CI profiles are `ci-metallic-user` (Linux) and

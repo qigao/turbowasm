@@ -107,6 +107,11 @@ typedef uint32_t (*turbowasm_wasi_clock_time_fn)(
     uint64_t precision_ns,
     uint64_t *out_timestamp_ns);
 
+/* Borrowed output valid only during this callback. On success fill all length
+ * bytes. The adapter invokes the provider once per admitted random_get,
+ * including zero length. Concurrent guests require a concurrent-safe provider.
+ * Shared guest output is published only on success; unshared calls retain the
+ * direct-buffer behavior, including any provider-written bytes on error. */
 typedef uint32_t (*turbowasm_wasi_random_fill_fn)(
     void *context,
     uint8_t *buffer,
@@ -217,9 +222,19 @@ typedef struct turbowasm_wasi_preview1_config {
  * valid range returns NOMEM before invoking the provider. Successful reads
  * copy only the reported byte count back to the original guest ranges.
  * Unshared-memory vector calls retain their existing capacity behavior.
- * Fixed filesystem outputs and preopen names also use protected copies;
- * failed provider calls leave those guest outputs unchanged. The filesystem
- * table and borrowed preopen names still require coordination with close/rebind.
+ * Shared path imports and random_get use the same 1 MiB per-call payload bound;
+ * rename counts both paths together. All guest ranges are checked first: FAULT
+ * takes precedence over NOMEM, before allocation or provider effects. Paths are
+ * copied before callbacks; random output is copied only on success. Zero-length
+ * random calls invoke the provider once without payload allocation. For example,
+ * request multiple <= 1 MiB random_get calls for a larger shared output.
+ * Unshared path/random calls keep their existing capacity and error behavior.
+ * Fixed filesystem outputs (including v2 fd_fdstat_get) and preopen names also
+ * use protected copies; failed provider calls leave those guest outputs
+ * unchanged. Preview1 pins borrowed preopen names through the copy. Concurrent
+ * filesystem close may return BUSY while a synchronous operation is admitted;
+ * finish that operation before retrying close. Public descriptor-info getters
+ * retain their separately documented borrowed-path lifetime contract.
  * Providers used by concurrently executing guests must support that concurrency.
  */
 turbowasm_status turbowasm_wasi_preview1_init(

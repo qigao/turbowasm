@@ -4059,8 +4059,9 @@ two importers observing the same storage before/after growth, failed-copy
 preservation, and compiled guest threads concurrently performing short vector
 I/O and first-time environment lookup. The vector tests check the exact 1 MiB
 boundary, rejection above it, OOB before provider effects, zero vectors, and
-provider errors/over-reported reads without publishing output. Random,
-path and v2 socket/poll projections still require migration;
+provider errors/over-reported reads without publishing output. Shared path and
+random snapshots and fixed v2 fdstat outputs are described below. Remaining v2
+socket/poll projections still require migration;
 this checkpoint does not qualify complete threaded Preview1 or libc support.
 
 Fixed filesystem outputs (`fd_seek`, `fd_tell`, `fd_filestat_get`,
@@ -4085,6 +4086,60 @@ As before, a later provider failure leaves any already-written prefix in the
 buffer and leaves the byte-count output unchanged; this is not an all-or-nothing
 directory snapshot. A failed entry itself is never published. Different entries
 are separate protected copies and do not promise an atomic directory listing.
+
+### Shared path and random snapshots (#426, selected)
+
+The synchronous Preview1 path imports and `random_get` previously used raw spans,
+which reject shared memory. Their provider boundaries need owned
+call-local bytes, without holding the Runtime memory lock across callbacks.
+The existing 1 MiB vector limit is extended to these additional calls.
+
+The approved extension retains public API/layouts and applies one 1 MiB
+temporary-payload limit to each shared-memory path or random call. Rename counts
+both paths together using checked wide arithmetic. Validate every input/output
+guest range before allocation or provider effects; an invalid range returns
+FAULT, and otherwise an over-budget payload returns NOMEM without calling the
+provider. Allocate no payload for zero length. Fixed 4/64-byte output records do
+not count against this payload budget. Existing unshared transfer capacity and
+provider error behavior remain unchanged.
+
+Shared paths are copied in full before admission to the filesystem provider and
+remain stable through its callback. They are length-delimited bytes, preserving
+embedded NULs and leaving path policy to the provider. No truncation or chunked
+path interpretation is allowed. `path_open` publishes its fd only after success;
+`path_filestat_get` serializes a call-local filestat and publishes only on success.
+Both recheck the output range through the protected write API after callbacks;
+memory growth cannot invalidate a saved raw pointer because none is retained.
+
+For shared `random_get`, invoke the configured provider exactly once with the
+original requested length and call-local initialized storage. Publish only after
+success; a provider error leaves guest bytes unchanged. Zero-length calls still
+invoke the provider once with a valid zero-length buffer. Provider ownership,
+entropy quality and concurrent callback support remain provider obligations;
+the adapter neither reseeds nor substitutes a random generator. The existing
+unshared direct-provider behavior, including provider-written bytes on error,
+remains intact. No new global serialization is introduced.
+
+Unbounded temporary allocation was rejected because a guest could turn a large
+valid memory range into an equally large host allocation. Chunking was rejected
+because paths require a complete stable argument and random providers may have
+per-call semantics or fail after a prefix. The selected limit matches the
+existing shared vector profile; applications needing a larger random transfer
+must request separate guest calls. Unshared-memory callers do not acquire a new
+limit. The bounded shared path profile is an explicit compatibility restriction,
+not a claim that Preview1 universally limits path size to 1 MiB.
+
+Fourteen formal projection cases cover shared/unshared calls, zero length, exact/over-budget
+payloads, aggregate rename capacity, bounds before effects, provider failures,
+overlapping path/output ranges, stable snapshots while another importer mutates
+or grows memory, output ABI and descriptor ownership, including the fixed
+24-byte `fd_fdstat_get` output. An internal compiled Metallic guest exercises
+four C11 workers against the production HostFS provider: create, append, seek,
+read, stat, rename, remove and temporary-file cleanup. Its deterministic random
+provider qualifies transfer behavior, not entropy quality.
+Rollback removes only the new
+shared projections and retains the private threaded SDK profile and protected
+Runtime APIs; it never exposes raw shared memory spans.
 
 ### Concurrent filesystem admission and provider lifetime (#426, selected)
 

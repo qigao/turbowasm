@@ -1331,6 +1331,12 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
   add_test(NAME turbowasm_wasi_fs_memory_test COMMAND turbowasm_wasi_fs_memory_test)
   set_tests_properties(turbowasm_wasi_fs_memory_test PROPERTIES TIMEOUT 30)
 
+  add_executable(turbowasm_wasi_path_memory_test wasi_path_memory_test.c)
+  target_link_libraries(turbowasm_wasi_path_memory_test PRIVATE TurboWasm::WASI Salts::TinyTest)
+  set_target_properties(turbowasm_wasi_path_memory_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_path_memory_test COMMAND turbowasm_wasi_path_memory_test)
+  set_tests_properties(turbowasm_wasi_path_memory_test PROPERTIES TIMEOUT 60)
+
   add_executable(turbowasm_wasi_fs_concurrency_test wasi_fs_concurrency_test.c)
   target_link_libraries(turbowasm_wasi_fs_concurrency_test PRIVATE TurboWasm::WASI Salts::TinyTest Salts::Platform)
   target_include_directories(turbowasm_wasi_fs_concurrency_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
