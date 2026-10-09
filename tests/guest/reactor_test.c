@@ -156,6 +156,17 @@ static turbowasm_status pipe_seek(void *context, turbowasm_host_call *host,
     *count = 1; *out_trap = TURBOWASM_TRAP_NONE;
     return TURBOWASM_OK;
 }
+static turbowasm_status pipe_close(void *context, turbowasm_host_call *host,
+    const turbowasm_value *args, size_t argc, turbowasm_value *results,
+    size_t capacity, size_t *count, turbowasm_trap *out_trap) {
+    (void)context; (void)host;
+    if (argc != 1 || !args || !results || capacity != 1) return TURBOWASM_INVALID_ARGUMENT;
+    /* These borrowed streams grant I/O only, never descriptor ownership. */
+    uint32_t error = (uint32_t)args[0].as.i32 < 3 ? TURBOWASM_WASI_ERRNO_NOTCAPABLE : TURBOWASM_WASI_ERRNO_BADF;
+    results[0] = (turbowasm_value){.kind = TURBOWASM_VALUE_I32, .as.i32 = (int32_t)error};
+    *count = 1; *out_trap = TURBOWASM_TRAP_NONE;
+    return TURBOWASM_OK;
+}
 static void guest_process_exit(void *context, turbowasm_instance *instance, uint32_t code) {
     (void)context; (void)instance; exited = true; exit_code = code;
 }
@@ -203,6 +214,7 @@ spec("Metallic Reactor lifecycle") {
         turbowasm_value_kind seek_params[] = {TURBOWASM_VALUE_I32, TURBOWASM_VALUE_I64, TURBOWASM_VALUE_I32, TURBOWASM_VALUE_I32};
         turbowasm_host_function_type seek_type = {seek_params, 4, &i32, 1};
         check_equal(turbowasm_linker_define_host_function(&linker, name("wasi_snapshot_preview1"), name("fd_seek"), &seek_type, pipe_seek, NULL), TURBOWASM_OK);
+        check_equal(turbowasm_linker_define_host_function(&linker, name("wasi_snapshot_preview1"), name("fd_close"), &type, pipe_close, NULL), TURBOWASM_OK);
     }
     after_each() {
         atomic_store(&host_release, true);
