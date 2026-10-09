@@ -83,10 +83,13 @@ hammers the published hard-to-round cases plus a broad random sample. See
 
 ## Limitations
 
-* `longjmp` aborts the process. WebAssembly has no native stack unwinding;
-  programs that need real setjmp/longjmp should compile with clang's
-  `-mllvm -wasm-enable-sjlj`, which lowers `setjmp`/`longjmp` to clang
-  intrinsics and bypasses libc.
+* This TurboWasm checkout implements `setjmp`/`longjmp` with LLVM 20+ SJLJ
+  lowering, Metallic runtime helpers and standard Wasm exception handling.
+  Use the containing project's guest CMake helpers: compiler and LTO options
+  must agree. The upstream Makefile does not configure this integration.
+  Jump buffers belong to a still-active invocation on the same C thread;
+  they cannot resume an export after it has returned to the host. Longjmp
+  does not run application cleanup or unwind a live host callback.
 * `signal`/`raise` track handlers but do not asynchronously dispatch — WASI
   preview1 delivers no signals. `raise(SIGABRT)` is correctly routed.
 * `localtime` aliases `gmtime` — WASI preview1 has no timezone info.

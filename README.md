@@ -352,7 +352,7 @@ The optional C11 guest SDK uses the local sources in `guest/metallic`. It perfor
 no Metallic download during configure or build. Origin, revision, license and
 local changes are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-Build with LLVM's `clang`, `llvm-ar` and `wasm-ld` on PATH and a Salts SDK providing
+Build with LLVM 20+ `clang`, `llvm-ar` and `wasm-ld` on PATH and a Salts SDK providing
 `SALTS_FS_ROOT_MUTATION_VERSION` (secure rename, exclusive create and append):
 
 ```powershell
@@ -374,12 +374,47 @@ so instantiation cannot run unmetered guest code. Runtime failures return proces
 status 125; guest `proc_exit` returns its low eight bits.
 
 `cmake --build --preset install-win-metallic-user` installs the runner and guest
-headers, `metallic.a`, `crt1.o`, license and `TurboWasmGuest.cmake`. Installed CMake
+headers, `metallic.a`, `crt1.o`, `crt1-reactor.o`, license and the guest CMake helpers. Installed CMake
 consumers can include `${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuest.cmake` after
 `find_package(TurboWasm CONFIG REQUIRED)`, then call
 `turbowasm_add_c_guest(app /absolute/path/app.c)`. This emits `app.wasm` with a
 256 KiB shadow stack and 16 MiB declared maximum memory. LLVM versions must be
 compatible with the LTO archive used by that SDK.
+
+For a persistent application, use `turbowasm_add_c_reactor(tool SOURCES tool.c
+EXPORTS tool_step tool_close)`. The host calls `_initialize` once, then retains
+the instance between business calls. Initialize before any allocation or
+business call; duplicate initialization traps. Close explicitly to release
+application objects and flush output. The [counter example](examples/guest/counter.c)
+and [embedding session](examples/guest/reactor_session.h) demonstrate bounded
+calls, exclusive admission, and terminal teardown after traps or fuel exhaustion.
+Run `turbowasm_reactor_example path/to/guest_counter.wasm` for the native example.
+
+`turbowasm_add_c_guest_library(name SOURCES a.c b.c)` emits a guest archive.
+Program helpers accept `LIBRARIES` with guest library targets or absolute archive
+paths; all helpers accept `INCLUDE_DIRECTORIES` and `COMPILE_OPTIONS`. The output
+variables are `<name>_ARCHIVE` and `<name>_WASM`. Invalid arguments or native
+library targets fail configuration; missing source files fail the build.
+
+To cross-compile CMeta core from local Salts source, include
+`${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuestCMeta.cmake` and call
+`turbowasm_add_cmeta_guest_library(guest_cmeta /absolute/path/salts/cmeta)`.
+Pass that guest target in `LIBRARIES` and its `cmeta/include` directory in
+`INCLUDE_DIRECTORIES`. The source needs the Wasm C11 `aligned_alloc` path in
+`cmeta/src/data.c`. Set the parent environment variable
+`TURBOWASM_GUEST_CMETA_SOURCE_DIR` before configuring a Metallic user preset to
+enable the project's CMeta guest tests. This compiles portable core sources,
+excluding CMetaNative; host SDK archives cannot be linked into Wasm. Metadata,
+function pointers and object ownership stay within the guest instance.
+
+`setjmp`/`longjmp` use LLVM SJLJ lowering and standard Wasm exception handling.
+The helpers supply compiler and LTO flags together, including the Wasm exception
+model; the small libc SJLJ support objects stay outside LTO. Rebuild all guest
+objects using the new `jmp_buf` layout. Omitting lowering fails to link rather
+than returning a false success. A jump target must still be active on the same
+C thread; returning from a Reactor export ends that target's lifetime. Jumps do
+not perform application cleanup and must not bypass a CMeta scope, live host
+callback or async boundary. See the [design and references](ARCHITECTURE.md#metallic-non-local-jumps-427).
 
 The profile supports command args/environment, stdio, ordinary files,
 rename/remove, exclusive creation, temporary files, append mutation, allocation,
@@ -394,8 +429,8 @@ reopen. Invalid settings and allocation failure return nonzero with errno set.
 unwritten suffix for a `clearerr`/`fflush` retry. Positioning accounts for input
 read-ahead and output buffering, and successful seek discards pushback and EOF.
 `freopen(NULL, ...)` permits append changes with unchanged read/write access;
-truncation or access changes return `ENOTSUP` and close the stream. Real
-`setjmp`/`longjmp`, threads, full locale/fenv and the documented upstream
+truncation or access changes return `ENOTSUP` and close the stream. Threads,
+full locale/fenv and the documented upstream
 long-double gaps remain outside this profile; it is not complete C11 conformance.
 The Linux CI profile is `ci-metallic-user`; manual CI selects it with
 `metallic_guests=true` and the matching `salts_ci_run` prerequisite artifact.

@@ -3,18 +3,24 @@
 
 #include "bits/specifiers.h"
 
-/* WebAssembly has no native stack-unwinding primitive, so a real
- * jmp_buf would be unused. Keep the type the smallest C requires:
- * one element of an arithmetic type, so the array decays to a
- * pointer just like a real setjmp implementation.
+/* Private LLVM Wasm SJLJ state. All pointers refer to guest linear memory.
+ * A target is valid only while its saving invocation remains active on the
+ * same C thread. Recompile every consumer when changing this layout.
  */
-typedef int jmp_buf[1];
+typedef struct {
+    void *__invocation;
+    unsigned int __label;
+    struct {
+        void *__environment;
+        int __value;
+    } __payload;
+} jmp_buf[1];
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-int setjmp(jmp_buf env);
+__attribute__((returns_twice)) int setjmp(jmp_buf env);
 _NORETURN void longjmp(jmp_buf env, int val);
 
 #ifdef __cplusplus

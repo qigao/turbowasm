@@ -3731,8 +3731,8 @@ heap growth, aligned allocation admission and temporary-file lifetime. Temporary
 files are exclusively created in the explicitly preopened current directory and
 unlinked immediately; neither a global host temp directory nor shell execution
 is granted. Failed unlink closes the newly created descriptor and reports the
-error. This profile is single-threaded and does not claim complete C11: real
-setjmp/longjmp, threads, general locale/fenv behavior and upstream long-double
+error. This profile is single-threaded and does not claim complete C11:
+threads, general locale/fenv behavior and upstream long-double
 soft-float gaps remain outside these stages.
 
 Validation uses compiled C guests through the real runner and formal filesystem
@@ -3783,3 +3783,91 @@ callbacks and are never registered. No host runtime or public WASI API changes
 are needed. Regression covers visibility before/after flush, line endings,
 input positions, borrowed and owned buffers, allocation and write failures,
 and the three exit paths.
+
+### Metallic Reactor and guest libraries (#425)
+
+Metallic remains the guest C11 library for the Reactor, threads (#426) and SJLJ
+(#427) work. These are separate capabilities; a single-threaded Reactor does not
+require either threads or SJLJ. Existing command guests keep their startup and
+exit behavior.
+
+The Reactor links a separate `crt1-reactor.o` and exports `_initialize : () -> ()`.
+Initialization seeds the heap before calling constructors and returns to its
+host. A second or recursive initialization traps before changing the heap. The
+host must initialize once before using business exports. There is no implicit
+`main`, process exit, or destructor pass after a business call. Applications
+explicitly release persistent objects and flush output in their close export;
+destroying an instance does not run `atexit` handlers.
+
+The installed CMake entry `turbowasm_add_c_reactor(name SOURCES ... EXPORTS ...)`
+selects this CRT. `turbowasm_add_c_guest_library(name SOURCES ...)` compiles a
+Wasm archive. Both accept `INCLUDE_DIRECTORIES` and `COMPILE_OPTIONS`; programs
+also accept `LIBRARIES` naming guest library targets or explicit archive paths.
+The existing `turbowasm_add_c_guest(name source)` accepts the same additional
+program arguments without changing old callers. Guest targets do not link
+native Salts archives. Object depfiles preserve header rebuilds, and archives
+are rebuilt from their exact source list so removed members cannot survive.
+
+The embedding example owns each instance's lifecycle and borrows its module,
+source bytes, providers and capabilities. It rejects a Wasm start section and
+checks `_initialize` before instantiation; initialization and business calls
+use explicit fuel limits. One active operation is admitted per session, with
+concurrent/reentrant operations rejected instead of queued. Successful business
+error returns leave the instance usable; traps, interruption, exceptions and
+fuel exhaustion retire it. Failed instances receive host teardown only, never
+another guest cleanup call. Explicit destruction requires quiescence; timing
+out a caller is not permission to free a running instance. Provider instances
+outlive consumers. This is example orchestration over the existing Runtime API,
+not a second public Runtime ABI or a tool gateway.
+
+CMeta qualification cross-compiles portable CMeta sources with the guest CRT
+and Metallic headers. Metadata, object pointers and callbacks remain guest-local;
+host reflection needs an explicit ABI adapter. Cross-instance pointers require
+a separately specified shared-memory/allocator contract. Native thunks remain
+excluded. Rollback disables the optional guest additions; command guests and
+native consumers retain their existing interfaces.
+
+### Metallic non-local jumps (#427)
+
+The selected implementation uses LLVM's Wasm SJLJ lowering and standard Wasm
+exception handling. The compiler creates continuations in the calling function;
+Metallic implements `__wasm_setjmp`, `__wasm_setjmp_test` and `__wasm_longjmp`.
+The `jmp_buf` stores only guest invocation identity, a compiler label and a
+two-field exception payload. No native address or host jump buffer crosses the
+memory boundary. This changes the previous placeholder layout: all guest
+objects and archives using `setjmp.h` must be rebuilt together.
+
+MIR's special handling of native `setjmp` illustrates the need to preserve the
+interpreter PC, but cannot restore an already returned host helper frame.
+Minicoro's Wasm backend uses Asyncify to preserve coroutine stacks; adding that
+whole-program transformation would introduce another tool and execution model.
+Neither is required by this path. The inspected local references are
+TurboScript `5e190f4d6256d67e9aea03dafdc7488d16d3b00e`'s `vendor/mir/mir-interp.c`
+and Salts `25388632d80150cf3f6bd31dcf8ddc02525f732f`'s `vendor/minicoro/minicoro.h`.
+Their native switching implementation is not copied into the guest library.
+The implemented compiler ABI follows
+[LLVM's lowering contract](https://github.com/llvm/llvm-project/blob/llvmorg-21.1.1/llvm/lib/Target/WebAssembly/WebAssemblyLowerEmscriptenEHSjLj.cpp).
+The [SDK integration reference](https://github.com/WebAssembly/wasi-sdk/blob/main/SetjmpLongjmp.md)
+documents the corresponding compiler and LTO flags. Metallic remains the libc.
+
+Guest compilation requires LLVM 20 or newer and enables SJLJ with standard EH
+at both compilation and LTO linking. LTO also selects `-exception-model=wasm`;
+the helper definitions compile without LTO because LLVM introduces declarations
+for these symbols in its late lowering pass. The linker explicitly retains the
+three compiler helper symbols from the archive. There is no success-returning `setjmp`
+fallback: omitting compiler lowering leaves an unresolved symbol. The helper
+payload is part of the target buffer, so nested live targets need no global
+scratch state or allocation. LLVM restores the guest shadow stack on landing.
+The Runtime propagates ordinary Wasm exceptions through its existing unwind
+paths, retaining fuel, trap and resource accounting in interpreter and JIT.
+
+Only a still-active invocation on the same C thread is a valid target. Returning
+to the host ends that invocation; Reactor persistence does not extend it.
+Cross-thread, stale-buffer and cross-instance jumps are undefined C behavior
+and do not acquire access outside Wasm memory. Synchronous host imports may
+return normally between setjmp and longjmp; a guest jump must not unwind a live
+host callback or async suspension. No host continuation API is added. C11's
+volatile-local rules apply, and longjmp does not perform application cleanup:
+in particular it cannot bypass outstanding CMeta structured-scope obligations.
+Rollback requires rebuilding the SDK and all affected guests, not mixing old
+four-byte placeholder buffers with the new helpers.

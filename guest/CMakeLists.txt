@@ -22,21 +22,31 @@ if(NOT IS_ABSOLUTE "${TURBOWASM_METALLIC_SOURCE_DIR}" OR
   message(FATAL_ERROR "TURBOWASM_METALLIC_SOURCE_DIR must point to a local Metallic source checkout")
 endif()
 set(metallic_source "${TURBOWASM_METALLIC_SOURCE_DIR}")
+set(TURBOWASM_GUEST_INCLUDE "${metallic_source}/include")
+include(${CMAKE_CURRENT_SOURCE_DIR}/TurboWasmGuest.cmake)
 # Match upstream's explicit two-depth source selection, restricted to vendor code.
 file(GLOB metallic_sources RELATIVE "${metallic_source}" "${metallic_source}/src/*/*.c" "${metallic_source}/src/*/*/*.c")
 set(metallic_objects)
 foreach(source IN LISTS metallic_sources)
+  set(metallic_unit_options)
+  if(source MATCHES "^src/setjmp/")
+    # LLVM creates these helper declarations during late SJLJ lowering. Keep
+    # their definitions outside that LTO module to avoid renamed duplicates.
+    set(metallic_unit_options -fno-lto)
+  endif()
   set(object "${CMAKE_CURRENT_BINARY_DIR}/objects/${source}.o")
   get_filename_component(object_dir "${object}" DIRECTORY)
   add_custom_command(OUTPUT "${object}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${object_dir}"
     COMMAND "${TURBOWASM_GUEST_CLANG}" --target=wasm32-unknown-unknown -mbulk-memory
-      -O2 -flto -std=gnu11 -D__STDC_NO_THREADS__=1 -I "${metallic_source}/include"
+      -O2 -flto -std=gnu11 -D__STDC_NO_THREADS__=1 ${TURBOWASM_GUEST_SJLJ_OPTIONS} ${metallic_unit_options} -I "${metallic_source}/include"
       -MMD -MF "${object}.d" -MT "${object}"
       -c "${metallic_source}/${source}" -o "${object}"
     DEPENDS "${metallic_source}/${source}" DEPFILE "${object}.d" VERBATIM)
   if(source STREQUAL "src/crt/crt1.c")
     set(TURBOWASM_GUEST_CRT "${object}")
+  elseif(source STREQUAL "src/crt/crt1-reactor.c")
+    set(TURBOWASM_GUEST_REACTOR_CRT "${object}")
   else()
     list(APPEND metallic_objects "${object}")
   endif()
@@ -51,16 +61,31 @@ add_custom_command(OUTPUT "${TURBOWASM_GUEST_LIBRARY}"
   COMMAND "${CMAKE_COMMAND}" -E rm -f "${TURBOWASM_GUEST_LIBRARY}"
   COMMAND "${TURBOWASM_GUEST_AR}" rcs "${TURBOWASM_GUEST_LIBRARY}" "@${CMAKE_CURRENT_BINARY_DIR}/metallic-objects.rsp"
   DEPENDS ${metallic_objects} "${CMAKE_CURRENT_BINARY_DIR}/metallic-objects.rsp" VERBATIM)
-add_custom_target(turbowasm_guest_sdk ALL DEPENDS "${TURBOWASM_GUEST_LIBRARY}" "${TURBOWASM_GUEST_CRT}")
+add_custom_target(turbowasm_guest_sdk ALL DEPENDS "${TURBOWASM_GUEST_LIBRARY}" "${TURBOWASM_GUEST_CRT}" "${TURBOWASM_GUEST_REACTOR_CRT}")
 set_target_properties(turbowasm_guest_sdk PROPERTIES FOLDER "guest")
 set(TURBOWASM_GUEST_INCLUDE "${metallic_source}/include")
 include(${CMAKE_CURRENT_SOURCE_DIR}/TurboWasmGuest.cmake)
+if(TURBOWASM_GUEST_CMETA_SOURCE_DIR)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/TurboWasmGuestCMeta.cmake)
+  turbowasm_add_cmeta_guest_library(turbowasm_guest_cmeta "${TURBOWASM_GUEST_CMETA_SOURCE_DIR}")
+endif()
 turbowasm_add_c_guest(guest_hello "${PROJECT_SOURCE_DIR}/examples/guest/hello.c")
+turbowasm_add_c_reactor(guest_counter SOURCES "${PROJECT_SOURCE_DIR}/examples/guest/counter.c"
+  EXPORTS counter_add counter_initializations counter_close)
+add_executable(turbowasm_reactor_example
+  "${PROJECT_SOURCE_DIR}/examples/guest/reactor_host.c"
+  "${PROJECT_SOURCE_DIR}/examples/guest/reactor_session.c")
+target_link_libraries(turbowasm_reactor_example PRIVATE TurboWasm::Runtime)
+target_compile_features(turbowasm_reactor_example PRIVATE c_std_11)
+target_compile_options(turbowasm_reactor_example PRIVATE $<$<COMPILE_LANG_AND_ID:C,MSVC>:-experimental:c11atomics>)
+set_target_properties(turbowasm_reactor_example PROPERTIES FOLDER "examples/guest")
+add_dependencies(turbowasm_reactor_example guest_counter)
 if(TURBOWASM_BUILD_TESTS)
   add_subdirectory(${PROJECT_SOURCE_DIR}/tests/guest ${CMAKE_CURRENT_BINARY_DIR}/tests)
 endif()
 install(DIRECTORY "${metallic_source}/include/" DESTINATION share/turbowasm/guest/include)
 install(FILES "${TURBOWASM_GUEST_LIBRARY}" DESTINATION share/turbowasm/guest/lib)
 install(FILES "${TURBOWASM_GUEST_CRT}" DESTINATION share/turbowasm/guest/lib RENAME crt1.o)
-install(FILES TurboWasmGuest.cmake DESTINATION share/turbowasm/guest)
+install(FILES "${TURBOWASM_GUEST_REACTOR_CRT}" DESTINATION share/turbowasm/guest/lib RENAME crt1-reactor.o)
+install(FILES TurboWasmGuest.cmake TurboWasmGuestCMeta.cmake DESTINATION share/turbowasm/guest)
 install(FILES "${TURBOWASM_METALLIC_SOURCE_DIR}/LICENSE" DESTINATION share/turbowasm/guest/licenses RENAME Metallic.txt)

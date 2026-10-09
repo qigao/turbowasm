@@ -22,8 +22,12 @@ Additional corrections cover unsigned assembly of 128-bit shift results and
 restartable Unicode conversion state, null-input handling and invalid prefixes.
 Stdio now supports explicit bounded buffering, stream-wide exit flushing,
 read-ahead-aware positioning, checked byte counts and short-I/O recovery.
+Additional guest extensions provide a separate Reactor CRT and LLVM-assisted
+`setjmp`/`longjmp` using standard Wasm EH. The SJLJ helpers implement the ABI
+documented by LLVM's `WebAssemblyLowerEmscriptenEHSjLj.cpp` (LLVM 21.1.1);
+the architecture document records references and compiler requirements.
 
 This is an optional wasm32, single-threaded guest library, not a native runtime
-dependency. It does not provide a shell, real setjmp/longjmp, threads or arbitrary
+dependency. It does not provide a shell, threads or arbitrary
 locales/rounding modes. Upstream documents ten failing soft-float/128-bit shift
 tests; importing its sources does not establish complete C11 conformance.
