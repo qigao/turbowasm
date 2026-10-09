@@ -4618,6 +4618,10 @@ normal host group ownership. The synchronization suite forces an atomic notify
 with an unchanged condition sequence, observes the awakened child's predicate
 recheck, and only then publishes completion. It also covers mutex-depth and
 condition-sequence exhaustion plus overflowing sleep durations.
+The retained-result case fills all 32 guest child records, waits for actual host
+tasks to finish, and then proves that admission still fails with idle workers.
+Joining one result restores capacity and advances its slot generation; stale
+handles remain rejected and every remaining result is checked before release.
 
 The installed consumer's existing SJLJ library/program pair was configured with
 three intentional invalid combinations: single-thread library plus THREADS

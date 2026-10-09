@@ -344,6 +344,43 @@ int capacity(void) {
 }
 
 static thrd_t drain_target;
+static thrd_t retained[METALLIC_THREAD_CAPACITY];
+static atomic_int retained_completed;
+static int retaining_child(void *argument) {
+    atomic_fetch_add(&retained_completed, 1);
+    __builtin_wasm_memory_atomic_notify((int *)&retained_completed, UINT32_MAX);
+    return (int)(intptr_t)argument;
+}
+int retained_fill(void) {
+    for (unsigned i = 0; i < METALLIC_THREAD_CAPACITY; ++i) {
+        int status;
+        /* Host finalization may briefly retain a worker after the guest result
+         * is published. Retry only that bounded, transient admission failure. */
+        do {
+            status = thrd_create(&retained[i], retaining_child, (void *)(intptr_t)i);
+            if (status == thrd_nomem) thrd_yield();
+        } while (status == thrd_nomem);
+        REQUIRE(status == thrd_success);
+        wait_value(&retained_completed, (int)i);
+    }
+    return 0;
+}
+int retained_recover(void) {
+    /* The native test first waits for actual host task finalization. Capacity
+     * rejection here must come from retained guest records, not busy workers. */
+    thrd_t extra = {99, 99}, stale = retained[0];
+    REQUIRE(thrd_create(&extra, exiting, (void *)42) == thrd_nomem);
+    REQUIRE(extra.slot == 99 && extra.generation == 99);
+    int result;
+    REQUIRE(thrd_join(stale, &result) == thrd_success && result == 0);
+    REQUIRE(thrd_create(&extra, exiting, (void *)42) == thrd_success);
+    REQUIRE(!thrd_equal(stale, extra) && thrd_join(stale, NULL) == thrd_error);
+    REQUIRE(thrd_join(extra, &result) == thrd_success && result == 42);
+    for (unsigned i = 1; i < METALLIC_THREAD_CAPACITY; ++i)
+        REQUIRE(thrd_join(retained[i], &result) == thrd_success && result == (int)i);
+    return 0;
+}
+
 static atomic_int drain_join_result;
 static int drain_joiner(void *argument) {
     (void)argument;

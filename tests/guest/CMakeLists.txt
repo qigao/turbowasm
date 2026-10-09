@@ -73,6 +73,7 @@ if(TARGET TurboWasm::WASIThreads)
       -Wl,--export=wasi_thread_start,--export=initialize,--export=lifecycle,--export=synchronization
       -Wl,--export=conditions,--export=thread_specific,--export=allocation,--export=capacity
       -Wl,--export=condition_spurious,--export=synchronization_limits
+      -Wl,--export=retained_fill,--export=retained_recover
       -Wl,--export=atomics
       -Wl,--export=shared_io,--export=drain_join,--export=abnormal_join
       -Wl,--export=stdio_records,--export=stdio_progress,--export=stdio_close_flush,--export=stdio_error_release

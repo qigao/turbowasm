@@ -335,6 +335,14 @@ spec("Metallic C11 threads internal profile") {
         check_equal(atomic_load(&io_errors), 0u);
     }
     it("rolls back rejected spawn and recovers capacity after join and detach") { call_test("capacity"); }
+    it("bounds retained joinable results independently of live host worker capacity") {
+        call_test("retained_fill");
+        uint64_t start = cmeta_hrtime();
+        while (turbowasm_wasi_threads_active(&threads) &&
+            cmeta_hrtime() - start < UINT64_C(10000000000)) cmeta_thread_yield();
+        check_equal(turbowasm_wasi_threads_active(&threads), (size_t)0);
+        call_test("retained_recover");
+    }
     it("retains timed-out drain state and tolerates concurrent child joins") { call_test("drain_join"); }
     it("interrupts a real C11 join when child host failure skips the terminal epilogue") {
         turbowasm_execution_options options = {0};
