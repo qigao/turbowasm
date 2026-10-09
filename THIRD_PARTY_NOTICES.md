@@ -41,6 +41,7 @@ string/calendar scratch state is thread-local. Preopen discovery publishes once
 and preserves initialization errors instead of scanning indefinitely or exposing
 partial results. Default terminating signals avoid recursive abort calls.
 Separate threaded CRT objects guard root initialization before heap mutation;
+threaded CPU-time queries report unavailable clocks without substituting wall time;
 the `metallic_threads_close` extension drains guest child storage with explicit
 deadline/retry semantics. The containing project installs this profile only
 when requested and qualifies threaded command/Reactor/CMeta consumers.

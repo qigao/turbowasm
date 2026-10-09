@@ -321,6 +321,8 @@ spec("Metallic C11 threads internal profile") {
     it("creates, identifies, joins and exits threads with stale-handle rejection") { call_test("lifecycle"); }
     it("serializes contended updates and once publication with recursive locks") { call_test("synchronization"); }
     it("waits for predicates, broadcasts and honors real clock deadlines") { call_test("conditions"); }
+    it("rechecks the predicate after an acknowledged spurious atomic wakeup") { call_test("condition_spurious"); }
+    it("rejects recursion, sequence and duration arithmetic exhaustion without wrapping") { call_test("synchronization_limits"); }
     it("isolates TSS keys and runs bounded destructor iterations on return and exit") { call_test("thread_specific"); }
     it("preserves allocator contents and alignment under contention") { call_test("allocation"); }
 #if defined(GUEST_CMETA_THREADED)

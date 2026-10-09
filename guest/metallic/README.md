@@ -107,6 +107,10 @@ hammers the published hard-to-round cases plus a broad random sample. See
   preview1 delivers no signals. `raise(SIGABRT)` is correctly routed.
 * `localtime` aliases `gmtime` — WASI preview1 has no timezone info.
 * Only the `C` locale is supported.
+* In the threaded profile, `clock()` requires a WASI process CPU-time provider;
+  it returns `(clock_t)-1` if unavailable. Elapsed wall time does not measure
+  aggregate CPU time across workers. The default single-thread profile retains
+  its existing monotonic-clock approximation when CPU time is unavailable.
 * The installed default remains single-threaded (`__STDC_NO_THREADS__`). The
   separate threaded implementation must be built with its matching libc, TLS,
   shared-memory and host thread configuration; adding `<threads.h>` to a

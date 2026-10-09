@@ -3961,7 +3961,8 @@ preserve initialized and zero-filled data after mutation, run constructors only
 on the root, reset child TLS on reuse, isolate errno/SJLJ/stack addresses, reject
 root and nested over-capacity spawn, and reject live/worker destruction. The
 internal C11 implementation below adds actual compiled guest qualification;
-the full libc locking audit and installed profile remain required by #426.
+the libc synchronization and installed profile are described in their selected
+sections below and remain part of the final #426 acceptance audit.
 The conversion-state portion of that audit now uses `_Thread_local mbstate_t`
 for implicit UTF-8/UTF-16/UTF-32 and legacy multibyte conversion state. The
 thread fixture interleaves distinct incomplete sequences/surrogate pairs on
@@ -4463,8 +4464,8 @@ identity, ordinary-file independence, cancellation versus readiness, close/rebin
 rights contraction and acknowledgement lifetime. Real compiled Metallic C11
 guests exchange TCP/UDP messages and poll while their root joins children on a
 separate worker, and exercise group proc_exit with socket work in flight.
-The threaded libc/command/Reactor SDK remains an internal #426 profile pending
-its separate installation and consumer qualification.
+The separate opt-in threaded SDK now installs matching libc/command/Reactor
+artifacts and runs the installed consumers described in its selected section.
 
 ### Concurrent filesystem admission and provider lifetime (#426, selected)
 
@@ -4552,6 +4553,13 @@ socket protocol and protected Runtime memory APIs remain independent.
 
 ### Threaded Metallic libc synchronization (#426)
 
+The threaded `clock()` uses only the provider's process CPU-time clock and
+returns `(clock_t)-1` if it cannot be determined (C11 7.27.2.1). Wall time cannot
+approximate summed worker CPU time or exclude time blocked in host callbacks.
+The existing single-thread profile's monotonic fallback remains unchanged.
+Compiled root/child tests run against the build-tree and installed archives,
+covering unavailable CPU time, no wall-clock substitution and 64-bit conversion.
+
 The threaded archive appends a recursive lock and flush-reference
 state to its private FILE layout; the single-threaded archive keeps its layout.
 Each public stream operation holds that FILE lock for its complete operation,
@@ -4592,8 +4600,9 @@ terminating signals call _Exit directly so abort cannot recursively raise
 SIGABRT forever. Implicit strtok and calendar/text-time buffers are TLS;
 the fixed C locale remains immutable. Preopen discovery uses once publication,
 and temporary-file sequence allocation is atomic (exclusive creation remains
-the authority against pathname collisions). These changes do not qualify the
-still-pending shared filesystem/provider path or asynchronous host signals.
+the authority against pathname collisions). The shared filesystem/provider
+path is qualified separately by the concurrent-filesystem and protected-copy
+tests above; asynchronous host signals remain outside this profile.
 
 Preopen initialization retains provider errors, unknown tags, oversized names
 and exhausted name storage as terminal initialization errors; callers never see
@@ -4601,3 +4610,19 @@ a partially discovered set. Formal compiled-guest tests cover the synchronizatio
 above and controlled filesystem callbacks, including concurrent first lookup,
 error retention, unknown errno/tag admission and no truncated name request.
 They do not substitute for concurrent HostFS/provider qualification.
+
+Additional boundary qualification uses compiler-generated TLS larger than the
+64 KiB child limit and alignment larger than that limit. Both reject child
+admission without changing the output handle or root TLS; teardown retains the
+normal host group ownership. The synchronization suite forces an atomic notify
+with an unchanged condition sequence, observes the awakened child's predicate
+recheck, and only then publishes completion. It also covers mutex-depth and
+condition-sequence exhaustion plus overflowing sleep durations.
+
+The installed consumer's existing SJLJ library/program pair was configured with
+three intentional invalid combinations: single-thread library plus THREADS
+program, THREADS library plus single-thread program, and a THREADS program with
+an absolute archive lacking target profile metadata. All stopped at the public
+helper's configuration boundary; the unchanged normal consumer graph was then
+restored and built/tested. These are manual error-configuration checks, not
+additional CTest cases or new consumer projects.

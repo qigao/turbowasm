@@ -2,6 +2,7 @@
 #include <threads.h>
 #include <stdatomic.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -195,6 +196,65 @@ int conditions(void) {
     REQUIRE(thrd_sleep(&duration, NULL) == -2);
     duration = (struct timespec){-1, 0};
     REQUIRE(thrd_sleep(&duration, NULL) == -2);
+    return 0;
+}
+
+static atomic_int spurious_ready, spurious_wakes, spurious_done;
+static int spurious_waiter(void *argument) {
+    (void)argument;
+    REQUIRE(mtx_lock(&condition_lock) == thrd_success);
+    publish(&spurious_ready, 1);
+    while (!predicate) {
+        REQUIRE(cnd_wait(&condition, &condition_lock) == thrd_success);
+        if (!predicate) publish(&spurious_wakes, 1);
+    }
+    publish(&spurious_done, 1);
+    REQUIRE(mtx_unlock(&condition_lock) == thrd_success);
+    return 0;
+}
+int condition_spurious(void) {
+    REQUIRE(mtx_init(&condition_lock, mtx_plain) == thrd_success && cnd_init(&condition) == thrd_success);
+    thrd_t worker;
+    REQUIRE(thrd_create(&worker, spurious_waiter, NULL) == thrd_success);
+    wait_value(&spurious_ready, 0);
+    /* A positive notify count proves the child was actually waiting. Leave the
+     * condition sequence and application predicate unchanged to force a real
+     * spurious wakeup, then wait for its acknowledgement before publishing. */
+    while (!__builtin_wasm_memory_atomic_notify((int *)&condition.sequence, 1)) thrd_yield();
+    wait_value(&spurious_wakes, 0);
+    REQUIRE(!atomic_load(&spurious_done));
+    REQUIRE(mtx_lock(&condition_lock) == thrd_success);
+    predicate = 1;
+    REQUIRE(cnd_broadcast(&condition) == thrd_success);
+    REQUIRE(mtx_unlock(&condition_lock) == thrd_success);
+    int result;
+    REQUIRE(thrd_join(worker, &result) == thrd_success && result == 0);
+    REQUIRE(atomic_load(&spurious_done) == 1);
+    cnd_destroy(&condition); mtx_destroy(&condition_lock);
+    return 0;
+}
+int synchronization_limits(void) {
+    mtx_t mutex;
+    REQUIRE(mtx_init(&mutex, mtx_recursive) == thrd_success);
+    REQUIRE(mtx_lock(&mutex) == thrd_success);
+    /* White-box boundary setup exercises exhaustion without billions of calls. */
+    mutex.depth = UINT_MAX;
+    unsigned owner = atomic_load(&mutex.owner);
+    REQUIRE(mtx_trylock(&mutex) == thrd_error && mutex.depth == UINT_MAX);
+    REQUIRE(atomic_load(&mutex.owner) == owner);
+    mutex.depth = 1;
+    REQUIRE(mtx_unlock(&mutex) == thrd_success);
+    mtx_destroy(&mutex);
+    cnd_t exhausted;
+    REQUIRE(cnd_init(&exhausted) == thrd_success);
+    atomic_store(&exhausted.sequence, UINT64_MAX - 1);
+    REQUIRE(cnd_signal(&exhausted) == thrd_success);
+    REQUIRE(cnd_signal(&exhausted) == thrd_error && cnd_broadcast(&exhausted) == thrd_error);
+    REQUIRE(atomic_load(&exhausted.sequence) == UINT64_MAX);
+    cnd_destroy(&exhausted);
+    struct timespec duration = {INT64_MAX, 999999999}, remaining = {71, 73};
+    REQUIRE(thrd_sleep(&duration, &remaining) == -2);
+    REQUIRE(remaining.tv_sec == 71 && remaining.tv_nsec == 73);
     return 0;
 }
 

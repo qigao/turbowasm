@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <time.h>
 
 #if defined(__STDC_NO_THREADS__) && __STDC_NO_THREADS__
 #error "The installed THREADS profile must advertise C11 threads"
@@ -84,6 +85,37 @@ int profile_close(int mode) {
 }
 int profile_constructor_count(void) { return (int)constructors; }
 int profile_spin(void) { for (;;) atomic_signal_fence(memory_order_seq_cst); }
+
+static int clock_child(void *argument) {
+    REQUIRE(clock() == *(const clock_t *)argument);
+    return 0;
+}
+int profile_clock(int available) {
+    /* Above 32 bits to detect truncation; the provider also supplies fractional
+     * microseconds to verify conversion to CLOCKS_PER_SEC. */
+    clock_t expected = available ? (clock_t)4294967301LL : (clock_t)-1;
+    REQUIRE(clock() == expected);
+    thrd_t worker;
+    REQUIRE(thrd_create(&worker, clock_child, &expected) == thrd_success);
+    int result;
+    REQUIRE(thrd_join(worker, &result) == thrd_success && result == 0);
+    return 0;
+}
+
+#ifdef GUEST_TLS_BYTES
+static _Thread_local volatile unsigned char tls_probe[GUEST_TLS_BYTES]
+    __attribute__((aligned(GUEST_TLS_ALIGNMENT)));
+static int tls_child(void *argument) { (void)argument; return 0; }
+int profile_tls_limit(int index) {
+    unsigned offset = (unsigned)index % sizeof(tls_probe);
+    tls_probe[offset] = 83;
+    thrd_t output = {99, 99};
+    REQUIRE(thrd_create(&output, tls_child, NULL) == thrd_nomem);
+    REQUIRE(output.slot == 99 && output.generation == 99);
+    REQUIRE(tls_probe[offset] == 83 && local == 17 && errno == 42);
+    return 0;
+}
+#endif
 
 #ifdef GUEST_PROFILE_COMMAND
 int main(void) {

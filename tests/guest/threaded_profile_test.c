@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { REACTOR, COMMAND, EXIT_LIVE, RECURSIVE, PROFILE_COUNT };
+enum { REACTOR, COMMAND, EXIT_LIVE, RECURSIVE, TLS_SIZE, TLS_ALIGNMENT, PROFILE_COUNT };
 static turbowasm_module modules[PROFILE_COUNT], memory_module;
 static uint8_t *bytes[PROFILE_COUNT];
 static turbowasm_instance memory;
@@ -16,7 +16,8 @@ static turbowasm_wasi_threads threads;
 static turbowasm_wasi_preview1 wasi;
 static threaded_session session;
 static turbowasm_trap trap;
-static bool clock_error, worker_started;
+static bool clock_error, worker_started, cpu_clock_available;
+static atomic_uint wall_clock_calls, cpu_clock_calls;
 static atomic_bool requested, observe_call, call_entered;
 static cmeta_thread_t worker;
 static turbowasm_status worker_status;
@@ -30,6 +31,13 @@ static turbowasm_name name(const char *s) {
 }
 static uint32_t clock_time(void *context, uint32_t id, uint64_t precision, uint64_t *out) {
     (void)context; (void)precision;
+    if (id == 2) {
+        atomic_fetch_add(&cpu_clock_calls, 1);
+        if (!cpu_clock_available) return TURBOWASM_WASI_ERRNO_NOTSUP;
+        *out = UINT64_C(4294967301123);
+        return 0;
+    }
+    atomic_fetch_add(&wall_clock_calls, 1);
     if (clock_error || id > 1) return TURBOWASM_WASI_ERRNO_IO;
     *out = id ? cmeta_hrtime() : cmeta_realtime_ms() * UINT64_C(1000000);
     return 0;
@@ -87,7 +95,8 @@ static uint32_t exported(const char *symbol) {
 spec("Installed-capable Metallic threaded profile") {
     before_all() {
         const char *paths[] = {GUEST_THREADED_REACTOR_PATH, GUEST_THREADED_COMMAND_PATH,
-            GUEST_THREADED_EXIT_PATH, GUEST_THREADED_RECURSIVE_PATH};
+            GUEST_THREADED_EXIT_PATH, GUEST_THREADED_RECURSIVE_PATH,
+            GUEST_THREADED_TLS_SIZE_PATH, GUEST_THREADED_TLS_ALIGNMENT_PATH};
         for (unsigned i = 0; i < PROFILE_COUNT; ++i) {
             FILE *f = fopen(paths[i], "rb"); check_not_null(f);
             check_equal(fseek(f, 0, SEEK_END), 0);
@@ -108,6 +117,8 @@ spec("Installed-capable Metallic threaded profile") {
     }
     before_each() {
         session = (threaded_session){0}; clock_error = worker_started = false;
+        cpu_clock_available = false;
+        atomic_store(&wall_clock_calls, 0); atomic_store(&cpu_clock_calls, 0);
         atomic_store(&requested, false); atomic_store(&observe_call, false); atomic_store(&call_entered, false);
         check_equal(turbowasm_wasi_threads_init_pool(&threads, 4), TURBOWASM_OK);
         check_equal(turbowasm_instance_create(&memory, &memory_module), TURBOWASM_OK);
@@ -155,6 +166,31 @@ spec("Installed-capable Metallic threaded profile") {
             &result, 1, &count, &trap), TURBOWASM_INVALID_ARGUMENT);
         check_equal(close_profile(1), 0);
         drain(); check_true(threaded_session_destroy(&session));
+    }
+    it("reports an unavailable CPU clock without substituting elapsed wall time") {
+        check_equal(open_profile(REACTOR, 10000000), TURBOWASM_OK);
+        check_equal(call("profile_clock", 0, true), 0);
+        check_equal(atomic_load(&cpu_clock_calls), 2u);
+        check_equal(atomic_load(&wall_clock_calls), 0u);
+        check_equal(close_profile(1), 0);
+    }
+    it("converts provider CPU time without truncation in the root and child") {
+        cpu_clock_available = true;
+        check_equal(open_profile(REACTOR, 10000000), TURBOWASM_OK);
+        check_equal(call("profile_clock", 1, true), 0);
+        check_equal(atomic_load(&cpu_clock_calls), 2u);
+        check_equal(atomic_load(&wall_clock_calls), 0u);
+        check_equal(close_profile(1), 0);
+    }
+    it("rejects compiler TLS sizes above the child limit while preserving root TLS") {
+        check_equal(open_profile(TLS_SIZE, 10000000), TURBOWASM_OK);
+        check_equal(call("profile_tls_limit", 731, true), 0);
+        check_equal(turbowasm_wasi_threads_active(&threads), (size_t)0);
+    }
+    it("rejects compiler TLS alignment above the child limit before spawn") {
+        check_equal(open_profile(TLS_ALIGNMENT, 10000000), TURBOWASM_OK);
+        check_equal(call("profile_tls_limit", 0, true), 0);
+        check_equal(turbowasm_wasi_threads_active(&threads), (size_t)0);
     }
     it("retains closed admission on invalid deadlines and clock failure") {
         check_equal(open_profile(REACTOR, 10000000), TURBOWASM_OK);
