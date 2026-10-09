@@ -353,6 +353,8 @@ endif()
 if(TURBOWASM_ENABLE_WASI_ADAPTER)
   add_library(turbowasm_wasi
     src/wasi_preview1.c
+    src/wasi_dispatch.c
+    src/wasi_provider.c
     src/wasi_fs.c)
   add_library(TurboWasm::WASI ALIAS turbowasm_wasi)
   set_target_properties(turbowasm_wasi PROPERTIES
@@ -363,7 +365,8 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<INSTALL_INTERFACE:include>)
   target_link_libraries(turbowasm_wasi
-    PUBLIC TurboWasm::Runtime)
+    PUBLIC TurboWasm::Runtime
+    PRIVATE Salts::Core Salts::Platform)
   if(MSVC)
     target_compile_options(turbowasm_wasi PRIVATE /W4)
   else()
@@ -761,6 +764,21 @@ if(TURBOWASM_BUILD_TOOLS)
   add_executable(turbowasm_cli tools/turbowasm.c)
   set_target_properties(turbowasm_cli PROPERTIES OUTPUT_NAME turbowasm)
   target_link_libraries(turbowasm_cli PRIVATE TurboWasm::Runtime)
+  if(TARGET TurboWasm::WASIHostFS)
+    add_library(turbowasm_command STATIC tools/command.c)
+    target_compile_features(turbowasm_command PRIVATE c_std_11)
+    target_link_libraries(turbowasm_command PUBLIC TurboWasm::WASIHostFS)
+    target_include_directories(turbowasm_command PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/tools")
+    add_executable(turbowasm_run tools/turbowasm_run.c)
+    target_link_libraries(turbowasm_run PRIVATE turbowasm_command Salts::Core)
+    set_target_properties(turbowasm_run PROPERTIES OUTPUT_NAME turbowasm-run)
+    set_target_properties(turbowasm_run turbowasm_command PROPERTIES FOLDER "tools")
+    install(TARGETS turbowasm_run RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  endif()
+endif()
+
+if(TURBOWASM_BUILD_METALLIC_GUESTS)
+  add_subdirectory(guest)
 endif()
 
 if(TURBOWASM_BUILD_TESTS)

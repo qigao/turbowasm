@@ -19,6 +19,7 @@ static turbowasm_status host_inc(
     (void)context;
 
     if (call == NULL ||
+        turbowasm_host_call_check_interrupt(call) != TURBOWASM_OK ||
         turbowasm_instance_module(turbowasm_host_call_instance(call)) == NULL ||
         argument_count != 1u ||
         result_capacity < 1u ||
@@ -126,6 +127,11 @@ int main(void) {
             &span64, &trap) != TURBOWASM_INVALID_ARGUMENT)
         return 25;
     trap = TURBOWASM_TRAP_NONE;
+
+    if (turbowasm_host_call_memory_check64(NULL, 0, 0, 0, &trap) != TURBOWASM_INVALID_ARGUMENT ||
+        turbowasm_host_call_memory_read64(NULL, 0, 0, NULL, 0, &trap) != TURBOWASM_INVALID_ARGUMENT ||
+        turbowasm_host_call_memory_write64(NULL, 0, 0, NULL, 0, &trap) != TURBOWASM_INVALID_ARGUMENT)
+        return 26;
 
     if (turbowasm_module_load_borrowed(
             &provider_module,

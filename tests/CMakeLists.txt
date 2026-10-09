@@ -1,4 +1,12 @@
 add_executable(turbowasm_module_test module_test.c)
+if(TARGET TurboWasm::WASI)
+  add_executable(turbowasm_wasi_fs_rename_flags_test wasi_fs_rename_flags_test.c)
+  target_link_libraries(turbowasm_wasi_fs_rename_flags_test PRIVATE TurboWasm::WASI Salts::TinyTest)
+  target_include_directories(turbowasm_wasi_fs_rename_flags_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_compile_features(turbowasm_wasi_fs_rename_flags_test PRIVATE c_std_11)
+  set_target_properties(turbowasm_wasi_fs_rename_flags_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_fs_rename_flags_test COMMAND turbowasm_wasi_fs_rename_flags_test)
+endif()
 target_link_libraries(turbowasm_module_test PRIVATE TurboWasm::Runtime)
 set_target_properties(turbowasm_module_test PROPERTIES
   C_STANDARD 11
@@ -1227,6 +1235,15 @@ add_test(NAME turbowasm_host_function_test
 
 add_executable(turbowasm_host_memory_test
   host_memory_test.c)
+add_executable(turbowasm_host_interrupt_test host_interrupt_test.c)
+target_link_libraries(turbowasm_host_interrupt_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+set_target_properties(turbowasm_host_interrupt_test PROPERTIES FOLDER "tests/runtime")
+add_test(NAME turbowasm_host_interrupt_test COMMAND turbowasm_host_interrupt_test)
+add_executable(turbowasm_host_memory_copy_test host_memory_copy_test.c)
+target_link_libraries(turbowasm_host_memory_copy_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+set_target_properties(turbowasm_host_memory_copy_test PROPERTIES
+  FOLDER "tests/runtime" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME turbowasm_host_memory_copy_test COMMAND turbowasm_host_memory_copy_test)
 target_link_libraries(turbowasm_host_memory_test
   PRIVATE TurboWasm::Runtime)
 set_target_properties(turbowasm_host_memory_test PROPERTIES
@@ -1251,13 +1268,47 @@ endif()
 
 if(TARGET TurboWasm::WASI)
   add_executable(turbowasm_wasi_preview1_sockets_test wasi_preview1_sockets_test.c)
+  foreach(shared IN ITEMS FALSE TRUE)
+    foreach(mir IN ITEMS FALSE TRUE)
+      if(mir AND NOT TURBOWASM_ENABLE_MIR_JIT)
+        continue()
+      endif()
+      set(threaded_suffix "")
+      if(shared)
+        string(APPEND threaded_suffix "_shared")
+      endif()
+      if(mir)
+        string(APPEND threaded_suffix "_mir")
+      endif()
+      set(threaded_test "turbowasm_wasi_preview1_threaded${threaded_suffix}_test")
+      add_executable(${threaded_test} wasi_preview1_threaded_test.c)
+      target_link_libraries(${threaded_test} PRIVATE TurboWasm::WASI Salts::TinyTest Salts::Platform)
+      if(shared)
+        target_compile_definitions(${threaded_test} PRIVATE TW_P1_SHARED=1)
+      endif()
+      if(mir)
+        target_compile_definitions(${threaded_test} PRIVATE TW_P1_MIR=1)
+        target_link_libraries(${threaded_test} PRIVATE turbowasm_mir_backend)
+      endif()
+      add_test(NAME ${threaded_test} COMMAND ${threaded_test})
+      set_tests_properties(${threaded_test} PROPERTIES TIMEOUT 30)
+    endforeach()
+  endforeach()
   target_link_libraries(turbowasm_wasi_preview1_sockets_test PRIVATE TurboWasm::WASI Salts::TinyTest)
   add_test(NAME turbowasm_wasi_preview1_sockets_test COMMAND turbowasm_wasi_preview1_sockets_test)
+  add_executable(turbowasm_wasi_preview1_sockets_shared_test wasi_preview1_sockets_test.c)
+  target_compile_definitions(turbowasm_wasi_preview1_sockets_shared_test PRIVATE TW_P1_SHARED=1)
+  target_link_libraries(turbowasm_wasi_preview1_sockets_shared_test PRIVATE TurboWasm::WASI Salts::TinyTest)
+  add_test(NAME turbowasm_wasi_preview1_sockets_shared_test COMMAND turbowasm_wasi_preview1_sockets_shared_test)
   if(TURBOWASM_ENABLE_MIR_JIT)
     add_executable(turbowasm_wasi_preview1_sockets_mir_test wasi_preview1_sockets_test.c)
     target_compile_definitions(turbowasm_wasi_preview1_sockets_mir_test PRIVATE TW_P1_MIR=1)
     target_link_libraries(turbowasm_wasi_preview1_sockets_mir_test PRIVATE TurboWasm::WASI turbowasm_mir_backend Salts::TinyTest)
     add_test(NAME turbowasm_wasi_preview1_sockets_mir_test COMMAND turbowasm_wasi_preview1_sockets_mir_test)
+    add_executable(turbowasm_wasi_preview1_sockets_shared_mir_test wasi_preview1_sockets_test.c)
+    target_compile_definitions(turbowasm_wasi_preview1_sockets_shared_mir_test PRIVATE TW_P1_MIR=1 TW_P1_SHARED=1)
+    target_link_libraries(turbowasm_wasi_preview1_sockets_shared_mir_test PRIVATE TurboWasm::WASI turbowasm_mir_backend Salts::TinyTest)
+    add_test(NAME turbowasm_wasi_preview1_sockets_shared_mir_test COMMAND turbowasm_wasi_preview1_sockets_shared_mir_test)
   endif()
   if(TARGET TurboWasm::WASICNet)
     add_executable(turbowasm_wasi_preview1_cnet_test wasi_preview1_cnet_test.c)
@@ -1311,6 +1362,31 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
     C_EXTENSIONS OFF)
   add_test(NAME turbowasm_wasi_fs_test
            COMMAND turbowasm_wasi_fs_test)
+
+  add_executable(turbowasm_wasi_fs_memory_test wasi_fs_memory_test.c)
+  target_link_libraries(turbowasm_wasi_fs_memory_test PRIVATE TurboWasm::WASI Salts::TinyTest)
+  set_target_properties(turbowasm_wasi_fs_memory_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_fs_memory_test COMMAND turbowasm_wasi_fs_memory_test)
+  set_tests_properties(turbowasm_wasi_fs_memory_test PROPERTIES TIMEOUT 30)
+
+  add_executable(turbowasm_wasi_path_memory_test wasi_path_memory_test.c)
+  target_link_libraries(turbowasm_wasi_path_memory_test PRIVATE TurboWasm::WASI Salts::TinyTest)
+  set_target_properties(turbowasm_wasi_path_memory_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_path_memory_test COMMAND turbowasm_wasi_path_memory_test)
+  set_tests_properties(turbowasm_wasi_path_memory_test PROPERTIES TIMEOUT 60)
+
+  add_executable(turbowasm_wasi_fs_concurrency_test wasi_fs_concurrency_test.c)
+  add_executable(turbowasm_wasi_dispatch_test wasi_dispatch_test.c)
+  target_link_libraries(turbowasm_wasi_dispatch_test PRIVATE TurboWasm::WASI Salts::Core Salts::TinyTest Salts::Platform)
+  target_include_directories(turbowasm_wasi_dispatch_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_wasi_dispatch_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_dispatch_test COMMAND turbowasm_wasi_dispatch_test)
+  set_tests_properties(turbowasm_wasi_dispatch_test PROPERTIES TIMEOUT 30)
+  target_link_libraries(turbowasm_wasi_fs_concurrency_test PRIVATE TurboWasm::WASI Salts::TinyTest Salts::Platform)
+  target_include_directories(turbowasm_wasi_fs_concurrency_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  set_target_properties(turbowasm_wasi_fs_concurrency_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_fs_concurrency_test COMMAND turbowasm_wasi_fs_concurrency_test)
+  set_tests_properties(turbowasm_wasi_fs_concurrency_test PROPERTIES TIMEOUT 30)
 endif()
 
 add_executable(turbowasm_host_wait_test
@@ -1527,6 +1603,13 @@ add_test(NAME turbowasm_simd_conversion_instance_test
 
 add_executable(turbowasm_execution_control_test
   execution_control_test.c)
+add_executable(turbowasm_instance_start_test instance_start_test.c)
+target_link_libraries(turbowasm_instance_start_test PRIVATE TurboWasm::Runtime Salts::TinyTest)
+target_include_directories(turbowasm_instance_start_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_compile_features(turbowasm_instance_start_test PRIVATE c_std_11)
+set_target_properties(turbowasm_instance_start_test PROPERTIES FOLDER "tests/runtime")
+add_test(NAME turbowasm_instance_start_test COMMAND turbowasm_instance_start_test)
+set_tests_properties(turbowasm_instance_start_test PROPERTIES TIMEOUT 15)
 target_link_libraries(turbowasm_execution_control_test
   PRIVATE TurboWasm::Runtime)
 set_target_properties(turbowasm_execution_control_test PROPERTIES
@@ -1963,6 +2046,12 @@ if(TURBOWASM_ENABLE_WASI_ADAPTER)
 endif()
 
 if(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER)
+  add_executable(turbowasm_wasi_fs_host_concurrency_test wasi_fs_host_concurrency_test.c)
+  target_link_libraries(turbowasm_wasi_fs_host_concurrency_test PRIVATE TurboWasm::WASIHostFS Salts::TinyTest Salts::Platform Salts::Core)
+  set_target_properties(turbowasm_wasi_fs_host_concurrency_test PROPERTIES FOLDER "tests/wasi")
+  add_test(NAME turbowasm_wasi_fs_host_concurrency_test COMMAND turbowasm_wasi_fs_host_concurrency_test)
+  set_tests_properties(turbowasm_wasi_fs_host_concurrency_test PROPERTIES TIMEOUT 60)
+
   add_executable(turbowasm_wasi_fs_contract_host_test
     wasi_fs_contract.c
     wasi02_fs_contract.c
@@ -2124,6 +2213,12 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
            COMMAND turbowasm_wasi_threads_group_test)
   set_tests_properties(turbowasm_wasi_threads_group_test PROPERTIES
     TIMEOUT 20)
+
+  add_executable(turbowasm_wasi_threads_terminal_test wasi_threads_terminal_test.c)
+  target_link_libraries(turbowasm_wasi_threads_terminal_test
+    PRIVATE TurboWasm::WASIThreads Salts::Platform Salts::TinyTest)
+  add_test(NAME turbowasm_wasi_threads_terminal_test COMMAND turbowasm_wasi_threads_terminal_test)
+  set_tests_properties(turbowasm_wasi_threads_terminal_test PROPERTIES TIMEOUT 20)
 
   add_executable(turbowasm_wasi_threads_header_cpp_test
     wasi_threads_header_cpp_test.cpp)

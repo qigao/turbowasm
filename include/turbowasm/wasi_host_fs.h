@@ -20,6 +20,14 @@ extern "C" {
  * as ownership-consuming and reports success once that close has been
  * attempted, so the generic descriptor table never retains a dangling Salts
  * identity.
+ *
+ * Concurrent provider calls pin native identities. Per-identity locks serialize
+ * file position, whole vector I/O, append flags and directory cursors; different
+ * files progress independently. Close returns BUSY while calls are in flight,
+ * preserving ownership for retry after those calls finish. Rename returns BUSY
+ * while a child directory is live or an open/rename transaction is in flight;
+ * opens racing an admitted rename also return BUSY before native effects.
+ * Init/destroy require exclusive caller lifecycle ownership and no new entrants.
  */
 enum {
     TURBOWASM_WASI_HOST_FS_PATH_MAX = 4096
@@ -50,7 +58,7 @@ turbowasm_status turbowasm_wasi_host_fs_init(
 
 /*
  * Destroy succeeds only after the provider root and every child identity have
- * been closed explicitly through the provider contract.
+ * been closed explicitly through the provider contract and all calls drained.
  */
 turbowasm_status turbowasm_wasi_host_fs_destroy(
     turbowasm_wasi_host_fs *adapter);

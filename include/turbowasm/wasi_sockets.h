@@ -77,9 +77,66 @@ typedef struct turbowasm_wasi_preview1_config_v2 {
     size_t pending_bytes;
 } turbowasm_wasi_preview1_config_v2;
 
+/* Socket/poll imports use protected copies for shared and unshared memory.
+ * Iovec addresses and poll arguments are saved before transport/clock effects;
+ * no guest pointer crosses a provider callback or wait. Transfer payloads use
+ * io_bytes (MSGSIZE on excess) and pending_bytes (NOMEM on exhausted storage).
+ * Receive copies only the returned prefix; errors before successful publication
+ * preserve output. Result buffers must be synchronized by the guest: separate
+ * protected writes do not make a multi-buffer result atomic.
+ * Socket/poll calls and progress/lifecycle functions still require the same
+ * host progress thread, even when instances import shared memory. For example,
+ * execute/resume a socket guest and advance its providers on that owner thread;
+ * shared-memory support alone does not admit calls from guest worker threads.
+ */
 void turbowasm_wasi_preview1_config_v2_init(turbowasm_wasi_preview1_config_v2 *);
 turbowasm_status turbowasm_wasi_preview1_init_v2(turbowasm_wasi_preview1 *,
     const turbowasm_wasi_preview1_config_v2 *);
+
+typedef struct turbowasm_wasi_preview1_threaded_config {
+    size_t request_capacity;
+    uint64_t interrupt_interval_ns;
+    void (*wake_owner)(void *context);
+    void *wake_context;
+} turbowasm_wasi_preview1_threaded_config;
+
+/* Opt-in worker calls with socket providers dispatched to the initializing
+ * native thread. Initialize with an empty WASI handle and a quiescent FS table
+ * containing no sockets, leases, reservations or dispatcher; ordinary preopens
+ * may exist. Bind sockets on that owner after initialization. Configs are copied;
+ * callbacks/contexts and the table are borrowed until checked destruction.
+ *
+ * request_capacity bounds queued/running provider commands. Full admission
+ * returns WASI BUSY before effects; infallible finish/release waits for capacity,
+ * including after shutdown. Accepted commands wait for owner acknowledgement.
+ * interrupt_interval_ns is 1..1,000,000,000 ns and bounds the worker's interruption
+ * polling interval, not accepted provider completion time. Runtime's configured
+ * interruption callback is queried only on the invoking worker. Existing v2
+ * wait/subscription/payload limits still apply. Ordinary files stay concurrent.
+ * Clock/random/custom file callbacks must support their admitted concurrency;
+ * the owner bridge transfers socket callbacks only.
+ *
+ * wake_owner must be thread-safe, nonblocking and retain a wake predicate until
+ * observed; it must not reenter this adapter or wait for the owner. It runs on
+ * guest workers. The owner drives native transports then advance/next_timeout;
+ * these functions and shutdown/destroy/define are owner-only and reject reentry.
+ * No native thread or event loop is created. An owner call which cannot suspend
+ * returns AGAIN. Existing resumable owner calls retain their wait protocol.
+ *
+ * Shutdown stops ordinary calls and wakes waits with INTR. Continue owner
+ * progress while consumers and cleanup drain; never join a worker needing this
+ * owner. After consumer quiescence, close sockets, destroy WASI (detaching the
+ * dispatcher), then destroy FS/providers. shutdown_poll does not close sockets.
+ * Destroy rejects live calls/waits or socket identities/leases without consuming
+ * ownership. Lifecycle admission remains exclusively coordinated by the host.
+ *
+ * Returns INVALID_ARGUMENT for invalid bounds/configuration, occupied handles
+ * or table state, OUT_OF_MEMORY on allocation failure, OK on success. Failure
+ * preserves both handles. Example config: {64, 10000000, signal_owner, context};
+ * run root/children on workers while the initializing thread drives progress.
+ */
+turbowasm_status turbowasm_wasi_preview1_init_threaded(turbowasm_wasi_preview1 *,
+    const turbowasm_wasi_preview1_config_v2 *, const turbowasm_wasi_preview1_threaded_config *);
 /* Call after progressing transport providers. Never polls native handles.
  * next_timeout returns a relative nanosecond delay, UINT64_MAX if no timer.
  * shutdown wakes parked calls with INTR; destroy_checked requires them to have

@@ -1,5 +1,7 @@
 #include <turbowasm/wasi.h>
 #include "wasi_fs_private.h"
+#include "wasi_provider_private.h"
+#include "wasi_dispatch_private.h"
 
 #include "wasi_preview1_adapter_plan.h"
 
@@ -337,6 +339,15 @@ static const cmeta_function_desc turbowasm_wasi_meta_poll_oneoff =
     TURBOWASM_WASI_META_FUNCTION("poll_oneoff", &cmeta_type_uint32,
         turbowasm_wasi_meta_poll_oneoff_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
 
+static const cmeta_param_desc turbowasm_wasi_meta_path_rename_params[] = {
+    TURBOWASM_WASI_META_PARAM32(old_fd), TURBOWASM_WASI_META_PARAM32(old_path),
+    TURBOWASM_WASI_META_PARAM32(old_length), TURBOWASM_WASI_META_PARAM32(new_fd),
+    TURBOWASM_WASI_META_PARAM32(new_path), TURBOWASM_WASI_META_PARAM32(new_length)
+};
+static const cmeta_function_desc turbowasm_wasi_meta_path_rename =
+    TURBOWASM_WASI_META_FUNCTION("path_rename", &cmeta_type_uint32,
+        turbowasm_wasi_meta_path_rename_params, CMETA_EFFECT_IO | CMETA_EFFECT_MAY_FAIL);
+
 static const cmeta_function_desc *const turbowasm_wasi_preview1_manifest[] = {
     &turbowasm_wasi_meta_args_sizes_get,
     &turbowasm_wasi_meta_args_get,
@@ -366,7 +377,8 @@ static const cmeta_function_desc *const turbowasm_wasi_preview1_manifest[] = {
     &turbowasm_wasi_meta_fd_fdstat_get,
     &turbowasm_wasi_meta_fd_fdstat_set_flags,
     &turbowasm_wasi_meta_fd_fdstat_set_rights,
-    &turbowasm_wasi_meta_poll_oneoff
+    &turbowasm_wasi_meta_poll_oneoff,
+    &turbowasm_wasi_meta_path_rename
 };
 
 #undef TURBOWASM_WASI_META_FUNCTION
@@ -527,6 +539,66 @@ static uint32_t turbowasm_wasi_memory_span(
     return TURBOWASM_WASI_ERRNO_FAULT;
 }
 
+static uint32_t turbowasm_wasi_memory_check(turbowasm_host_call *call, uint64_t address, uint64_t length) {
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    return turbowasm_host_call_memory_check64(call, 0, address, length, &trap) == TURBOWASM_OK ?
+        TURBOWASM_WASI_ERRNO_SUCCESS : TURBOWASM_WASI_ERRNO_FAULT;
+}
+static uint32_t turbowasm_wasi_memory_write(turbowasm_host_call *call, uint64_t address,
+    const void *source, size_t length) {
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    return turbowasm_host_call_memory_write64(call, 0, address, source, length, &trap) == TURBOWASM_OK ?
+        TURBOWASM_WASI_ERRNO_SUCCESS : TURBOWASM_WASI_ERRNO_FAULT;
+}
+static uint32_t turbowasm_wasi_memory_read(turbowasm_host_call *call, uint64_t address,
+    void *destination, size_t length) {
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    return turbowasm_host_call_memory_read64(call, 0, address, destination, length, &trap) == TURBOWASM_OK ?
+        TURBOWASM_WASI_ERRNO_SUCCESS : TURBOWASM_WASI_ERRNO_FAULT;
+}
+
+static bool turbowasm_wasi_memory_shared(turbowasm_host_call *call) {
+    turbowasm_memory_desc memory = {0};
+    return turbowasm_module_memory_at(turbowasm_instance_module(
+        turbowasm_host_call_instance(call)), 0, &memory) && memory.shared;
+}
+
+/* Each call owns its snapshot until the provider has returned. No Runtime
+ * memory lock crosses the provider boundary, including a suspended callback. */
+#define TURBOWASM_WASI_SHARED_PAYLOAD_BYTES (1024u * 1024u)
+typedef struct turbowasm_wasi_iov_snapshot {
+    uint8_t entries[TURBOWASM_WASI_IOV_MAX * 8u];
+    uint8_t *bytes;
+} turbowasm_wasi_iov_snapshot;
+
+typedef struct turbowasm_wasi_path_snapshot {
+    const uint8_t *data;
+    uint8_t *owned;
+    uint8_t empty;
+} turbowasm_wasi_path_snapshot;
+
+/* Callers check all ranges (including outputs) and the combined payload budget
+ * before copying any path. Each owned snapshot survives its provider callback. */
+static uint32_t turbowasm_wasi_path_snapshot_read(turbowasm_host_call *call,
+    uint32_t address, uint32_t length, bool shared, turbowasm_wasi_path_snapshot *out) {
+    if (!shared) {
+        turbowasm_host_memory_span span = {0};
+        uint32_t error = turbowasm_wasi_memory_span(call, address, length, &span);
+        if (!error) out->data = span.data;
+        return error;
+    }
+    out->data = &out->empty;
+    if (!length) return TURBOWASM_WASI_ERRNO_SUCCESS;
+    out->owned = malloc(length);
+    if (!out->owned) return TURBOWASM_WASI_ERRNO_NOMEM;
+    out->data = out->owned;
+    return turbowasm_wasi_memory_read(call, address, out->owned, length);
+}
+static uint32_t turbowasm_wasi_payload_budget(bool shared, uint64_t length) {
+    return shared && length > TURBOWASM_WASI_SHARED_PAYLOAD_BYTES ?
+        TURBOWASM_WASI_ERRNO_NOMEM : TURBOWASM_WASI_ERRNO_SUCCESS;
+}
+
 static turbowasm_status turbowasm_wasi_sizes_get(
     const turbowasm_wasi_string_list *list,
     turbowasm_host_call *call,
@@ -536,8 +608,7 @@ static turbowasm_status turbowasm_wasi_sizes_get(
     size_t result_capacity,
     size_t *result_count,
     turbowasm_trap *trap) {
-    turbowasm_host_memory_span count_span = {0};
-    turbowasm_host_memory_span bytes_span = {0};
+    uint8_t output[4];
     uint32_t error;
 
     if (list == NULL || call == NULL ||
@@ -546,20 +617,22 @@ static turbowasm_status turbowasm_wasi_sizes_get(
         arguments[1].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_memory_span(
+    error = turbowasm_wasi_memory_check(
         call, (uint32_t)arguments[0].as.i32,
-        4u, &count_span);
+        4u);
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        error = turbowasm_wasi_memory_span(
+        error = turbowasm_wasi_memory_check(
             call, (uint32_t)arguments[1].as.i32,
-            4u, &bytes_span);
+            4u);
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        turbowasm_wasi_store_u32(
-            count_span.data, list->count);
-        turbowasm_wasi_store_u32(
-            bytes_span.data, list->bytes);
+        turbowasm_wasi_store_u32(output, list->count);
+        error = turbowasm_wasi_memory_write(call, (uint32_t)arguments[0].as.i32, output, 4u);
+        if (!error) {
+            turbowasm_wasi_store_u32(output, list->bytes);
+            error = turbowasm_wasi_memory_write(call, (uint32_t)arguments[1].as.i32, output, 4u);
+        }
     }
 
     return turbowasm_wasi_return_errno(
@@ -576,14 +649,12 @@ static turbowasm_status turbowasm_wasi_list_get(
     size_t result_capacity,
     size_t *result_count,
     turbowasm_trap *trap) {
-    turbowasm_host_memory_span table = {0};
-    turbowasm_host_memory_span buffer = {0};
     uint32_t table_address;
     uint32_t buffer_address;
     uint32_t error;
     uint32_t cursor = 0u;
     uint32_t index;
-    size_t table_size;
+    uint64_t table_size;
 
     if (list == NULL || call == NULL ||
         arguments == NULL || argument_count != 2u ||
@@ -593,13 +664,11 @@ static turbowasm_status turbowasm_wasi_list_get(
 
     table_address = (uint32_t)arguments[0].as.i32;
     buffer_address = (uint32_t)arguments[1].as.i32;
-    table_size = (size_t)list->count * 4u;
+    table_size = (uint64_t)list->count * 4u;
 
-    error = turbowasm_wasi_memory_span(
-        call, table_address, table_size, &table);
+    error = turbowasm_wasi_memory_check(call, table_address, table_size);
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        error = turbowasm_wasi_memory_span(
-            call, buffer_address, list->bytes, &buffer);
+        error = turbowasm_wasi_memory_check(call, buffer_address, list->bytes);
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
@@ -613,11 +682,12 @@ static turbowasm_status turbowasm_wasi_list_get(
             }
 
             pointer = buffer_address + cursor;
-            turbowasm_wasi_store_u32(
-                table.data + (size_t)index * 4u,
-                pointer);
-            memcpy(buffer.data + cursor,
-                   list->items[index], length);
+            uint8_t entry[4];
+            turbowasm_wasi_store_u32(entry, pointer);
+            uint64_t entry_address = (uint64_t)table_address + (uint64_t)index * 4u;
+            error = turbowasm_wasi_memory_write(call, entry_address, entry, 4u);
+            if (!error) error = turbowasm_wasi_memory_write(call, pointer, list->items[index], length);
+            if (error) break;
             cursor += (uint32_t)length;
         }
     }
@@ -714,7 +784,7 @@ static turbowasm_status turbowasm_wasi_clock_time_get(
     turbowasm_trap *trap) {
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
-    turbowasm_host_memory_span output = {0};
+    uint8_t output[8];
     uint64_t timestamp = 0u;
     uint32_t error;
 
@@ -727,17 +797,19 @@ static turbowasm_status turbowasm_wasi_clock_time_get(
         arguments[2].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_memory_span(
+    error = turbowasm_wasi_memory_check(
         call, (uint32_t)arguments[2].as.i32,
-        8u, &output);
+        sizeof(output));
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
         error = impl->clock_time(
             impl->clock_context,
             (uint32_t)arguments[0].as.i32,
             (uint64_t)arguments[1].as.i64,
             &timestamp);
-        if (error == TURBOWASM_WASI_ERRNO_SUCCESS)
-            turbowasm_wasi_store_u64(output.data, timestamp);
+        if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+            turbowasm_wasi_store_u64(output, timestamp);
+            error = turbowasm_wasi_memory_write(call, (uint32_t)arguments[2].as.i32, output, sizeof(output));
+        }
     }
 
     return turbowasm_wasi_return_errno(
@@ -766,16 +838,25 @@ static turbowasm_status turbowasm_wasi_random_get(
         arguments[1].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_memory_span(
-        call,
-        (uint32_t)arguments[0].as.i32,
-        (uint32_t)arguments[1].as.i32,
-        &buffer);
-    if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        error = impl->random_fill(
-            impl->random_context,
-            buffer.data,
-            buffer.size);
+    uint32_t address = (uint32_t)arguments[0].as.i32;
+    uint32_t length = (uint32_t)arguments[1].as.i32;
+    if (turbowasm_wasi_memory_shared(call)) {
+        uint8_t empty = 0;
+        uint8_t *snapshot = NULL;
+        error = turbowasm_wasi_memory_check(call, address, length);
+        if (!error) error = turbowasm_wasi_payload_budget(true, length);
+        if (!error) {
+            /* A successful random provider must fill the whole request. Zero
+             * initialization also prevents disclosure by an incomplete provider. */
+            snapshot = length ? calloc(1, length) : &empty;
+            if (!snapshot) error = TURBOWASM_WASI_ERRNO_NOMEM;
+        }
+        if (!error) error = impl->random_fill(impl->random_context, snapshot, length);
+        if (!error) error = turbowasm_wasi_memory_write(call, address, snapshot, length);
+        if (length) free(snapshot);
+    } else {
+        error = turbowasm_wasi_memory_span(call, address, length, &buffer);
+        if (!error) error = impl->random_fill(impl->random_context, buffer.data, buffer.size);
     }
 
     return turbowasm_wasi_return_errno(
@@ -836,6 +917,60 @@ static uint32_t turbowasm_wasi_collect_iovecs(
     return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
+static uint32_t turbowasm_wasi_snapshot_iovecs(
+    turbowasm_host_call *call, uint32_t table_address, uint32_t count,
+    bool writable, turbowasm_wasi_const_buffer *inputs,
+    turbowasm_wasi_buffer *outputs, turbowasm_wasi_iov_snapshot *snapshot,
+    uint64_t *out_capacity) {
+    if (count > TURBOWASM_WASI_IOV_MAX) return TURBOWASM_WASI_ERRNO_INVAL;
+    uint32_t error = turbowasm_wasi_memory_read(call, table_address, snapshot->entries, (size_t)count * 8u);
+    if (error) return error;
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint8_t *entry = snapshot->entries + (size_t)i * 8u;
+        uint32_t address = turbowasm_wasi_load_u32(entry);
+        uint32_t length = turbowasm_wasi_load_u32(entry + 4u);
+        error = turbowasm_wasi_memory_check(call, address, length);
+        if (error) return error;
+        total += length; /* At most 64 uint32_t lengths; cannot overflow. */
+    }
+    if (total > TURBOWASM_WASI_SHARED_PAYLOAD_BYTES) return TURBOWASM_WASI_ERRNO_NOMEM;
+    snapshot->bytes = malloc(total ? (size_t)total : 1u);
+    if (!snapshot->bytes) return TURBOWASM_WASI_ERRNO_NOMEM;
+    size_t offset = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint8_t *entry = snapshot->entries + (size_t)i * 8u;
+        uint32_t address = turbowasm_wasi_load_u32(entry);
+        uint32_t length = turbowasm_wasi_load_u32(entry + 4u);
+        if (writable) {
+            outputs[i] = (turbowasm_wasi_buffer){snapshot->bytes + offset, length};
+        } else {
+            error = turbowasm_wasi_memory_read(call, address, snapshot->bytes + offset, length);
+            if (error) return error;
+            inputs[i] = (turbowasm_wasi_const_buffer){snapshot->bytes + offset, length};
+        }
+        offset += length;
+    }
+    *out_capacity = total;
+    return TURBOWASM_WASI_ERRNO_SUCCESS;
+}
+
+static uint32_t turbowasm_wasi_snapshot_readback(turbowasm_host_call *call,
+    const turbowasm_wasi_iov_snapshot *snapshot, uint32_t count, uint32_t read_count) {
+    size_t offset = 0;
+    for (uint32_t i = 0; i < count && read_count; ++i) {
+        const uint8_t *entry = snapshot->entries + (size_t)i * 8u;
+        uint32_t address = turbowasm_wasi_load_u32(entry);
+        uint32_t length = turbowasm_wasi_load_u32(entry + 4u);
+        uint32_t copied = length < read_count ? length : read_count;
+        uint32_t error = turbowasm_wasi_memory_write(call, address, snapshot->bytes + offset, copied);
+        if (error) return error;
+        offset += length;
+        read_count -= copied;
+    }
+    return TURBOWASM_WASI_ERRNO_SUCCESS;
+}
+
 #include "wasi_preview1_sockets.inc"
 
 static turbowasm_status turbowasm_wasi_fd_write(
@@ -850,7 +985,8 @@ static turbowasm_status turbowasm_wasi_fd_write(
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
     turbowasm_wasi_const_buffer buffers[TURBOWASM_WASI_IOV_MAX] = {{0}};
-    turbowasm_host_memory_span written_span = {0};
+    turbowasm_wasi_iov_snapshot snapshot = {0};
+    uint8_t written_bytes[4];
     uint64_t capacity = 0u;
     uint32_t written = 0u;
     uint32_t error;
@@ -878,11 +1014,15 @@ static turbowasm_status turbowasm_wasi_fd_write(
             return turbowasm_wasi_return_errno(results, result_capacity, result_count, trap, TURBOWASM_WASI_ERRNO_BADF);
     }
 
-    error = turbowasm_wasi_memory_span(
+    bool shared = turbowasm_wasi_memory_shared(call);
+    error = turbowasm_wasi_memory_check(
         call, (uint32_t)arguments[3].as.i32,
-        4u, &written_span);
+        4u);
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        error = turbowasm_wasi_collect_iovecs(
+        if (shared) error = turbowasm_wasi_snapshot_iovecs(call,
+            (uint32_t)arguments[1].as.i32, (uint32_t)arguments[2].as.i32,
+            false, buffers, NULL, &snapshot, &capacity);
+        else error = turbowasm_wasi_collect_iovecs(
             call,
             (uint32_t)arguments[1].as.i32,
             (uint32_t)arguments[2].as.i32,
@@ -915,12 +1055,13 @@ static turbowasm_status turbowasm_wasi_fd_write(
         if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
             if ((uint64_t)written > capacity)
                 error = TURBOWASM_WASI_ERRNO_IO;
-            else
-                turbowasm_wasi_store_u32(
-                    written_span.data, written);
+            else {
+                turbowasm_wasi_store_u32(written_bytes, written);
+                error = turbowasm_wasi_memory_write(call, (uint32_t)arguments[3].as.i32, written_bytes, 4u);
+            }
         }
     }
-
+    free(snapshot.bytes);
     return turbowasm_wasi_return_errno(
         results, result_capacity, result_count, trap, error);
 }
@@ -937,7 +1078,8 @@ static turbowasm_status turbowasm_wasi_fd_read(
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
     turbowasm_wasi_buffer buffers[TURBOWASM_WASI_IOV_MAX] = {{0}};
-    turbowasm_host_memory_span read_span = {0};
+    turbowasm_wasi_iov_snapshot snapshot = {0};
+    uint8_t read_bytes[4];
     uint64_t capacity = 0u;
     uint32_t read_count = 0u;
     uint32_t error;
@@ -965,11 +1107,15 @@ static turbowasm_status turbowasm_wasi_fd_read(
             return turbowasm_wasi_return_errno(results, result_capacity, result_count, trap, TURBOWASM_WASI_ERRNO_BADF);
     }
 
-    error = turbowasm_wasi_memory_span(
+    bool shared = turbowasm_wasi_memory_shared(call);
+    error = turbowasm_wasi_memory_check(
         call, (uint32_t)arguments[3].as.i32,
-        4u, &read_span);
+        4u);
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        error = turbowasm_wasi_collect_iovecs(
+        if (shared) error = turbowasm_wasi_snapshot_iovecs(call,
+            (uint32_t)arguments[1].as.i32, (uint32_t)arguments[2].as.i32,
+            true, NULL, buffers, &snapshot, &capacity);
+        else error = turbowasm_wasi_collect_iovecs(
             call,
             (uint32_t)arguments[1].as.i32,
             (uint32_t)arguments[2].as.i32,
@@ -1002,28 +1148,19 @@ static turbowasm_status turbowasm_wasi_fd_read(
         if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
             if ((uint64_t)read_count > capacity)
                 error = TURBOWASM_WASI_ERRNO_IO;
-            else
-                turbowasm_wasi_store_u32(
-                    read_span.data, read_count);
+            else {
+                if (shared) error = turbowasm_wasi_snapshot_readback(call, &snapshot,
+                    (uint32_t)arguments[2].as.i32, read_count);
+                if (!error) {
+                    turbowasm_wasi_store_u32(read_bytes, read_count);
+                    error = turbowasm_wasi_memory_write(call, (uint32_t)arguments[3].as.i32, read_bytes, 4u);
+                }
+            }
         }
     }
-
+    free(snapshot.bytes);
     return turbowasm_wasi_return_errno(
         results, result_capacity, result_count, trap, error);
-}
-
-static uint32_t turbowasm_wasi_fs_descriptor_errno(
-    turbowasm_wasi_fs *filesystem,
-    uint32_t fd,
-    turbowasm_wasi_fs_descriptor_info *out_info) {
-    if (filesystem == NULL || out_info == NULL)
-        return TURBOWASM_WASI_ERRNO_INVAL;
-    if (!turbowasm_wasi_fs_descriptor_info_get(
-            filesystem, fd, out_info))
-        return TURBOWASM_WASI_ERRNO_BADF;
-    if (!out_info->preopen)
-        return TURBOWASM_WASI_ERRNO_NOTCAPABLE;
-    return TURBOWASM_WASI_ERRNO_SUCCESS;
 }
 
 static turbowasm_status turbowasm_wasi_fd_seek(
@@ -1037,7 +1174,7 @@ static turbowasm_status turbowasm_wasi_fd_seek(
     turbowasm_trap *trap) {
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
-    turbowasm_host_memory_span output = {0};
+    uint8_t output[8];
     uint64_t new_offset = 0u;
     uint32_t error;
 
@@ -1054,11 +1191,10 @@ static turbowasm_status turbowasm_wasi_fd_seek(
         arguments[2].as.i32 > TURBOWASM_WASI_WHENCE_END) {
         error = TURBOWASM_WASI_ERRNO_INVAL;
     } else {
-        error = turbowasm_wasi_memory_span(
+        error = turbowasm_wasi_memory_check(
             call,
             (uint32_t)arguments[3].as.i32,
-            8u,
-            &output);
+            sizeof(output));
     }
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
         error = turbowasm_wasi_fs_fd_seek(
@@ -1067,9 +1203,11 @@ static turbowasm_status turbowasm_wasi_fd_seek(
             arguments[1].as.i64,
             (uint8_t)arguments[2].as.i32,
             &new_offset);
-        if (error == TURBOWASM_WASI_ERRNO_SUCCESS)
-            turbowasm_wasi_store_u64(
-                output.data, new_offset);
+        if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+            turbowasm_wasi_store_u64(output, new_offset);
+            error = turbowasm_wasi_memory_write(
+                call, (uint32_t)arguments[3].as.i32, output, sizeof(output));
+        }
     }
 
     return turbowasm_wasi_return_errno(
@@ -1087,7 +1225,7 @@ static turbowasm_status turbowasm_wasi_fd_tell(
     turbowasm_trap *trap) {
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
-    turbowasm_host_memory_span output = {0};
+    uint8_t output[8];
     uint64_t offset = 0u;
     uint32_t error;
 
@@ -1098,19 +1236,20 @@ static turbowasm_status turbowasm_wasi_fd_tell(
         arguments[1].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_memory_span(
+    error = turbowasm_wasi_memory_check(
         call,
         (uint32_t)arguments[1].as.i32,
-        8u,
-        &output);
+        sizeof(output));
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
         error = turbowasm_wasi_fs_fd_tell(
             impl->filesystem,
             (uint32_t)arguments[0].as.i32,
             &offset);
-        if (error == TURBOWASM_WASI_ERRNO_SUCCESS)
-            turbowasm_wasi_store_u64(
-                output.data, offset);
+        if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+            turbowasm_wasi_store_u64(output, offset);
+            error = turbowasm_wasi_memory_write(
+                call, (uint32_t)arguments[1].as.i32, output, sizeof(output));
+        }
     }
 
     return turbowasm_wasi_return_errno(
@@ -1128,7 +1267,7 @@ static turbowasm_status turbowasm_wasi_fd_filestat_get(
     turbowasm_trap *trap) {
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
-    turbowasm_host_memory_span output = {0};
+    uint8_t output[64] = {0};
     turbowasm_wasi_fs_stat stat = {0};
     uint32_t error;
 
@@ -1139,11 +1278,10 @@ static turbowasm_status turbowasm_wasi_fd_filestat_get(
         arguments[1].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_memory_span(
+    error = turbowasm_wasi_memory_check(
         call,
         (uint32_t)arguments[1].as.i32,
-        64u,
-        &output);
+        sizeof(output));
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
         error = turbowasm_wasi_fs_fd_stat(
             impl->filesystem,
@@ -1152,20 +1290,21 @@ static turbowasm_status turbowasm_wasi_fd_filestat_get(
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        memset(output.data, 0, 64u);
-        turbowasm_wasi_store_u64(output.data + 0u, stat.device);
-        turbowasm_wasi_store_u64(output.data + 8u, stat.inode);
-        output.data[16u] = stat.file_type;
+        turbowasm_wasi_store_u64(output + 0u, stat.device);
+        turbowasm_wasi_store_u64(output + 8u, stat.inode);
+        output[16u] = stat.file_type;
         turbowasm_wasi_store_u64(
-            output.data + 24u, stat.link_count);
+            output + 24u, stat.link_count);
         turbowasm_wasi_store_u64(
-            output.data + 32u, stat.size);
+            output + 32u, stat.size);
         turbowasm_wasi_store_u64(
-            output.data + 40u, stat.accessed_ns);
+            output + 40u, stat.accessed_ns);
         turbowasm_wasi_store_u64(
-            output.data + 48u, stat.modified_ns);
+            output + 48u, stat.modified_ns);
         turbowasm_wasi_store_u64(
-            output.data + 56u, stat.changed_ns);
+            output + 56u, stat.changed_ns);
+        error = turbowasm_wasi_memory_write(
+            call, (uint32_t)arguments[1].as.i32, output, sizeof(output));
     }
 
     return turbowasm_wasi_return_errno(
@@ -1183,8 +1322,9 @@ static turbowasm_status turbowasm_wasi_fd_readdir(
     turbowasm_trap *trap) {
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
-    turbowasm_host_memory_span buffer = {0};
-    turbowasm_host_memory_span bufused = {0};
+    uint8_t bufused[4];
+    uint32_t buffer_address;
+    uint32_t buffer_size;
     uint64_t cookie;
     size_t used = 0u;
     uint32_t error;
@@ -1199,22 +1339,19 @@ static turbowasm_status turbowasm_wasi_fd_readdir(
         arguments[4].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_memory_span(
-        call,
-        (uint32_t)arguments[1].as.i32,
-        (uint32_t)arguments[2].as.i32,
-        &buffer);
+    buffer_address = (uint32_t)arguments[1].as.i32;
+    buffer_size = (uint32_t)arguments[2].as.i32;
+    error = turbowasm_wasi_memory_check(call, buffer_address, buffer_size);
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        error = turbowasm_wasi_memory_span(
+        error = turbowasm_wasi_memory_check(
             call,
             (uint32_t)arguments[4].as.i32,
-            4u,
-            &bufused);
+            sizeof(bufused));
     }
 
     cookie = (uint64_t)arguments[3].as.i64;
     while (error == TURBOWASM_WASI_ERRNO_SUCCESS &&
-           used < buffer.size) {
+           used < buffer_size) {
         turbowasm_wasi_fs_dirent entry = {0};
         bool has_entry = false;
         uint8_t record[24u + TURBOWASM_WASI_FS_DIRENT_NAME_MAX];
@@ -1242,9 +1379,12 @@ static turbowasm_status turbowasm_wasi_fd_readdir(
         }
 
         record_size = 24u + (size_t)entry.name_length;
-        remaining = buffer.size - used;
+        remaining = buffer_size - used;
         copy_size = record_size < remaining ? record_size : remaining;
-        memcpy(buffer.data + used, record, copy_size);
+        error = turbowasm_wasi_memory_write(
+            call, (uint64_t)buffer_address + used, record, copy_size);
+        if (error != TURBOWASM_WASI_ERRNO_SUCCESS)
+            break;
         used += copy_size;
         if (copy_size != record_size)
             break;
@@ -1252,7 +1392,9 @@ static turbowasm_status turbowasm_wasi_fd_readdir(
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        turbowasm_wasi_store_u32(bufused.data, (uint32_t)used);
+        turbowasm_wasi_store_u32(bufused, (uint32_t)used);
+        error = turbowasm_wasi_memory_write(
+            call, (uint32_t)arguments[4].as.i32, bufused, sizeof(bufused));
     }
 
     return turbowasm_wasi_return_errno(
@@ -1298,7 +1440,7 @@ static turbowasm_status turbowasm_wasi_fd_prestat_get(
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
     turbowasm_wasi_fs_descriptor_info info = {0};
-    turbowasm_host_memory_span output = {0};
+    uint8_t output[8] = {0};
     uint32_t error;
     size_t name_length = 0u;
 
@@ -1309,31 +1451,32 @@ static turbowasm_status turbowasm_wasi_fd_prestat_get(
         arguments[1].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_fs_descriptor_errno(
+    error = tw_wasi_fd_preopen_pin(
         impl->filesystem,
         (uint32_t)arguments[0].as.i32,
         &info);
+    bool pinned = error == TURBOWASM_WASI_ERRNO_SUCCESS;
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
         name_length = strlen(info.guest_path);
         if (name_length > UINT32_MAX) {
             error = TURBOWASM_WASI_ERRNO_INVAL;
         } else {
-            error = turbowasm_wasi_memory_span(
+            error = turbowasm_wasi_memory_check(
                 call,
                 (uint32_t)arguments[1].as.i32,
-                8u,
-                &output);
+                sizeof(output));
         }
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        memset(output.data, 0, 8u);
-        output.data[0] = 0u;
         turbowasm_wasi_store_u32(
-            output.data + 4u,
+            output + 4u,
             (uint32_t)name_length);
+        error = turbowasm_wasi_memory_write(
+            call, (uint32_t)arguments[1].as.i32, output, sizeof(output));
     }
 
+    if (pinned) tw_wasi_fd_preopen_unpin(impl->filesystem, info.descriptor);
     return turbowasm_wasi_return_errno(
         results, result_capacity, result_count, trap, error);
 }
@@ -1350,7 +1493,6 @@ static turbowasm_status turbowasm_wasi_fd_prestat_dir_name(
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
     turbowasm_wasi_fs_descriptor_info info = {0};
-    turbowasm_host_memory_span output = {0};
     uint32_t path_length;
     uint32_t error;
     size_t name_length = 0u;
@@ -1363,10 +1505,11 @@ static turbowasm_status turbowasm_wasi_fd_prestat_dir_name(
         arguments[2].kind != TURBOWASM_VALUE_I32)
         return TURBOWASM_INVALID_ARGUMENT;
 
-    error = turbowasm_wasi_fs_descriptor_errno(
+    error = tw_wasi_fd_preopen_pin(
         impl->filesystem,
         (uint32_t)arguments[0].as.i32,
         &info);
+    bool pinned = error == TURBOWASM_WASI_ERRNO_SUCCESS;
     path_length = (uint32_t)arguments[2].as.i32;
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
@@ -1374,19 +1517,20 @@ static turbowasm_status turbowasm_wasi_fd_prestat_dir_name(
         if (name_length > path_length) {
             error = TURBOWASM_WASI_ERRNO_NAMETOOLONG;
         } else {
-            error = turbowasm_wasi_memory_span(
+            error = turbowasm_wasi_memory_check(
                 call,
                 (uint32_t)arguments[1].as.i32,
-                path_length,
-                &output);
+                path_length);
         }
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS &&
         name_length != 0u) {
-        memcpy(output.data, info.guest_path, name_length);
+        error = turbowasm_wasi_memory_write(
+            call, (uint32_t)arguments[1].as.i32, info.guest_path, name_length);
     }
 
+    if (pinned) tw_wasi_fd_preopen_unpin(impl->filesystem, info.descriptor);
     return turbowasm_wasi_return_errno(
         results, result_capacity, result_count, trap, error);
 }
@@ -1409,7 +1553,7 @@ static turbowasm_status turbowasm_wasi_path_mutation(
     turbowasm_wasi_path_mutation_call_fn mutation) {
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
-    turbowasm_host_memory_span path = {0};
+    turbowasm_wasi_path_snapshot path = {0};
     uint32_t path_length;
     uint32_t error;
 
@@ -1423,19 +1567,23 @@ static turbowasm_status turbowasm_wasi_path_mutation(
         return TURBOWASM_INVALID_ARGUMENT;
 
     path_length = (uint32_t)arguments[2].as.i32;
-    error = turbowasm_wasi_memory_span(
+    bool shared = turbowasm_wasi_memory_shared(call);
+    error = turbowasm_wasi_memory_check(
         call,
         (uint32_t)arguments[1].as.i32,
-        path_length,
-        &path);
+        path_length);
+    if (!error) error = turbowasm_wasi_payload_budget(shared, path_length);
+    if (!error) error = turbowasm_wasi_path_snapshot_read(call,
+        (uint32_t)arguments[1].as.i32, path_length, shared, &path);
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
         error = mutation(
             impl->filesystem,
             (uint32_t)arguments[0].as.i32,
             path.data,
-            path.size);
+            path_length);
     }
 
+    free(path.owned);
     return turbowasm_wasi_return_errno(
         results, result_capacity, result_count, trap, error);
 }
@@ -1485,6 +1633,32 @@ static turbowasm_status turbowasm_wasi_path_unlink_file(
         turbowasm_wasi_fs_path_unlink_file);
 }
 
+static turbowasm_status turbowasm_wasi_path_rename(
+    void *context, turbowasm_host_call *call,
+    const turbowasm_value *arguments, size_t argument_count,
+    turbowasm_value *results, size_t result_capacity,
+    size_t *result_count, turbowasm_trap *trap) {
+    turbowasm_wasi_preview1_impl *impl = context;
+    if (!impl || !impl->allow_filesystem || !impl->filesystem || !call ||
+        !arguments || argument_count != 6) return TURBOWASM_INVALID_ARGUMENT;
+    for (size_t i = 0; i < 6; ++i)
+        if (arguments[i].kind != TURBOWASM_VALUE_I32) return TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_wasi_path_snapshot a = {0}, b = {0};
+    uint32_t an = (uint32_t)arguments[2].as.i32, bn = (uint32_t)arguments[5].as.i32;
+    bool shared = turbowasm_wasi_memory_shared(call);
+    uint32_t error = turbowasm_wasi_memory_check(call, (uint32_t)arguments[1].as.i32, an);
+    if (!error) error = turbowasm_wasi_memory_check(call, (uint32_t)arguments[4].as.i32, bn);
+    if (!error) error = turbowasm_wasi_payload_budget(shared, (uint64_t)an + bn);
+    if (!error) error = turbowasm_wasi_path_snapshot_read(call, (uint32_t)arguments[1].as.i32, an, shared, &a);
+    if (!error) error = turbowasm_wasi_path_snapshot_read(call, (uint32_t)arguments[4].as.i32, bn, shared, &b);
+    if (!error) error = turbowasm_wasi_fs_path_rename(impl->filesystem,
+        (uint32_t)arguments[0].as.i32, a.data, an,
+        (uint32_t)arguments[3].as.i32, b.data, bn);
+    free(b.owned);
+    free(a.owned);
+    return turbowasm_wasi_return_errno(results, result_capacity, result_count, trap, error);
+}
+
 static turbowasm_status turbowasm_wasi_path_filestat_get(
     void *context,
     turbowasm_host_call *call,
@@ -1496,8 +1670,8 @@ static turbowasm_status turbowasm_wasi_path_filestat_get(
     turbowasm_trap *trap) {
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
-    turbowasm_host_memory_span path = {0};
-    turbowasm_host_memory_span output = {0};
+    turbowasm_wasi_path_snapshot path = {0};
+    uint8_t output[64] = {0};
     turbowasm_wasi_fs_stat stat = {0};
     uint32_t path_length;
     uint32_t error;
@@ -1513,18 +1687,20 @@ static turbowasm_status turbowasm_wasi_path_filestat_get(
         return TURBOWASM_INVALID_ARGUMENT;
 
     path_length = (uint32_t)arguments[3].as.i32;
-    error = turbowasm_wasi_memory_span(
+    bool shared = turbowasm_wasi_memory_shared(call);
+    error = turbowasm_wasi_memory_check(
         call,
         (uint32_t)arguments[2].as.i32,
-        path_length,
-        &path);
+        path_length);
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        error = turbowasm_wasi_memory_span(
+        error = turbowasm_wasi_memory_check(
             call,
             (uint32_t)arguments[4].as.i32,
-            64u,
-            &output);
+            sizeof(output));
     }
+    if (!error) error = turbowasm_wasi_payload_budget(shared, path_length);
+    if (!error) error = turbowasm_wasi_path_snapshot_read(call,
+        (uint32_t)arguments[2].as.i32, path_length, shared, &path);
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
         error = turbowasm_wasi_fs_path_stat(
@@ -1532,27 +1708,29 @@ static turbowasm_status turbowasm_wasi_path_filestat_get(
             (uint32_t)arguments[0].as.i32,
             (uint32_t)arguments[1].as.i32,
             path.data,
-            path.size,
+            path_length,
             &stat);
     }
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        memset(output.data, 0, 64u);
-        turbowasm_wasi_store_u64(output.data + 0u, stat.device);
-        turbowasm_wasi_store_u64(output.data + 8u, stat.inode);
-        output.data[16u] = stat.file_type;
+        turbowasm_wasi_store_u64(output + 0u, stat.device);
+        turbowasm_wasi_store_u64(output + 8u, stat.inode);
+        output[16u] = stat.file_type;
         turbowasm_wasi_store_u64(
-            output.data + 24u, stat.link_count);
+            output + 24u, stat.link_count);
         turbowasm_wasi_store_u64(
-            output.data + 32u, stat.size);
+            output + 32u, stat.size);
         turbowasm_wasi_store_u64(
-            output.data + 40u, stat.accessed_ns);
+            output + 40u, stat.accessed_ns);
         turbowasm_wasi_store_u64(
-            output.data + 48u, stat.modified_ns);
+            output + 48u, stat.modified_ns);
         turbowasm_wasi_store_u64(
-            output.data + 56u, stat.changed_ns);
+            output + 56u, stat.changed_ns);
+        error = turbowasm_wasi_memory_write(call,
+            (uint32_t)arguments[4].as.i32, output, sizeof(output));
     }
 
+    free(path.owned);
     return turbowasm_wasi_return_errno(
         results, result_capacity, result_count, trap, error);
 }
@@ -1568,8 +1746,8 @@ static turbowasm_status turbowasm_wasi_path_open(
     turbowasm_trap *trap) {
     turbowasm_wasi_preview1_impl *impl =
         (turbowasm_wasi_preview1_impl *)context;
-    turbowasm_host_memory_span path = {0};
-    turbowasm_host_memory_span opened_fd = {0};
+    turbowasm_wasi_path_snapshot path = {0};
+    uint8_t opened_fd[4];
     uint32_t path_length;
     uint32_t error;
     uint32_t guest_fd = 0u;
@@ -1589,18 +1767,20 @@ static turbowasm_status turbowasm_wasi_path_open(
         return TURBOWASM_INVALID_ARGUMENT;
 
     path_length = (uint32_t)arguments[3].as.i32;
-    error = turbowasm_wasi_memory_span(
+    bool shared = turbowasm_wasi_memory_shared(call);
+    error = turbowasm_wasi_memory_check(
         call,
         (uint32_t)arguments[2].as.i32,
-        path_length,
-        &path);
+        path_length);
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
-        error = turbowasm_wasi_memory_span(
+        error = turbowasm_wasi_memory_check(
             call,
             (uint32_t)arguments[8].as.i32,
-            4u,
-            &opened_fd);
+            sizeof(opened_fd));
     }
+    if (!error) error = turbowasm_wasi_payload_budget(shared, path_length);
+    if (!error) error = turbowasm_wasi_path_snapshot_read(call,
+        (uint32_t)arguments[2].as.i32, path_length, shared, &path);
 
     if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
         error = turbowasm_wasi_fs_path_open(
@@ -1608,17 +1788,20 @@ static turbowasm_status turbowasm_wasi_path_open(
             (uint32_t)arguments[0].as.i32,
             (uint32_t)arguments[1].as.i32,
             path.data,
-            path.size,
+            path_length,
             (uint32_t)arguments[4].as.i32,
             (uint64_t)arguments[5].as.i64,
             (uint64_t)arguments[6].as.i64,
             (uint32_t)arguments[7].as.i32,
             &guest_fd);
-        if (error == TURBOWASM_WASI_ERRNO_SUCCESS)
-            turbowasm_wasi_store_u32(
-                opened_fd.data, guest_fd);
+        if (error == TURBOWASM_WASI_ERRNO_SUCCESS) {
+            turbowasm_wasi_store_u32(opened_fd, guest_fd);
+            error = turbowasm_wasi_memory_write(call,
+                (uint32_t)arguments[8].as.i32, opened_fd, sizeof(opened_fd));
+        }
     }
 
+    free(path.owned);
     return turbowasm_wasi_return_errno(
         results, result_capacity, result_count, trap, error);
 }
@@ -1742,8 +1925,23 @@ turbowasm_status turbowasm_wasi_preview1_destroy_checked(turbowasm_wasi_preview1
     if (!wasi) return TURBOWASM_INVALID_ARGUMENT;
     if (!wasi->impl) return TURBOWASM_OK;
     turbowasm_wasi_preview1_impl *impl = wasi->impl;
-    if (impl->async && (impl->async->active || impl->async->used)) return TURBOWASM_INVALID_ARGUMENT;
-    if (impl->async) { free(impl->async->waits); free(impl->async); }
+    struct tw_p1_async *a = impl->async;
+    if (a) {
+        if (a->dispatch && !tw_wasi_dispatch_is_owner(a->dispatch)) return TURBOWASM_INVALID_ARGUMENT;
+        tw_p1_lock(a);
+        bool busy = a->active || a->used || a->calls || a->progressing ||
+            (a->dispatch && (!tw_wasi_dispatch_idle_locked(a->dispatch) || a->dispatch->advancing));
+        tw_p1_unlock(a);
+        if (busy) return TURBOWASM_INVALID_ARGUMENT;
+        if (a->dispatch) {
+            turbowasm_status status = tw_wasi_fs_detach_dispatch(impl->filesystem, a->dispatch);
+            if (status != TURBOWASM_OK) return status;
+            status = tw_wasi_dispatch_destroy(a->dispatch);
+            if (status != TURBOWASM_OK) return status;
+            free(a->dispatch);
+        }
+        free(a->bindings); free(a->waits); free(a);
+    }
     turbowasm_wasi_string_list_destroy(&impl->environment);
     turbowasm_wasi_string_list_destroy(&impl->args);
     free(impl); wasi->impl = NULL; return TURBOWASM_OK;
@@ -1790,6 +1988,32 @@ turbowasm_status turbowasm_wasi_preview1_init_v2(turbowasm_wasi_preview1 *wasi,
 size_t turbowasm_wasi_preview1_function_count(void) {
     return sizeof(turbowasm_wasi_preview1_manifest) /
            sizeof(turbowasm_wasi_preview1_manifest[0]);
+}
+
+turbowasm_status turbowasm_wasi_preview1_init_threaded(turbowasm_wasi_preview1 *wasi,
+    const turbowasm_wasi_preview1_config_v2 *base,
+    const turbowasm_wasi_preview1_threaded_config *threaded) {
+    if (!wasi || wasi->impl || !threaded || !threaded->request_capacity || !threaded->wake_owner ||
+        threaded->request_capacity >= SIZE_MAX / sizeof(void *) ||
+        !threaded->interrupt_interval_ns || threaded->interrupt_interval_ns > UINT64_C(1000000000))
+        return TURBOWASM_INVALID_ARGUMENT;
+    turbowasm_wasi_preview1 temporary = {0};
+    turbowasm_status status = turbowasm_wasi_preview1_init_v2(&temporary, base);
+    if (status != TURBOWASM_OK) return status;
+    turbowasm_wasi_preview1_impl *p = temporary.impl;
+    tw_wasi_dispatch *d = calloc(1, sizeof(*d));
+    p->async->bindings = calloc(turbowasm_wasi_preview1_function_count(), sizeof(tw_p1_binding));
+    if (!d || !p->async->bindings) { status = TURBOWASM_OUT_OF_MEMORY; goto fail; }
+    status = tw_wasi_dispatch_init(d, threaded->request_capacity, threaded->wake_owner, threaded->wake_context);
+    if (status != TURBOWASM_OK) goto fail;
+    status = tw_wasi_fs_attach_dispatch(p->filesystem, d);
+    if (status != TURBOWASM_OK) { (void)tw_wasi_dispatch_destroy(d); goto fail; }
+    p->async->dispatch = d;
+    p->async->interrupt_interval_ns = threaded->interrupt_interval_ns;
+    *wasi = temporary;
+    return TURBOWASM_OK;
+fail:
+    free(d); turbowasm_wasi_preview1_destroy(&temporary); return status;
 }
 
 const cmeta_function_desc *turbowasm_wasi_preview1_function_at(
@@ -1854,6 +2078,33 @@ static bool turbowasm_wasi_adapter_value_kind(
     return false;
 }
 
+static turbowasm_status tw_p1_threaded_call(void *context, turbowasm_host_call *call,
+    const turbowasm_value *arguments, size_t argument_count, turbowasm_value *results,
+    size_t result_capacity, size_t *result_count, turbowasm_trap *trap) {
+    tw_p1_binding *binding = context;
+    turbowasm_wasi_preview1_impl *p = binding->owner;
+    struct tw_p1_async *a = p->async;
+    tw_wasi_dispatch *d = a->dispatch;
+    tw_p1_lock(a);
+    uint32_t error = a->calls == SIZE_MAX ? TURBOWASM_WASI_ERRNO_BUSY :
+        d->stopping && !binding->cleanup ? TURBOWASM_WASI_ERRNO_INTR : 0;
+    if (!error) ++a->calls;
+    tw_p1_unlock(a);
+    if (error) return turbowasm_wasi_return_errno(results, result_capacity, result_count, trap, error);
+    turbowasm_status status = binding->function(p, call, arguments, argument_count,
+        results, result_capacity, result_count, trap);
+    bool worker = !tw_wasi_dispatch_is_owner(d);
+    tw_p1_lock(a);
+    --a->calls;
+    if (worker) ++d->callers; /* Keep the final wake context alive through return. */
+    tw_p1_unlock(a);
+    if (worker) {
+        d->wake(d->wake_context);
+        tw_p1_lock(a); --d->callers; tw_p1_unlock(a);
+    }
+    return status;
+}
+
 static turbowasm_status turbowasm_wasi_define_cmeta_function(
     turbowasm_linker *linker,
     const cmeta_function_desc *metadata,
@@ -1891,6 +2142,15 @@ static turbowasm_status turbowasm_wasi_define_cmeta_function(
         type.result_count = 1u;
     }
 
+    turbowasm_wasi_preview1_impl *p = context;
+    if (p->async && p->async->dispatch) {
+        size_t binding_index = (size_t)(plan - turbowasm_wasi_preview1_adapter_functions);
+        tw_p1_binding *binding = &p->async->bindings[binding_index];
+        if (!binding->function) *binding = (tw_p1_binding){.owner = p, .function = function,
+            .cleanup = function == turbowasm_wasi_fd_close || function == turbowasm_wasi_proc_exit};
+        else if (binding->function != function) return TURBOWASM_INVALID_ARGUMENT;
+        function = tw_p1_threaded_call; context = binding;
+    }
     return turbowasm_linker_define_host_function(
         linker,
         turbowasm_wasi_namespace(),
@@ -1911,6 +2171,16 @@ turbowasm_status turbowasm_wasi_preview1_define(
         return TURBOWASM_INVALID_ARGUMENT;
 
     impl = (turbowasm_wasi_preview1_impl *)wasi->impl;
+
+    if (impl->async && impl->async->dispatch) {
+        struct tw_p1_async *a = impl->async;
+        if (!tw_wasi_dispatch_is_owner(a->dispatch)) return TURBOWASM_INVALID_ARGUMENT;
+        tw_p1_lock(a);
+        bool busy = a->progressing || a->calls || a->dispatch->advancing || a->dispatch->direct_calls ||
+            a->dispatch->stopping;
+        tw_p1_unlock(a);
+        if (busy) return TURBOWASM_INVALID_ARGUMENT;
+    }
 
 #define TURBOWASM_WASI_DEFINE(metadata_, function_) \
     do { \
@@ -1999,6 +2269,7 @@ turbowasm_status turbowasm_wasi_preview1_define(
         TURBOWASM_WASI_DEFINE(
             &turbowasm_wasi_meta_path_unlink_file,
             turbowasm_wasi_path_unlink_file);
+        TURBOWASM_WASI_DEFINE(&turbowasm_wasi_meta_path_rename, turbowasm_wasi_path_rename);
         TURBOWASM_WASI_DEFINE(
             &turbowasm_wasi_meta_fd_seek,
             turbowasm_wasi_fd_seek);

@@ -1,4 +1,10 @@
 option(TURBOWASM_BUILD_TOOLS "Build TurboWasm command-line tools" ON)
+option(TURBOWASM_BUILD_METALLIC_GUESTS "Build the local Metallic wasm32 guest SDK and C11 guests" OFF)
+option(TURBOWASM_BUILD_METALLIC_THREADS "Build and install the opt-in Metallic C11 threads profile" OFF)
+set(TURBOWASM_METALLIC_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/guest/metallic" CACHE PATH
+  "Absolute path to the local Metallic sources")
+set(TURBOWASM_GUEST_CMETA_SOURCE_DIR "" CACHE PATH
+  "Optional local Salts cmeta source directory to cross-compile and qualify with Metallic")
 option(TURBOWASM_BUILD_TESTS "Build TurboWasm tests" ON)
 option(TURBOWASM_BUILD_CONFORMANCE_RUNNER
   "Build the non-installed WebAssembly spec conformance runner" OFF)
@@ -20,6 +26,10 @@ option(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN
   "Regenerate the checked Preview1 adapter plan with SaltsUtils tooling" OFF)
 option(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER
   "Build optional legacy WASI Preview1 threads adapter" ON)
+if(TURBOWASM_BUILD_METALLIC_THREADS AND
+   (NOT TURBOWASM_BUILD_METALLIC_GUESTS OR NOT TURBOWASM_ENABLE_WASI_THREADS_ADAPTER))
+  message(FATAL_ERROR "Metallic threads require the Metallic guest SDK and WASIThreads adapter")
+endif()
 option(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER
   "Build optional WASI Preview1 NativeIO fd adapter" ON)
 option(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER

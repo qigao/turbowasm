@@ -66,6 +66,25 @@ turbowasm_status turbowasm_instance_create_linked(
     const turbowasm_module *module,
     const struct turbowasm_linker *linker);
 
+/* Linked creation with execution control for the Wasm start function only.
+ * Requires an empty instance and non-NULL options/trap; module, source bytes
+ * and providers have the same borrowed lifetime as create_linked. No start
+ * section means no guest execution or interruption callback. Later calls use
+ * their own options. Returns link/allocation errors or the start invocation's
+ * status (including FUEL_EXHAUSTED, INTERRUPTED and TRAPPED); trap reports a
+ * start trap and is otherwise NONE. Failure leaves the instance empty, but
+ * imported-state changes and host effects are not rolled back: owners must
+ * retain resources needed by operations admitted before failure. GC modules
+ * still require create_in_store. Example: options = {.fuel = 100000,
+ * .has_fuel_limit = true}; create_linked_with_options(&i, &m, &l, &options, &trap).
+ */
+turbowasm_status turbowasm_instance_create_linked_with_options(
+    turbowasm_instance *instance,
+    const turbowasm_module *module,
+    const struct turbowasm_linker *linker,
+    const turbowasm_execution_options *start_options,
+    turbowasm_trap *trap);
+
 /* GC instances share an explicit store, including all instance import providers.
  * A NULL linker requires no imports.
  * The instance must be destroyed before the store. All operations use the

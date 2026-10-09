@@ -58,7 +58,10 @@ bool turbowasm_wasi_threads_execution_policy_apply(
 typedef struct turbowasm_wasi_threads_config {
     /*
      * Borrowed concurrent CFlow executor. It must outlive this capability and
-     * all admitted child tasks.
+     * all admitted child tasks. Before waiting for executor shutdown, publish
+     * group exit if children may be blocked: CANCEL_PENDING only cancels queued
+     * tasks when a worker can deliver their callbacks; it cannot stop running
+     * callbacks. The owner must also keep enough workers available for progress.
      */
     cflow_executor *executor;
 
@@ -71,8 +74,30 @@ turbowasm_status turbowasm_wasi_threads_init(
     const turbowasm_wasi_threads_config *config);
 
 /*
+ * Own a private pool with capacity workers and capacity live-child slots.
+ * The root must execute outside this pool. Each admitted child can then run
+ * even when other children block in guest join or atomic wait. Excess spawn
+ * returns SPAWN_CAPACITY; application-level lock cycles can still deadlock.
+ *
+ * threads must be zero-initialized. NULL/nonempty threads, zero capacity or
+ * capacity outside the TID/slot representable range return INVALID_ARGUMENT.
+ * Allocation/worker creation failure returns OUT_OF_MEMORY and leaves threads
+ * empty. Destroy drains finalizers and joins this owned pool after children
+ * become inactive; it never shuts down a borrowed executor.
+ *
+ * Example: turbowasm_wasi_threads threads = {0};
+ *   status = turbowasm_wasi_threads_init_pool(&threads, 4);
+ *   // Define imports, run root, then quiesce all consumers/children.
+ *   if (status == TURBOWASM_OK) turbowasm_wasi_threads_destroy(&threads);
+ */
+turbowasm_status turbowasm_wasi_threads_init_pool(
+    turbowasm_wasi_threads *threads, size_t capacity);
+
+/*
  * Destroy succeeds only when no child task is active. Consumer instances whose
  * imported host function borrows this object must already be quiescent.
+ * Calls from an owned pool worker are rejected. A rejected destroy preserves
+ * the capability. External lifecycle operations must be serialized.
  */
 bool turbowasm_wasi_threads_destroy(
     turbowasm_wasi_threads *threads);
@@ -89,8 +114,10 @@ size_t turbowasm_wasi_threads_active(
     const turbowasm_wasi_threads *threads);
 
 /*
- * Query the first fatal child terminal. A trapped child publishes group-fatal
- * exactly once; siblings/root executions using the group policy then leave
+ * Query the first fatal child terminal. Any unsuccessful child invocation
+ * (including an uncaught exception or host error) publishes group-fatal once.
+ * An accepted executor task cancelled before run publishes INTERRUPTED/NONE.
+ * Earlier fatal/proc_exit state is preserved. Siblings/root using the policy leave
  * with TURBOWASM_INTERRUPTED at the next checkpoint or interruptible wait.
  */
 bool turbowasm_wasi_threads_group_fatal(

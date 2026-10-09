@@ -40,6 +40,16 @@ if ($selected) {
         if ($SkipWindows -and $profileEntry.family -eq 'windows') { continue }
         if ($Profile -eq 'sdk' -and -not $profileEntry.ContainsKey('sdk_preset')) { continue }
         $entry = $profileEntry.Clone()
+        if ($Profile -eq 'ci' -and $env:CI_METALLIC_GUESTS -eq 'true') {
+            if ($entry.id -eq 'linux-release') {
+                $entry.preset = 'ci-metallic-user'
+                $entry.metallic = $true
+            } elseif ($entry.id -eq 'macos-mir-release') {
+                $entry.preset = 'ci-macos-metallic-user'
+                $entry.consumer = 'ci-macos-user'
+                $entry.metallic = $true
+            }
+        }
         if ($Profile -eq 'sdk') {
             $entry.preset = $entry.sdk_preset
             if ($entry.ContainsKey('sdk_id')) { $entry.id = $entry.sdk_id }

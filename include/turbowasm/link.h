@@ -56,6 +56,17 @@ turbowasm_instance *turbowasm_host_call_instance(
 bool turbowasm_host_call_can_wait(
     const turbowasm_host_call *call);
 
+/* Query the current invocation's interruption callback on its invoking thread,
+ * inside the live host callback. Returns INTERRUPTED when requested, otherwise
+ * OK (also when no interruption callback exists); an empty/NULL call returns
+ * INVALID_ARGUMENT. No fuel is consumed, no trap is set, and no native operation
+ * is cancelled. Callers must finish accepted operations and cleanup before
+ * propagating interruption. Do not retain call or query it from an IO owner.
+ * Example: status = turbowasm_host_call_check_interrupt(call); if status is
+ * INTERRUPTED, stop admitting work, drain owned operations, then return status.
+ */
+turbowasm_status turbowasm_host_call_check_interrupt(turbowasm_host_call *call);
+
 typedef struct turbowasm_host_memory_span {
     uint8_t *data;
     size_t size;
@@ -69,6 +80,7 @@ typedef struct turbowasm_host_memory_span {
  * The span is borrowed from the live guest memory and remains valid while the
  * same host call is active (including resumable host wait), provided the
  * instance is not concurrently executed/grown from another owner.
+ * Shared memories return TURBOWASM_UNSUPPORTED; use protected copies below.
  */
 turbowasm_status turbowasm_host_call_memory_span(
     turbowasm_host_call *call,
@@ -90,6 +102,27 @@ turbowasm_status turbowasm_host_call_memory_span64(
     size_t length,
     turbowasm_host_memory_span *out_span,
     turbowasm_trap *trap);
+
+/* Protected, allocation-free host transfers for shared/unshared memory32/64.
+ * call must be a live host callback; memory_index selects its caller's memory.
+ * No guest pointer or lock escapes. Each operation checks its entire range;
+ * failed copies leave the destination unchanged. Host buffers must not alias
+ * guest memory, and may be NULL only when length is zero.
+ * OOB/overflow returns TRAPPED and MEMORY_OUT_OF_BOUNDS. Invalid call, index,
+ * buffer or trap returns INVALID_ARGUMENT. Other outcomes set trap to NONE.
+ * check64 validates without copying and does not reserve or freeze the range.
+ * Example: uint8_t bytes[8]; turbowasm_host_call_memory_read64(call, 0,
+ *     guest_address, bytes, sizeof bytes, &trap); // check status before use
+ */
+turbowasm_status turbowasm_host_call_memory_check64(
+    turbowasm_host_call *call, uint32_t memory_index, uint64_t address,
+    uint64_t length, turbowasm_trap *trap);
+turbowasm_status turbowasm_host_call_memory_read64(
+    turbowasm_host_call *call, uint32_t memory_index, uint64_t address,
+    void *destination, size_t length, turbowasm_trap *trap);
+turbowasm_status turbowasm_host_call_memory_write64(
+    turbowasm_host_call *call, uint32_t memory_index, uint64_t address,
+    const void *source, size_t length, turbowasm_trap *trap);
 
 /*
  * Suspend the current async-capable host callback after an external operation

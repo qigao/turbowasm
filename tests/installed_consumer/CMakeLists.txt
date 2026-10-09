@@ -22,6 +22,54 @@ endforeach()
 
 turbowasm_normalize_salts_c11_atomics()
 
+if(TurboWasm_HAS_METALLIC_GUEST_SDK)
+  include("${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuest.cmake")
+  if(TurboWasm_HAS_METALLIC_THREADS)
+    include("${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuestCMeta.cmake")
+    set(threaded_profile_prefix turbowasm_installed_threaded_profile)
+    set(threaded_cmeta_source "$ENV{TURBOWASM_GUEST_CMETA_SOURCE_DIR}")
+    include(../guest/threaded_profile.cmake)
+  endif()
+  turbowasm_add_c_guest(turbowasm_installed_c_guest "${CMAKE_CURRENT_SOURCE_DIR}/../../examples/guest/hello.c")
+  find_program(TURBOWASM_INSTALLED_RUNNER NAMES turbowasm-run
+    PATHS "$ENV{TURBOWASM_ROOT}/bin" NO_DEFAULT_PATH REQUIRED)
+  add_test(NAME turbowasm_installed_c_guest
+    COMMAND "${TURBOWASM_INSTALLED_RUNNER}" "${turbowasm_installed_c_guest_WASM}")
+  set_tests_properties(turbowasm_installed_c_guest PROPERTIES
+    PASS_REGULAR_EXPRESSION "guest cleanup complete" TIMEOUT 30)
+  turbowasm_add_c_reactor(turbowasm_installed_reactor
+    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/../../examples/guest/counter.c"
+    EXPORTS counter_add counter_initializations counter_close)
+  add_executable(turbowasm_installed_reactor_host
+    ../../examples/guest/reactor_host.c ../../examples/guest/reactor_session.c)
+  target_link_libraries(turbowasm_installed_reactor_host PRIVATE TurboWasm::Runtime)
+  target_compile_features(turbowasm_installed_reactor_host PRIVATE c_std_11)
+  target_compile_options(turbowasm_installed_reactor_host PRIVATE $<$<COMPILE_LANG_AND_ID:C,MSVC>:-experimental:c11atomics>)
+  add_dependencies(turbowasm_installed_reactor_host turbowasm_installed_reactor)
+  add_test(NAME turbowasm_installed_reactor
+    COMMAND turbowasm_installed_reactor_host "${turbowasm_installed_reactor_WASM}")
+  set_tests_properties(turbowasm_installed_reactor PROPERTIES TIMEOUT 30)
+  turbowasm_add_c_guest_library(turbowasm_installed_sjlj_library
+    SOURCES ../guest/sjlj.c ../guest/sjlj_leaf.c)
+  turbowasm_add_c_guest(turbowasm_installed_sjlj "${CMAKE_CURRENT_SOURCE_DIR}/../guest/sjlj_main.c"
+    LIBRARIES turbowasm_installed_sjlj_library)
+  add_test(NAME turbowasm_installed_sjlj
+    COMMAND "${TURBOWASM_INSTALLED_RUNNER}" "${turbowasm_installed_sjlj_WASM}")
+  set_tests_properties(turbowasm_installed_sjlj PROPERTIES TIMEOUT 30)
+  if(DEFINED ENV{TURBOWASM_GUEST_CMETA_SOURCE_DIR} AND NOT "$ENV{TURBOWASM_GUEST_CMETA_SOURCE_DIR}" STREQUAL "")
+    include("${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuestCMeta.cmake")
+    turbowasm_add_cmeta_guest_library(turbowasm_installed_cmeta_library "$ENV{TURBOWASM_GUEST_CMETA_SOURCE_DIR}")
+    turbowasm_add_c_guest_library(turbowasm_installed_cmeta_fixture
+      SOURCES ../guest/cmeta.c ../guest/cmeta_peer.c
+      INCLUDE_DIRECTORIES "$ENV{TURBOWASM_GUEST_CMETA_SOURCE_DIR}/include")
+    turbowasm_add_c_guest(turbowasm_installed_cmeta "${CMAKE_CURRENT_SOURCE_DIR}/../guest/cmeta_main.c"
+      LIBRARIES turbowasm_installed_cmeta_fixture turbowasm_installed_cmeta_library)
+    add_test(NAME turbowasm_installed_cmeta
+      COMMAND "${TURBOWASM_INSTALLED_RUNNER}" "${turbowasm_installed_cmeta_WASM}")
+    set_tests_properties(turbowasm_installed_cmeta PROPERTIES TIMEOUT 30)
+  endif()
+endif()
+
 add_executable(turbowasm_installed_consumer main.c)
 target_link_libraries(turbowasm_installed_consumer PRIVATE TurboWasm::Runtime)
 set_target_properties(turbowasm_installed_consumer PROPERTIES

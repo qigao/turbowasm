@@ -3,7 +3,30 @@
 #include <stdint.h>
 #include <string.h>
 
+static bool bounded_start(void) {
+    static const uint8_t bytes[] = {
+        0, 0x61, 0x73, 0x6d, 1, 0, 0, 0,
+        1, 4, 1, 0x60, 0, 0, 3, 2, 1, 0, 8, 1, 0,
+        10, 9, 1, 7, 0, 3, 0x40, 0x0c, 0, 0x0b, 0x0b
+    };
+    turbowasm_module module = {0};
+    turbowasm_instance instance = {0};
+    turbowasm_linker linker = {0};
+    turbowasm_trap trap = TURBOWASM_TRAP_NONE;
+    turbowasm_execution_options options = {.fuel = 32, .has_fuel_limit = true};
+    bool passed = turbowasm_module_load_borrowed(&module, bytes, sizeof(bytes)) == TURBOWASM_OK &&
+        turbowasm_linker_init(&linker) == TURBOWASM_OK &&
+        turbowasm_instance_create_linked_with_options(&instance, &module, &linker,
+            &options, &trap) == TURBOWASM_FUEL_EXHAUSTED &&
+        instance.impl == NULL && trap == TURBOWASM_TRAP_NONE;
+    turbowasm_instance_destroy(&instance);
+    turbowasm_linker_destroy(&linker);
+    turbowasm_module_destroy(&module);
+    return passed;
+}
+
 int main(void) {
+    if (!bounded_start()) return 40;
     const int32_t left_data[4] = {1, 2, 3, 4};
     const int32_t right_data[4] = {4, 3, 2, 1};
     const int32_t expected[4] = {5, 5, 5, 5};

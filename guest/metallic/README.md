@@ -1,0 +1,151 @@
+# Metallic
+
+[![CI](https://github.com/jdh8/metallic/actions/workflows/ci.yml/badge.svg)](https://github.com/jdh8/metallic/actions/workflows/ci.yml)
+[![Oracle](https://github.com/jdh8/metallic/actions/workflows/oracle.yml/badge.svg)](https://github.com/jdh8/metallic/actions/workflows/oracle.yml)
+[![Benchmark](https://github.com/jdh8/metallic/actions/workflows/bench.yml/badge.svg)](https://jdh8.github.io/metallic/dev/bench/)
+
+A from-scratch C library for WebAssembly. The name comes from Gary Bernhardt's
+[The Birth & Death of JavaScript][bdjs] — a vision of "metal" web applications
+running at near-native speed. Metallic aims to be the runtime for that world.
+
+[bdjs]: https://www.destroyallsoftware.com/talks/the-birth-and-death-of-javascript
+
+## Quickstart
+
+    # Build the libraries (requires clang with the wasm32 target and llvm-link).
+    make
+
+    # Run the included hello-world example under wasmtime.
+    cd examples/hello && make run
+
+## Linking
+
+Metallic builds to a single static archive, `metallic.a`, that calls
+WASI snapshot_preview1 directly.  Programs link it like any other library:
+
+    clang --target=wasm32-unknown-unknown-wasm -nostdlib \
+        -I include main.c metallic.a -o app.out
+
+Host I/O lives in [src/wasi/wasi.h](src/wasi/wasi.h), where each binding
+carries the `import_module("wasi_snapshot_preview1")` attribute so the
+linker emits them as wasm imports without needing `--allow-undefined`.
+
+## Status
+
+Implemented C11 hosted-environment headers:
+
+* `<assert.h>` `<complex.h>` `<ctype.h>` `<errno.h>` `<fenv.h>` `<float.h>`
+  `<inttypes.h>` `<iso646.h>` `<limits.h>` `<locale.h>` `<math.h>`
+  `<setjmp.h>` `<signal.h>` `<stdalign.h>` `<stdarg.h>` `<stdbool.h>`
+  `<stddef.h>` `<stdint.h>` `<stdio.h>` `<stdlib.h>` `<stdnoreturn.h>`
+  `<string.h>` `<tgmath.h>` `<time.h>` `<uchar.h>` `<wchar.h>` `<wctype.h>`
+
+The default installed profile opts out of C11 threads through
+`__STDC_NO_THREADS__`. This TurboWasm checkout also has a separate opt-in
+threaded profile under `threaded/`, built and installed by the containing
+project's `TURBOWASM_BUILD_METALLIC_THREADS` option. Its helpers require `THREADS`
+on the program and every guest library; the upstream Makefile does not provide
+this integration. See the containing project's README for ABI, capacities,
+host ownership and the `<metallic/threads.h>` close extension.
+
+`<stdatomic.h>` comes from Clang's compiler headers. Metallic provides the C
+library, while Clang supplies C11 language support and atomic code generation.
+The threaded profile enables `-matomics -pthread`, imports shared Wasm memory
+and uses actual Wasm atomic instructions. The default single-thread profile
+does not provide inter-thread synchronization. Compiled guest tests exercise
+8/16/32/64-bit unsigned integer atomics, pointer arithmetic, compare-exchange,
+atomic flags, fences and release/acquire publication. This coverage does not
+claim arbitrary aggregate or wider-than-64-bit atomic support.
+
+## Math accuracy
+
+Correct rounding is the math library's goal, and every real `float` and `double`
+transcendental now reaches it (the complex functions are composed from those
+kernels and inherit their accuracy).
+A function is **correctly rounded** when its result is the true value rounded to
+the nearest representable number (error ≤ 0.5 ulp); **faithfully rounded** is the
+weaker guarantee of one of the two nearest (error < 1 ulp). For `float`, correct
+rounding is *proven* by an exhaustive sweep of all 2³² bit patterns against an
+MPFR or CORE-MATH oracle; for `double` it is strong evidence from a sampler that
+hammers the published hard-to-round cases plus a broad random sample. See
+`test/oracle/` and `make check.oracle` (native; not part of the wasm CI gate).
+
+* **`float`, correctly rounded (≤ 0.5 ulp).** Unary, proven by exhaustive sweep:
+  `expf` `exp2f` `expm1f` `logf` `log2f` `log10f` `log1pf` `sinf` `cosf` `tanf`
+  `asinf` `acosf` `atanf` `asinhf` `acoshf` `atanhf` `sinhf` `coshf` `tanhf`
+  `cbrtf` `erff` `erfcf` `lgammaf` `tgammaf`.  Bivariate (sampler evidence, since
+  the 2⁶⁴ domain cannot be swept): `atan2f` `hypotf` `powf`.
+* **`double`, correctly rounded (≤ 0.5 ulp), sampler evidence.** Unary: `exp`
+  `exp2` `expm1` `log` `log2` `log10` `log1p` `sin` `cos` `tan` `asin` `acos`
+  `atan` `asinh` `acosh` `atanh` `sinh` `cosh` `tanh` `cbrt` `erf` `erfc`
+  `lgamma` `tgamma`.  Bivariate (sampler evidence, since the 2⁶⁴ domain cannot
+  be swept): `atan2` `hypot` `pow`.
+* **Selected binary128 `long double`, correctly rounded, worst-case-corpus
+  evidence.** `sqrtl` `rsqrtl` `cbrtl` `hypotl` `expl` `exp2l` `exp10l`
+  `expm1l` `logl` `log2l` `log10l` `log1pl` `sinl` `cosl` `tanl` `asinl`
+  `acosl` `atanl` `atan2l` `powl`. This is not complete `long double` coverage.
+* **Complex `float`, correctly rounded (≤ 0.5 ulp per part), sampler evidence.**
+  Each of the real and imaginary parts is the correctly-rounded `float` of the
+  exact value (the 2⁶⁴ domain cannot be swept, so this is a random + near-axis
+  MPFR sampler, as for the bivariate floats): `cabsf` `cargf` `csqrtf` `cexpf`
+  `clogf`.  See `test/oracle/math/float/complex/` and `make check.oracle.complex`.
+  The remaining complex `float` functions (the trig/hyperbolic and inverse
+  families, `cpowf`) are still composed from the real kernels and faithful.
+* **Complex `double`** (`cabs`, `cexp`, `clog`, `csqrt`, the trig/hyperbolic
+  families, …) is composed from the real kernels and inherits their accuracy.
+
+## Limitations
+
+* This TurboWasm checkout implements `setjmp`/`longjmp` with LLVM 20+ SJLJ
+  lowering, Metallic runtime helpers and standard Wasm exception handling.
+  Use the containing project's guest CMake helpers: compiler and LTO options
+  must agree. The upstream Makefile does not configure this integration.
+  Jump buffers belong to a still-active invocation on the same C thread;
+  they cannot resume an export after it has returned to the host. Longjmp
+  does not run application cleanup or unwind a live host callback.
+* `signal`/`raise` track handlers but do not asynchronously dispatch — WASI
+  preview1 delivers no signals. `raise(SIGABRT)` is correctly routed.
+* `localtime` aliases `gmtime` — WASI preview1 has no timezone info.
+* Only the `C` locale is supported.
+* In the threaded profile, `clock()` requires a WASI process CPU-time provider;
+  it returns `(clock_t)-1` if unavailable. Elapsed wall time does not measure
+  aggregate CPU time across workers. The default single-thread profile retains
+  its existing monotonic-clock approximation when CPU time is unavailable.
+* The installed default remains single-threaded (`__STDC_NO_THREADS__`). The
+  separate threaded implementation must be built with its matching libc, TLS,
+  shared-memory and host thread configuration; adding `<threads.h>` to a
+  single-thread program's include path is insufficient. It is not a pthread
+  compatibility implementation.
+
+## Testing
+
+* `make check.native` — native tests (some pre-existing math accuracy failures
+  against the host libm).
+* `make check.wasm.fast` — wasm tests under `wasmtime`, excluding the 10
+  pre-existing soft-float/integer failures. CI runs this.
+* `make check.wasm` — full wasm suite including the known-broken tests.
+* `make check.oracle.long-double` — compare the selected binary128 functions
+  against CORE-MATH's complete worst-case corpora (requires Clang, quadmath,
+  and a CORE-MATH checkout).
+
+If `wasmtime` is installed but not on `PATH` (for example via
+`$HOME/.wasmtime/bin/wasmtime`), the Makefile will use that location
+automatically. You can also select another runner explicitly:
+
+    make WASMRUN=/path/to/wasmtime check.wasm.fast
+
+## Known issues
+
+10 pre-existing test failures in the soft-float / 128-bit integer shift code
+paths. These are not regressions and are excluded from
+`check.wasm.fast`. See [Makefile](Makefile) `KNOWN_BROKEN_WASM`.
+
+## Acknowledgements
+
+This was originally Chen-Pang He's libc-for-WebAssembly experiment. Revival
+work brought it up to a hosted C11 + WASI snapshot_preview1 runtime; the
+math kernels predate the revival.
+
+## License
+
+See [LICENSE](LICENSE).

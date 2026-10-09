@@ -3690,3 +3690,943 @@ does not submit duplicate accepts, and cancellation cannot reuse the physical
 socket slot before its terminal completion is routed. Both ordinary close and
 adapter shutdown are covered. The Runtime static library also retains #419's
 position-independent-code setting for embedding in shared libraries.
+
+## Metallic C11 command guests
+
+The approved first three stages add an optional wasm32 guest SDK and a separate
+`turbowasm-run` command. Metallic is consumed directly from `guest/metallic`,
+with a local source override through `TURBOWASM_METALLIC_SOURCE_DIR`; its headers and allocator run inside
+guest linear memory. Salts remains a native host dependency, never a guest libc.
+Configuration does not fetch, copy or patch the sources. Libc fixes are maintained
+in the local source tree and the C guest tests qualify its behavior.
+The initial audit used upstream `66ea0f480a16a9341be94ed4e66be28b3c3802d5`.
+LLVM produces LTO objects in a conventional
+archive, with the command CRT linked explicitly. This avoids requiring
+`llvm-link` while retaining the upstream compilation model. wasi-sdk remains an
+alternative for applications needing its larger sysroot; importing another
+libc into the runtime would duplicate guest state and is unnecessary.
+
+The runner owns one module, instance, Preview1 adapter and bounded descriptor
+table. Arguments and explicitly supplied environment entries are copied by the
+adapter. Standard streams are borrowed host streams; guest close revokes their
+descriptor without closing the host stream. A directory is available only when
+explicitly passed by the user. Guest memory, module size, descriptor count and
+execution fuel are bounded. `proc_exit` is recorded separately from traps and
+fuel exhaustion. Cleanup destroys the instance before the adapter and closes
+every remaining descriptor before destroying the filesystem provider.
+
+The filesystem provider appends optional `path_rename` and `set_flags` callbacks.
+Existing zero-initialized source consumers retain their behavior but must
+recompile (provider struct size changes). Rename validates both descriptor
+rights and paths before dispatch; different provider contexts return XDEV.
+Flags are committed to the descriptor table only after the provider accepts
+them. HostFS uses secure Salts root-relative operations, never host path
+concatenation. Append is supported; unsupported flag combinations report NOTSUP.
+HostFS refuses rename while any child directory descriptor is live with BUSY,
+because these descriptors currently retain root-relative paths. The preopened
+root is exempt; ordinary C file streams do not open child directory descriptors.
+
+Metallic patches address command exit handlers, allocation failure, checked
+heap growth, aligned allocation admission and temporary-file lifetime. Temporary
+files are exclusively created in the explicitly preopened current directory and
+unlinked immediately; neither a global host temp directory nor shell execution
+is granted. Failed unlink closes the newly created descriptor and reports the
+error. This profile is single-threaded and does not claim complete C11:
+threads, general locale/fenv behavior and upstream long-double
+soft-float gaps remain outside these stages.
+
+Validation uses compiled C guests through the real runner and formal filesystem
+tests, including exit order, allocation limits, args/environment, rename,
+append, temporary files and clock conversion. The dependency and profile are
+optional; disabling the guest build restores the native-only build graph.
+Reverting the provider extension requires rebuilding native consumers.
+
+Restartable character conversions retain the existing UTF-8 encoding and
+32-bit `mbstate_t` layout. The caller owns explicit state; each API owns its
+separate implicit state when `ps` is null. Input and output arrays are borrowed
+only for the call, and a conversion retains at most one partial UTF-8 sequence
+or UTF-16 surrogate in that state. Encoding uses at most four output bytes and
+does not allocate. Incomplete input returns `(size_t)-2`, a pending low surrogate
+returns `(size_t)-3` without consuming input, and invalid sequences report
+`EILSEQ`. State after an encoding error is unspecified; callers must reinitialize
+it before reuse. Null input follows the equivalent empty-string/NUL conversion
+specified by C11, rather than discarding a pending partial sequence. This does
+not add locale selection or thread support. The governing contracts are
+[N1570 sections 7.28 and 7.29.6](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf).
+
+### Guest stdio buffering
+
+`setvbuf` selects unbuffered, full or line buffering before stream I/O starts.
+Existing streams remain unbuffered until explicitly configured. A caller buffer
+is borrowed until `fclose` or `freopen`; otherwise the stream allocates exactly
+the requested capacity (BUFSIZ when size is zero). Capacity never grows, must fit
+PTRDIFF_MAX, and is bounded by guest linear memory. Allocation failure leaves the
+previous configuration intact. `FILE` remains opaque in installed headers;
+only its private implementation changes, so guests relink the updated libc.
+
+The single-threaded stream owns its pending output and input read-ahead state.
+Only configured streams enter an intrusive list owned by guest stdio; no separate
+registry allocation or host-global state is introduced. Full buffers and line
+endings trigger writes; a short host write is retried, while an error retains
+the unwritten suffix and sets the stream error indicator. `clearerr` followed by
+`fflush` may retry that suffix. The caller must not resend a failed write's data
+without accounting for partial progress. Input refills retain unread bytes;
+EOF is set only after an actual zero-byte read. The pushback cache stays separate.
+
+Position queries account for buffered bytes and do not clear EOF. Successful
+position changes discard read-ahead and pushback, and clear EOF; failed seeks
+retain unread data. `fflush(NULL)` drains every buffered output stream. Normal
+exit runs handlers and then drains all outputs; quick exit and `_Exit` do not.
+Closing or reopening unregisters the stream and frees only libc-owned buffers,
+even when flushing fails. String-formatting pseudo-streams retain their existing
+callbacks and are never registered. No host runtime or public WASI API changes
+are needed. Regression covers visibility before/after flush, line endings,
+input positions, borrowed and owned buffers, allocation and write failures,
+and the three exit paths.
+
+### Metallic Reactor and guest libraries (#425)
+
+Metallic remains the guest C11 library for the Reactor, threads (#426) and SJLJ
+(#427) work. These are separate capabilities; a single-threaded Reactor does not
+require either threads or SJLJ. Existing command guests keep their startup and
+exit behavior.
+
+The Reactor links a separate `crt1-reactor.o` and exports `_initialize : () -> ()`.
+Initialization seeds the heap before calling constructors and returns to its
+host. A second or recursive initialization traps before changing the heap. The
+host must initialize once before using business exports. There is no implicit
+`main`, process exit, or destructor pass after a business call. Applications
+explicitly release persistent objects and flush output in their close export;
+destroying an instance does not run `atexit` handlers.
+
+The installed CMake entry `turbowasm_add_c_reactor(name SOURCES ... EXPORTS ...)`
+selects this CRT. `turbowasm_add_c_guest_library(name SOURCES ...)` compiles a
+Wasm archive. Both accept `INCLUDE_DIRECTORIES` and `COMPILE_OPTIONS`; programs
+also accept `LIBRARIES` naming guest library targets or explicit archive paths.
+The existing `turbowasm_add_c_guest(name source)` accepts the same additional
+program arguments without changing old callers. Guest targets do not link
+native Salts archives. Object depfiles preserve header rebuilds, and archives
+are rebuilt from their exact source list so removed members cannot survive.
+
+The embedding example owns each instance's lifecycle and borrows its module,
+source bytes, providers and capabilities. It rejects a Wasm start section and
+checks `_initialize` before instantiation; initialization and business calls
+use explicit fuel limits. One active operation is admitted per session, with
+concurrent/reentrant operations rejected instead of queued. Successful business
+error returns leave the instance usable; traps, interruption, exceptions and
+fuel exhaustion retire it. Failed instances receive host teardown only, never
+another guest cleanup call. Explicit destruction requires quiescence; timing
+out a caller is not permission to free a running instance. Provider instances
+outlive consumers. This is example orchestration over the existing Runtime API,
+not a second public Runtime ABI or a tool gateway.
+
+CMeta qualification cross-compiles portable CMeta sources with the guest CRT
+and Metallic headers. Metadata, object pointers and callbacks remain guest-local;
+host reflection needs an explicit ABI adapter. Cross-instance pointers require
+a separately specified shared-memory/allocator contract. Native thunks remain
+excluded. Rollback disables the optional guest additions; command guests and
+native consumers retain their existing interfaces.
+
+### Metallic non-local jumps (#427)
+
+The selected implementation uses LLVM's Wasm SJLJ lowering and standard Wasm
+exception handling. The compiler creates continuations in the calling function;
+Metallic implements `__wasm_setjmp`, `__wasm_setjmp_test` and `__wasm_longjmp`.
+The `jmp_buf` stores only guest invocation identity, a compiler label and a
+two-field exception payload. No native address or host jump buffer crosses the
+memory boundary. This changes the previous placeholder layout: all guest
+objects and archives using `setjmp.h` must be rebuilt together.
+
+MIR's special handling of native `setjmp` illustrates the need to preserve the
+interpreter PC, but cannot restore an already returned host helper frame.
+Minicoro's Wasm backend uses Asyncify to preserve coroutine stacks; adding that
+whole-program transformation would introduce another tool and execution model.
+Neither is required by this path. The inspected local references are
+TurboScript `5e190f4d6256d67e9aea03dafdc7488d16d3b00e`'s `vendor/mir/mir-interp.c`
+and Salts `25388632d80150cf3f6bd31dcf8ddc02525f732f`'s `vendor/minicoro/minicoro.h`.
+Their native switching implementation is not copied into the guest library.
+The implemented compiler ABI follows
+[LLVM's lowering contract](https://github.com/llvm/llvm-project/blob/llvmorg-21.1.1/llvm/lib/Target/WebAssembly/WebAssemblyLowerEmscriptenEHSjLj.cpp).
+The [SDK integration reference](https://github.com/WebAssembly/wasi-sdk/blob/main/SetjmpLongjmp.md)
+documents the corresponding compiler and LTO flags. Metallic remains the libc.
+
+Guest compilation requires LLVM 20 or newer and enables SJLJ with standard EH
+at both compilation and LTO linking. LTO also selects `-exception-model=wasm`;
+the helper definitions compile without LTO because LLVM introduces declarations
+for these symbols in its late lowering pass. The linker explicitly retains the
+three compiler helper symbols from the archive. There is no success-returning `setjmp`
+fallback: omitting compiler lowering leaves an unresolved symbol. The helper
+payload is part of the target buffer, so nested live targets need no global
+scratch state or allocation. LLVM restores the guest shadow stack on landing.
+The Runtime propagates ordinary Wasm exceptions through its existing unwind
+paths, retaining fuel, trap and resource accounting in interpreter and JIT.
+
+Only a still-active invocation on the same C thread is a valid target. Returning
+to the host ends that invocation; Reactor persistence does not extend it.
+Cross-thread, stale-buffer and cross-instance jumps are undefined C behavior
+and do not acquire access outside Wasm memory. Synchronous host imports may
+return normally between setjmp and longjmp; a guest jump must not unwind a live
+host callback or async suspension. No host continuation API is added. C11's
+volatile-local rules apply, and longjmp does not perform application cleanup:
+in particular it cannot bypass outstanding CMeta structured-scope obligations.
+Rollback requires rebuilding the SDK and all affected guests, not mixing old
+four-byte placeholder buffers with the new helpers.
+
+### Metallic C11 threads and bounded worker ownership (#426, selected)
+
+The thread-enabled SDK is a separate wasm32 profile using imported shared
+memory, Wasm atomics, bulk memory, native TLS and the existing legacy
+`wasi.thread-spawn` / `wasi_thread_start` ABI. The single-threaded archive and
+CRT remain separate. The full C11 surface is required before installing or
+advertising this profile: thread lifecycle, plain/recursive/timed mutexes,
+conditions, once and thread-specific storage with destructor iterations.
+
+Runtime atomic waits currently block a native worker in
+`turbowasm_instance_memory_wait_internal`. The borrowed CFlow Executor protocol
+does not expose a reserved-worker count. Queuing a child on a saturated pool
+while its parent waits can therefore prevent progress. Making more queue slots
+available does not solve this. Converting all waits to coroutine suspension
+would additionally require owner-affine resumption and wake/cancel integration.
+
+The approved additive host entry is:
+
+```c
+turbowasm_status turbowasm_wasi_threads_init_pool(
+    turbowasm_wasi_threads *threads, size_t capacity);
+```
+
+It creates a private CFlow worker pool with exactly `capacity` workers and an
+admission limit of `capacity` live children. The pool is not exposed for unrelated
+tasks. The root executes outside this pool. A queued admitted child always has
+a worker not occupied by another live child once short task-finalization work
+finishes; excess/nested spawn fails with the existing capacity error before
+guest join can depend on an unadmitted child. Application lock cycles can still
+deadlock. This bounds workers and avoids claiming coroutine scheduling that does
+not exist. The existing initializer retains its borrowed-executor semantics.
+
+`threads` must be zero-initialized; zero/unsupported capacity returns
+`INVALID_ARGUMENT`, resource setup failure returns `OUT_OF_MEMORY`, and failure
+leaves it empty. Destruction rejects live children and calls from the owned
+pool. Once quiescent, it drains task finalizers before joining/destroying only
+its owned executor. Module, imported backing and providers must outlive all
+actual child terminals. Group exit interrupts/wakes children but does not prove
+quiescence. The borrowed variant never shuts down its caller's executor.
+
+Guest records have bounded slot/generation identities distinct from host TIDs.
+Stacks/TLS are allocated before spawn with checked alignment and size arithmetic.
+A failed spawn rolls back the uncommitted record. Joinable results remain until
+join or detach; detached records may be reaped only after a stack-free completion
+epilogue publishes terminal state. The epilogue must not access the released
+stack/TLS after publication. Destructors run before publication. Normal return
+and `thrd_exit` are local to a thread; process exit and abnormal termination
+remain group-terminal. SJLJ targets and errno belong to each thread's TLS.
+
+Every non-OK child invocation result is group-terminal, including uncaught Wasm
+exceptions and host callback failures. An accepted executor task cancelled before
+run publishes INTERRUPTED/NONE before finalization destroys its child instance.
+Neither path can publish the guest epilogue's join word, so both use the existing
+group interrupt and shared-memory waiter registry instead. The first fatal or
+proc_exit result wins; sibling unwind and later cancellations cannot replace it.
+Rejected task admission still rolls back only that spawn. This adds no asynchronous
+guest cancellation and never shuts down a borrowed executor from a child callback.
+Borrowed-executor cancellation is delivered by a worker; it does not interrupt
+already-running callbacks. A host shutting down a saturated borrowed pool must
+publish group exit before waiting for idle, so blocked children can unwind and
+workers can deliver queued cancellations. The owned pool's worker-per-child
+admission rule avoids dependency on an unrelated queued task for normal progress.
+
+Root startup initializes shared data, allocator, root TLS and constructors once.
+Child startup installs its own stack/TLS before entering C and never resets live
+shared data. Compiler-generated shared-data initialization must be examined and
+tested, including repeated child instantiation. Reactor close stops admission
+and drains actual terminals before releasing the shared group; timeout retains
+live resources instead of pretending teardown completed.
+
+The libc audit covers allocator/heap locks, FILE operations and the stream list,
+environment/preopen initialization, implicit conversion/time buffers, random
+state and exit-handler registration. Timed waits use real clock values and
+predicate loops. CMeta metadata remains guest-local; reflection neither makes
+mutable objects thread-safe nor enables cross-thread managed GC stores.
+Tests must include saturated/nested spawn, rollback and slot reuse, TLS/stack
+isolation, destructor iterations, contended allocation/I/O and terminal wakeup.
+Rollback disables the optional profile; existing guest artifacts do not relink
+to its ABI implicitly.
+
+The owned host pool is implemented. The private `tests/guest/thread_abi.c`
+qualification uses fixed per-child stacks/TLS and compiler-generated shared
+initialization; it does not install a partial C11 threads library. LLVM 21 emits
+a `__wasm_init_memory` start function with an atomic once guard, passive data
+segments and a per-instance `__tls_base`. The tests verify repeated siblings
+preserve initialized and zero-filled data after mutation, run constructors only
+on the root, reset child TLS on reuse, isolate errno/SJLJ/stack addresses, reject
+root and nested over-capacity spawn, and reject live/worker destruction. The
+internal C11 implementation below adds actual compiled guest qualification;
+the libc synchronization and installed profile are described in their selected
+sections below and remain part of the final #426 acceptance audit.
+The conversion-state portion of that audit now uses `_Thread_local mbstate_t`
+for implicit UTF-8/UTF-16/UTF-32 and legacy multibyte conversion state. The
+thread fixture interleaves distinct incomplete sequences/surrogate pairs on
+the root and both children, including child TLS reuse. Explicit state still
+belongs to the caller and must not be shared concurrently without coordination.
+
+The internal C11 implementation uses 32 child records plus one root record,
+128 generation-checked TSS keys and four destructor passes. A child reserves
+128 KiB of shadow stack and at most 64 KiB of TLS, with linker-provided size
+and alignment checked before allocation. A thread handle is a slot/generation
+pair, never a host TID or native pointer; exhausted generations are retired.
+One registry lock protects admission, join/detach claims and key identities.
+Join waits on a release-published terminal word; only the stack-free assembly
+epilogue can publish it. Detached records are reclaimed at subsequent admission
+or explicit group drain, so retained storage remains bounded. A join claim
+excludes detach and another join, and failed spawn frees only its reservation.
+During drain, completed joinable records remain available until every child
+has terminated, allowing live children to finish their own joins. Reclamation
+preserves the terminal word until later admission, so a drain waiter cannot
+miss completion when a concurrent join releases the same record.
+
+Mutex owners use the current guest slot identity; recursive depth overflow is
+an error. Lock/unlock use acquire/release atomics and predicate-loop wait/notify.
+Conditions capture an atomic 64-bit sequence before unlocking their mutex,
+wait only while that sequence matches, and reacquire before returning on either
+success or timeout. Sequence exhaustion fails rather than wrapping. Timed
+mutex/condition operations use absolute TIME_UTC deadlines and checked values;
+sleep uses a monotonic deadline. Yield uses a short timed atomic wait to offer
+the native worker to other runnable threads without requiring a nonstandard
+host import. It is not a coroutine suspension facility.
+
+Internal allocator locking uses dlmalloc's custom-lock hook, with no pthread
+dependency. Registry/libc locks may acquire allocator locks, never the reverse.
+Callbacks and TSS destructors run outside the registry lock. The root initializes
+its record before constructors. Child return and thrd_exit converge on one TSS
+destructor path; root thrd_exit drains children and exits the process with zero.
+The implementation is kept in a separate threaded include/source directory;
+the opt-in SDK installation and command/Reactor integration are described below.
+`tests/guest/c11_threads.c` exercises create/join/detach/exit, stale handles,
+once, recursive/contended mutexes, timed condition waits, broadcast, sleep,
+TSS deletion/destructor passes, concurrent allocation and admission recovery.
+Environment initialization uses checked allocator-owned storage and call_once
+publication in this profile; its established empty-on-provider-error behavior
+is retained. The allocator remains the sole owner of program-break mutation.
+
+### Installed threaded guest profile and bounded startup (#426, selected)
+
+Implementation status: the budgeted Runtime creation entry and inherited child
+startup control are implemented and covered by Runtime and installed-consumer
+tests. The guest close entry, separate threaded CRT/profile installation and
+threaded command/Reactor/CMeta consumers are now implemented. The formal profile
+suite runs both in-tree and against installed headers, helpers and archives.
+Final cross-platform qualification and the full #426 acceptance audit remain.
+
+The thread archive and compiled tests cover C11 synchronization,
+libc state, native HostFS and owner-dispatched sockets. Installing that archive
+alone would leave startup, host resource ownership and Reactor shutdown to
+undocumented test conventions. LLVM shared-memory output also contains a
+guarded memory/TLS initialization start function. The single-thread Reactor
+example rejects every start section; existing Runtime creation invokes a start
+without invocation fuel. Neither rule is an adequate installed threaded profile.
+
+Selected additive interfaces and artifact contract (approved 2026-10-09):
+
+```c
+turbowasm_status turbowasm_instance_create_linked_with_options(
+    turbowasm_instance *instance, const turbowasm_module *module,
+    const struct turbowasm_linker *linker,
+    const turbowasm_execution_options *start_options,
+    turbowasm_trap *trap);
+
+/* Guest-only extension, declared by <metallic/threads.h>. */
+int metallic_threads_close(const struct timespec *utc_deadline);
+```
+
+The Runtime entry requires an empty instance, live validated module/linker,
+non-NULL start_options and trap. It uses the existing execution fuel and
+interruption policy for the start function only; later invocations keep their
+own options. No start means no guest execution. It returns ordinary linking,
+allocation and invocation errors, including FUEL_EXHAUSTED/INTERRUPTED/TRAPPED,
+and reports the start trap. Failure leaves the instance empty. Effects already
+performed on imported state or by host callbacks cannot be rolled back; their
+owners must outlive any admitted operations. GC still uses its existing explicit
+store entry; threaded managed GC remains excluded. Existing create functions
+retain their API and behavior. Child sibling startup uses the spawning host
+call's execution context internally, so its start cannot bypass that invocation's
+fuel/interrupt policy. No new host join API is introduced.
+
+Guest close is root-only and maps to the existing bounded registry drain. It
+permanently closes new thread admission, waits for actual stack-free child
+terminals, then reclaims retained child records. NULL waits cooperatively with
+no deadline; a supplied absolute TIME_UTC deadline returns thrd_timedout when
+expired and thrd_error on invalid clock/deadline or wrong thread. Timeout/error
+preserves live storage and closed admission; the root may retry close. Success
+is idempotent. This helper does not run application cleanup, flush FILEs, call
+atexit handlers, destroy the root, or terminate the process. Applications stop
+their own child work before close and release persistent objects afterwards.
+A fatal group is host-teardown-only after actual child terminals; guest code
+cannot recover damaged locks or publish missing guest terminal records.
+
+`TURBOWASM_BUILD_METALLIC_THREADS` is an OFF-by-default root CMake option,
+requiring the Metallic guest SDK and WASIThreads adapter. Its installation adds
+separate thread headers, `metallic-threaded.a`, command/Reactor CRT objects and
+profile metadata; it does not replace existing single-thread files. The guest
+helpers accept an additive `THREADS` flag for commands, Reactors and static
+libraries, including `turbowasm_add_cmeta_guest_library(name source_dir THREADS)`.
+Threaded library targets carry an ABI/profile property; threaded programs reject
+single-thread or unannotated absolute archives before linking. Existing absolute
+archive support remains available to the single-thread helper. Compiler/linker
+settings select wasm32 atomics, bulk memory, native TLS, standard EH/SJLJ and
+imported `env.memory` with a declared maximum. Initial memory is 1 MiB, maximum
+16 MiB, root shadow stack 256 KiB; existing bounded child/TSS limits remain.
+All threaded objects must relink together; mixing CRT, TLS or libc profiles is
+unsupported. CMeta metadata remains guest-local, with native thunks excluded.
+The concrete property is `TURBOWASM_GUEST_PROFILE`, with
+`metallic-wasm32-single-v1` and `metallic-wasm32-threads-v1` values. Installed
+thread headers, archives, CRTs and `TurboWasmGuestThreads.cmake` live under
+`share/turbowasm/guest/threaded`; package metadata exposes
+`TurboWasm_HAS_METALLIC_THREADS`. The configuration rejects THREADS when profile
+metadata is absent. Custom compile options must not override its ABI flags.
+
+The separate threaded CRT initializes shared data/TLS through the metered Wasm
+start, then claims root initialization once, seeds the allocator, initializes
+the root thread record, and runs constructors. Duplicate/recursive CRT entry
+traps before heap mutation. Command `_start` calls main and retains normal
+process-exit semantics; it does not silently turn main return into an unbounded
+join. Host group exit interrupts children, and the owner must continue provider
+progress until they terminate. Reactor `_initialize` returns for repeated root
+calls. Child entry installs its private stack/TLS and never reruns root CRT or
+constructors. One root call is admitted at a time even when children are active.
+
+Host integration starts as an embedding example and installed consumers over
+existing Runtime/WASIThreads/Preview1 APIs, not a second public session ABI.
+The group owner retains module bytes, shared-memory provider, root and child
+instances, callbacks and transports through actual termination. Creation,
+initialization, business calls and graceful close have explicit fuel/interrupt
+policies. A timed-out close retains the group and can be retried; failure/trap
+skips arbitrary guest cleanup. The transport owner never joins a worker that
+still needs its progress. The existing single-thread command CLI remains explicit
+about its supported input; automatic profile guessing is not introduced.
+
+Alternatives rejected: trusting a start-function name/custom marker would not
+bound arbitrary guest code; matching one LLVM instruction sequence is brittle;
+rewriting compiled modules needs another binary transformation and provenance
+contract; a second libc or native pthread dependency duplicates existing work.
+The additive budgeted Runtime entry reuses existing execution machinery and
+retains compatibility, at the cost of explicit start-policy adoption by hosts.
+
+Qualification must include installed threaded command and persistent Reactor
+consumers, threaded CMeta archives, mixed-profile build rejection, root/child
+constructor/TLS identity, startup budget/interrupt/trap failures, duplicate CRT
+entry, close timeout/retry with live resources, detached children and fatal
+host teardown. Existing single-thread installed consumers remain regression
+gates. Run the configured Linux/macOS graph and document native/guest sanitizer
+limits. Publish the option/artifacts only after the advertised C11 thread
+surface and libc audit are qualified. Rollback disables this optional profile;
+no existing guest artifact or default CLI mode changes.
+
+### Shared-memory host copies for threaded WASI (#426, selected)
+
+The first compiled C11 timed-wait test exposed an integration gap: Preview1
+clock output uses `turbowasm_host_call_memory_span`, whereas Runtime deliberately
+rejects shared-memory raw spans. Removing that guard would expose data races and
+growth-invalidated pointers. WASI needs protected copies across its public
+Runtime boundary, rather than including Runtime's private instance structures.
+
+Approved additive entries in `link.h` use the existing host-call context:
+
+```c
+turbowasm_status turbowasm_host_call_memory_check64(
+    turbowasm_host_call *call, uint32_t memory, uint64_t address,
+    uint64_t length, turbowasm_trap *trap);
+turbowasm_status turbowasm_host_call_memory_read64(
+    turbowasm_host_call *call, uint32_t memory, uint64_t address,
+    void *destination, size_t length, turbowasm_trap *trap);
+turbowasm_status turbowasm_host_call_memory_write64(
+    turbowasm_host_call *call, uint32_t memory, uint64_t address,
+    const void *source, size_t length, turbowasm_trap *trap);
+```
+
+They support shared and unshared memories and memory32/64 addresses, reuse
+Runtime's existing range checks/read-write locks, and allocate nothing. NULL
+buffers are valid only for zero length. Host buffers must not alias guest
+storage. OOB returns TRAPPED with MEMORY_OUT_OF_BOUNDS; invalid arguments return
+INVALID_ARGUMENT. The trap is NONE on other outcomes. Failed copies do not
+partially transfer. No pointer or lock survives the call. Check validates one
+range without accessing data; subsequent operations recheck their own ranges.
+The existing span functions remain unshared-only and unchanged.
+
+Preview1 scalar output, arguments/environment, paths and vector I/O migrate to
+these entries. Input descriptors/payloads are snapshotted before provider calls;
+outputs are copied back only after provider completion. No memory lock is held
+across callbacks, filesystem I/O, suspension or wait. Existing transfer limits
+are retained where present; newly copied synchronous vector transfers use a
+1 MiB per-call bound and return Preview1 NOMEM when over budget, without invoking
+the provider. This limit and its compatibility cost must be documented for the
+opt-in shared profile; unshared calls retain their existing behavior. Input
+snapshots do not make concurrently mutated application buffers meaningful C.
+
+Tests must cover actual shared-memory clock/stdio, imported memory identity,
+OOB/overflow, zero length, failed copy preservation, limits before side effects,
+and growth/concurrent access. Rollback removes the additive entries and disables
+the threaded SDK profile that depends on them; it must not relax the raw-span guard.
+
+The protected Runtime APIs, Preview1 clock, args/environment and vector
+fd_read/fd_write are implemented. Tests cover shared and unshared memory32/64,
+two importers observing the same storage before/after growth, failed-copy
+preservation, and compiled guest threads concurrently performing short vector
+I/O and first-time environment lookup. The vector tests check the exact 1 MiB
+boundary, rejection above it, OOB before provider effects, zero vectors, and
+provider errors/over-reported reads without publishing output. Shared path and
+random snapshots and fixed v2 fdstat outputs are described below. Remaining v2
+socket/poll projections still require migration;
+this checkpoint does not qualify complete threaded Preview1 or libc support.
+
+Fixed filesystem outputs (`fd_seek`, `fd_tell`, `fd_filestat_get`,
+`fd_prestat_get`) use an 8- or 64-byte call-local record. Output ranges are
+checked before provider effects; the record is published with a protected
+copy only on success. `fd_prestat_dir_name` checks the full requested range
+but copies only the actual preopen name, leaving trailing bytes unchanged.
+These paths allocate no transfer storage and retain no guest pointer across
+callbacks. Provider-triggered memory growth therefore cannot invalidate the
+output location. Error precedence and little-endian layouts remain unchanged
+for unshared guests. Protected copies alone do not protect the descriptor table
+or borrowed preopen names against concurrent close/rebind. The next section's
+admission protocol supplies that lifetime protection; remaining shared path
+projection and threaded guest integration are still qualification requirements.
+
+`fd_readdir` checks the complete caller buffer and byte-count output before
+provider calls, then publishes each successful entry from the existing bounded
+24-byte header plus at most 255 name bytes. It holds no guest pointer while
+enumerating and allocates no transfer buffer. Truncated headers/names, cookies,
+embedded NUL name bytes and zero-length enumeration keep their existing ABI.
+As before, a later provider failure leaves any already-written prefix in the
+buffer and leaves the byte-count output unchanged; this is not an all-or-nothing
+directory snapshot. A failed entry itself is never published. Different entries
+are separate protected copies and do not promise an atomic directory listing.
+
+### Shared path and random snapshots (#426, selected)
+
+The synchronous Preview1 path imports and `random_get` previously used raw spans,
+which reject shared memory. Their provider boundaries need owned
+call-local bytes, without holding the Runtime memory lock across callbacks.
+The existing 1 MiB vector limit is extended to these additional calls.
+
+The approved extension retains public API/layouts and applies one 1 MiB
+temporary-payload limit to each shared-memory path or random call. Rename counts
+both paths together using checked wide arithmetic. Validate every input/output
+guest range before allocation or provider effects; an invalid range returns
+FAULT, and otherwise an over-budget payload returns NOMEM without calling the
+provider. Allocate no payload for zero length. Fixed 4/64-byte output records do
+not count against this payload budget. Existing unshared transfer capacity and
+provider error behavior remain unchanged.
+
+Shared paths are copied in full before admission to the filesystem provider and
+remain stable through its callback. They are length-delimited bytes, preserving
+embedded NULs and leaving path policy to the provider. No truncation or chunked
+path interpretation is allowed. `path_open` publishes its fd only after success;
+`path_filestat_get` serializes a call-local filestat and publishes only on success.
+Both recheck the output range through the protected write API after callbacks;
+memory growth cannot invalidate a saved raw pointer because none is retained.
+
+For shared `random_get`, invoke the configured provider exactly once with the
+original requested length and call-local initialized storage. Publish only after
+success; a provider error leaves guest bytes unchanged. Zero-length calls still
+invoke the provider once with a valid zero-length buffer. Provider ownership,
+entropy quality and concurrent callback support remain provider obligations;
+the adapter neither reseeds nor substitutes a random generator. The existing
+unshared direct-provider behavior, including provider-written bytes on error,
+remains intact. No new global serialization is introduced.
+
+Unbounded temporary allocation was rejected because a guest could turn a large
+valid memory range into an equally large host allocation. Chunking was rejected
+because paths require a complete stable argument and random providers may have
+per-call semantics or fail after a prefix. The selected limit matches the
+existing shared vector profile; applications needing a larger random transfer
+must request separate guest calls. Unshared-memory callers do not acquire a new
+limit. The bounded shared path profile is an explicit compatibility restriction,
+not a claim that Preview1 universally limits path size to 1 MiB.
+
+Fourteen formal projection cases cover shared/unshared calls, zero length, exact/over-budget
+payloads, aggregate rename capacity, bounds before effects, provider failures,
+overlapping path/output ranges, stable snapshots while another importer mutates
+or grows memory, output ABI and descriptor ownership, including the fixed
+24-byte `fd_fdstat_get` output. An internal compiled Metallic guest exercises
+four C11 workers against the production HostFS provider: create, append, seek,
+read, stat, rename, remove and temporary-file cleanup. Its deterministic random
+provider qualifies transfer behavior, not entropy quality.
+Rollback removes only the new
+shared projections and disables SDK configurations requiring concurrent access,
+while retaining protected Runtime APIs; it never exposes raw shared memory spans.
+
+### Socket/poll protected projection (#426)
+
+The v2 socket layer already stages transport bytes and bounds each transfer by
+`io_bytes`, aggregate retained storage by `pending_bytes`, subscriptions by
+`subscription_capacity`, and parked calls by `wait_capacity`. Extend its existing
+projection to shared memory through the approved Runtime copy APIs, preserving
+those limits and errors. This does not add the synchronous filesystem's 1 MiB
+limit to socket transfers or change the public configuration/layout.
+
+Copy the bounded iovec table once, validate every payload/output range, then use
+those saved addresses through callback and suspension. Send bytes are copied
+into the existing owned staging allocation. Receive publishes only the admitted
+prefix to the saved destinations, followed by count/flags. Accept validates its
+fixed output before reserving/provider effects and publishes a local fd record.
+No raw guest pointer survives a provider callback or wait.
+
+Poll decodes each 48-byte record into its existing owned subscription array
+before any provider retain or clock callback. Clock and fd arguments, userdata,
+and flags are no longer reread from guest memory after validation. Selected
+events are serialized one at a time into local 32-byte records; the event count
+is written last. These protected copies are not an atomic multi-buffer result.
+Applications must synchronize concurrent access to argument/result storage.
+Provider errors, rights loss, descriptor reuse, cancellation, partial reads,
+PEEK/WAITALL, shutdown and lease cleanup keep their existing contracts.
+
+The adapter and descriptor callbacks still execute on one host progress thread;
+shared backing alone does not authorize concurrent entry into the wait registry
+or CNet. A worker-to-owner dispatch bridge remains required for threaded socket
+use. No Runtime memory lock crosses a callback. Reusing existing parsed records
+avoids another payload allocation or a second capacity policy. Keeping raw spans
+was rejected because they reject shared memory and can expire during callbacks.
+Rollback reverts this projection and retains the existing single-owner socket
+API; threaded socket callers must disable that capability when rolling back.
+
+Qualification runs the same socket ABI suite with shared and unshared memory,
+including MIR where enabled, and adds provider-time memory growth, argument
+mutation, output boundaries, suspension and cleanup checks. This qualifies
+shared memory transport only, not concurrent provider ownership.
+
+### Threaded Preview1 socket owner dispatch (#426, selected)
+
+The protected projection above does not change CNet ownership. The current
+Preview1 wait registry and payload accounting also assume one progress thread,
+and WASI children use synchronous `instance_invoke_with_options`: their host
+callbacks cannot use resumable `host_call_wait`. A threaded guest therefore
+needs both provider dispatch and an interruptible native waiting path. Root
+joins must not occupy the only thread that advances transports.
+
+Approved public additions (existing v1/v2 initialization and layouts remain):
+
+```c
+typedef struct turbowasm_wasi_preview1_threaded_config {
+    size_t request_capacity;
+    uint64_t interrupt_interval_ns;
+    void (*wake_owner)(void *context);
+    void *wake_context;
+} turbowasm_wasi_preview1_threaded_config;
+
+turbowasm_status turbowasm_wasi_preview1_init_threaded(
+    turbowasm_wasi_preview1 *wasi,
+    const turbowasm_wasi_preview1_config_v2 *base,
+    const turbowasm_wasi_preview1_threaded_config *threaded);
+
+turbowasm_status turbowasm_host_call_check_interrupt(
+    turbowasm_host_call *call);
+```
+
+The new initializer belongs to `TurboWasm::WASI`; the interruption query belongs
+to Runtime. No CFlow/CNet dependency is added to WASI or Runtime. This reuses
+Salts Core storage and Platform mutex/condition/thread identity primitives.
+Initialize on the transport owner thread with an empty WASI handle and a live,
+quiescent filesystem table. The table must have no existing socket identities,
+reservations, pins, leases, or attached dispatcher. Ordinary preopens may
+already exist. The initializer copies both configurations, creates its bounded
+state, and exclusively attaches socket dispatch to that table. Failure leaves
+both handles unchanged. Zero capacity/interval, an interval above one second,
+a null wake callback, or overflowing allocation sizes return INVALID_ARGUMENT;
+allocation failure returns OUT_OF_MEMORY. The callback/context and configured
+providers are borrowed through successful destruction. There is no hidden
+thread, native event loop, transport poll, or default retry queue.
+
+Example configuration: request_capacity=64, interrupt_interval_ns=10000000,
+wake_owner=an event/condition notifier, wake_context=the host event loop. Bind
+socket identities through the existing `fs_bind_socket_move` on that owner
+after initialization. Run the root on another host worker, children on the
+approved bounded pool, and progress transports followed by Preview1 `advance`
+on the owner. The wake callback executes on a submitting worker, must be
+thread-safe/nonblocking, and must neither reenter this adapter nor wait for its
+owner. The host must retain a wake condition until observed; notification is
+not permission to free submitted storage. Existing resumable owner-thread
+calls remain supported. A synchronous owner-thread call which would wait
+returns AGAIN rather than blocking its own progress loop.
+
+#### Dispatch ownership and capacity
+
+- One table has one attached dispatcher. All callbacks for its socket
+  identities, including retain/release/finish, stat, close, read/write, ready,
+  accept/recv/send/shutdown and optional file-provider operations, execute on
+  that owner. Binding rejects wrong-owner entry in this opt-in mode. Decisions
+  use pinned table identities; a close/rebind race cannot bypass dispatch by
+  changing a previously classified fd. Ordinary filesystem providers keep
+  their concurrent-call contract and do not run on the transport owner.
+- Each command borrows an immutable typed argument/result frame from its
+  submitting call. The caller cannot return, release its lease, free staging,
+  or abandon that frame until terminal acknowledgement. Provider callbacks are
+  nonblocking and borrow buffers only during their callback. No guest pointer
+  enters the queue; existing protected snapshots own all transport bytes.
+- Reuse `ring_data_type` for the fixed FIFO of command pointers, with **every**
+  ring operation under one external mutex; no lock-free/SPSC claim is made.
+  Checked storage includes the ring's required empty-space allowance.
+  `request_capacity` bounds queued plus running commands. The owner removes
+  commands under the mutex, executes callbacks without any adapter/table lock,
+  publishes terminal results under the mutex, then wakes callers. It never
+  accesses a caller's frame after terminal publication. Owner-local callbacks
+  execute directly and cannot block on this queue.
+- Full admission for an ordinary fallible provider operation returns BUSY
+  before that callback's effects; it does not replay an already admitted
+  operation. Existing io_bytes/pending_bytes/subscription/wait bounds and their
+  MSGSIZE/NOMEM/AGAIN results remain. Payload accounting becomes synchronized.
+  Void finish/release cannot drop cleanup when full: they wait for bounded
+  command capacity and then acknowledgement, even after admission closes.
+  Cleanup waiters count as in-flight users for destruction. They allocate no
+  extra queue entries. Progress requires the owner to keep draining; it must
+  never synchronously join a worker waiting for owner acknowledgement.
+
+#### Blocking, interruption and terminal ownership
+
+- The Runtime query is valid only on the invoking thread inside a live host
+  callback. It returns INVALID_ARGUMENT for an invalid context, INTERRUPTED
+  when that invocation's existing interruption callback requests termination,
+  and OK otherwise (including no interruption callback). It does not consume
+  fuel, create a cancellation token, run on the provider owner, or interrupt a
+  native provider callback. The existing WASI thread execution policy supplies
+  group fatal/proc_exit interruption without adding a reverse dependency.
+- Worker calls register a bounded wait before sleeping on a condition and use
+  predicate loops. They query interruption on their own thread at the configured
+  interval, outside adapter locks. The interval bounds polling opportunity,
+  not OS scheduling latency or time to finish an accepted provider operation.
+  Worker waits do not migrate a Runtime execution/coroutine to the owner.
+- Registration, owner selection, completion, cancellation request and worker
+  acknowledgement are distinct synchronized states. The owner pins a wait
+  before accessing its subscriptions outside the mutex. A cancelling worker
+  marks cancellation, notifies the owner and retains its frame until the owner
+  stops reading it and acknowledges cancellation. If readiness wins first,
+  the worker rechecks interruption before further effects/publication. Effects
+  already accepted are not rolled back or repeated. Cancellation releases all
+  leases/claims on the provider owner before the host callback returns.
+- `advance`, `next_timeout` and shutdown/progress queries are owner-only and
+  reject wrong-thread/reentrant calls in this mode. `advance` processes a
+  bounded command batch and scans registered waits without holding a mutex
+  across provider/clock callbacks. Existing resumable owner waits continue to
+  complete through Runtime; synchronous worker waits use condition signalling.
+  Clock callbacks reachable from both roles must satisfy the existing provider
+  concurrency contract. Registry state, borrowed subscription access and
+  payload accounting each have one synchronized source of truth.
+
+#### Shutdown, alternatives and qualification
+
+Owner shutdown closes ordinary command/call admission and wakes parked callers
+with INTR. Already accepted commands reach terminal acknowledgement; cleanup
+and socket close remain admissible until all consumers have drained. Shutdown
+poll is true only after queued/running commands, cleanup waiters, active calls
+and parked waits reach zero; it does not imply that bound sockets were closed.
+Continue progressing the native transport while it retains native operations.
+After consumers are quiescent, close all socket descriptors, complete their
+lease cleanup, destroy the threaded Preview1 adapter (detaching the dispatcher),
+then destroy the table and providers in their existing dependency order.
+Checked WASI destruction rejects wrong-owner entry, active users, or remaining
+socket identities/leases; filesystem destruction rejects an attached dispatcher.
+Rejected destruction preserves ownership. Host lifecycle admission remains
+exclusive: counters do not make concurrent destruction and new entry valid.
+
+A single global lock around CNet calls was rejected because it cannot transfer
+thread ownership or drive progress. Routing all filesystem calls through the
+owner was rejected because a blocking HostFS operation would stall unrelated
+transports. A hidden I/O thread changes native-provider ownership and deployment.
+A coroutine/executor migration of WASI children is much wider than the required
+bridge and does not by itself resolve blocking atomic join/wait. The chosen
+opt-in mode keeps provider code on its current owner and guest instances on
+their workers, at the cost of bounded cross-thread command/wait coordination.
+
+Validation must cover native-thread identity for every callback class, ordinary
+file progress independent of sockets, queue full before effects, mandatory
+cleanup at full capacity, lost-wakeup barriers, many blocked workers, cancelled
+wait versus owner scan, group fatal/proc_exit, close/rebind/rights contraction,
+wrong-owner/reentrant calls, failed init rollback and destroy rejection. Real
+compiled threaded guests must perform TCP/UDP socket I/O and poll with the
+existing CNet provider while the root joins children; use deterministic native
+barriers, bounded capacities and CTest timeouts. Run installed C/C++ consumers,
+shared/unshared and interpreter/MIR regressions on Linux/macOS. Sanitizer results
+must distinguish native instrumentation from guest Wasm code.
+
+The additions are opt-in; v1/v2 callers and existing public struct layouts do
+not change. Threaded callers must adopt the explicit owner loop and shutdown
+order. Rollback disables this initializer and its threaded socket integration,
+leaving protected copies and the existing single-owner v2 adapter intact. Do not
+publish placeholder declarations before the complete implementation and tests.
+
+The initializer now integrates the private bounded queue with the Preview1 wait
+registry, payload reservations and active-call accounting. Worker cancellation
+only marks its registered wait: owner scans pin the subscription frame and
+publish completion before the worker can retire it. Terminal call notifications
+retain the dispatch context until the wake callback returns; `next_timeout`
+reports immediate progress while those acknowledgements remain in flight.
+Native barrier tests cover admission, cleanup after stop, callback thread
+identity, ordinary-file independence, cancellation versus readiness, close/rebind,
+rights contraction and acknowledgement lifetime. Real compiled Metallic C11
+guests exchange TCP/UDP messages and poll while their root joins children on a
+separate worker, and exercise group proc_exit with socket work in flight.
+The separate opt-in threaded SDK now installs matching libc/command/Reactor
+artifacts and runs the installed consumers described in its selected section.
+
+### Concurrent filesystem admission and provider lifetime (#426, selected)
+
+Protected guest copies alone do not protect the descriptor table: provider calls
+previously borrowed a slot while close could consume its file and a later bind
+could reuse its metadata. `path_open` opened the provider resource before finding
+descriptor capacity, then ignored a rollback-close error. Threaded guests need
+one lifetime protocol across WASI FS, HostFS and Preview1 preopen projection.
+
+The approved change uses the existing public functions and opaque owners; it
+does not change public struct layouts. Initialization and destruction remain
+exclusive host lifecycle operations. Destruction still requires all identities,
+reservations and in-flight calls to have drained. The caller must prevent new
+API entry while destroying an owner; a mutex cannot keep a freed owner alive.
+
+A single lock across provider I/O was rejected because one blocked file would
+stop unrelated descriptors and provider reentry could deadlock. Waiting inside
+close was also rejected: a callback may need its caller to make progress. Short
+admission plus BUSY preserves explicit ownership and independent progress at the
+cost of caller-visible retry, while per-file HostFS locks serialize only native
+state that cannot safely overlap.
+
+- A short-held table mutex protects slot state, generation, rights, flags,
+  reservations, reference counts and lookup. An admitted synchronous call pins
+  the generation and copies provider operations/identity before dropping the
+  mutex. Provider callbacks, allocation, native I/O and waiting never execute
+  under the table mutex. Pins are bounded checked counters, not heap records.
+- Close with an in-flight synchronous operation, another close, or a pending
+  metadata transaction returns BUSY without invoking the provider or consuming
+  the descriptor. Close otherwise marks CLOSING, invokes the provider without
+  the mutex, then commits retirement on success or restores LIVE on error.
+  Calls attempting admission while CLOSING also return BUSY. This preserves
+  the existing retryable-close ownership contract without waiting on a callback
+  which might itself need the closing caller to make progress.
+- Different descriptors can execute concurrently. The table does not serialize
+  arbitrary custom provider I/O: providers admitted to concurrent execution
+  must support that concurrency. Flags use a per-slot metadata transaction so
+  provider acceptance and the table value cannot commit in opposite orders.
+  Rights only decrease; already-admitted operations retain their admitted
+  authority. Child publication intersects requested rights with the parent's
+  current inheriting rights, as the existing socket accept path does.
+- `path_open` reserves a free descriptor and fd before the provider callback.
+  A full table returns MFILE with no create/truncate/open effects. Provider
+  failure aborts the reservation; success publishes into that reservation with
+  no further allocation or fallible bind. A successful provider open must
+  produce a valid owned identity, and an error must transfer no identity.
+  This deliberately changes full-table error precedence and removes the
+  ignored rollback-close path. Reserved slots and retired generations cannot
+  be reused; generation exhaustion fails admission rather than wrapping.
+- Existing socket retain/release leases remain distinct from synchronous pins.
+  They retain their close-while-parked behavior and same-progress-thread callback
+  contract. Table locking does not authorize CNet callbacks on guest workers;
+  the threaded owner-dispatch bridge is a separate integration requirement.
+- Public descriptor-info/preopen enumeration keeps its borrowed-name contract:
+  callers must coordinate close while consuming that pointer. Preview1 uses an
+  internal pinned preopen snapshot through the protected copy, so no freed
+  name crosses its callback boundary. No new public lifetime carrier is added.
+
+HostFS mirrors operation admission for its root and bounded child identities.
+Its table mutex only manages identity state and admission. Per-identity locks
+serialize native file-position/append operations and directory cursors without
+blocking unrelated files. Root-directory lazy initialization uses the same
+root-operation serialization. A separate namespace admission transaction makes
+the existing no-live-child-directory rename rule atomic against directory
+open/close; native filesystem calls run outside the table mutex. All temporary
+paths remain bounded by the configured path capacity. Close retains the
+existing ownership-consuming native-close translation. External providers keep
+their own cancellation/progress contracts; these locks introduce no asynchronous
+cancellation guarantee for blocking native I/O.
+
+Validation must include barrier-controlled blocked read versus close/rebind,
+independent descriptor progress, callback reentry, duplicate close, close error
+retry, full-table open with no provider effects, reserved-slot races, rights
+reduction during open, flags commit ordering, retained preopen copies and stale
+generations. HostFS tests cover concurrent files, cursor/append consistency,
+root readdir initialization and rename/open exclusion. Existing v2 socket,
+Preview1, WASI 0.2 and installed consumers remain regression gates; native race
+diagnostics are additional evidence and do not instrument guest C code.
+
+Migration requires callers racing close with synchronous operations to handle
+BUSY and retry after their in-flight operation finishes; no ABI rebuild is
+required solely for this internal layout change. Rollback disables the threaded
+filesystem profile and removes its concurrent-filesystem claim; the single-owner
+socket protocol and protected Runtime memory APIs remain independent.
+
+### Threaded Metallic libc synchronization (#426)
+
+The threaded `clock()` uses only the provider's process CPU-time clock and
+returns `(clock_t)-1` if it cannot be determined (C11 7.27.2.1). Wall time cannot
+approximate summed worker CPU time or exclude time blocked in host callbacks.
+The existing single-thread profile's monotonic fallback remains unchanged.
+Compiled root/child tests run against the build-tree and installed archives,
+covering unavailable CPU time, no wall-clock substitution and 64-bit conversion.
+
+The threaded archive appends a recursive lock and flush-reference
+state to its private FILE layout; the single-threaded archive keeps its layout.
+Each public stream operation holds that FILE lock for its complete operation,
+including provider I/O. Different FILEs remain independently usable; there is
+no process-wide lock held across blocking I/O. Nested byte/wide formatting uses
+the same recursive owner. LLVM cleanup attributes release guards on ordinary
+C returns; guest traps/process termination retire the entire group and do not
+permit subsequent use of abandoned libc state. Non-local jumps across libc or
+live provider frames remain outside the supported contract.
+
+The existing buffered-stream list has a separate short-held lock. A flush-all
+walk selects its next live stream in guest-address order and acquires a bounded
+temporary reference while holding only the list lock, then drops that lock
+before locking/flushing the FILE. Concurrently removed streams are skipped;
+streams added during traversal may or may not participate. No snapshot array,
+unbounded allocation or borrowed next pointer crosses the list lock. A stream
+close marks retirement and removes the stream before releasing its FILE lock,
+then waits for outstanding flush references before freeing it. This prevents
+both use-after-free and a close/flush lock cycle. Lock order is FILE -> list or
+allocator; flush traversal never holds the list lock while acquiring a FILE.
+Reopen resets ordinary stream state while preserving its live lock/reference
+metadata. Application calls still must not use a FILE after it is closed.
+
+Automatic line-buffer flushing occurs at the outermost input operation before
+acquiring its FILE lock. Nested reads do not start a second cross-stream walk.
+This avoids opposite FILE lock ordering between concurrent input operations.
+Error flags, wide orientation, pushback, buffering and stream-list mutation are
+covered by the same operation locks. Tests must include indivisible formatted
+records, concurrent reads/writes on distinct streams, close against flush-all,
+wide I/O, short/error returns and lock release after failure.
+
+The two bounded exit-handler registries serialize push/pop independently and
+release their locks before calling application handlers, including handlers
+that register further callbacks. The random generator preserves its existing
+sequence with an atomic state transition; signal-handler publication uses an
+atomic function pointer and raise calls it without internal locks. Default
+terminating signals call _Exit directly so abort cannot recursively raise
+SIGABRT forever. Implicit strtok and calendar/text-time buffers are TLS;
+the fixed C locale remains immutable. Preopen discovery uses once publication,
+and temporary-file sequence allocation is atomic (exclusive creation remains
+the authority against pathname collisions). The shared filesystem/provider
+path is qualified separately by the concurrent-filesystem and protected-copy
+tests above; asynchronous host signals remain outside this profile.
+
+Preopen initialization retains provider errors, unknown tags, oversized names
+and exhausted name storage as terminal initialization errors; callers never see
+a partially discovered set. Formal compiled-guest tests cover the synchronization
+above and controlled filesystem callbacks, including concurrent first lookup,
+error retention, unknown errno/tag admission and no truncated name request.
+They do not substitute for concurrent HostFS/provider qualification.
+
+Additional boundary qualification uses compiler-generated TLS larger than the
+64 KiB child limit and alignment larger than that limit. Both reject child
+admission without changing the output handle or root TLS; teardown retains the
+normal host group ownership. The synchronization suite forces an atomic notify
+with an unchanged condition sequence, observes the awakened child's predicate
+recheck, and only then publishes completion. It also covers mutex-depth and
+condition-sequence exhaustion plus overflowing sleep durations.
+The retained-result case fills all 32 guest child records, waits for actual host
+tasks to finish, and then proves that admission still fails with idle workers.
+Joining one result restores capacity and advances its slot generation; stale
+handles remain rejected and every remaining result is checked before release.
+
+The installed consumer's existing SJLJ library/program pair was configured with
+three intentional invalid combinations: single-thread library plus THREADS
+program, THREADS library plus single-thread program, and a THREADS program with
+an absolute archive lacking target profile metadata. All stopped at the public
+helper's configuration boundary; the unchanged normal consumer graph was then
+restored and built/tested. These are manual error-configuration checks, not
+additional CTest cases or new consumer projects.

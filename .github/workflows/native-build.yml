@@ -38,6 +38,7 @@ jobs:
       CMAKE_CXX_COMPILER_LAUNCHER: sccache
       SCCACHE_DIR: ${{ github.workspace }}/build/sccache/${{ matrix.preset }}
       SCCACHE_CACHE_SIZE: 1G
+      TURBOWASM_GUEST_CMETA_SOURCE_DIR: ${{ matrix.metallic && format('{0}/build/guest-salts/cmeta', github.workspace) || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,6 +48,13 @@ jobs:
         with:
           repository: littlefs-project/littlefs
           path: build/littlefs
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: matrix.metallic
+        with:
+          repository: qigao/salts
+          ref: 85c64549160c32c5057303f4e083d18120b08752
+          path: build/guest-salts
           persist-credentials: false
       - uses: actions/checkout@v4
         if: runner.os != 'Windows'
@@ -84,10 +92,27 @@ jobs:
           if [ "$RUNNER_OS" = Linux ]; then
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends ninja-build pkg-config mono-runtime
+            if [ '${{ matrix.metallic }}' = true ]; then
+              # SJLJ needs standard Wasm EH (LLVM >= 20), including at LTO.
+              curl --fail --location --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key -o "$RUNNER_TEMP/llvm.asc"
+              sudo install -m 644 "$RUNNER_TEMP/llvm.asc" /usr/share/keyrings/turbowasm-llvm.asc
+              echo 'deb [signed-by=/usr/share/keyrings/turbowasm-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' | sudo tee /etc/apt/sources.list.d/turbowasm-llvm.list
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends clang-21 llvm-21 lld-21
+              echo /usr/lib/llvm-21/bin >> "$GITHUB_PATH"
+              echo TURBOWASM_GUEST_LLVM_ROOT=/usr/lib/llvm-21 >> "$GITHUB_ENV"
+            fi
           else
             command -v ninja >/dev/null || brew install ninja
             # Match the published Salts SDK's GNU thread-local ABI (TinyTest).
             brew install gcc@15
+            if [ '${{ matrix.metallic }}' = true ]; then
+              brew install llvm@21 lld@21
+              guest_llvm_root="$(brew --prefix llvm@21)"
+              echo "$guest_llvm_root/bin" >> "$GITHUB_PATH"
+              echo "$(brew --prefix lld@21)/bin" >> "$GITHUB_PATH"
+              echo "TURBOWASM_GUEST_LLVM_ROOT=$guest_llvm_root" >> "$GITHUB_ENV"
+            fi
           fi
       - name: Prepare Windows toolchain
         if: runner.os == 'Windows'
@@ -222,6 +247,16 @@ jobs:
           if errorlevel 1 exit /b 1
           ctest --preset "${{ matrix.consumer }}"
           if errorlevel 1 exit /b 1
+      - name: Retain failed guest test fixtures
+        if: failure() && matrix.metallic
+        uses: actions/upload-artifact@v4
+        with:
+          name: metallic-test-failure-${{ matrix.id }}-${{ github.run_id }}
+          path: |
+            build/${{ matrix.preset }}/guest/**/*.wasm
+            build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Record SDK provenance
         if: matrix.package
         shell: pwsh
