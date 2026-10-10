@@ -185,11 +185,12 @@ and Runtime retain their existing dependency boundaries.
 
 Enable `TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND=ON` with a Salts SDK exporting
 `cnet_connection_preserve_send_on_eof`, datagram socket controls and public
-name lookup. The prerequisite is implemented on
-[the Salts prerequisite branch](https://github.com/qigao/salts/tree/codex/wasi-socket-prerequisites)
-with SDK qualification through [Salts CI](https://github.com/qigao/salts/actions/workflows/ci.yml).
-The option defaults off until an SDK carrying this capability is selected;
-requesting it with an unsuitable SDK fails configuration.
+name lookup, plus `Salts::IDNA` with `SALTS_IDNA_UNICODE17_UTS46_35_DNS` for
+Unicode names. The DNS profile is an upstream addition after Salts 2.3.0-rc.2;
+that release alone cannot build this backend. The option defaults off for local profiles; native CI
+presets enable it with the published SDK, including the Metallic guest profiles.
+The runtime+component-only SDK and Core conformance profiles explicitly keep it
+off. Requesting it with an unsuitable SDK fails configuration.
 
 Initialize zeroed I/O and CNet owners, then compose the facade with
 `turbowasm_wasi02_cnet_wasi02_init` and create the Component instance with
@@ -218,8 +219,9 @@ empty packets, ordered address results and retained subscriptions. See
 
 For branch SDK qualification, dispatch TurboWasm CI with `salts_ci_run` set to
 a successful Salts SDK preparation run. CI verifies the artifact's source
-commit, enables the socket target, builds the full native matrix and runs the
-existing installed-package tests. Ordinary CI continues selecting published SDKs.
+commit, builds the full native matrix and runs the existing installed-package
+tests. The override selects the dependency only; native CI presets enable socket
+coverage for both prerequisite artifacts and ordinary published SDKs.
 Set `skip_windows=true` for an explicitly partial qualification of Linux,
 macOS and Android. In that mode, each prerequisite Salts platform job must
 have completed successfully and its SDK source commit must match the run;
@@ -311,8 +313,13 @@ finite defaults; zero facade capacities omit the corresponding capability.
 For CNet, use `turbowasm_wasi02_cnet_init_external_v2` followed by
 `turbowasm_wasi02_cnet_wasi02_init_v2`. The optional `TurboWasm::WASI02CNet`
 target requires a Salts SDK exposing datagram socket controls and
-`<cnet/name_lookup.h>`, in addition to directional TCP EOF. Salts implements
-IDNA validation with ICU and reuses its existing c-ares progress owner.
+`<cnet/name_lookup.h>` and `Salts::IDNA`, in addition to directional TCP EOF.
+The adapter applies Salts' Unicode 17 / UTS46 nontransitional validation before
+name authorization, then passes the same ASCII identity to CNet's c-ares
+progress owner. Numeric addresses and optional DNS root dots remain supported;
+ICU and SaltsUtils are not required. Guest CMeta uses the Salts `2.3.0-rc.2`
+sources; the host SDK additionally requires the post-rc.2 IDNA DNS profile
+described in [the absolute-name migration](ARCHITECTURE.md#absolute-dns-names-after-uts46-mapping).
 
 ```c
 turbowasm_wasi02_cnet_config_v2 native;
@@ -539,10 +546,12 @@ Immutable descriptors are shared; the test's mutable counters and objects use
 TLS. This qualifies independent objects, not concurrent mutation of one object.
 The guest CI profiles are `ci-metallic-user` (Linux) and
 `ci-macos-metallic-user` (macOS); manual CI selects both with
-`metallic_guests=true` and matching `salts_ci_run` prerequisite artifacts.
+`metallic_guests=true`. Salts `2.3.0-*` remains the published SDK selector; native
+socket builds require the new IDNA DNS profile. Until that profile is published,
+use `salts_ci_run` with its qualified prerequisite SDK artifact.
 Its parent `TURBOWASM_GUEST_LLVM_ROOT` selects the guest compiler tools explicitly;
 CI supplies LLVM 21 and also enables MIR and mixed-tier guest regression.
-macOS keeps GCC 15 for native SDK ABI compatibility and installs LLVM/linker 21
+macOS uses AppleClang for native SDK ABI compatibility and installs LLVM/linker 21
 separately for guest compilation. Both platforms run the installed consumer suite.
 
 The guest tests also cover restartable UTF-8/UTF-16/UTF-32 conversions: split
@@ -557,6 +566,15 @@ the guest's WASI import boundary.
 
 ## Dependency boundary
 
+TurboWasm does not depend on SaltsUtils. The Preview1 ABI plan in
+`src/wasi_preview1_adapter_plan.h` is maintained with its CMeta declarations in
+`src/wasi_preview1.c`; `turbowasm_wasi_adapter_plan_test` checks every function
+and parameter against those declarations. The external DataBind generator and
+byte-for-byte regeneration check have been removed in favor of this existing
+semantic test. Remove `TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN` and
+`-WithSaltsUtils` from older build invocations; use `ci-win-user` instead of
+`ci-win-qualify-user`. No runtime or guest API changes are required.
+
 ```text
 qigao/vcpkg-cache
     -> SIMDe package cache
@@ -567,10 +585,6 @@ Salts SDK selected by package acquisition
     -> Salts::SIMD (SIMDe is private)
     -> Salts::Coroutine (private resumable Runtime implementation)
     -> optional Salts::CFlow / Salts::NativeIO adapters
-
-SaltsUtils
-    -> ecosystem companion only
-    -> not linked by TurboWasm
 
 TurboWasm::Runtime
     -> Wasm decoding / validation / sandbox semantics
@@ -597,7 +611,7 @@ the installed `TurboWasm::Runtime` target.
 
 ## Build
 
-Use CMake 3.25+, Ninja, the latest released Salts SDK, and the shared
+Use CMake 3.25+, Ninja, a Salts SDK selected by `2.3.0-*`, and the shared
 [qigao/vcpkg-cache](https://github.com/qigao/vcpkg-cache) toolchain. The Salts
 2.x API uses `cmeta_v128`, `cmeta_simd_*`, `cmeta_*` platform/filesystem
 functions, and `<coro.h>`. TurboWasm does not pin the SDK version or provide
@@ -618,10 +632,10 @@ on `PATH` (the runtime alone is insufficient):
 ./cmake/ci/restore-salts-sdk.ps1 -Local -SaltsRid windows-x64
 ```
 
-This resolves the latest package with `--no-cache --force-evaluate` and exports
+This resolves `Salts.Native` using `Version="2.3.0-*"` with
+`--no-cache --force-evaluate` and exports
 `SALTS_ROOT` in that PowerShell process. Alternatively, set `SALTS_ROOT` to an
-already installed release SDK. `-WithSaltsUtils` additionally provides
-`SALTS_UTILS_ROOT` for `TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN`.
+already installed release SDK. SaltsUtils is not required.
 
 Set `PROJECT_ROOT` to the parent containing `external/pkgs`, and `VCPKG_ROOT`
 to the vcpkg checkout. Windows expects the cache checkout at
@@ -668,7 +682,7 @@ spelling as an input file, while retaining the dash spelling as an argument.
 The SDK's C-only condition and atomics semantics are preserved; SDK files are
 unchanged. Remove this normalization when the minimum supported Salts SDK
 exports the corrected spelling.
-CI restores the latest published SDK on every run and
+CI resolves `Salts.Native` using `2.3.0-*` on every run and
 builds the complete selected graph. The published package remains Runtime +
 Component only; MIR remains outside the installed Runtime link interface.
 Android uses the shared outer vcpkg toolchain with the NDK chainloaded, and its

@@ -1,6 +1,5 @@
 param(
   [string]$SaltsRid = "",
-  [switch]$WithSaltsUtils,
   [switch]$Local
 )
 
@@ -41,7 +40,7 @@ if ([string]::IsNullOrWhiteSpace($SaltsRid)) {
 }
 
 if ($env:SALTS_SDK_VERSION) {
-  throw "SALTS_SDK_VERSION is forbidden; GitHub Packages dependencies must resolve latest"
+  throw "SALTS_SDK_VERSION is forbidden; Salts.Native uses the repository's 2.3.0-* selector"
 }
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../.."))
 $restoreRoot = if ($Local) { Join-Path $repositoryRoot "build/native-sdk" } else { $env:RUNNER_TEMP }
@@ -51,12 +50,6 @@ $config = Join-Path $repositoryRoot "cmake/vcpkg-cache.nuget.config"
 $project = Join-Path $restoreRoot "turbowasm-salts-sdk-restore.csproj"
 New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
 
-$saltsUtilsReference = if ($WithSaltsUtils) {
-  '    <PackageReference Include="SaltsUtils.Native" Version="*" />'
-} else {
-  ""
-}
-
 @"
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -64,14 +57,13 @@ $saltsUtilsReference = if ($WithSaltsUtils) {
     <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" />
-$saltsUtilsReference
+    <PackageReference Include="Salts.Native" Version="2.3.0-*" />
   </ItemGroup>
 </Project>
 "@ | Set-Content -LiteralPath $project
 
 dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate
-if ($LASTEXITCODE -ne 0) { throw "failed to restore latest Salts.Native" }
+if ($LASTEXITCODE -ne 0) { throw "failed to restore Salts.Native 2.3.0-*" }
 
 $assetsPath = Join-Path $restoreRoot "obj/project.assets.json"
 if (-not (Test-Path -LiteralPath $assetsPath -PathType Leaf)) {
@@ -108,32 +100,3 @@ if (-not $Local) {
   "QIGAO_NUGET_PACKAGES=$packages" >> $env:GITHUB_ENV
 }
 Write-Host "Restored Salts.Native $saltsVersion ($SaltsRid): $saltsRoot"
-
-if ($WithSaltsUtils) {
-  $utilsLibraries = @(
-    $assets.libraries.PSObject.Properties.Name |
-      Where-Object { $_ -like "SaltsUtils.Native/*" }
-  )
-  if ($utilsLibraries.Count -ne 1) {
-    throw "expected exactly one restored SaltsUtils.Native package, found $($utilsLibraries.Count)"
-  }
-
-  $utilsVersion = ($utilsLibraries[0] -split "/", 2)[1]
-  $utilsPackageRoot = Join-Path (Join-Path $packages "saltsutils.native") $utilsVersion
-  $utilsRoot = Join-Path (Join-Path $utilsPackageRoot "sdk") $SaltsRid
-  $utilsConfig = Join-Path $utilsRoot "lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
-  $utilsTargets = Join-Path $utilsRoot "lib/cmake/SaltsUtils/SaltsUtilsTargets.cmake"
-  $producerHeader = Join-Path $utilsRoot "include/data_bind_cmeta_adapter_plan.h"
-
-  foreach ($path in @($utilsConfig, $utilsTargets, $producerHeader)) {
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-      throw "missing restored SaltsUtils SDK file: $path"
-    }
-  }
-
-  $env:SALTS_UTILS_ROOT = $utilsRoot
-  if (-not $Local) {
-    "SALTS_UTILS_ROOT=$utilsRoot" >> $env:GITHUB_ENV
-  }
-  Write-Host "Restored SaltsUtils.Native $utilsVersion ($SaltsRid): $utilsRoot"
-}

@@ -37,7 +37,7 @@
     },
     {
       "name": "ci-macos-user",
-      "inherits": ["GccMac", "ci-user"]
+      "inherits": ["AppleClang", "ci-user"]
     },
     {
       "name": "ci-android-user",

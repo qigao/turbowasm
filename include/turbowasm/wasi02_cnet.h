@@ -56,7 +56,10 @@ turbowasm_status turbowasm_wasi02_cnet_wasi02_init(turbowasm_wasi02_cnet *adapte
  * (receive_datagrams + send_datagrams + 1). Pair metadata stays alive while
  * closed poll aliases exist; pair_capacity bounds repeated stream replacement.
  * DNS servers_csv is copied at init; policy_context stays borrowed through
- * adapter destruction. Names reach authorize_name only after IDNA validation. */
+ * adapter destruction. Names reach authorize_name only after Unicode 17 UTS46
+ * nontransitional IDNA validation; the same ASCII identity is submitted to DNS.
+ * Numeric IPs bypass IDNA; an optional final root separator after UTS46 mapping
+ * becomes '.', including when followed by ignored scalars. */
 typedef struct turbowasm_wasi02_cnet_config_v2 {
     size_t size; uint32_t api_version;
     turbowasm_wasi02_cnet_config base;

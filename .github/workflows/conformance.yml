@@ -115,7 +115,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-      - name: Restore latest Salts SDK
+      - name: Restore Salts SDK (2.3.0-*)
         shell: pwsh
         run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid linux-x64
       - name: Prepare host tools

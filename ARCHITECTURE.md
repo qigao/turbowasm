@@ -3402,13 +3402,33 @@ UDP buffer setters implement the WIT's allowed clamping: after a native ENOBUFS
 capacity rejection, halve the request with a finite integer bound until a real
 setting succeeds. Other native errors propagate; getters report actual settings.
 
-Salts exposes `cnet/name_lookup.h` using its existing c-ares owner and ICU UTS46
-with nontransitional STD3/Bidi/context validation. This adds ICU behind the Salts
-CNet ABI; TurboWasm does not link to ICU or c-ares. ASCII-only validation would
-violate the pinned WIT Unicode contract; a second resolver would duplicate
-progress, cancellation and ordering. The cost is ICU's SDK/runtime footprint.
-Salts records the baseline-selected ICU version/license and installs Windows
-runtime dependencies. No fallback silently relaxes IDNA validation.
+Salts 2.3.0-rc.2 separates ASCII DNS (`cnet/name_lookup.h`, existing c-ares
+owner) from Unicode conversion (`Salts::IDNA`, backed by `Salts::Unicode`).
+The WASI adapter explicitly applies the fixed Unicode 17 / UTS46 revision 35
+nontransitional STD3/Bidi/ContextJ/ContextO profile before name authorization
+and DNS admission. Numeric IPs bypass domain conversion. The new Salts DNS
+profile recognizes a final root separator after mapping/NFC and retains an ASCII dot;
+empty labels and invalid A-labels remain errors. The same converted identity
+reaches authorization and DNS. Neither ICU nor SaltsUtils is required.
+
+Normalization is synchronous on the existing single progress owner. Input is
+borrowed only for the call and bounded by `max_name_bytes` (CNet permits at most
+4096). One call-local allocation through the Runtime allocator owns disjoint
+mapping, normalization and scalar scratch, and is freed before authorization
+or DNS. Unicode 17 maps one scalar to at most 18 scalars; canonical decomposition
+expands each to at most four. For n input bytes, scratch reserves 72n mapped
+bytes, 72n uint32_t scalars and 288n+1 normalized bytes (648n+1 bytes total).
+Arithmetic is checked before allocation. Allocation/workspace exhaustion
+returns OUT_OF_MEMORY; invalid domains return INVALID_ARGUMENT, without
+authorization, query admission or output-handle publication. No scratch or
+input view survives the call; numeric IPs allocate nothing.
+
+This replaces the former ICU implementation while retaining Unicode DNS and
+the public provider/config layouts. ASCII-only CNet by itself would narrow the
+WIT contract; retaining ICU would add a second Unicode implementation. Use the
+matching Salts SDK for host libraries and the pinned release source for guest
+CMeta. Rollback requires restoring both the previous SDK and normalization
+call site; there is no unchecked-name fallback.
 
 Verification includes IPv4/IPv6 loopback, real empty datagrams, repeated source
 readiness, exact send prefixes, connected/disconnected UDP, default-deny policy,
@@ -3433,6 +3453,45 @@ the new socket backend with the prerequisite SDK, not the published Salts SDK.
 References: [WASI UDP 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/udp.wit),
 [WASI name lookup 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/ip-name-lookup.wit).
 
+
+## Absolute DNS names after UTS46 mapping
+
+The Salts 2.3.0-rc.2 strict IDNA profile rejects trailing dots. TurboWasm's
+initial migration removed a literal final separator before invoking it. That ordering
+rejects an otherwise valid absolute name when UTS46 ignored scalars follow its
+root separator: mapping removes those scalars and exposes an empty final label.
+Scratch contents are unspecified after the public IDNA call, so the adapter
+cannot inspect partial normalization to repair this result.
+
+The approved change adds `SALTS_IDNA_UNICODE17_UTS46_35_DNS` as an opt-in profile of the existing
+`salts_idna_to_ascii` API in Salts. Preserve the existing STRICT profile exactly.
+The DNS profile applies the same mapping, NFC, STD3, hyphen, Bidi, ContextJ and
+ContextO checks, then recognizes one optional final ASCII dot in the mapped/NFC
+domain. Validate every non-root label with the existing implementation and
+preserve the root marker in successful ASCII output. Reject a root-only name,
+empty interior labels and repeated root markers. The domain excluding the root
+marker remains limited to 253 bytes and each label to 63; the absolute output
+may have 254 bytes plus its terminal NUL. Existing status codes, caller-owned
+workspace, disjoint storage and unchanged-output-on-error contracts remain.
+
+TurboWasm requires an installed SDK exporting the new profile and passes the
+whole bounded input to it, removing the adapter's separator stripping/restoring.
+Numeric-address handling, provider ABI, authorization ordering and Runtime
+scratch ownership remain unchanged. No Unicode mapping tables, ignored-scalar
+lists, private scratch inspection or retry-based normalization belong here.
+An ASCII-only downgrade or locally copied mapping would narrow compatibility
+or create a second Unicode implementation, so neither is selected.
+
+Qualification must cover all four separators with ignored suffixes, ordinary
+relative names with ignored suffixes, repeated/interior empty labels, root-only
+names, malformed UTF-8, contextual/Bidi failures, maximal DNS lengths and output
+capacity failures. Upstream tests must also prove STRICT still rejects final
+dots and all errors leave output unchanged. TurboWasm reuses its public network
+and installed-consumer suites. Migration waits for the upstream SDK; rollback
+reverts profile selection and retains the documented rc.2 edge-case limitation.
+The profile is not present in the published 2.3.0-rc.2 SDK. Publication/remote
+qualification must precede promoting the dependency migration; ordinary native
+CI fails fast with an older SDK instead of silently omitting socket coverage.
 
 ## Preview1 socket descriptors and async polling
 

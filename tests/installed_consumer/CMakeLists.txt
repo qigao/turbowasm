@@ -121,7 +121,6 @@ if("Salts::CFlow" IN_LIST _turbowasm_runtime_links)
     "TurboWasm::Runtime must remain CFlow-free")
 endif()
 foreach(_turbowasm_forbidden_tooling_target IN ITEMS
-    Salts::DataBindProducer
     Salts::DataBind
     Salts::DataBindCore)
   if("${_turbowasm_forbidden_tooling_target}" IN_LIST _turbowasm_runtime_links)
@@ -301,7 +300,6 @@ if(TARGET TurboWasm::WASI)
       "TurboWasm::WASI must remain host-filesystem-adapter-free")
   endif()
   foreach(_turbowasm_forbidden_tooling_target IN ITEMS
-      Salts::DataBindProducer
       Salts::DataBind
       Salts::DataBindCore)
     if("${_turbowasm_forbidden_tooling_target}" IN_LIST _turbowasm_wasi_links)

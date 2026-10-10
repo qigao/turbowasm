@@ -22,8 +22,6 @@ option(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER
   "Build optional Salts NativeIO host-wait adapter" ON)
 option(TURBOWASM_ENABLE_WASI_ADAPTER
   "Build optional WASI Preview1 capability adapter" ON)
-option(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN
-  "Regenerate the checked Preview1 adapter plan with SaltsUtils tooling" OFF)
 option(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER
   "Build optional legacy WASI Preview1 threads adapter" ON)
 if(TURBOWASM_BUILD_METALLIC_THREADS AND

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail CI if repository metadata reintroduces dependency/release version pins."""
+"""Check version policy, including the approved Salts.Native floating selector."""
 
 from __future__ import annotations
 
@@ -111,14 +111,14 @@ def check_salts_restore() -> None:
     if re.search(r"\$requestedVersion|\$versionSpec|Version=\"\$", text):
         fail(path, "GitHub package version selection through variables is forbidden")
 
-    for package_id in ("Salts.Native", "SaltsUtils.Native"):
+    for package_id in ("Salts.Native",):
         match = re.search(
             rf'PackageReference[^>]*Include="{re.escape(package_id)}"[^>]*Version="([^"]+)"',
             text,
             flags=re.IGNORECASE | re.DOTALL,
         )
-        if match and match.group(1).strip() != "*":
-            fail(path, f'{package_id} GitHub PackageReference must use Version="*"')
+        if match and match.group(1).strip() != "2.3.0-*":
+            fail(path, f'{package_id} GitHub PackageReference must use Version="2.3.0-*"')
 
 
 def main() -> int:

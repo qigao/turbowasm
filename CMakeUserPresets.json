@@ -107,6 +107,7 @@
         "TURBOWASM_ENABLE_MIR_JIT": false,
         "TURBOWASM_ENABLE_WASI02_ADAPTER": false,
         "TURBOWASM_ENABLE_WASI02_CNET_ADAPTER": false,
+        "TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND": false,
         "TURBOWASM_ENABLE_CFLOW_ADAPTER": false,
         "TURBOWASM_ENABLE_NATIVE_IO_ADAPTER": false,
         "TURBOWASM_ENABLE_WASI_ADAPTER": false,
@@ -189,10 +190,9 @@
       },
       "environment": {
         "SALTS_ROOT": "$penv{SALTS_ROOT}",
-        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
-        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
       }
     },
     {
@@ -208,10 +208,9 @@
       },
       "environment": {
         "SALTS_ROOT": "$penv{SALTS_ROOT}",
-        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
-        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
       }
     },
     {
@@ -227,10 +226,9 @@
       },
       "environment": {
         "SALTS_ROOT": "$penv{SALTS_ROOT}",
-        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
-        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
       }
     },
     {
@@ -246,10 +244,9 @@
       },
       "environment": {
         "SALTS_ROOT": "$penv{SALTS_ROOT}",
-        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
-        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
       }
     },
     {
@@ -277,15 +274,17 @@
         "VCPKG_OVERLAY_PORTS": "$penv{VCPKG_OVERLAY_PORTS}",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed/${presetName}",
         "SALTS_ROOT": "$penv{SALTS_ROOT}",
-        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
-        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
       }
     },
     {
       "name": "ci-native-user",
-      "inherits": "ci-paths"
+      "inherits": "ci-paths",
+      "cacheVariables": {
+        "TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND": true
+      }
     },
     {
       "name": "ci-win-user",
@@ -298,16 +297,8 @@
       "name": "ci-linux-user",
       "inherits": "ci-native-user",
       "cacheVariables": {
-        "TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN": true,
         "TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER": true,
         "TURBOWASM_LITTLEFS_SOURCE_DIR": "${sourceDir}/build/littlefs"
-      }
-    },
-    {
-      "name": "ci-win-qualify-user",
-      "inherits": "ci-win-user",
-      "cacheVariables": {
-        "TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN": true
       }
     },
     {
@@ -319,7 +310,7 @@
     },
     {
       "name": "ci-macos-mir-user",
-      "inherits": ["GccMac", "ci-mir-user"]
+      "inherits": ["AppleClang", "ci-mir-user"]
     },
     {
       "name": "ci-android-user",
@@ -364,6 +355,7 @@
         "TURBOWASM_BUILD_TOOLS": false,
         "TURBOWASM_ENABLE_CFLOW_ADAPTER": false,
         "TURBOWASM_BUILD_CONFORMANCE_RUNNER": true,
+        "TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND": false,
         "TURBOWASM_SPEC_ROOT": "${sourceDir}/build/wasm-spec"
       }
     },
@@ -498,10 +490,6 @@
       "configurePreset": "ci-linux-user"
     },
     {
-      "name": "ci-win-qualify-user",
-      "configurePreset": "ci-win-qualify-user"
-    },
-    {
       "name": "ci-mir-user",
       "configurePreset": "ci-mir-user"
     },
@@ -566,13 +554,6 @@
     {
       "name": "install-ci-linux-user",
       "configurePreset": "ci-linux-user",
-      "targets": [
-        "install"
-      ]
-    },
-    {
-      "name": "install-ci-win-qualify-user",
-      "configurePreset": "ci-win-qualify-user",
       "targets": [
         "install"
       ]
@@ -746,16 +727,6 @@
     {
       "name": "ci-linux-user",
       "configurePreset": "ci-linux-user",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error"
-      }
-    },
-    {
-      "name": "ci-win-qualify-user",
-      "configurePreset": "ci-win-qualify-user",
       "output": {
         "outputOnFailure": true
       },
