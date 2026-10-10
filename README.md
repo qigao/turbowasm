@@ -70,8 +70,9 @@ null and subtype checks; cross-instance tails switch owners after the native
 frame unwinds. Each instance/backend retains one execution owner,
 while distinct instances can import the same shared backing. Native MIR
 memory64 verification passed the Linux and macOS MIR test profiles; see the
-[qualification record](tests/conformance/README.md). The Windows MIR dependency
-is not supported. The Component Model host API is exposed separately
+[qualification record](tests/conformance/README.md). Windows x64 uses the shared
+`mir-jit` port revision 3, and `ci-win-user` enables the MIR test graph.
+The Component Model host API is exposed separately
 through the optional `TurboWasm::Component` façade; it does not enter the
 `TurboWasm::Runtime` public ABI. WASI 0.2 remains a separate capability layer
 tracked by Runtime v2 (#301). The interpreter supports GC and all table64
