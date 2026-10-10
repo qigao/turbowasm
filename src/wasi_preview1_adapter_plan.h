@@ -1,6 +1,7 @@
-/* generated static adapter plan; do not edit */
-#ifndef turbowasm_wasi_preview1_adapter_plan_generated_h
-#define turbowasm_wasi_preview1_adapter_plan_generated_h
+/* Repository-maintained Preview1 ABI plan. Keep synchronized with the CMeta
+ * declarations in wasi_preview1.c; wasi_adapter_plan_test checks every entry. */
+#ifndef turbowasm_wasi_preview1_adapter_plan_h
+#define turbowasm_wasi_preview1_adapter_plan_h
 
 #include <stddef.h>
 #include <stdint.h>
@@ -249,4 +250,4 @@ static const turbowasm_wasi_preview1_adapter_function_plan turbowasm_wasi_previe
 
 static const size_t turbowasm_wasi_preview1_adapter_function_count = 30u;
 
-#endif /* turbowasm_wasi_preview1_adapter_plan_generated_h */
+#endif /* turbowasm_wasi_preview1_adapter_plan_h */

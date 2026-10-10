@@ -497,7 +497,18 @@ if(TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND)
   if(NOT TARGET TurboWasm::WASI02IO OR NOT TARGET Salts::CNet)
     message(FATAL_ERROR "WASI02 socket backend requires WASI02IO and Salts::CNet")
   endif()
+  if(NOT TARGET Salts::IDNA)
+    message(FATAL_ERROR "WASI02 Unicode DNS requires a Salts SDK exporting Salts::IDNA")
+  endif()
   include(CheckCSourceCompiles)
+  set(CMAKE_REQUIRED_LIBRARIES Salts::IDNA)
+  unset(TURBOWASM_IDNA_DNS_PROFILE CACHE)
+  check_c_source_compiles("#include <salts_idna.h>
+    int main(void) { return SALTS_IDNA_UNICODE17_UTS46_35_DNS == 0; }"
+    TURBOWASM_IDNA_DNS_PROFILE)
+  if(NOT TURBOWASM_IDNA_DNS_PROFILE)
+    message(FATAL_ERROR "WASI02 Unicode DNS requires a Salts SDK with SALTS_IDNA_UNICODE17_UTS46_35_DNS; Salts 2.3.0-rc.2 does not provide this profile")
+  endif()
   set(CMAKE_REQUIRED_LIBRARIES Salts::CNet)
   unset(TURBOWASM_CNET_DIRECTIONAL_EOF CACHE)
   check_c_source_compiles("#include <cnet/cnet.h>
@@ -525,7 +536,7 @@ if(TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND)
   target_compile_definitions(turbowasm_wasi02_cnet PRIVATE TURBOWASM_WASI02_NATIVE_TCP=1)
   target_compile_features(turbowasm_wasi02_cnet PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_cnet PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-  target_link_libraries(turbowasm_wasi02_cnet PUBLIC TurboWasm::WASI02IO Salts::CNet)
+  target_link_libraries(turbowasm_wasi02_cnet PUBLIC TurboWasm::WASI02IO Salts::CNet PRIVATE Salts::IDNA)
 endif()
 
 if(TARGET turbowasm_wasi AND TARGET turbowasm_wasi02_cnet)
@@ -534,66 +545,6 @@ if(TARGET turbowasm_wasi AND TARGET turbowasm_wasi02_cnet)
   set_target_properties(turbowasm_wasi_cnet PROPERTIES EXPORT_NAME WASICNet)
   target_link_libraries(turbowasm_wasi_cnet INTERFACE TurboWasm::WASI TurboWasm::WASI02CNet)
   install(TARGETS turbowasm_wasi_cnet EXPORT TurboWasmTargets)
-endif()
-
-if(TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN)
-  if(NOT TURBOWASM_ENABLE_WASI_ADAPTER)
-    message(FATAL_ERROR
-      "Preview1 adapter-plan qualification requires TURBOWASM_ENABLE_WASI_ADAPTER")
-  endif()
-  if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR
-     NOT IS_DIRECTORY "$ENV{SALTS_UTILS_ROOT}")
-    message(FATAL_ERROR
-      "SALTS_UTILS_ROOT must point at an installed SaltsUtils SDK for adapter-plan qualification")
-  endif()
-
-  file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" SALTS_UTILS_ROOT_PATH)
-  unset(SaltsUtils_DIR CACHE)
-  unset(SaltsUtils_DIR)
-  find_package(SaltsUtils CONFIG REQUIRED
-    PATHS "${SALTS_UTILS_ROOT_PATH}"
-    NO_DEFAULT_PATH
-    NO_CMAKE_FIND_ROOT_PATH)
-  if(NOT TARGET Salts::DataBindProducer)
-    message(FATAL_ERROR
-      "SaltsUtils SDK must export Salts::DataBindProducer")
-  endif()
-
-  add_executable(turbowasm_wasi_adapter_plan_generator
-    tools/generate_wasi_preview1_adapter_plan.c)
-  target_compile_features(turbowasm_wasi_adapter_plan_generator
-    PRIVATE c_std_11)
-  target_link_libraries(turbowasm_wasi_adapter_plan_generator
-    PRIVATE
-      TurboWasm::WASI
-      Salts::DataBindProducer)
-
-  set(TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/wasi_preview1_adapter_plan.h")
-  add_custom_command(
-    OUTPUT "${TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory
-      "${CMAKE_CURRENT_BINARY_DIR}/generated"
-    COMMAND $<TARGET_FILE:turbowasm_wasi_adapter_plan_generator>
-      "${TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED}"
-    DEPENDS
-      turbowasm_wasi_adapter_plan_generator
-      "${CMAKE_CURRENT_SOURCE_DIR}/src/wasi_preview1.c"
-    VERBATIM)
-
-  add_custom_target(turbowasm_wasi_adapter_plan_check ALL
-    COMMAND "${CMAKE_COMMAND}" -E compare_files
-      "${TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/src/wasi_preview1_adapter_plan.h"
-    DEPENDS "${TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED}"
-    VERBATIM)
-
-  if(TURBOWASM_BUILD_TESTS)
-    add_test(NAME turbowasm_wasi_adapter_plan_regeneration
-      COMMAND "${CMAKE_COMMAND}" -E compare_files
-        "${TURBOWASM_WASI_ADAPTER_PLAN_REGENERATED}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/wasi_preview1_adapter_plan.h")
-  endif()
 endif()
 
 if(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER)

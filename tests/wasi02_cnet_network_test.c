@@ -30,11 +30,11 @@ static turbowasm_value network, udp[2], in[2], out[2], aliases[4], dns;
 static turbowasm_wasi02_cnet_config_v2 config;
 static bool deny_names, deny_results, probe_reentry;
 static size_t name_policy_calls;
+static const char *expected_name;
 static bool authorize_name(void *ctx, turbowasm_wasi02_string_view name) {
     (void)ctx; ++name_policy_calls;
     if (deny_names) {
-        const char expected[] = "xn--bcher-kva.example";
-        check_equal(name.size,sizeof(expected)-1); check_equal(name.data,expected,sizeof(expected)-1);
+        check_equal(name.size,strlen(expected_name)); check_equal(name.data,expected_name,strlen(expected_name));
     }
     return !deny_names;
 }
@@ -134,7 +134,7 @@ static void run_component(const uint8_t *bytes, size_t size, uint32_t expected) 
     turbowasm_component_call_destroy(&call); turbowasm_component_instance_destroy(&instance); turbowasm_component_destroy(&component);
     check_equal(turbowasm_wasi02_destroy(&facade), TURBOWASM_OK);
 }
-static void fixture_init(bool allowed) {
+static void fixture_init_with_runtime(bool allowed, const turbowasm_runtime_config *runtime) {
         memset(&adapter,0,sizeof(adapter)); memset(&io,0,sizeof(io)); memset(&backend,0,sizeof(backend));
         memset(&network,0,sizeof(network)); memset(udp,0,sizeof(udp)); memset(in,0,sizeof(in)); memset(out,0,sizeof(out));
         memset(aliases,0,sizeof(aliases)); memset(&dns,0,sizeof(dns));
@@ -144,17 +144,19 @@ static void fixture_init(bool allowed) {
         config.datagram_bytes = 64; config.receive_datagrams = config.send_datagrams = 2;
         config.allow_udp_bind = config.allow_udp_send = config.allow_udp_receive = config.allow_name_lookup = allowed;
         deny_names = deny_results = probe_reentry = false; name_policy_calls = 0;
+        expected_name = "xn--bcher-kva.example";
         config.authorize_name = authorize_name; config.base.authorize = authorize_endpoint;
         native_io_backend_config bc = {0}; bc.kind = config.base.backend;
         bc.endpoint_capacity = 6; bc.request_capacity = 12; bc.completion_batch_capacity = 12;
         check_equal(native_io_backend_init(&backend,&bc), SALTS_OK);
         check_equal(turbowasm_wasi02_io_init(&io,NULL,NULL), TURBOWASM_OK);
         check_equal(turbowasm_wasi02_io_providers(&io,&streams,&poll), TURBOWASM_OK);
-        check_equal(turbowasm_wasi02_cnet_init_external_v2(&adapter,&io,&backend,&config,NULL), TURBOWASM_OK);
+        check_equal(turbowasm_wasi02_cnet_init_external_v2(&adapter,&io,&backend,&config,runtime), TURBOWASM_OK);
         check_equal(turbowasm_wasi02_cnet_socket_provider(&adapter,&tcp), TURBOWASM_OK);
         check_equal(turbowasm_wasi02_cnet_network_provider(&adapter,&net), TURBOWASM_OK);
         check_equal(tcp.instance_network(tcp.context,&network), TURBOWASM_OK);
 }
+static void fixture_init(bool allowed) { fixture_init_with_runtime(allowed,NULL); }
 static void fixture_destroy(void) {
         if (!net.context) {
             if (io.impl) (void)turbowasm_wasi02_io_destroy(&io);
@@ -314,6 +316,77 @@ suite("native WASI datagrams and name lookup") {
         check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)name,sizeof(name)-1},&dns,&e),TURBOWASM_OK);
         check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED); check_equal(name_policy_calls,1u); check_equal(dns.kind,0);
     }
+    it("authorizes the same IDNA identity for Unicode, NFC and existing A-labels") {
+        const char *names[] = {"B\xc3\x9c" "CHER.example", "bu\xcc\x88" "cher.example", "XN--BCHER-KVA.example"};
+        deny_names = true;
+        for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); ++i) {
+            turbowasm_wasi02_socket_error e;
+            check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)names[i],strlen(names[i])},&dns,&e),TURBOWASM_OK);
+            check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED);
+            check_equal(name_policy_calls,i+1); check_equal(dns.kind,0);
+        }
+    }
+    it("retains an absolute root marker after IDNA for all four separators") {
+        const char *names[] = {"b\xc3\xbc" "cher.example.", "b\xc3\xbc" "cher.example\xe3\x80\x82",
+            "b\xc3\xbc" "cher.example\xef\xbc\x8e", "b\xc3\xbc" "cher.example\xef\xbd\xa1"};
+        deny_names = true; expected_name = "xn--bcher-kva.example.";
+        for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); ++i) {
+            turbowasm_wasi02_socket_error e;
+            check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)names[i],strlen(names[i])},&dns,&e),TURBOWASM_OK);
+            check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED);
+            check_equal(name_policy_calls,i+1); check_equal(dns.kind,0);
+        }
+    }
+    it("preserves nontransitional sharp-s and the configured input budget") {
+        turbowasm_wasi02_socket_error e;
+        const char name[] = "fa\xc3\x9f.de";
+        deny_names = true; expected_name = "xn--fa-hia.de";
+        check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)name,sizeof(name)-1},&dns,&e),TURBOWASM_OK);
+        check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED);
+        char expanded[4097];
+        for (size_t i = 0; i < 4080; i += 2) { expanded[i] = (char)0xc2; expanded[i+1] = (char)0xad; }
+        memcpy(expanded+4080,"b\xc3\xbc" "cher.example",15);
+        expanded[4095] = '.'; expanded[4096] = 'x';
+        expected_name = "xn--bcher-kva.example.";
+        check_equal(config.max_name_bytes,4096u);
+        check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)expanded,4096},&dns,&e),TURBOWASM_OK);
+        check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED); check_equal(name_policy_calls,2u);
+        check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)expanded,sizeof(expanded)},&dns,&e),TURBOWASM_OK);
+        check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_INVALID_ARGUMENT);
+        check_equal(name_policy_calls,2u); check_equal(dns.kind,0);
+    }
+    it("normalizes ignored suffixes after absolute roots before authorization") {
+        const char *names[] = {"b\xc3\xbc" "cher.example.\xc2\xad",
+            "b\xc3\xbc" "cher.example\xe3\x80\x82\xcd\x8f",
+            "b\xc3\xbc" "cher.example\xef\xbc\x8e\xe2\x80\x8b",
+            "b\xc3\xbc" "cher.example\xef\xbd\xa1\xc2\xad\xcd\x8f\xe2\x80\x8b"};
+        deny_names = true; expected_name = "xn--bcher-kva.example.";
+        for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); ++i) {
+            turbowasm_wasi02_socket_error e;
+            check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)names[i],strlen(names[i])},&dns,&e),TURBOWASM_OK);
+            check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED);
+            check_equal(name_policy_calls,i+1); check_equal(dns.kind,0);
+        }
+    }
+    it("keeps ignored suffixes on relative names relative") {
+        const char name[] = "b\xc3\xbc" "cher.example\xc2\xad";
+        turbowasm_wasi02_socket_error e; deny_names = true;
+        check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)name,sizeof(name)-1},&dns,&e),TURBOWASM_OK);
+        check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED);
+        check_equal(name_policy_calls,1u); check_equal(dns.kind,0);
+    }
+    it("rejects invalid A-labels, empty labels, Bidi and joiners before authorization") {
+        const char *names[] = {"xn--a.example", "xn--.example", "a..example", "a.example..",
+            ".", ".\xc2\xad", "\xe3\x80\x82\xcd\x8f", "a.example..\xc2\xad",
+            "a.\xc2\xad.example.", "example.\xff", "123.\xd7\x90",
+            "123.\xd7\x90.\xc2\xad", "a\xe2\x80\x8d.example"};
+        for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); ++i) {
+            turbowasm_wasi02_socket_error e;
+            check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)names[i],strlen(names[i])},&dns,&e),TURBOWASM_OK);
+            check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_INVALID_ARGUMENT);
+            check_equal(name_policy_calls,0u); check_equal(dns.kind,0);
+        }
+    }
     it("rejects denied resolved addresses before publishing an IP value") {
         turbowasm_wasi02_socket_error e; bool has; turbowasm_wasi02_ip_address address = {0}; deny_results = true;
         check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)"127.0.0.1",9},&dns,&e),TURBOWASM_OK); check_equal(e,0);
@@ -329,6 +402,38 @@ suite("native WASI datagrams and name lookup") {
         check_not_equal(local.as.ipv4.port,0);
     }
 }
+
+#if !defined(TW_NETWORK_PUBLIC_ONLY)
+suite("WASI DNS normalization allocation") {
+    before_each() {
+        turbowasm_runtime_config runtime; turbowasm_runtime_config_init(&runtime);
+        runtime.allocator.allocate = fault_allocate; runtime.allocator.deallocate = fault_free;
+        fault_calls = fault_live = 0; fault_at = SIZE_MAX;
+        fixture_init_with_runtime(true,&runtime);
+    }
+    after_each() { fixture_destroy(); check_equal(fault_live,0u); }
+    it("preserves admission and releases scratch when allocation fails then recovers") {
+        turbowasm_wasi02_socket_error e; const char name[] = "b\xc3\xbc" "cher.example";
+        size_t live = fault_live;
+        deny_names = true; fault_at = fault_calls + 1;
+        check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)name,sizeof(name)-1},&dns,&e),TURBOWASM_OK);
+        check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_OUT_OF_MEMORY);
+        check_equal(name_policy_calls,0u); check_equal(dns.kind,0); check_equal(fault_live,live);
+        fault_at = SIZE_MAX;
+        check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)name,sizeof(name)-1},&dns,&e),TURBOWASM_OK);
+        check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED);
+        check_equal(name_policy_calls,1u); check_equal(dns.kind,0); check_equal(fault_live,live);
+    }
+    it("keeps numeric resolution independent of IDNA scratch allocation") {
+        turbowasm_wasi02_socket_error e; size_t calls = fault_calls;
+        deny_names = true; expected_name = "127.0.0.1"; fault_at = fault_calls + 1;
+        check_equal(net.resolve_addresses(net.context,network,(turbowasm_wasi02_string_view){(const uint8_t *)expected_name,strlen(expected_name)},&dns,&e),TURBOWASM_OK);
+        check_equal(e,TURBOWASM_WASI02_SOCKET_ERROR_ACCESS_DENIED);
+        check_equal(name_policy_calls,1u); check_equal(fault_calls,calls); check_equal(dns.kind,0);
+        fault_at = SIZE_MAX;
+    }
+}
+#endif
 
 suite("WASI network default-deny admission") {
     before_each() { fixture_init(false); }

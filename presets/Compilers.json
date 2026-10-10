@@ -18,8 +18,8 @@
             "name": "AppleClang",
             "hidden": true,
             "cacheVariables": {
-                "CMAKE_C_COMPILER": "clang",
-                "CMAKE_CXX_COMPILER": "clang++"
+                "CMAKE_C_COMPILER": "/usr/bin/clang",
+                "CMAKE_CXX_COMPILER": "/usr/bin/clang++"
             },
             "description": "Xcode compiler for native macOS and iOS SDKs"
         },

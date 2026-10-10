@@ -1,6 +1,7 @@
 /* Private extension compiled in the CNet adapter translation unit so the
  * existing owner, admission guard and backend stay the sole authority. */
 #include <cnet/name_lookup.h>
+#include <salts_idna.h>
 #include <limits.h>
 #include "component_resource.h"
 
@@ -368,13 +369,60 @@ static turbowasm_status dns_ready(void *ctx, bool *ready) {
     if (!d->live || d->terminal || d->owner->stopping) { *ready = true; return TURBOWASM_OK; }
     return cnet_name_lookup_ready(&d->owner->network->lookup,d->query,ready) == SALTS_OK ? TURBOWASM_OK : TURBOWASM_TRAPPED;
 }
+/* These bounds belong to the fixed Unicode 17 profile, not the DNS output
+ * length. Mapping has at most 18 scalars; canonical decomposition at most 4. */
+enum {
+    TW_IDNA_MAPPING_SCALARS = 18,
+    TW_IDNA_DECOMPOSITION_SCALARS = 4,
+    TW_IDNA_UTF8_BYTES = 4,
+    TW_IDNA_SCALARS_PER_BYTE = TW_IDNA_MAPPING_SCALARS * TW_IDNA_DECOMPOSITION_SCALARS,
+    TW_IDNA_MAPPED_BYTES_PER_BYTE = TW_IDNA_MAPPING_SCALARS * TW_IDNA_UTF8_BYTES,
+    TW_IDNA_NORMALIZED_BYTES_PER_BYTE = TW_IDNA_SCALARS_PER_BYTE * TW_IDNA_UTF8_BYTES,
+    TW_IDNA_SCRATCH_BYTES_PER_BYTE = TW_IDNA_SCALARS_PER_BYTE * sizeof(uint32_t) +
+        TW_IDNA_MAPPED_BYTES_PER_BYTE + TW_IDNA_NORMALIZED_BYTES_PER_BYTE
+};
+static int dns_normalize(tw_cnet_impl *p, turbowasm_wasi02_string_view name,
+    char ascii[256], size_t *out_size) {
+    tw_cnet_network *n = p->network;
+    bool numeric = false;
+    if (!name.data || !name.size || name.size > n->config.max_name_bytes ||
+        memchr(name.data, 0, name.size)) return SALTS_EINVAL;
+    int rc = cnet_name_lookup_normalize(&n->lookup, (const char *)name.data,
+        name.size, ascii, 256, out_size, &numeric, NULL);
+    if (rc == SALTS_OK && numeric) return SALTS_OK;
+
+    size_t domain_size = name.size;
+    if (domain_size > (SIZE_MAX - 1) / TW_IDNA_SCRATCH_BYTES_PER_BYTE) return SALTS_ENOMEM;
+    size_t scalar_count = domain_size * TW_IDNA_SCALARS_PER_BYTE;
+    size_t mapped_bytes = domain_size * TW_IDNA_MAPPED_BYTES_PER_BYTE;
+    size_t normalized_bytes = domain_size * TW_IDNA_NORMALIZED_BYTES_PER_BYTE + 1;
+    turbowasm_runtime_scope scope = turbowasm_runtime_scope_enter(&p->runtime);
+    p->busy = true;
+    uint32_t *scratch = turbowasm_rt_malloc(domain_size * TW_IDNA_SCRATCH_BYTES_PER_BYTE + 1);
+    if (!scratch) {
+        p->busy = false; turbowasm_runtime_scope_leave(scope); return SALTS_ENOMEM;
+    }
+    char *mapped = (char *)(scratch + scalar_count);
+    salts_idna_workspace workspace = {
+        mapped, mapped_bytes, mapped + mapped_bytes, normalized_bytes, scratch, scalar_count
+    };
+    salts_idna_status status = salts_idna_to_ascii(
+        vstr_from_buf((const char *)name.data, domain_size),
+        SALTS_IDNA_UNICODE17_UTS46_35_DNS, &workspace, ascii, 256, out_size);
+    turbowasm_rt_free(scratch);
+    p->busy = false; turbowasm_runtime_scope_leave(scope);
+    if (status != SALTS_IDNA_OK)
+        return status == SALTS_IDNA_WORKSPACE || status == SALTS_IDNA_OVERFLOW ||
+            status == SALTS_IDNA_OUTPUT_CAPACITY ? SALTS_ENOMEM : SALTS_EINVAL;
+    return SALTS_OK;
+}
 static turbowasm_status net_resolve(void *ctx, turbowasm_value network, turbowasm_wasi02_string_view name,
     turbowasm_value *out, turbowasm_wasi02_socket_error *error) {
     tw_cnet_impl *p = ctx; tw_cnet_network *n = p->network; tw_dns *d = NULL; char ascii[256]; size_t size;
     if (!n || p->busy || !out || !error) return TURBOWASM_INVALID_ARGUMENT;
     *error = TURBOWASM_WASI02_SOCKET_ERROR_NONE;
     if (p->stopping || !network_rep_valid(p,network)) { *error = TURBOWASM_WASI02_SOCKET_ERROR_INVALID_STATE; return TURBOWASM_OK; }
-    int rc = cnet_name_lookup_normalize(&n->lookup,(const char *)name.data,name.size,ascii,sizeof(ascii),&size,NULL,NULL);
+    int rc = dns_normalize(p,name,ascii,&size);
     if (rc != SALTS_OK) { *error = map_error(rc); return TURBOWASM_OK; }
     bool allow = n->config.allow_name_lookup;
     if (allow && n->config.authorize_name) { p->busy = true;

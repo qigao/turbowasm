@@ -53,7 +53,7 @@ jobs:
         if: matrix.metallic
         with:
           repository: qigao/salts
-          ref: 85c64549160c32c5057303f4e083d18120b08752
+          ref: 081bdff4da141c8042faa83aff0d25eae1077d5e # Salts 2.3.0-rc.2
           path: build/guest-salts
           persist-credentials: false
       - uses: actions/checkout@v4
@@ -104,8 +104,7 @@ jobs:
             fi
           else
             command -v ninja >/dev/null || brew install ninja
-            # Match the published Salts SDK's GNU thread-local ABI (TinyTest).
-            brew install gcc@15
+            # Match the published Salts SDK's AppleClang thread-local ABI.
             if [ '${{ matrix.metallic }}' = true ]; then
               brew install llvm@21 lld@21
               guest_llvm_root="$(brew --prefix llvm@21)"
@@ -131,9 +130,9 @@ jobs:
             choco install ninja -y --no-progress
             if ($LASTEXITCODE -ne 0) { throw 'Ninja installation failed' }
           }
-      - name: Restore latest published SDKs
+      - name: Restore Salts SDK (2.3.0-*)
         shell: pwsh
-        run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid '${{ matrix.rid }}' -WithSaltsUtils:${{ matrix.utils && '$true' || '$false' }}
+        run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid '${{ matrix.rid }}'
       - name: Select explicit Salts prerequisite artifact
         if: inputs.salts_ci_run != ''
         id: prerequisite
@@ -170,7 +169,7 @@ jobs:
           github-token: ${{ github.token }}
           name: ${{ steps.prerequisite.outputs.artifact }}
           path: build/salts-prerequisite-sdk
-      - name: Admit native socket prerequisite SDK
+      - name: Select prerequisite SDK override
         if: inputs.salts_ci_run != ''
         shell: pwsh
         run: |
@@ -182,13 +181,12 @@ jobs:
           if ((Get-Content -LiteralPath $manifest) -notcontains "commit=$env:SALTS_PREREQUISITE_COMMIT") { throw 'Salts SDK commit does not match its CI run' }
           "SALTS_ROOT=$sdk" >> $env:GITHUB_ENV
           "SALTS_VERSION=ci-$env:SALTS_PREREQUISITE_COMMIT" >> $env:GITHUB_ENV
-          "TURBOWASM_SOCKET_BACKEND=ON" >> $env:GITHUB_ENV
       - name: Configure, build and install Unix graph
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
-          cmake --preset '${{ matrix.preset }}' -DTURBOWASM_ENABLE_WASI02_SOCKET_BACKEND="${TURBOWASM_SOCKET_BACKEND:-OFF}"
+          cmake --preset '${{ matrix.preset }}'
           cmake --build --preset '${{ matrix.preset }}' --parallel 2
           cmake --build --preset 'install-${{ matrix.preset }}' --parallel 2
       - name: Configure, build and install Windows graph
@@ -198,8 +196,7 @@ jobs:
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%TURBOWASM_VCPKG_ROOT%"
-          if not defined TURBOWASM_SOCKET_BACKEND set "TURBOWASM_SOCKET_BACKEND=OFF"
-          cmake --preset "${{ matrix.preset }}" -DTURBOWASM_ENABLE_WASI02_SOCKET_BACKEND=%TURBOWASM_SOCKET_BACKEND%
+          cmake --preset "${{ matrix.preset }}"
           if errorlevel 1 exit /b 1
           cmake --build --preset "${{ matrix.preset }}" --parallel 2
           if errorlevel 1 exit /b 1
