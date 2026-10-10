@@ -60,13 +60,14 @@ jobs:
         if: runner.os != 'Windows'
         with:
           repository: qigao/vcpkg-cache
+          ref: mir-jit-1.0.0-port3
           path: build/vcpkg-cache-contract
           persist-credentials: false
       - name: Bootstrap the canonical vcpkg tool on Unix
         if: runner.os != 'Windows'
         shell: bash
         run: bash cmake/ci/prepare-vcpkg-tool.sh build/vcpkg-cache-contract
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@mir-jit-1.0.0-port3
         with:
           mode: read
       - uses: actions/setup-dotnet@v4

@@ -291,7 +291,10 @@
       "inherits": [
         "windows",
         "ci-native-user"
-      ]
+      ],
+      "cacheVariables": {
+        "TURBOWASM_ENABLE_MIR_JIT": true
+      }
     },
     {
       "name": "ci-linux-user",
