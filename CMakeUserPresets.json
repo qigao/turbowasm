@@ -2,6 +2,19 @@
   "version": 6,
   "configurePresets": [
     {
+      "name": "win-http-guest-user",
+      "inherits": "win-metallic-user",
+      "cacheVariables": {
+        "TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE": true,
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/http/windows-x64"
+      },
+      "environment": {
+        "HTTP_SERVICES_ROOT": "$penv{HTTP_SERVICES_ROOT}",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+        "PATH": "$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/${presetName}${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{TURBOWASM_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
       "name": "vcpkg-cache-ci",
       "hidden": true,
       "inherits": "vcpkg-cache",
@@ -439,6 +452,8 @@
     }
   ],
   "buildPresets": [
+    { "name": "win-http-guest-user", "configurePreset": "win-http-guest-user" },
+    { "name": "install-win-http-guest-user", "configurePreset": "win-http-guest-user", "targets": ["install"] },
     { "name": "ci-macos-metallic-user", "configurePreset": "ci-macos-metallic-user" },
     { "name": "install-ci-macos-metallic-user", "configurePreset": "ci-macos-metallic-user", "targets": ["install"] },
     { "name": "ci-metallic-user", "configurePreset": "ci-metallic-user" },
@@ -645,6 +660,8 @@
     }
   ],
   "testPresets": [
+    { "name": "win-http-guest-user", "configurePreset": "win-http-guest-user",
+      "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     {
       "name": "ci-macos-metallic-user", "configurePreset": "ci-macos-metallic-user",
       "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" }

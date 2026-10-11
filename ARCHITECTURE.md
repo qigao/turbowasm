@@ -4689,3 +4689,311 @@ an absolute archive lacking target profile metadata. All stopped at the public
 helper's configuration boundary; the unchanged normal consumer graph was then
 restored and built/tested. These are manual error-configuration checks, not
 additional CTest cases or new consumer projects.
+
+## Module-scoped guest-to-host APIs
+
+Status: the scalar guest SDK/clock example and bounded HTTP buffer adapter are
+implemented; resource-handle adapters and a public batch-registration API remain future work. Runtime binding
+behavior is unchanged. The initial scope is the Core Wasm C guest SDK. Here a host API
+module is an import namespace, not a dynamically loaded native library. A guest
+declares its required imports; the embedding host supplies their implementations.
+Registration does not make a native library directly accessible to a guest.
+
+### Existing contracts and selected approach
+
+[`link.h`](include/turbowasm/link.h) already provides
+`turbowasm_linker_define_host_function(linker, module_name, name, type, fn, context)`.
+[`link.c`](src/link.c) resolves the namespace/name pair, checks the exact carrier
+signature, and copies the callback/context binding into the consumer instance.
+Missing imports produce `TURBOWASM_LINK_ERROR`; signature mismatches produce
+`TURBOWASM_TYPE_MISMATCH`. Duplicate host entries and mixing a Wasm provider
+instance with host functions under the same namespace are rejected.
+[`host_function_test.c`](tests/host_function_test.c) covers direct/tail calls,
+linker destruction after binding, missing functions, signature mismatch, namespace
+collision and callback traps. Compiled C imports are already demonstrated by
+[`reactor.c`](tests/guest/reactor.c) and its
+[`host test`](tests/guest/reactor_test.c).
+
+Use these existing imports with one guest header and one native adapter per
+business API module. The guest header owns the wire declarations; the adapter
+owns decoding, capability checks and error translation into the host service.
+The host service retains its native implementation and resource ownership.
+Module registration follows the existing `turbowasm_wasi_preview1_define` facade
+pattern in [`wasi_preview1.c`](src/wasi_preview1.c), using the existing linker as
+the sole binding authority.
+
+```text
+guest application -> module guest header -> (namespace, function) import
+    -> instance's validated binding -> module adapter(context, call) -> host service
+```
+
+Alternatives considered: a generic `host_call(module, operation, payload)` would
+require another dispatcher and payload protocol and lose per-function link-time
+type admission. A separate global module registry would duplicate the linker
+and obscure per-instance authority. Neither is needed for this scope. Component
+Model interfaces remain on the existing separate Component facade; this proposal
+does not invent a Core equivalent of its rich value/resource machinery.
+
+### Guest surface and host composition
+
+Application-owned namespaces use an explicit major ABI version, for example
+`app:clock/v1` and `app:storage/v1`. These are proposed naming conventions, not
+special Runtime syntax. Names match exactly; there is no version negotiation.
+Existing WASI namespaces retain their standard names and contracts.
+
+Illustrative guest declaration for an application-specific clock contract:
+
+```c
+#include <stdint.h>
+
+/* Nonnegative nanoseconds since this clock context's origin, or -1 on failure.
+ * No allocation or transferred ownership; overflow is a failure.
+ */
+__attribute__((import_module("app:clock/v1"), import_name("now_ns")))
+int64_t app_clock_now_ns(void);
+```
+
+Its native adapter registers `() -> i64` under the same pair using
+`turbowasm_linker_define_host_function`; the callback receives the clock service
+through `context` and writes one `TURBOWASM_VALUE_I64` result. The guest can call
+`app_clock_now_ns()` normally. A module with several operations exposes several
+typed imports and one application registration facade, rather than a dispatch
+opcode. `app_clock_define(linker, clock)` is now an application example facade,
+not an installed TurboWasm Runtime API. The guest SDK's `<turbowasm/import.h>`
+provides `TURBOWASM_IMPORT(module, name)` without changing the wire ABI. It uses
+Clang's Wasm import attributes and rejects native compilation. The existing
+guest CMake helper supplies this include directory both in-tree and installed.
+
+The embedding host composes a fresh linker for each distinct consumer policy,
+registers the allowed modules with that consumer's contexts, then creates the
+instance with the existing linked-creation API. Use
+`turbowasm_instance_create_linked_with_options` when startup needs explicit fuel
+or interruption limits. All contexts must be ready before creation: a Wasm start
+function may call imports during creation.
+
+| Consumer policy | Registered modules | Context ownership |
+| --- | --- | --- |
+| Guest A | clock, storage | A's clock and storage scope |
+| Guest B | clock | B's clock scope |
+| Same Wasm bytes, another instance | its own allowed set | independent contexts unless explicitly shared |
+
+Registration facades return the first registration failure unchanged. The initial
+implementation uses existing per-function registration, which is not a batch
+transaction: on any composition failure the host destroys the entire fresh
+linker and does not instantiate a consumer from it. It releases contexts it owns
+once no consumer uses them. Successful binding permits linker destruction while
+the callbacks and contexts remain alive. Do not claim a facade can roll back
+entries in an arbitrary existing linker. A future public batch registration API
+would need separate all-or-nothing admission and allocation-failure tests.
+
+### Authority, ABI and lifetime protocol
+
+- **HIGH — authority:** namespace names group APIs; the host's selected bindings
+  grant authority. Guest imports are requests, never permission to auto-register
+  services. The first version fixes the allowed set at instance creation. Deleting
+  or changing a linker does not revoke bindings already copied into an instance.
+  A Wasm provider can expose behavior backed by its own host capabilities; the
+  host must treat granting its exports as delegated authority. Consumer linker
+  filtering alone does not attenuate that provider's capabilities.
+- **HIGH — memory boundary:** native pointers, function pointers, `tstr`, and
+  native struct layouts never become guest ABI values. Strings/buffers use an
+  explicit memory index and offset/length layout; each module specifies encoding,
+  output capacity, required-length reporting and success/failure mutation rules.
+  Use the existing host-call checked memory helpers. Shared-memory input requires
+  a bounded snapshot before validation and provider effects; individual protected
+  copies do not make a multi-field message atomic. Concurrent guest writers must
+  obey the module's synchronization contract. Memory64 needs an explicit matching
+  ABI profile; it cannot reuse pointer-sized C declarations from wasm32 blindly.
+- **HIGH — resource lifetime:** the host owns each module context and any native
+  resources it grants. Contexts and callback code outlive all bound consumers and
+  accepted operations, including startup. Stateful adapters use opaque guest
+  handles scoped to their owner with stale-handle detection, never native pointer
+  casts. Reuse an applicable existing provider/resource table when available.
+  Stop invocation admission, complete or cancel-and-drain accepted work, destroy
+  executions/instances at quiescence, then release contexts. Link failure does not
+  transfer ownership; startup failure cannot roll back arbitrary host effects.
+- **MED — concurrency and bounds:** initial adapters run synchronously on the
+  invoking execution owner. Distinct instances and guest threads can call a shared
+  context concurrently; each adapter must declare whether sharing is supported
+  and how it serializes mutable state. Module configuration supplies hard limits
+  for payload bytes, handles and in-flight work; overflow or capacity exhaustion
+  returns an explicit failure without a provider effect. No new queues or
+  background workers are required by this proposal.
+- **MED — errors and waiting:** ordinary business failures use the module's
+  documented guest result ABI, with `TURBOWASM_OK` meaning the callback completed
+  that ABI exchange. Runtime errors, traps and interruption retain their existing
+  channels. Async operations require a separately specified adapter protocol
+  using existing host-wait support only when `turbowasm_host_call_can_wait`
+  permits it; never replay side effects or retain unchecked guest pointers.
+
+### Delivery, compatibility and validation
+
+The scalar module is delivered end to end in `examples/guest/clock*`: guest header,
+native adapter and compiled Reactor example. The host uses Salts' high-resolution
+clock with an instance-specific origin. The adapter borrows a synchronous reader,
+maps provider failure and values above INT64_MAX to -1, and owns no allocation,
+queue or resource table. It checks native configuration before registration.
+The HTTP example below qualifies a bounded buffer module. Keep application policy
+in the embedder and protocol conversion in the adapter; Runtime continues to own
+type admission and memory checks. The clock needs no new dependency; HTTP opts into
+the existing Chttp SDK. Neither needs a native plugin loader, reflection system or
+global registry.
+
+Existing guests, single-function registration, WASI adapters and the default
+runner retain their behavior. Custom modules initially require an embedding host;
+the runner does not acquire services merely because a guest requests them.
+An incompatible ABI gets a new namespace; compatible additions keep existing
+operations unchanged. Rollback removes the optional headers/adapters and rebuilds
+only their consumers; no existing data format or runtime migration is required.
+
+`tests/guest/clock_test.c` covers two namespaces with identical function names,
+different contexts for two instances of the same compiled C guest, missing/denied
+imports, exact signature mismatch, duplicates and provider collisions,
+registration allocation failures with complete composition cleanup, Reactor
+initialization and bounded Wasm start calls/failure, overflow/business errors,
+and invocation after linker destruction. The test is registered for interpretation
+and, when enabled, MIR with assertions of actual compilation. The existing
+installed consumer suite compiles the example using the installed guest header.
+Resource-handle qualification remains separate: stale or foreign handles, capacity
+exhaustion and concurrent shared-memory inputs are required before those adapters
+are delivered. The HTTP module has no guest resource handles or input buffers.
+
+Local validation uses `win-metallic-user` in the Visual Studio developer
+environment: full build, the 23 guest/host/linking/allocation CTest cases, and
+`install-win-metallic-user`. The installed consumer's `ci-win-user` profile
+builds and runs `turbowasm_installed_clock_consumer`. These checks passed with
+the Windows native ASan Runtime; this does not instrument guest Wasm code.
+MIR execution is unverified locally because that backend is unsupported on
+Windows; its registered test requires the existing Linux/macOS MIR profiles.
+
+### HTTP client module example
+
+The method extension preserves `get` and adds separate typed `head`, `delete`,
+`post`, `put`, and `patch` imports. HEAD/DELETE use GET's four scalar arguments;
+POST/PUT/PATCH add a request offset and length immediately after the endpoint ID.
+Each endpoint has a host-only method mask: zero preserves the original GET-only
+configuration, while a nonzero mask grants exactly those methods. Unknown bits
+fail initialization. This prevents adding write authority to existing endpoints.
+Content-Type for body methods is host-owned (default `application/octet-stream`).
+
+Request protocol: the single invoking owner checks method permission, both size
+limits and every input/output range before network effects, then copies guest
+request bytes into a context-owned scratch buffer. Initialization allocates that
+buffer at the configured request limit (1..64 KiB); allocation failure leaves the
+owner empty. Chttp copies the snapshot before progress and owns its response.
+The scratch buffer is reused only after the blocking call returns and is freed
+only after successful client destruction. Input may alias response storage because
+the complete snapshot precedes response writes; the response body and length must
+still be disjoint. Guest writers must synchronize during the snapshot. There are
+no new threads, queues or unbounded allocations. Limits return `APP_HTTP_LIMIT`;
+bad ranges trap before sending and ordinary failures preserve outputs.
+
+HEAD returns status and length zero (received body bytes, not Content-Length).
+DELETE sends no request body in this ABI. POST/PUT/PATCH allow empty/binary bodies.
+No method is automatically retried, including on insufficient response capacity;
+the remote operation may already have committed. New guests require an updated
+adapter; old GET guests remain wire-compatible. Host example structs gain fields
+and must be rebuilt. Rollback restores GET-only consumers/configuration.
+
+The application-specific `app:http/v1` namespace demonstrates a real HTTP client
+without changing Runtime or implementing HTTP over raw sockets. Guest
+[`http_guest.h`](examples/guest/http_guest.h) declares six method imports; native
+[`http_host.c`](examples/guest/http_host.c) delegates to the corresponding Chttp
+blocking method. All methods share the same admission and memory-copy path. The
+[`embedding executable`](examples/guest/http_main.c) registers the module and
+invokes the compiled GET [`guest`](examples/guest/http.c). This is a synchronous
+HTTP/1 example, not a WASI HTTP implementation or a general streaming request API.
+OPTIONS, CONNECT, guest-selected headers and streaming remain outside this slice.
+
+The chosen ABI is wasm32 memory 0:
+
+```c
+int32_t app_http_get(uint32_t endpoint, void *body, uint32_t capacity,
+                     uint32_t *body_length);
+/* Core signature: (i32, i32, i32, i32) -> i32 */
+int32_t app_http_post(uint32_t endpoint, const void *request, uint32_t request_length,
+                      void *body, uint32_t capacity, uint32_t *body_length);
+/* Core signature: (i32, i32, i32, i32, i32, i32) -> i32 */
+```
+
+The embedding host initializes an `app_http` owner, supplies an immutable table of
+1..8 `app_http_endpoint` entries, and calls `app_http_define` on a fresh linker.
+Each entry fixes the connection URI, HTTP authority, target and optional TLS trust
+profile. Endpoint IDs are zero-based capabilities local to that context. The host
+owns destination policy, DNS/network policy and certificate verification; guest
+imports alone grant no endpoint. A fixed hostname is not a network-address filter.
+Redirects return their HTTP status without following `Location`. Arbitrary URL
+inputs were rejected for this example because they require a separate destination,
+credential and redirect authorization protocol. Native endpoint/profile pointers
+never cross the guest boundary.
+
+| Result | Output mutation |
+| --- | --- |
+| HTTP status, including 4xx/5xx | Copy complete binary body and write its length; no NUL terminator |
+| `APP_HTTP_BUFFER_TOO_SMALL` (-2) | Write required length only; body unchanged |
+| `APP_HTTP_DENIED` (-1) | Unknown endpoint or ungranted method; both outputs unchanged |
+| `APP_HTTP_LIMIT` (-3) | Request/response capacity or native resource limit exceeded; both unchanged |
+| `APP_HTTP_TIMEOUT` (-4) | Chttp deadline expired; both unchanged |
+| `APP_HTTP_IO` (-5) | Other native request failure; both unchanged |
+| `APP_HTTP_INVALID_ARGUMENT` (-6) | Overlapping outputs; both unchanged |
+| Runtime trap/error/interruption | Existing Runtime channel; not an HTTP result |
+
+Admission checks endpoint/method, capacity and overlap before checking guest spans;
+an otherwise admissible out-of-bounds span traps before sending. Offsets are
+zero-extended to 64 bits for checked arithmetic. The host holds only offsets while
+Chttp runs, then copies from the owned native response through Runtime's protected
+memory helpers. The four-byte length is explicitly little-endian. A zero capacity
+can obtain length, but still performs the selected method. There is no cached
+response or automatic retry: a second call repeats the request and its effects.
+Interruption after sending cannot undo remote effects. Guests must exclusively
+own the output buffers until return; separate copies do not make them atomic to
+other guest threads. Runtime failures during copy are not an output transaction.
+
+`app_http_client_config` provides bounded CNet and HTTP capacities. Request and
+response limits are independently configurable from 1 byte to 64 KiB, defaulting
+to 64 KiB each; scratch storage adds the request limit to native owner memory
+outside the Runtime allocation budget. Request concurrency is one in the supplied
+defaults, and the example guest offers 4096 bytes. The host requires a request
+timeout from 1 to 60000 ms. Chttp owns progress and response storage; every path
+destroys the response. The adapter checks interruption before/after the blocking
+call, so Wasm fuel/cancellation does not preempt Chttp mid-call. Its deadline bounds
+waiting for a result, not the subsequent native cancel/drain duration. Async
+start/poll/read/close handles were deferred because they introduce generation,
+cancellation and retained-operation lifecycle contracts beyond this example.
+
+The host owns `app_http`; endpoint strings, table and TLS profiles are borrowed
+and immutable until successful `app_http_destroy`. Calls and destruction use a
+single owner thread; contexts are not concurrently shared between guest instances.
+Destroy executions/instances before the client. Failed client destruction retains
+the context and borrowed storage for a later drain attempt. Destroying the linker
+alone neither revokes nor releases an already bound context.
+
+Chttp is found only from the installed `HTTP_SERVICES_ROOT`; its matching
+SaltsUtils/Salts SDKs are required. Local qualification uses Chttp 2.1.0-rc.2,
+Salts 2.3.0-rc.9 and the matching installed SaltsUtils package. Chttp and GmSSL
+carry Apache-2.0 licensing; no vendor source is copied. The optional manifest
+feature `chttp-example` brings GmSSL through the existing vcpkg toolchain and pins
+the baseline used by the sibling Chttp manifest. This adds native HTTP/crypto
+dependency weight only to the opted-in example graph. Reusing Chttp preserves
+its parser, transport, TLS, timeout and cleanup contracts instead of maintaining
+a second HTTP implementation. TLS behavior and other platforms require separate
+qualification; the current integration test is plaintext Windows loopback.
+
+[`http_test.c`](tests/guest/http_test.c) and its compiled guest exercise binary
+responses, repeated calls after linker destruction, insufficient/zero capacity,
+unchanged outputs on failure, denied endpoints, overlap, both out-of-bounds
+outputs, 404/302 behavior, response limits, timeout/drain and reuse, missing
+module admission, and connection errors against a real Chttp server. Method tests
+verify all five additional wire methods, HEAD/204 empty responses, host Content-Type,
+empty/binary/aliased inputs, exact request capacity and overflow, request and write
+output bounds, per-method grants, no implicit write replay, and POST timeout/drain
+followed by reuse. They run via
+`ctest --preset win-http-guest-user -R turbowasm_guest_http_test --output-on-failure`.
+Local Windows ASan verification passed all 21 HTTP scenarios and seven adjacent
+clock/linker/host-function/interruption/memory CTests. The native HTTP executable
+and standalone guest also compiled. The ordinary Metallic preset reconfigured
+successfully with the HTTP option disabled. No HTTPS, MIR HTTP or non-Windows
+execution is claimed by these checks.
+The default option is OFF. Rollback disables it and removes only example consumers;
+existing imports, Runtime ABI and data formats require no migration. An incompatible
+future HTTP contract must use a new namespace rather than change `app:http/v1`.

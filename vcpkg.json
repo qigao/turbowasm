@@ -1,8 +1,13 @@
 {
   "name": "turbowasm",
   "description": "TurboWasm native dependencies",
+  "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
   "dependencies": [],
   "features": {
+    "chttp-example": {
+      "description": "Crypto package required by the optional installed Chttp SDK",
+      "dependencies": ["gmssl"]
+    },
     "mir": {
       "description": "Optional MIR JIT backend",
       "dependencies": [

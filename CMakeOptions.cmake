@@ -1,5 +1,9 @@
 option(TURBOWASM_BUILD_TOOLS "Build TurboWasm command-line tools" ON)
 option(TURBOWASM_BUILD_METALLIC_GUESTS "Build the local Metallic wasm32 guest SDK and C11 guests" OFF)
+option(TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE "Build the optional Chttp-backed guest HTTP example and tests" OFF)
+if(TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE AND NOT TURBOWASM_BUILD_METALLIC_GUESTS)
+  message(FATAL_ERROR "The Chttp guest example requires the Metallic guest SDK")
+endif()
 option(TURBOWASM_BUILD_METALLIC_THREADS "Build and install the opt-in Metallic C11 threads profile" OFF)
 set(TURBOWASM_METALLIC_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/guest/metallic" CACHE PATH
   "Absolute path to the local Metallic sources")
@@ -56,6 +60,9 @@ set(TURBOWASM_CORE3_TOOLS "" CACHE FILEPATH "wasm-tools executable for the full 
 
 # The vcpkg toolchain consumes features during project().
 set(VCPKG_MANIFEST_FEATURES "")
+if(TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE)
+  list(APPEND VCPKG_MANIFEST_FEATURES chttp-example)
+endif()
 if(TURBOWASM_ENABLE_MIR_JIT)
   list(APPEND VCPKG_MANIFEST_FEATURES mir)
 endif()

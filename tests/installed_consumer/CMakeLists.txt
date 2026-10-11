@@ -24,6 +24,20 @@ turbowasm_normalize_salts_c11_atomics()
 
 if(TurboWasm_HAS_METALLIC_GUEST_SDK)
   include("${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuest.cmake")
+  turbowasm_add_c_reactor(turbowasm_installed_clock
+    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/../../examples/guest/clock.c"
+    EXPORTS clock_initial clock_sample clock_close)
+  add_executable(turbowasm_installed_clock_consumer
+    ../../examples/guest/clock_main.c ../../examples/guest/clock_host.c
+    ../../examples/guest/reactor_session.c)
+  target_link_libraries(turbowasm_installed_clock_consumer PRIVATE TurboWasm::Runtime Salts::Core Salts::Platform)
+  set_target_properties(turbowasm_installed_clock_consumer PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/guest")
+  target_compile_options(turbowasm_installed_clock_consumer PRIVATE $<$<COMPILE_LANG_AND_ID:C,MSVC>:-experimental:c11atomics>)
+  add_dependencies(turbowasm_installed_clock_consumer turbowasm_installed_clock)
+  add_test(NAME turbowasm_installed_clock_consumer
+    COMMAND turbowasm_installed_clock_consumer "${turbowasm_installed_clock_WASM}")
+  set_tests_properties(turbowasm_installed_clock_consumer PROPERTIES TIMEOUT 30)
   if(TurboWasm_HAS_METALLIC_THREADS)
     include("${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuestCMeta.cmake")
     set(threaded_profile_prefix turbowasm_installed_threaded_profile)
