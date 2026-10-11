@@ -391,6 +391,124 @@ consumers can include `${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuest.cmake` after
 256 KiB shadow stack and 16 MiB declared maximum memory. LLVM versions must be
 compatible with the LTO archive used by that SDK.
 
+Guest code can call application host APIs grouped by module. The SDK installs
+`<turbowasm/import.h>` for explicit typed import declarations:
+
+```c
+#include <stdint.h>
+#include <turbowasm/import.h>
+
+TURBOWASM_IMPORT("app:clock/v1", "now_ns")
+int64_t app_clock_now_ns(void);
+```
+
+The host registers the same namespace/name and `() -> i64` signature with
+`turbowasm_linker_define_host_function`. The [clock guest header](examples/guest/clock_guest.h),
+[native module adapter](examples/guest/clock_host.h) and
+[embedding example](examples/guest/clock_main.c) demonstrate this complete path.
+`app_clock_define(&linker, &clock)` borrows a synchronous clock provider; guest
+results are nonnegative nanoseconds since its host-selected origin, or `-1` for
+provider failure/overflow. These application example functions are not installed
+Runtime APIs. The import macro is guest-only; native builds reject its header.
+
+Compose a fresh linker with only the modules granted to that guest, check every
+registration result, then instantiate it. Discard the fresh linker on composition
+failure. Separate instances can bind different contexts even when sharing Wasm
+code. Provider contexts must be ready before startup and outlive all bound
+instances and calls; destroying the linker does not revoke existing bindings.
+The standard runner does not automatically supply custom application modules.
+See the [module API design](ARCHITECTURE.md#module-scoped-guest-to-host-apis) for
+memory, authority and lifecycle rules.
+
+With the Metallic preset configured, build and run the example through CTest
+(Windows commands require a Visual Studio developer shell):
+
+```sh
+cmake --build --preset win-metallic-user --target turbowasm_clock_example turbowasm_guest_clock_interpreter_test
+ctest --preset win-metallic-user -R turbowasm_guest_clock --output-on-failure
+```
+
+The host executable can also be used as
+`turbowasm_clock_example path/to/guest_clock.wasm`. The existing installed consumer
+suite builds this guest using the installed import header and runs the host adapter.
+
+For a buffer-bearing module, the [HTTP guest](examples/guest/http.c) imports
+`app:http/v1.get`, implemented by the [Chttp adapter](examples/guest/http_host.c):
+
+```c
+#include "http_guest.h"
+uint8_t body[4096];
+uint32_t length = 0;
+int32_t status = app_http_get(0, body, sizeof(body), &length);
+```
+
+The host assigns endpoint `0` to a complete destination and request target;
+the guest cannot select arbitrary URLs. The result is an HTTP status (including
+404/500) or a negative `APP_HTTP_*` error. Bodies are binary. Insufficient guest
+capacity returns the required length without truncation; another call sends
+another request. The adapter permits at most 64 KiB per request/response body, does not follow
+redirects, and blocks the calling execution until Chttp completes or drains.
+See the [HTTP contract](ARCHITECTURE.md#http-client-module-example) for exact
+ownership, timeout and failure semantics.
+
+The same module also exposes `app_http_head`, `app_http_delete`, `app_http_post`,
+`app_http_put`, and `app_http_patch`. HEAD/DELETE use GET's argument list; HEAD's
+returned length is zero and DELETE sends no body. POST/PUT/PATCH take binary
+request bytes before the response arguments:
+
+```c
+const char json[] = "{\"name\":\"example\"}";
+status = app_http_post(0, json, sizeof(json) - 1, body, sizeof(body), &length);
+```
+
+Before initializing the host adapter, explicitly grant methods and select the
+request Content-Type in its endpoint configuration:
+
+```c
+app_http_endpoint endpoint = {
+    .connection_uri = "tcp://127.0.0.1:8080",
+    .authority = "localhost",
+    .target = "/resource",
+    .allowed_methods = APP_HTTP_ALLOW_GET | APP_HTTP_ALLOW_POST,
+    .content_type = "application/json"
+};
+```
+
+A zero method mask preserves GET-only behavior; nonzero masks grant exactly the
+listed methods. An ungranted method returns `APP_HTTP_DENIED` before sending.
+Body methods default to `application/octet-stream` when Content-Type is omitted.
+Request bytes are snapshotted in bounded host storage before network progress;
+input may share storage with the response. Calls never retry automatically.
+In particular, a write may already have committed when the guest receives a
+timeout or `APP_HTTP_BUFFER_TOO_SMALL`; repeating it can repeat the mutation.
+
+Enable `TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE` with the Metallic guest SDK. On Windows,
+`win-http-guest-user` enables it. Set `HTTP_SERVICES_ROOT` to an installed Chttp SDK,
+`SALTS_UTILS_ROOT` to its matching SaltsUtils SDK, and `SALTS_ROOT` to its matching
+Salts SDK; retain the Metallic preset's compiler and guest-source requirements.
+The optional manifest feature supplies Chttp's GmSSL dependency through vcpkg.
+From the Visual Studio developer shell, with the configured `VCPKG_ROOT`:
+
+```sh
+cmake --preset win-http-guest-user
+cmake --build --preset win-http-guest-user --target turbowasm_http_example turbowasm_guest_http_test
+ctest --preset win-http-guest-user -R turbowasm_guest_http_test --output-on-failure
+```
+
+With a host-selected local HTTP service running, the native example can be used as:
+
+```sh
+build/win-http-guest-user/guest/turbowasm_http_example.exe build/win-http-guest-user/guest/guest_http.wasm tcp://127.0.0.1:8080 localhost /resource
+```
+
+It prints the HTTP result and body length; the response body stays in guest memory.
+For direct execution, put the matching SDK `bin` directories and the preset's
+vcpkg triplet `bin` directory on `PATH`, as the CTest preset does.
+This command demonstrates GET-only plain HTTP. HTTPS embedders supply a host-owned Chttp
+TLS trust profile. The integration test starts its own loopback server and needs
+no external service. Chttp remains an optional example dependency; these application
+headers and adapters are not part of the installed Runtime API.
+
 The opt-in `TURBOWASM_BUILD_METALLIC_THREADS` option also installs
 `threaded/include`, `threaded/lib/metallic-threaded.a`, separate command/Reactor
 CRTs and profile metadata beneath the guest SDK directory. It requires the guest

@@ -1,3 +1,48 @@
+if(TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE)
+  turbowasm_add_c_reactor(guest_http_cases SOURCES http_cases.c "${PROJECT_SOURCE_DIR}/examples/guest/http.c"
+    INCLUDE_DIRECTORIES "${PROJECT_SOURCE_DIR}/examples/guest"
+    EXPORTS http_case fetch response_length response_address http_close)
+  add_executable(turbowasm_guest_http_test http_test.c "${PROJECT_SOURCE_DIR}/examples/guest/reactor_session.c")
+  target_link_libraries(turbowasm_guest_http_test PRIVATE turbowasm_http_example_adapter CHttp::Server Salts::Core Salts::TinyTest)
+  target_compile_features(turbowasm_guest_http_test PRIVATE c_std_11)
+  target_compile_options(turbowasm_guest_http_test PRIVATE $<$<COMPILE_LANG_AND_ID:C,MSVC>:-experimental:c11atomics>)
+  target_compile_definitions(turbowasm_guest_http_test PRIVATE GUEST_HTTP_PATH="${guest_http_cases_WASM}")
+  set_target_properties(turbowasm_guest_http_test PROPERTIES FOLDER "tests/guest")
+  add_dependencies(turbowasm_guest_http_test guest_http_cases)
+  add_test(NAME turbowasm_guest_http_test COMMAND turbowasm_guest_http_test)
+  set_tests_properties(turbowasm_guest_http_test PROPERTIES TIMEOUT 60)
+endif()
+
+turbowasm_add_c_reactor(guest_clock_modules
+  SOURCES "${PROJECT_SOURCE_DIR}/examples/guest/clock.c" clock_modules.c
+  EXPORTS clock_initial clock_sample clock_close other_sample)
+set(clock_test_tiers interpreter)
+if(TURBOWASM_ENABLE_MIR_JIT)
+  list(APPEND clock_test_tiers mir)
+endif()
+foreach(tier IN LISTS clock_test_tiers)
+  add_executable(turbowasm_guest_clock_${tier}_test clock_test.c
+    "${PROJECT_SOURCE_DIR}/examples/guest/clock_host.c"
+    "${PROJECT_SOURCE_DIR}/examples/guest/reactor_session.c")
+  target_include_directories(turbowasm_guest_clock_${tier}_test PRIVATE "${PROJECT_SOURCE_DIR}/examples/guest")
+  target_link_libraries(turbowasm_guest_clock_${tier}_test PRIVATE TurboWasm::Runtime Salts::Core Salts::TinyTest)
+  target_compile_features(turbowasm_guest_clock_${tier}_test PRIVATE c_std_11)
+  target_compile_options(turbowasm_guest_clock_${tier}_test PRIVATE $<$<COMPILE_LANG_AND_ID:C,MSVC>:-experimental:c11atomics>)
+  target_compile_definitions(turbowasm_guest_clock_${tier}_test PRIVATE
+    GUEST_CLOCK_PATH="${guest_clock_WASM}" GUEST_CLOCK_MODULES_PATH="${guest_clock_modules_WASM}")
+  if(tier STREQUAL "mir")
+    target_compile_definitions(turbowasm_guest_clock_${tier}_test PRIVATE TURBOWASM_TEST_MIR=1)
+    target_include_directories(turbowasm_guest_clock_${tier}_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(turbowasm_guest_clock_${tier}_test PRIVATE turbowasm_mir_backend)
+  endif()
+  set_target_properties(turbowasm_guest_clock_${tier}_test PROPERTIES FOLDER "tests/guest")
+  add_dependencies(turbowasm_guest_clock_${tier}_test guest_clock guest_clock_modules)
+  add_test(NAME turbowasm_guest_clock_${tier}_test COMMAND turbowasm_guest_clock_${tier}_test)
+  set_tests_properties(turbowasm_guest_clock_${tier}_test PROPERTIES TIMEOUT 60)
+endforeach()
+add_test(NAME turbowasm_guest_clock_example COMMAND turbowasm_clock_example "${guest_clock_WASM}")
+set_tests_properties(turbowasm_guest_clock_example PROPERTIES TIMEOUT 30)
+
 turbowasm_add_c_guest(guest_c11 "${CMAKE_CURRENT_SOURCE_DIR}/c11.c")
 turbowasm_add_c_guest(guest_numeric "${CMAKE_CURRENT_SOURCE_DIR}/numeric.c")
 turbowasm_add_c_guest(guest_buffering "${CMAKE_CURRENT_SOURCE_DIR}/buffering.c")

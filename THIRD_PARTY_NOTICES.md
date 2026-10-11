@@ -1,5 +1,21 @@
 # Third-party source notices
 
+## Optional native HTTP example dependencies
+
+`TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE` consumes an installed Chttp SDK from
+`HTTP_SERVICES_ROOT`, together with its matching Salts and SaltsUtils SDKs.
+Local qualification used Chttp 2.1.0-rc.2 from the sibling `http-services`
+project. Chttp is Apache-2.0 licensed; its SDK retains the full license at
+`share/licenses/Chttp/LICENSE`. No Chttp source is copied into this repository.
+
+The optional `chttp-example` vcpkg feature supplies
+[GmSSL](https://github.com/guanzhi/GmSSL), an Apache-2.0 dependency of the
+installed crypto SDK. Local qualification resolved GmSSL 3.2.0, port revision 9,
+through the existing shared vcpkg overlay. Its package retains licensing at
+`share/gmssl/copyright`; modifications belong to that maintained port, not a
+TurboWasm source copy. Distribution of the optional executable must retain the
+licenses and notices of its linked SDK/package dependencies.
+
 ## Metallic
 
 `guest/metallic/src` and `guest/metallic/include` originate from
