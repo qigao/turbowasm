@@ -67,6 +67,8 @@ jobs:
           mode: read
           triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.triplet }}
           host-triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.host_triplet }}
+          # Product CMake enables the optional MIR port only for MIR profiles.
+          features: ${{ contains(matrix.preset, 'mir') && 'mir' || '' }}
       # Archive one bounded local cache instead of uploading every object through
       # sccache's GHA backend, which rejected writes in the qualified full graph.
       - name: Restore compiler cache
