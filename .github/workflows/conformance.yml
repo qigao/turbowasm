@@ -107,6 +107,12 @@ jobs:
           ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
           path: build/vcpkg-cache-contract
           persist-credentials: false
+      - name: Prepare host tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config curl
       - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
         with:
           mode: read
@@ -118,12 +124,6 @@ jobs:
       - name: Restore Salts SDK (2.3.0-*)
         shell: pwsh
         run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid linux-x64
-      - name: Prepare host tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config curl
       - name: Restore pinned Core 3.0 text tools
         if: startsWith(matrix.suite, 'core3')
         shell: bash
