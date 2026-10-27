@@ -59,10 +59,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: qigao/vcpkg-cache
-          ref: 5def8a658585c00ffb483cb6226d9e6df22f787c
+          ref: 64e92e5847fbe378a5580adc3872f3153ed2f675
           path: build/vcpkg-cache-contract
           persist-credentials: false
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@5def8a658585c00ffb483cb6226d9e6df22f787c
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@64e92e5847fbe378a5580adc3872f3153ed2f675
         with:
           mode: read
           triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.triplet }}
