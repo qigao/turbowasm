@@ -112,6 +112,9 @@ jobs:
           mode: read
           triplet: x64-linux
           host-triplet: x64-linux
+          # CMakeOptions maps non-Core3 suites to spec-tools (WABT); MIR
+          # adds the mir-jit port, Core3 uses pinned standalone wasm-tools.
+          features: ${{ startsWith(matrix.suite, 'core3') && (matrix.suite == 'core3-mir' && 'mir' || '') || (matrix.suite == 'mir' && 'mir,spec-tools' || 'spec-tools') }}
       - name: Restore Salts SDK (2.3.0-*)
         shell: pwsh
         run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid linux-x64
