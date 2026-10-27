@@ -91,4 +91,4 @@ if (-not $Local) {
   "SALTS_VERSION=$version" >> $env:GITHUB_ENV
   "QIGAO_GITHUB_PACKAGES_ROOT=$packages" >> $env:GITHUB_ENV
 }
-Write-Host "curl GitHub Packages verified Salts.Native $version for $SaltsRid: $saltsRoot"
+Write-Host "curl GitHub Packages verified Salts.Native $version for ${SaltsRid}: $saltsRoot"
