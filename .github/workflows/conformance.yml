@@ -104,17 +104,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: qigao/vcpkg-cache
+          ref: 5def8a658585c00ffb483cb6226d9e6df22f787c
           path: build/vcpkg-cache-contract
           persist-credentials: false
-      - name: Bootstrap the canonical vcpkg tool
-        shell: bash
-        run: bash cmake/ci/prepare-vcpkg-tool.sh build/vcpkg-cache-contract
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@5def8a658585c00ffb483cb6226d9e6df22f787c
         with:
           mode: read
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
+          triplet: x64-linux
+          host-triplet: x64-linux
       - name: Restore Salts SDK (2.3.0-*)
         shell: pwsh
         run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid linux-x64
@@ -123,7 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config mono-runtime
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config curl
       - name: Restore pinned Core 3.0 text tools
         if: startsWith(matrix.suite, 'core3')
         shell: bash
