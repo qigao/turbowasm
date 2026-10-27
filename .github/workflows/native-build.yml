@@ -62,13 +62,6 @@ jobs:
           ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
           path: build/vcpkg-cache-contract
           persist-credentials: false
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
-        with:
-          mode: read
-          triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.triplet }}
-          host-triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.host_triplet }}
-          # Product CMake enables the optional MIR port only for MIR profiles.
-          features: ${{ contains(matrix.preset, 'mir') && 'mir' || '' }}
       # Archive one bounded local cache instead of uploading every object through
       # sccache's GHA backend, which rejected writes in the qualified full graph.
       - name: Restore compiler cache
@@ -110,6 +103,13 @@ jobs:
               echo "TURBOWASM_GUEST_LLVM_ROOT=$guest_llvm_root" >> "$GITHUB_ENV"
             fi
           fi
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        with:
+          mode: read
+          triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.triplet }}
+          host-triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.host_triplet }}
+          # Product CMake enables the optional MIR port only for MIR profiles.
+          features: ${{ contains(matrix.preset, 'mir') && 'mir' || '' }}
       - name: Prepare Windows toolchain
         if: runner.os == 'Windows'
         shell: pwsh
