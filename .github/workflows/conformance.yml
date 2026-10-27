@@ -104,10 +104,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: qigao/vcpkg-cache
-          ref: 64e92e5847fbe378a5580adc3872f3153ed2f675
+          ref: 4d0c635920aa061a41be6c5bc184d7023f5cb834
           path: build/vcpkg-cache-contract
           persist-credentials: false
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@64e92e5847fbe378a5580adc3872f3153ed2f675
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@4d0c635920aa061a41be6c5bc184d7023f5cb834
         with:
           mode: read
           triplet: x64-linux
