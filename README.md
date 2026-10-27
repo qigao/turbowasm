@@ -738,8 +738,10 @@ aliases for the removed Salts names.
 
 `CMakeOptions.cmake` owns feature defaults. The versioned `CMakeUserPresets.json`
 provides configure/build/test/install entry points; `presets/` contains shared
-base settings. Third-party dependencies use the root `vcpkg.json`: enabling
-`TURBOWASM_ENABLE_MIR_JIT` selects `mir`, while conformance selects host WABT.
+base settings. Native libraries use root `vcpkg.json`; enabling `TURBOWASM_ENABLE_MIR_JIT`
+selects `mir`. Conformance uses a SHA256-pinned WABT 1.0.42 official
+GitHub Release host binary, fetched by `curl` and passed via
+`TURBOWASM_WABT_ROOT`; it does not require an unpublished vcpkg WABT ABI.
 GitHub Packages is read over authenticated curl/NuGet V3 metadata; the native vcpkg installer uses only its local files cache, with no Mono or NuGet executable.
 Provide `GITHUB_TOKEN` with package read access in the parent environment;
 presets do not load `.env`.
