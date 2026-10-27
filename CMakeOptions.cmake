@@ -66,6 +66,12 @@ endif()
 if(TURBOWASM_ENABLE_MIR_JIT)
   list(APPEND VCPKG_MANIFEST_FEATURES mir)
 endif()
-if(TURBOWASM_BUILD_CONFORMANCE_RUNNER AND NOT TURBOWASM_CORE3_TOOLS)
-  list(APPEND VCPKG_MANIFEST_FEATURES spec-tools)
+# Non-Core3 conformance requires an explicitly pinned standalone WABT binary.
+# WABT is a host test tool; it is not a third-party native library dependency.
+set(TURBOWASM_WABT_ROOT "$ENV{TURBOWASM_WABT_ROOT}" CACHE PATH
+  "Root of the SHA256-verified WABT host binary Release archive")
+if(TURBOWASM_BUILD_CONFORMANCE_RUNNER AND
+   NOT TURBOWASM_CORE3_TOOLS AND NOT TURBOWASM_WABT_ROOT)
+  message(FATAL_ERROR
+    "Conformance requires explicit SHA256-verified TURBOWASM_WABT_ROOT")
 endif()

@@ -6,97 +6,89 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$requiredEnvironment = @("GITHUB_TOKEN")
-if (-not $Local) { $requiredEnvironment += @("RUNNER_TEMP", "GITHUB_ENV") }
-foreach ($name in $requiredEnvironment) {
-  $value = [Environment]::GetEnvironmentVariable($name)
-  if ([string]::IsNullOrWhiteSpace($value)) {
-    throw "$name is required"
+if (-not $Local) {
+  foreach ($name in @("RUNNER_TEMP", "GITHUB_ENV", "GITHUB_WORKSPACE")) {
+    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+      throw "$name is required for native curl-based CI SDK restore"
+    }
   }
-}
-
-if ($Local -and [string]::IsNullOrWhiteSpace($SaltsRid)) {
-  throw "-SaltsRid is required for local restore"
 }
 if ([string]::IsNullOrWhiteSpace($SaltsRid)) {
-  switch ($env:RUNNER_OS) {
-    "Linux" {
-      if ($env:RUNNER_ARCH -ne "X64") { throw "unsupported Linux Salts.Native architecture: $env:RUNNER_ARCH" }
-      $SaltsRid = "linux-x64"
-    }
-    "Windows" {
-      if ($env:RUNNER_ARCH -ne "X64") { throw "unsupported Windows Salts.Native architecture: $env:RUNNER_ARCH" }
-      $SaltsRid = "windows-x64"
-    }
-    "macOS" {
-      switch ($env:RUNNER_ARCH) {
-        "X64" { $SaltsRid = "macos-x64" }
-        "ARM64" { $SaltsRid = "macos-arm64" }
-        default { throw "unsupported macOS Salts.Native architecture: $env:RUNNER_ARCH" }
-      }
-    }
-    default { throw "unsupported runner OS for Salts.Native: $env:RUNNER_OS" }
+  if ($Local) { throw "Local restore requires an explicit -SaltsRid" }
+  switch ("$env:RUNNER_OS/$env:RUNNER_ARCH") {
+    "Linux/X64" { $SaltsRid = "linux-x64" }
+    "Windows/X64" { $SaltsRid = "windows-x64" }
+    "macOS/X64" { $SaltsRid = "macos-x64" }
+    "macOS/ARM64" { $SaltsRid = "macos-arm64" }
+    default { throw "Unsupported Salts SDK host: $env:RUNNER_OS/$env:RUNNER_ARCH" }
   }
 }
-
-if ($env:SALTS_SDK_VERSION) {
-  throw "SALTS_SDK_VERSION is forbidden; Salts.Native uses the repository's 2.3.0-* selector"
+if ($SaltsRid -notin @("linux-x64", "windows-x64", "macos-x64", "macos-arm64", "android-arm64-v8a")) {
+  throw "Unsupported Salts.Native RID: $SaltsRid"
 }
-$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../.."))
-$restoreRoot = if ($Local) { Join-Path $repositoryRoot "build/native-sdk" } else { $env:RUNNER_TEMP }
-$packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $restoreRoot "qigao-nuget" }
-$packages = [IO.Path]::GetFullPath($packages)
-$config = Join-Path $repositoryRoot "cmake/vcpkg-cache.nuget.config"
-$project = Join-Path $restoreRoot "turbowasm-salts-sdk-restore.csproj"
+if ($env:SALTS_SDK_VERSION) {
+  throw "SALTS_SDK_VERSION override is forbidden; the audited selector is 2.3.0-*"
+}
+
+$token = if ($env:GH_TOKEN) { $env:GH_TOKEN } else { $env:GITHUB_TOKEN }
+if ([string]::IsNullOrWhiteSpace($token)) {
+  throw "GitHub Packages requires GH_TOKEN or GITHUB_TOKEN with read:packages"
+}
+$env:GH_TOKEN = $token
+
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../.."))
+$cacheCheckout = Join-Path $root "build/vcpkg-cache-contract"
+if (-not (Test-Path -LiteralPath (Join-Path $cacheCheckout 'scripts/github-packages.py'))) {
+  if (-not $Local -or -not $env:VCPKG_CACHE_REPOSITORY_ROOT) {
+    throw "Canonical qigao/vcpkg-cache curl package client checkout is missing"
+  }
+  $cacheCheckout = $env:VCPKG_CACHE_REPOSITORY_ROOT
+}
+$client = Join-Path $cacheCheckout "scripts/github-packages.py"
+if (-not (Test-Path -LiteralPath $client -PathType Leaf)) {
+  throw "Missing pinned shared GitHub Packages HTTP client: $client"
+}
+
+$restoreRoot = if ($Local) { Join-Path $root "build/native-sdk" } else { $env:RUNNER_TEMP }
+$packages = Join-Path $restoreRoot "github-packages"
+$archive = Join-Path $restoreRoot "salts-native.nupkg"
+$versionFile = Join-Path $restoreRoot "salts-native.version"
 New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
 
-@"
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
-  </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="2.3.0-*" />
-  </ItemGroup>
-</Project>
-"@ | Set-Content -LiteralPath $project
-
-dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate
-if ($LASTEXITCODE -ne 0) { throw "failed to restore Salts.Native 2.3.0-*" }
-
-$assetsPath = Join-Path $restoreRoot "obj/project.assets.json"
-if (-not (Test-Path -LiteralPath $assetsPath -PathType Leaf)) {
-  throw "missing NuGet restore assets: $assetsPath"
+# The shared NuGet V3 client performs authenticated curl GET and validates
+# the exact NuGet ID/version/zip archive, without invoking dotnet or Mono.
+& python $client floating 'Salts.Native' '2.3.0-*' $archive $versionFile
+if ($LASTEXITCODE -ne 0) { throw "GitHub Packages curl metadata/package download failed" }
+if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
+  throw "Missing exact downloaded Salts.Native version provenance"
 }
-$assets = Get-Content -LiteralPath $assetsPath -Raw | ConvertFrom-Json
-$saltsLibraries = @(
-  $assets.libraries.PSObject.Properties.Name |
-    Where-Object { $_ -like "Salts.Native/*" }
-)
-if ($saltsLibraries.Count -ne 1) {
-  throw "expected exactly one restored Salts.Native package, found $($saltsLibraries.Count)"
+$version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+if ($version -notmatch '^2[.]3[.]0-[0-9A-Za-z][0-9A-Za-z.-]*$') {
+  throw "Unexpected GitHub Packages Salts.Native version: $version"
 }
-$saltsVersion = ($saltsLibraries[0] -split "/", 2)[1]
+$packageRoot = Join-Path $packages "salts.native/$version"
+if (Test-Path -LiteralPath $packageRoot) {
+  Remove-Item -LiteralPath $packageRoot -Recurse -Force
+}
+& python $client extract $archive $packageRoot
+if ($LASTEXITCODE -ne 0) { throw "Validated Salts.Native package extraction failed" }
 
-$packageRoot = Join-Path (Join-Path $packages "salts.native") $saltsVersion
-$saltsRoot = Join-Path (Join-Path $packageRoot "sdk") $SaltsRid
-$configPath = Join-Path $saltsRoot "lib/cmake/Salts/SaltsConfig.cmake"
-$targetsPath = Join-Path $saltsRoot "lib/cmake/Salts/SaltsTargets.cmake"
-$functionHeader = Join-Path $saltsRoot "include/cmeta/function.h"
-
-foreach ($path in @($configPath, $targetsPath, $functionHeader)) {
-  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-    throw "missing restored Salts SDK file: $path"
+$saltsRoot = Join-Path $packageRoot "sdk/$SaltsRid"
+foreach ($rel in @(
+  'lib/cmake/Salts/SaltsConfig.cmake',
+  'lib/cmake/Salts/SaltsTargets.cmake',
+  'include/cmeta/function.h'
+)) {
+  if (-not (Test-Path -LiteralPath (Join-Path $saltsRoot $rel) -PathType Leaf)) {
+    throw "Downloaded Salts.Native $version lacks required SDK file: $rel"
   }
 }
-
 $env:SALTS_ROOT = $saltsRoot
-$env:SALTS_VERSION = $saltsVersion
-$env:QIGAO_NUGET_PACKAGES = $packages
+$env:SALTS_VERSION = $version
+$env:QIGAO_GITHUB_PACKAGES_ROOT = $packages
 if (-not $Local) {
   "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
-  "SALTS_VERSION=$saltsVersion" >> $env:GITHUB_ENV
-  "QIGAO_NUGET_PACKAGES=$packages" >> $env:GITHUB_ENV
+  "SALTS_VERSION=$version" >> $env:GITHUB_ENV
+  "QIGAO_GITHUB_PACKAGES_ROOT=$packages" >> $env:GITHUB_ENV
 }
-Write-Host "Restored Salts.Native $saltsVersion ($SaltsRid): $saltsRoot"
+Write-Host "curl GitHub Packages verified Salts.Native $version for ${SaltsRid}: $saltsRoot"

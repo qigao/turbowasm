@@ -738,28 +738,31 @@ aliases for the removed Salts names.
 
 `CMakeOptions.cmake` owns feature defaults. The versioned `CMakeUserPresets.json`
 provides configure/build/test/install entry points; `presets/` contains shared
-base settings. Third-party dependencies use the root `vcpkg.json`: enabling
-`TURBOWASM_ENABLE_MIR_JIT` selects `mir`, while conformance selects host WABT.
-The shared NuGet feed is read-only and the local binary cache is writable.
+base settings. Native libraries use root `vcpkg.json`; enabling `TURBOWASM_ENABLE_MIR_JIT`
+selects `mir`. Conformance uses a SHA256-pinned WABT 1.0.42 official
+GitHub Release host binary, fetched by `curl` and passed via
+`TURBOWASM_WABT_ROOT`; it does not require an unpublished vcpkg WABT ABI.
+GitHub Packages is read over authenticated curl/NuGet V3 metadata; the native vcpkg installer uses only its local files cache, with no Mono or NuGet executable.
 Provide `GITHUB_TOKEN` with package read access in the parent environment;
 presets do not load `.env`.
 
-For local SDK acquisition, run the following in PowerShell with .NET SDK 8+
-on `PATH` (the runtime alone is insufficient):
+For local SDK acquisition, install Python 3.12 and curl, check out the
+canonical qigao/vcpkg-cache repository, and run in PowerShell with the
+GITHUB_TOKEN (read:packages) in the environment:
 
 ```powershell
 ./cmake/ci/restore-salts-sdk.ps1 -Local -SaltsRid windows-x64
 ```
 
-This resolves `Salts.Native` using `Version="2.3.0-*"` with
-`--no-cache --force-evaluate` and exports
+This resolves the audited `Salts.Native` selector `2.3.0-*` directly from
+GitHub Packages with curl, validates the archive and exports
 `SALTS_ROOT` in that PowerShell process. Alternatively, set `SALTS_ROOT` to an
 already installed release SDK. SaltsUtils is not required.
 
 Set `PROJECT_ROOT` to the parent containing `external/pkgs`, and `VCPKG_ROOT`
 to the vcpkg checkout. Windows expects the cache checkout at
 `%LOCALAPPDATA%/qigao/vcpkg-cache`; Linux uses `VCPKG_CACHE_REPOSITORY_ROOT`
-and requires Mono for NuGet restore. SDK lookup is restricted to `SALTS_ROOT`;
+and requires Python/curl, not Mono. SDK lookup is restricted to `SALTS_ROOT`;
 `CMAKE_PREFIX_PATH` contains only the matching vcpkg profile.
 
 From a Windows VS developer environment (`VsDevCmd.bat -arch=x64 -host_arch=x64`):

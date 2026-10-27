@@ -3235,7 +3235,7 @@ the same SDK. No runtime state or persisted data migration is required.
 
 The build migration separates option defaults, reusable presets, SDK acquisition
 and CI orchestration. Native CI and packaging share one workflow, while SDK
-packaging retains its Runtime + Component scope. vcpkg owns optional MIR/WABT
+packaging retains its Runtime + Component scope. vcpkg owns optional MIR, while SHA256-pinned GitHub Releases own WABT host binaries
 dependencies; first-party SDKs are resolved only through explicit roots.
 
 Validation covers the existing runtime/SIMD/threads/filesystem tests, C++ public
