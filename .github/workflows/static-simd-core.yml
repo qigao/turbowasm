@@ -75,7 +75,7 @@ jobs:
     env:
       CORE_SOURCE_SHA: 4c678e1fe3d0b9f44ea0dd1fc2d80454e43d8434
       # Qualified Salts 3 reflection integration over the native static module.
-      SALTS_SOURCE_SHA: b6448bc0ab08571c56bb06bbf2fd83a3ce5d705a
+      SALTS_SOURCE_SHA: bf71a34f336f96f73631ead619b294674d2765d0
       TURBOWASM_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       BUILD_TYPE: ${{ matrix.build_type }}
       INSTRUMENT_FLAGS: ${{ matrix.flags }}
