@@ -665,9 +665,11 @@ Immutable descriptors are shared; the test's mutable counters and objects use
 TLS. This qualifies independent objects, not concurrent mutation of one object.
 The guest CI profiles are `ci-metallic-user` (Linux) and
 `ci-macos-metallic-user` (macOS); manual CI selects both with
-`metallic_guests=true`. Salts `2.3.0-*` remains the published SDK selector; native
-socket builds require the new IDNA DNS profile. Until that profile is published,
-use `salts_ci_run` with its qualified prerequisite SDK artifact.
+`metallic_guests=true`. Those package-based profiles still select Salts
+`2.3.0-*` and have not been admitted against this branch's Salts 3/static-Core
+dependency graph. Native socket builds also require the IDNA DNS profile.
+The separate static-SIMD integration below does not qualify Metallic or the
+native socket backend.
 Its parent `TURBOWASM_GUEST_LLVM_ROOT` selects the guest compiler tools explicitly;
 CI supplies LLVM 21 and also enables MIR and mixed-tier guest regression.
 macOS uses AppleClang for native SDK ABI compatibility and installs LLVM/linker 21
@@ -699,9 +701,9 @@ qigao/vcpkg-cache
     -> SIMDe package cache
     -> MIR JIT package + executable-memory limit
 
-Salts SDK selected by package acquisition
+Salts 3 SDK + matching installed SaltsCore SDK
     -> CMeta
-    -> Salts::SIMD (SIMDe is private)
+    -> Salts::SIMD (static Core module; SIMDe is private)
     -> Salts::Coroutine (private resumable Runtime implementation)
     -> optional Salts::CFlow / Salts::NativeIO adapters
 
@@ -728,13 +730,59 @@ TurboWasm::Component
 TurboWasm never includes SIMDe directly and does not expose MIR types through
 the installed `TurboWasm::Runtime` target.
 
+SIMD execution tables and helpers consume the native `salts_simd_desc` from
+SaltsCore. The public `turbowasm_v128_descriptor` continues to return CMeta
+reflection: its `type` identifies the reflected vector, while `native_shape`
+borrows the immutable execution shape. Callers pass that shape explicitly to
+`cmeta_simd_*`; the two descriptor layouts cannot be cast to one another.
+The 16-byte aligned carrier and numerical operation contracts are preserved.
+Shape matching uses lane kind, width, count and mask status, so equivalent
+descriptors do not need the same address across static archives or DSOs.
+Neither reflection nor execution retains caller-owned storage. This descriptor
+ABI change requires rebuilding Salts, TurboWasm and their consumers together.
+
+The HostFS provider and native guest host utilities include `<salts/fs.h>` and
+link `Salts::FS`. Their path bytes, error handling, open flags and close/ownership
+behavior are unchanged; no legacy filesystem forwarding layer is installed.
+
 ## Build
 
-Use CMake 3.25+, Ninja, a Salts SDK selected by `2.3.0-*`, and the shared
-[qigao/vcpkg-cache](https://github.com/qigao/vcpkg-cache) toolchain. The Salts
-2.x API uses `cmeta_v128`, `cmeta_simd_*`, `cmeta_*` platform/filesystem
-functions, and `<coro.h>`. TurboWasm does not pin the SDK version or provide
-aliases for the removed Salts names.
+Use CMake 3.25+, Ninja, Salts 3 and its matching installed SaltsCore 0.1 SDK
+with `SALTSCORE_BUILD_SIMD=ON`. Configuration requires the imported
+`Salts::SIMD` target to be a static library. `cmeta_v128`, `cmeta_simd_*` and
+`<coro.h>` remain available; native SIMD descriptors and filesystem APIs come
+from SaltsCore. The shared
+[qigao/vcpkg-cache](https://github.com/qigao/vcpkg-cache) toolchain supplies
+optional native dependencies.
+
+`.github/workflows/static-simd-core.yml` pins the exact Core and Salts source
+commits and builds/installs each complete configured graph before building
+TurboWasm. It requires the existing SIMD/JIT-helper tests, HostFS behavior tests
+and the installed consumer suite, including real SIMD execution, on Linux,
+Linux ASan/UBSan, Windows and
+macOS. This bounded integration profile explicitly disables only
+`TURBOWASM_ENABLE_WASI02_CNET_ADAPTER`; all other feature defaults are retained.
+It does not qualify the optional MIR backend, Metallic guests, CNet, or production
+SDK package acquisition. Those configurations need separate admission.
+
+For the same local integration profile, install the pinned Core and Salts
+sources first, set `SALTS_ROOT` to the Salts 3 installation and `CORE_SDK` to
+the matching Core installation, then run:
+
+```sh
+cmake -S . -B build-static-simd -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  "-DCMAKE_PREFIX_PATH=$SALTS_ROOT;$CORE_SDK" \
+  -DTURBOWASM_ENABLE_WASI02_CNET_ADAPTER=OFF
+cmake --build build-static-simd --parallel 2
+ctest --test-dir build-static-simd --no-tests=error --output-on-failure \
+  -R '(^turbowasm_.*simd.*_test$|^turbowasm_wasi_fs_.*host.*_test$)'
+```
+
+Set the platform's runtime library search path to the matching Core and Salts
+SDK `bin` directories on Windows, or `lib` directories on Linux/macOS, before
+executing tests. SIMD itself is static; stateful native Core owners remain
+shared.
 
 `CMakeOptions.cmake` owns feature defaults. The versioned `CMakeUserPresets.json`
 provides configure/build/test/install entry points; `presets/` contains shared
@@ -746,24 +794,18 @@ GitHub Packages is read over authenticated curl/NuGet V3 metadata; the native vc
 Provide `GITHUB_TOKEN` with package read access in the parent environment;
 presets do not load `.env`.
 
-For local SDK acquisition, install Python 3.12 and curl, check out the
-canonical qigao/vcpkg-cache repository, and run in PowerShell with the
-GITHUB_TOKEN (read:packages) in the environment:
-
-```powershell
-./cmake/ci/restore-salts-sdk.ps1 -Local -SaltsRid windows-x64
-```
-
-This resolves the audited `Salts.Native` selector `2.3.0-*` directly from
-GitHub Packages with curl, validates the archive and exports
-`SALTS_ROOT` in that PowerShell process. Alternatively, set `SALTS_ROOT` to an
-already installed release SDK. SaltsUtils is not required.
+The existing `cmake/ci/restore-salts-sdk.ps1` still resolves the audited
+`Salts.Native` selector `2.3.0-*` from GitHub Packages. That SDK does not satisfy
+this branch's Salts 3 requirement. Its package-based CI and shipping SDK
+cutover remain pending; a successful source integration run must not mark them
+complete. Set `SALTS_ROOT` to the matching source-built Salts 3 installation for
+this Draft. SaltsUtils is not required.
 
 Set `PROJECT_ROOT` to the parent containing `external/pkgs`, and `VCPKG_ROOT`
 to the vcpkg checkout. Windows expects the cache checkout at
 `%LOCALAPPDATA%/qigao/vcpkg-cache`; Linux uses `VCPKG_CACHE_REPOSITORY_ROOT`
-and requires Python/curl, not Mono. SDK lookup is restricted to `SALTS_ROOT`;
-`CMAKE_PREFIX_PATH` contains only the matching vcpkg profile.
+and requires Python/curl, not Mono. Salts SDK lookup is restricted to
+`SALTS_ROOT`; `CMAKE_PREFIX_PATH` must also locate the matching Core SDK.
 
 From a Windows VS developer environment (`VsDevCmd.bat -arch=x64 -host_arch=x64`):
 
@@ -804,13 +846,14 @@ spelling as an input file, while retaining the dash spelling as an argument.
 The SDK's C-only condition and atomics semantics are preserved; SDK files are
 unchanged. Remove this normalization when the minimum supported Salts SDK
 exports the corrected spelling.
-CI resolves `Salts.Native` using `2.3.0-*` on every run and
-builds the complete selected graph. The published package remains Runtime +
+The legacy package-based CI resolves `Salts.Native` using `2.3.0-*` on every
+run and builds the complete selected graph; it cannot admit this Salts 3 branch
+until package acquisition is migrated. The published package remains Runtime +
 Component only; MIR remains outside the installed Runtime link interface.
 Android uses the shared outer vcpkg toolchain with the NDK chainloaded, and its
 existing installed consumers are cross-compiled without running host CTest.
 
-Commit `27d6efb` passes all five profiles in both the
+Historical commit `27d6efb` passed all five profiles in both the
 [cold build](https://github.com/qigao/turbowasm/actions/runs/37738464606) and
 [cache-restored build](https://github.com/qigao/turbowasm/actions/runs/37738955984),
 with zero cache write errors. Restored Linux and macOS MIR builds each record

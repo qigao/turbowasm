@@ -2,7 +2,7 @@
 #include "http_host.h"
 #include "reactor_session.h"
 #include <http_server/http.h>
-#include <cmeta_fs.h>
+#include <salts/fs.h>
 #include <fmt.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -18,7 +18,7 @@ static atomic_uint requests;
 static bool server_started;
 static tstr connection;
 static turbowasm_module module;
-static cmeta_fs_buf_t program;
+static salts_fs_buf_t program;
 static turbowasm_linker linker;
 static reactor_session session;
 static turbowasm_trap trap;
@@ -85,13 +85,13 @@ static void run(int which) {
 
 spec("compiled guest HTTP module with real Chttp transport") {
     before_all() {
-        check_equal(cmeta_fs_read_file(GUEST_HTTP_PATH, &program), 0);
+        check_equal(salts_fs_read_file(GUEST_HTTP_PATH, &program), 0);
         check_equal(turbowasm_module_load_borrowed(&module,
             (const uint8_t *)program.base, program.len), TURBOWASM_OK);
     }
     after_all() {
         turbowasm_module_destroy(&module);
-        cmeta_fs_buf_free(&program);
+        salts_fs_buf_free(&program);
     }
     before_each() {
         memset(&session, 0, sizeof(session));

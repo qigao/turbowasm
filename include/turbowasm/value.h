@@ -122,6 +122,10 @@ typedef struct turbowasm_value {
 const cmeta_type_desc *
 turbowasm_value_type_descriptor(turbowasm_value_kind kind);
 
+/* Borrowed immutable reflection metadata for a lane shape; NULL for RAW or
+ * an unknown shape. The native execution descriptor is desc->native_shape,
+ * not the reflected descriptor's object representation. Execution tables use
+ * Salts::SIMD native shapes directly; callers must not cast this result. */
 const cmeta_vector_desc *turbowasm_v128_descriptor(turbowasm_v128_shape shape);
 turbowasm_status turbowasm_v128_load(turbowasm_v128 *out,
                                      turbowasm_v128_shape shape,

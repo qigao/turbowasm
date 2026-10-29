@@ -1,6 +1,6 @@
 #include "tinytest.h"
 #include "command.h"
-#include <cmeta_fs.h>
+#include <salts/fs.h>
 #include <string.h>
 
 static tw_command_options options;
@@ -26,7 +26,7 @@ static void run_buffering(const char *mode) {
 }
 static void check_buffer_file(const char *expected) {
     char path[1200], text[32] = {0};
-    check_equal(cmeta_fs_path_join(path, sizeof(path), root, "buffer"), 0);
+    check_equal(salts_fs_path_join(path, sizeof(path), root, "buffer"), 0);
     FILE *f = fopen(path, "rb"); check_not_null(f);
     size_t n = fread(text, 1, sizeof(text) - 1, f);
     int error = ferror(f); fclose(f);
@@ -48,9 +48,9 @@ static void diagnostics(void) {
 spec("local Metallic C11 command guests") {
     before_all() {
         char temp[768];
-        check_equal(cmeta_fs_get_tmpdir(temp, sizeof(temp)), 0);
-        check_equal(cmeta_fs_path_join(root, sizeof(root), temp, "turbowasm-metallic-c11"), 0);
-        check_equal(cmeta_fs_mkdir(root, 0700), 0);
+        check_equal(salts_fs_get_tmpdir(temp, sizeof(temp)), 0);
+        check_equal(salts_fs_path_join(root, sizeof(root), temp, "turbowasm-metallic-c11"), 0);
+        check_equal(salts_fs_mkdir(root, 0700), 0);
     }
     before_each() {
         for (int i = 0; i < 3; ++i) { streams[i] = tmpfile(); check_not_null(streams[i]); }
@@ -66,13 +66,13 @@ spec("local Metallic C11 command guests") {
         const char *names[] = {"first", "second", "oom", "buffer", "buffer2"};
         char path[1200];
         for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
-            if (!cmeta_fs_path_join(path, sizeof(path), root, names[i]) &&
-                !cmeta_fs_access(path, SALTS_FS_ACCESS_EXISTS))
-                (void)cmeta_fs_unlink(path);
+            if (!salts_fs_path_join(path, sizeof(path), root, names[i]) &&
+                !salts_fs_access(path, SALTS_FS_ACCESS_EXISTS))
+                (void)salts_fs_unlink(path);
     }
     after_all() {
         /* Fails if tmpfile left any named entry behind. */
-        check_equal(cmeta_fs_rmdir(root), 0);
+        check_equal(salts_fs_rmdir(root), 0);
     }
     it("returns through exit and runs atexit in reverse order") {
         tw_command_result r = run("exit"); char text[64]; output(text, sizeof(text));

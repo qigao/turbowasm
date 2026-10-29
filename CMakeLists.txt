@@ -18,7 +18,7 @@ endif()
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTS_ROOT_PATH)
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
-find_package(Salts CONFIG REQUIRED
+find_package(Salts 3.0 CONFIG REQUIRED
   PATHS "${SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
@@ -33,7 +33,13 @@ endif()
 
 if(NOT TARGET Salts::SIMD)
   message(FATAL_ERROR
-    "TurboWasm requires a Salts SDK that exports Salts::SIMD")
+    "TurboWasm requires the static SaltsCore SIMD module through Salts 3")
+endif()
+get_target_property(_turbowasm_simd_kind Salts::SIMD TYPE)
+get_target_property(_turbowasm_simd_imported Salts::SIMD IMPORTED)
+if(NOT _turbowasm_simd_imported OR
+   NOT _turbowasm_simd_kind STREQUAL "STATIC_LIBRARY")
+  message(FATAL_ERROR "TurboWasm requires imported STATIC Salts::SIMD")
 endif()
 
 if(NOT TARGET Salts::Coroutine)
@@ -552,9 +558,9 @@ if(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER)
     message(FATAL_ERROR
       "TurboWasm WASIHostFS requires the WASI adapter")
   endif()
-  if(NOT TARGET Salts::Core)
+  if(NOT TARGET Salts::FS)
     message(FATAL_ERROR
-      "TurboWasm WASIHostFS requires a Salts SDK that exports Salts::Core")
+      "TurboWasm WASIHostFS requires the native SaltsCore Salts::FS module")
   endif()
 
   add_library(turbowasm_wasi_host_fs
@@ -569,7 +575,7 @@ if(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER)
       $<INSTALL_INTERFACE:include>)
   target_link_libraries(turbowasm_wasi_host_fs
     PUBLIC TurboWasm::WASI
-    PRIVATE Salts::Core)
+    PRIVATE Salts::FS)
 
   if(MSVC)
     target_compile_options(turbowasm_wasi_host_fs PRIVATE /W4)

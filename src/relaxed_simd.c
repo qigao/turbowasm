@@ -1,7 +1,5 @@
 #include "relaxed_simd.h"
 
-#include <cmeta/vector.h>
-
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -269,7 +267,7 @@ static bool relaxed_dot_add_i32(
 }
 
 static bool relaxed_madd(
-    const cmeta_vector_desc *desc,
+    const salts_simd_desc *desc,
     bool negative,
     cmeta_v128 *out,
     const cmeta_v128 *a,
@@ -345,22 +343,22 @@ bool turbowasm_relaxed_simd_execute(
         case 0x105u:
             return b != NULL && c != NULL &&
                    relaxed_madd(
-                       &cmeta_vector_f32x4, false,
+                       &salts_simd_f32x4, false,
                        out, a, b, c);
         case 0x106u:
             return b != NULL && c != NULL &&
                    relaxed_madd(
-                       &cmeta_vector_f32x4, true,
+                       &salts_simd_f32x4, true,
                        out, a, b, c);
         case 0x107u:
             return b != NULL && c != NULL &&
                    relaxed_madd(
-                       &cmeta_vector_f64x2, false,
+                       &salts_simd_f64x2, false,
                        out, a, b, c);
         case 0x108u:
             return b != NULL && c != NULL &&
                    relaxed_madd(
-                       &cmeta_vector_f64x2, true,
+                       &salts_simd_f64x2, true,
                        out, a, b, c);
 
         case 0x109u:
@@ -369,7 +367,7 @@ bool turbowasm_relaxed_simd_execute(
         case 0x10cu:
             return b != NULL && c != NULL &&
                    cmeta_simd_select(
-                       &cmeta_vector_i8x16,
+                       &salts_simd_i8x16,
                        out, a, b, c);
 
         case 0x10du:
@@ -388,7 +386,7 @@ bool turbowasm_relaxed_simd_execute(
         case 0x111u:
             return b != NULL &&
                    cmeta_simd_q15mulr_sat(
-                       &cmeta_vector_i16x8, out, a, b);
+                       &salts_simd_i16x8, out, a, b);
 
         case 0x112u:
             return b != NULL &&

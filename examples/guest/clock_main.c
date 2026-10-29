@@ -1,6 +1,6 @@
 #include "clock_host.h"
 #include "reactor_session.h"
-#include <cmeta_fs.h>
+#include <salts/fs.h>
 #include <salts/clock.h>
 #include <stdlib.h>
 
@@ -20,8 +20,8 @@ static bool elapsed_ns(void *context, uint64_t *out) {
 int main(int argc, char **argv) {
     if (argc != 2) return 1;
     uint8_t *program = NULL;
-    cmeta_file_t file = SALTS_INVALID_FILE;
-    cmeta_fs_stat_t file_info = {0};
+    salts_file_t file = SALTS_INVALID_FILE;
+    salts_fs_stat_t file_info = {0};
     turbowasm_module module = {0};
     turbowasm_linker linker = {0};
     reactor_session session = {0};
@@ -36,19 +36,19 @@ int main(int argc, char **argv) {
     config.limits.max_table_elements = 1024;
     /* Bound host allocation before reading. The host keeps this input file
      * immutable while loading; guest memory limits cannot bound a file read. */
-    if (cmeta_fs_stat(argv[1], &file_info) || !file_info.is_file ||
+    if (salts_fs_stat(argv[1], &file_info) || !file_info.is_file ||
         !file_info.size || file_info.size > MODULE_LIMIT) goto done;
     size_t length = (size_t)file_info.size;
     program = malloc(length);
     if (!program) goto done;
-    file = cmeta_fs_open(argv[1], SALTS_FS_O_RDONLY, 0);
+    file = salts_fs_open(argv[1], SALTS_FS_O_RDONLY, 0);
     if (file == SALTS_INVALID_FILE) goto done;
     for (size_t offset = 0; offset < length;) {
-        int count = cmeta_fs_read(file, (char *)program + offset, length - offset);
+        int count = salts_fs_read(file, (char *)program + offset, length - offset);
         if (count <= 0) goto done;
         offset += (size_t)count;
     }
-    int close_status = cmeta_fs_close(file);
+    int close_status = salts_fs_close(file);
     file = SALTS_INVALID_FILE;
     if (close_status || turbowasm_module_load_borrowed_with_config(&module,
             program, length, &config) != TURBOWASM_OK ||
@@ -78,6 +78,6 @@ done:
     turbowasm_linker_destroy(&linker);
     turbowasm_module_destroy(&module);
     free(program);
-    if (file != SALTS_INVALID_FILE && cmeta_fs_close(file)) code = 1;
+    if (file != SALTS_INVALID_FILE && salts_fs_close(file)) code = 1;
     return code;
 }

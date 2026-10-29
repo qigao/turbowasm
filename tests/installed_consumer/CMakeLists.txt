@@ -30,7 +30,7 @@ if(TurboWasm_HAS_METALLIC_GUEST_SDK)
   add_executable(turbowasm_installed_clock_consumer
     ../../examples/guest/clock_main.c ../../examples/guest/clock_host.c
     ../../examples/guest/reactor_session.c)
-  target_link_libraries(turbowasm_installed_clock_consumer PRIVATE TurboWasm::Runtime Salts::Core Salts::Platform)
+  target_link_libraries(turbowasm_installed_clock_consumer PRIVATE TurboWasm::Runtime Salts::Core Salts::FS Salts::Platform)
   set_target_properties(turbowasm_installed_clock_consumer PROPERTIES
     C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF FOLDER "tests/guest")
   target_compile_options(turbowasm_installed_clock_consumer PRIVATE $<$<COMPILE_LANG_AND_ID:C,MSVC>:-experimental:c11atomics>)

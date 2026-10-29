@@ -3882,37 +3882,37 @@ static turbowasm_status turbowasm_exec_simd_splat(
     turbowasm_status status;
 
     switch (descriptor->vector_desc->lane_kind) {
-        case CMETA_VECTOR_I8:
+        case SALTS_SIMD_LANE_I8:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &input);
             if (status != TURBOWASM_OK) return status;
             scalar.i8 = (int8_t)input.as.i32;
             break;
-        case CMETA_VECTOR_I16:
+        case SALTS_SIMD_LANE_I16:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &input);
             if (status != TURBOWASM_OK) return status;
             scalar.i16 = (int16_t)input.as.i32;
             break;
-        case CMETA_VECTOR_I32:
+        case SALTS_SIMD_LANE_I32:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &input);
             if (status != TURBOWASM_OK) return status;
             scalar.i32 = input.as.i32;
             break;
-        case CMETA_VECTOR_I64:
+        case SALTS_SIMD_LANE_I64:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I64, &input);
             if (status != TURBOWASM_OK) return status;
             scalar.i64 = input.as.i64;
             break;
-        case CMETA_VECTOR_F32:
+        case SALTS_SIMD_LANE_F32:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_F32, &input);
             if (status != TURBOWASM_OK) return status;
             scalar.f32 = input.as.f32;
             break;
-        case CMETA_VECTOR_F64:
+        case SALTS_SIMD_LANE_F64:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_F64, &input);
             if (status != TURBOWASM_OK) return status;
@@ -4481,35 +4481,35 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
             return TURBOWASM_UNSUPPORTED;
 
         switch (descriptor->vector_desc->lane_kind) {
-            case CMETA_VECTOR_I8:
+            case SALTS_SIMD_LANE_I8:
                 out.kind = TURBOWASM_VALUE_I32;
                 out.as.i32 = (int32_t)scalar.i8;
                 break;
-            case CMETA_VECTOR_U8:
+            case SALTS_SIMD_LANE_U8:
                 out.kind = TURBOWASM_VALUE_I32;
                 out.as.i32 = (int32_t)scalar.u8;
                 break;
-            case CMETA_VECTOR_I16:
+            case SALTS_SIMD_LANE_I16:
                 out.kind = TURBOWASM_VALUE_I32;
                 out.as.i32 = (int32_t)scalar.i16;
                 break;
-            case CMETA_VECTOR_U16:
+            case SALTS_SIMD_LANE_U16:
                 out.kind = TURBOWASM_VALUE_I32;
                 out.as.i32 = (int32_t)scalar.u16;
                 break;
-            case CMETA_VECTOR_I32:
+            case SALTS_SIMD_LANE_I32:
                 out.kind = TURBOWASM_VALUE_I32;
                 out.as.i32 = scalar.i32;
                 break;
-            case CMETA_VECTOR_I64:
+            case SALTS_SIMD_LANE_I64:
                 out.kind = TURBOWASM_VALUE_I64;
                 out.as.i64 = scalar.i64;
                 break;
-            case CMETA_VECTOR_F32:
+            case SALTS_SIMD_LANE_F32:
                 out.kind = TURBOWASM_VALUE_F32;
                 out.as.f32 = scalar.f32;
                 break;
-            case CMETA_VECTOR_F64:
+            case SALTS_SIMD_LANE_F64:
                 out.kind = TURBOWASM_VALUE_F64;
                 out.as.f64 = scalar.f64;
                 break;
@@ -4523,37 +4523,37 @@ static turbowasm_status turbowasm_exec_simd_lane_special(
         return TURBOWASM_UNSUPPORTED;
 
     switch (descriptor->vector_desc->lane_kind) {
-        case CMETA_VECTOR_I8:
+        case SALTS_SIMD_LANE_I8:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &scalar_value);
             if (status != TURBOWASM_OK) return status;
             scalar.i8 = (int8_t)scalar_value.as.i32;
             break;
-        case CMETA_VECTOR_I16:
+        case SALTS_SIMD_LANE_I16:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &scalar_value);
             if (status != TURBOWASM_OK) return status;
             scalar.i16 = (int16_t)scalar_value.as.i32;
             break;
-        case CMETA_VECTOR_I32:
+        case SALTS_SIMD_LANE_I32:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I32, &scalar_value);
             if (status != TURBOWASM_OK) return status;
             scalar.i32 = scalar_value.as.i32;
             break;
-        case CMETA_VECTOR_I64:
+        case SALTS_SIMD_LANE_I64:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_I64, &scalar_value);
             if (status != TURBOWASM_OK) return status;
             scalar.i64 = scalar_value.as.i64;
             break;
-        case CMETA_VECTOR_F32:
+        case SALTS_SIMD_LANE_F32:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_F32, &scalar_value);
             if (status != TURBOWASM_OK) return status;
             scalar.f32 = scalar_value.as.f32;
             break;
-        case CMETA_VECTOR_F64:
+        case SALTS_SIMD_LANE_F64:
             status = turbowasm_stack_pop_kind(
                 stack, TURBOWASM_VALUE_F64, &scalar_value);
             if (status != TURBOWASM_OK) return status;
