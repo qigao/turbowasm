@@ -2,13 +2,13 @@ if(NOT TARGET TurboWasm::WASIHostFS OR NOT TURBOWASM_BUILD_TOOLS)
   message(FATAL_ERROR "Metallic guests require tools and the WASI HostFS adapter")
 endif()
 include(CheckCSourceCompiles)
-set(CMAKE_REQUIRED_LIBRARIES Salts::Core)
+set(CMAKE_REQUIRED_LIBRARIES Salts::FS)
 unset(TURBOWASM_HAVE_GUEST_FS CACHE)
-check_c_source_compiles("#include <cmeta_fs.h>
+check_c_source_compiles("#include <salts/fs.h>
 #if !defined(SALTS_FS_ROOT_MUTATION_VERSION)
 #error Metallic guests require secure rename, exclusive create and append mutation
 #endif
-int main(void) { return cmeta_fs_root_file_set_append(0, 0); }" TURBOWASM_HAVE_GUEST_FS)
+int main(void) { return salts_fs_root_file_set_append(0, 0); }" TURBOWASM_HAVE_GUEST_FS)
 unset(CMAKE_REQUIRED_LIBRARIES)
 if(NOT TURBOWASM_HAVE_GUEST_FS)
   message(FATAL_ERROR "Metallic guests require a Salts SDK with SALTS_FS_ROOT_MUTATION_VERSION")
@@ -128,7 +128,7 @@ add_executable(turbowasm_clock_example
   "${PROJECT_SOURCE_DIR}/examples/guest/clock_main.c"
   "${PROJECT_SOURCE_DIR}/examples/guest/clock_host.c"
   "${PROJECT_SOURCE_DIR}/examples/guest/reactor_session.c")
-target_link_libraries(turbowasm_clock_example PRIVATE TurboWasm::Runtime Salts::Core Salts::Platform)
+target_link_libraries(turbowasm_clock_example PRIVATE TurboWasm::Runtime Salts::Core Salts::FS Salts::Platform)
 target_compile_features(turbowasm_clock_example PRIVATE c_std_11)
 target_compile_options(turbowasm_clock_example PRIVATE $<$<COMPILE_LANG_AND_ID:C,MSVC>:-experimental:c11atomics>)
 set_target_properties(turbowasm_clock_example PROPERTIES FOLDER "examples/guest")
@@ -148,7 +148,7 @@ if(TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE)
   set_target_properties(turbowasm_http_example_adapter PROPERTIES FOLDER "examples/guest")
   add_executable(turbowasm_http_example "${PROJECT_SOURCE_DIR}/examples/guest/http_main.c"
     "${PROJECT_SOURCE_DIR}/examples/guest/reactor_session.c")
-  target_link_libraries(turbowasm_http_example PRIVATE turbowasm_http_example_adapter Salts::Core)
+  target_link_libraries(turbowasm_http_example PRIVATE turbowasm_http_example_adapter Salts::Core Salts::FS)
   target_compile_features(turbowasm_http_example PRIVATE c_std_11)
   target_compile_options(turbowasm_http_example PRIVATE $<$<COMPILE_LANG_AND_ID:C,MSVC>:-experimental:c11atomics>)
   set_target_properties(turbowasm_http_example PROPERTIES FOLDER "examples/guest")

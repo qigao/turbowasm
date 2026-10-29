@@ -98,6 +98,54 @@ static void test_slot_copy(void) {
     assert(context.call_trap == TURBOWASM_TRAP_NONE);
 }
 
+static void test_float_splat_shapes_and_rejection(void) {
+    turbowasm_v128 slots[2] = {0};
+    turbowasm_jit_invocation_context context = {0};
+    turbowasm_v128 saved_f32;
+    turbowasm_v128 saved_f64;
+    float f32_lanes[4] = {0};
+    double f64_lanes[2] = {0};
+    uint32_t index;
+
+    context.simd_slots = slots;
+    context.simd_slot_count = 2u;
+    reset_status(&context);
+
+    assert(turbowasm_jit_simd_splat_f32(
+               &context, 0x13, 0, 2.5f) == TURBOWASM_OK);
+    assert(turbowasm_jit_simd_splat_f64(
+               &context, 0x14, 1, -7.5) == TURBOWASM_OK);
+    cmeta_simd_v128_store(f32_lanes, &slots[0].bits);
+    cmeta_simd_v128_store(f64_lanes, &slots[1].bits);
+    for (index = 0u; index < 4u; ++index)
+        assert(f32_lanes[index] == 2.5f);
+    for (index = 0u; index < 2u; ++index)
+        assert(f64_lanes[index] == -7.5);
+    assert(slots[0].shape == TURBOWASM_V128_F32X4);
+    assert(slots[1].shape == TURBOWASM_V128_F64X2);
+    assert(context.call_status == TURBOWASM_OK);
+    assert(context.call_trap == TURBOWASM_TRAP_NONE);
+
+    saved_f32 = slots[0];
+    saved_f64 = slots[1];
+    assert(turbowasm_jit_simd_splat_f32(
+               &context, 0x14, 0, 9.0f) == TURBOWASM_UNSUPPORTED);
+    assert(context.call_status == TURBOWASM_UNSUPPORTED);
+    assert(context.call_trap == TURBOWASM_TRAP_NONE);
+    assert(slots[0].shape == saved_f32.shape);
+    assert(memcmp(&slots[0].bits, &saved_f32.bits,
+                  sizeof(saved_f32.bits)) == 0);
+
+    reset_status(&context);
+    assert(turbowasm_jit_simd_splat_f64(
+               &context, 0x13, 1, 9.0) == TURBOWASM_UNSUPPORTED);
+    assert(context.call_status == TURBOWASM_UNSUPPORTED);
+    assert(context.call_trap == TURBOWASM_TRAP_NONE);
+    assert(slots[1].shape == saved_f64.shape);
+    assert(memcmp(&slots[1].bits, &saved_f64.bits,
+                  sizeof(saved_f64.bits)) == 0);
+}
+
 static void test_memory_helper_and_trap(void) {
     static const uint8_t bytes[] = {
         WASM_HEADER,
@@ -305,6 +353,7 @@ int main(void) {
     test_value_cells_preserve_shape();
     test_slot_ops_and_reduce();
     test_slot_copy();
+    test_float_splat_shapes_and_rejection();
     test_memory_helper_and_trap();
     test_invalid_slot_is_invalid_argument();
     test_success_does_not_set_trap();

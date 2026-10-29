@@ -45,35 +45,35 @@ static int64_t turbowasm_jit_simd_status(
 }
 
 static bool turbowasm_jit_simd_scalar_i64(
-    const cmeta_vector_desc *desc,
+    const salts_simd_desc *desc,
     int64_t raw,
     cmeta_simd_scalar *out) {
     if (desc == NULL || out == NULL)
         return false;
 
     switch (desc->lane_kind) {
-        case CMETA_VECTOR_I8:
+        case SALTS_SIMD_LANE_I8:
             out->i8 = (int8_t)raw;
             return true;
-        case CMETA_VECTOR_U8:
+        case SALTS_SIMD_LANE_U8:
             out->u8 = (uint8_t)raw;
             return true;
-        case CMETA_VECTOR_I16:
+        case SALTS_SIMD_LANE_I16:
             out->i16 = (int16_t)raw;
             return true;
-        case CMETA_VECTOR_U16:
+        case SALTS_SIMD_LANE_U16:
             out->u16 = (uint16_t)raw;
             return true;
-        case CMETA_VECTOR_I32:
+        case SALTS_SIMD_LANE_I32:
             out->i32 = (int32_t)(uint32_t)raw;
             return true;
-        case CMETA_VECTOR_U32:
+        case SALTS_SIMD_LANE_U32:
             out->u32 = (uint32_t)raw;
             return true;
-        case CMETA_VECTOR_I64:
+        case SALTS_SIMD_LANE_I64:
             out->i64 = raw;
             return true;
-        case CMETA_VECTOR_U64:
+        case SALTS_SIMD_LANE_U64:
             out->u64 = (uint64_t)raw;
             return true;
         default:
@@ -187,7 +187,11 @@ int64_t turbowasm_jit_simd_splat_f32(
     out = turbowasm_jit_simd_slot(context, out_slot);
     if (descriptor == NULL ||
         descriptor->kind != TURBOWASM_SIMD_EXEC_SPLAT ||
-        descriptor->vector_desc != &cmeta_vector_f32x4 ||
+        descriptor->vector_desc == NULL ||
+        descriptor->vector_desc->lane_kind != SALTS_SIMD_LANE_F32 ||
+        descriptor->vector_desc->lane_bits != 32u ||
+        descriptor->vector_desc->lane_count != 4u ||
+        descriptor->vector_desc->is_mask ||
         out == NULL) {
         return turbowasm_jit_simd_status(
             context, TURBOWASM_UNSUPPORTED,
@@ -217,7 +221,11 @@ int64_t turbowasm_jit_simd_splat_f64(
     out = turbowasm_jit_simd_slot(context, out_slot);
     if (descriptor == NULL ||
         descriptor->kind != TURBOWASM_SIMD_EXEC_SPLAT ||
-        descriptor->vector_desc != &cmeta_vector_f64x2 ||
+        descriptor->vector_desc == NULL ||
+        descriptor->vector_desc->lane_kind != SALTS_SIMD_LANE_F64 ||
+        descriptor->vector_desc->lane_bits != 64u ||
+        descriptor->vector_desc->lane_count != 2u ||
+        descriptor->vector_desc->is_mask ||
         out == NULL) {
         return turbowasm_jit_simd_status(
             context, TURBOWASM_UNSUPPORTED,

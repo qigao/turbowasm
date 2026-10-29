@@ -27,9 +27,9 @@ typedef struct outcome {
 
 static uint8_t scalar_type(const turbowasm_simd_exec_descriptor *d) {
     switch (d->vector_desc->lane_kind) {
-        case CMETA_VECTOR_I64: case CMETA_VECTOR_U64: return 0x7e;
-        case CMETA_VECTOR_F32: return 0x7d;
-        case CMETA_VECTOR_F64: return 0x7c;
+        case SALTS_SIMD_LANE_I64: case SALTS_SIMD_LANE_U64: return 0x7e;
+        case SALTS_SIMD_LANE_F32: return 0x7d;
+        case SALTS_SIMD_LANE_F64: return 0x7c;
         default: return 0x7f;
     }
 }

@@ -39,11 +39,12 @@ typedef enum turbowasm_simd_exec_kind {
 typedef struct turbowasm_simd_exec_descriptor {
     uint32_t opcode;
     turbowasm_simd_exec_kind kind;
-    const cmeta_vector_desc *vector_desc;
+    /* Native lane semantics; CMeta reflection is queried separately. */
+    const salts_simd_desc *vector_desc;
     uint8_t op;
     turbowasm_v128_shape result_shape;
     uint8_t memory_width;
-    const cmeta_vector_desc *source_desc;
+    const salts_simd_desc *source_desc;
     uint8_t lane_policy;
 } turbowasm_simd_exec_descriptor;
 

@@ -1,6 +1,6 @@
 #include "http_host.h"
 #include "reactor_session.h"
-#include <cmeta_fs.h>
+#include <salts/fs.h>
 #include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,8 +14,8 @@ enum { MODULE_LIMIT = 16 * 1024 * 1024, ALLOCATION_LIMIT = 64 * 1024 * 1024 };
 int main(int argc, char **argv) {
     if (argc != 5) return 1;
     uint8_t *program = NULL;
-    cmeta_file_t file = SALTS_INVALID_FILE;
-    cmeta_fs_stat_t file_info = {0};
+    salts_file_t file = SALTS_INVALID_FILE;
+    salts_fs_stat_t file_info = {0};
     turbowasm_module module = {0};
     turbowasm_linker linker = {0};
     reactor_session session = {0};
@@ -32,19 +32,19 @@ int main(int argc, char **argv) {
     int code = 1;
     /* Bound the read separately from Runtime allocations. Keep this trusted
      * input file immutable until loading has completed. */
-    if (cmeta_fs_stat(argv[1], &file_info) || !file_info.is_file ||
+    if (salts_fs_stat(argv[1], &file_info) || !file_info.is_file ||
         !file_info.size || file_info.size > MODULE_LIMIT) goto done;
     size_t length = (size_t)file_info.size;
     program = malloc(length);
     if (!program) goto done;
-    file = cmeta_fs_open(argv[1], SALTS_FS_O_RDONLY, 0);
+    file = salts_fs_open(argv[1], SALTS_FS_O_RDONLY, 0);
     if (file == SALTS_INVALID_FILE) goto done;
     for (size_t offset = 0; offset < length;) {
-        int count = cmeta_fs_read(file, (char *)program + offset, length - offset);
+        int count = salts_fs_read(file, (char *)program + offset, length - offset);
         if (count <= 0) goto done;
         offset += (size_t)count;
     }
-    int close_status = cmeta_fs_close(file);
+    int close_status = salts_fs_close(file);
     file = SALTS_INVALID_FILE;
     if (close_status || app_http_init(&http, &endpoint, 1, &client_config, 5000) != SALTS_OK ||
         turbowasm_module_load_borrowed_with_config(&module, program, length, &config) != TURBOWASM_OK ||
@@ -82,6 +82,6 @@ done:
     if (app_http_destroy(&http, 5000) != SALTS_OK) return 1;
     turbowasm_module_destroy(&module);
     free(program);
-    if (file != SALTS_INVALID_FILE && cmeta_fs_close(file)) code = 1;
+    if (file != SALTS_INVALID_FILE && salts_fs_close(file)) code = 1;
     return code;
 }

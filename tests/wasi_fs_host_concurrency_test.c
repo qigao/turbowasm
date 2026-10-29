@@ -1,6 +1,6 @@
 #include "tinytest.h"
 #include <turbowasm/wasi_host_fs.h>
-#include <cmeta_fs.h>
+#include <salts/fs.h>
 #include <salts/thread.h>
 #include <tstr.h>
 #include <string.h>
@@ -106,10 +106,10 @@ spec("HostFS concurrent native identity ownership") {
         tstr temp = tstr_new_len(NULL, 2047);
         directory = tstr_new_len(NULL, 2047);
         check(temp != NULL); check(directory != NULL);
-        check_equal(cmeta_fs_get_tmpdir(temp, 2048), 0);
-        check_equal(cmeta_fs_path_join(directory, 2048, temp, "turbowasm_host_concurrency"), 0);
+        check_equal(salts_fs_get_tmpdir(temp, 2048), 0);
+        check_equal(salts_fs_path_join(directory, 2048, temp, "turbowasm_host_concurrency"), 0);
         tstr_free(temp);
-        check_equal(cmeta_fs_mkdir(directory, 0755), 0);
+        check_equal(salts_fs_mkdir(directory, 0755), 0);
         turbowasm_wasi_host_fs_config config = {.host_root = directory, .file_capacity = 4, .path_capacity = 256};
         check_equal(turbowasm_wasi_host_fs_init(&adapter, &config), TURBOWASM_OK);
         check(turbowasm_wasi_host_fs_provider(&adapter, &provider, &root));
@@ -120,7 +120,7 @@ spec("HostFS concurrent native identity ownership") {
         check_equal(provider.path_unlink_file(provider.context, root, (const uint8_t *)"data", 4), 0u);
         check_equal(provider.close(provider.context, root), 0u);
         check_equal(turbowasm_wasi_host_fs_destroy(&adapter), TURBOWASM_OK);
-        check_equal(cmeta_fs_rmdir(directory), 0);
+        check_equal(salts_fs_rmdir(directory), 0);
         tstr_free(directory);
         cmeta_cond_destroy(&gate.cond); cmeta_mutex_destroy(&gate.mutex);
     }

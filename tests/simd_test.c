@@ -14,20 +14,35 @@ static void test_value_type_reflection(void) {
     const cmeta_type_desc *funcref =
         turbowasm_value_type_descriptor(TURBOWASM_VALUE_FUNCREF);
 
-    assert(turbowasm_value_type_descriptor(
-               TURBOWASM_VALUE_I32) == &cmeta_type_int32);
-    assert(turbowasm_value_type_descriptor(
-               TURBOWASM_VALUE_I64) == &cmeta_type_int64);
-    assert(turbowasm_value_type_descriptor(
-               TURBOWASM_VALUE_F32) == &cmeta_type_float);
-    assert(turbowasm_value_type_descriptor(
-               TURBOWASM_VALUE_F64) == &cmeta_type_double);
+    assert(cmeta_type_equal(turbowasm_value_type_descriptor(
+               TURBOWASM_VALUE_I32), &cmeta_type_int32));
+    assert(cmeta_type_equal(turbowasm_value_type_descriptor(
+               TURBOWASM_VALUE_I64), &cmeta_type_int64));
+    assert(cmeta_type_equal(turbowasm_value_type_descriptor(
+               TURBOWASM_VALUE_F32), &cmeta_type_float));
+    assert(cmeta_type_equal(turbowasm_value_type_descriptor(
+               TURBOWASM_VALUE_F64), &cmeta_type_double));
     assert(cmeta_type_desc_valid(v128));
     assert(cmeta_type_desc_valid(funcref));
     assert(v128->size == sizeof(turbowasm_v128));
     assert(funcref->size == sizeof(turbowasm_funcref));
     assert(turbowasm_value_type_descriptor(
                (turbowasm_value_kind)0) == NULL);
+}
+
+static void assert_vector_reflection(
+    turbowasm_v128_shape shape,
+    const cmeta_type_desc *type,
+    const salts_simd_desc *native_shape) {
+    const cmeta_vector_desc *reflection = turbowasm_v128_descriptor(shape);
+
+    assert(cmeta_vector_desc_valid(reflection));
+    assert(cmeta_type_equal(reflection->type, type));
+    assert(salts_simd_desc_valid(reflection->native_shape));
+    assert(reflection->native_shape->lane_kind == native_shape->lane_kind);
+    assert(reflection->native_shape->lane_bits == native_shape->lane_bits);
+    assert(reflection->native_shape->lane_count == native_shape->lane_count);
+    assert(reflection->native_shape->is_mask == native_shape->is_mask);
 }
 
 static void test_raw_v128_roundtrip(void) {
@@ -67,7 +82,8 @@ static void test_i32x4_add(void) {
     assert(turbowasm_simd_i32x4_add(
                &result, &left, &right) == TURBOWASM_OK);
     assert(result.shape == TURBOWASM_V128_I32X4);
-    assert(turbowasm_v128_descriptor(result.shape) == &cmeta_vector_i32x4);
+    assert_vector_reflection(
+        result.shape, &cmeta_type_i32x4, &salts_simd_i32x4);
 
     assert(turbowasm_v128_store(actual, &result) == TURBOWASM_OK);
     assert(memcmp(actual, expected, sizeof(actual)) == 0);
@@ -89,7 +105,8 @@ static void test_i32x4_eq_mask(void) {
     assert(turbowasm_simd_i32x4_eq(
                &mask, &left, &right) == TURBOWASM_OK);
     assert(mask.shape == TURBOWASM_V128_B32X4);
-    assert(turbowasm_v128_descriptor(mask.shape) == &cmeta_vector_b32x4);
+    assert_vector_reflection(
+        mask.shape, &cmeta_type_b32x4, &salts_simd_b32x4);
 
     assert(turbowasm_v128_store(actual, &mask) == TURBOWASM_OK);
     assert(memcmp(actual, expected, sizeof(actual)) == 0);

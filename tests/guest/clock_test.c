@@ -1,7 +1,7 @@
 #include <tinytest.h>
 #include "clock_host.h"
 #include "reactor_session.h"
-#include <cmeta_fs.h>
+#include <salts/fs.h>
 #include <stdlib.h>
 #include <string.h>
 #ifdef TURBOWASM_TEST_MIR
@@ -16,7 +16,7 @@ typedef struct clock_probe {
 } clock_probe;
 
 static turbowasm_module module, multi_module, provider_module;
-static cmeta_fs_buf_t program, multi_program;
+static salts_fs_buf_t program, multi_program;
 static reactor_session first, second;
 static turbowasm_instance provider;
 static turbowasm_linker linker;
@@ -35,8 +35,8 @@ static bool read_clock(void *context, uint64_t *out) {
     *out = probe->value;
     return true;
 }
-static void load(const char *path, turbowasm_module *out, cmeta_fs_buf_t *bytes) {
-    check_equal(cmeta_fs_read_file(path, bytes), 0);
+static void load(const char *path, turbowasm_module *out, salts_fs_buf_t *bytes) {
+    check_equal(salts_fs_read_file(path, bytes), 0);
     check_equal(turbowasm_module_load_borrowed(out,
         (const uint8_t *)bytes->base, bytes->len), TURBOWASM_OK);
 }
@@ -112,8 +112,8 @@ spec("module-scoped compiled guest host calls") {
     after_all() {
         turbowasm_module_destroy(&multi_module);
         turbowasm_module_destroy(&module);
-        cmeta_fs_buf_free(&multi_program);
-        cmeta_fs_buf_free(&program);
+        salts_fs_buf_free(&multi_program);
+        salts_fs_buf_free(&program);
     }
     before_each() {
         memset(&first, 0, sizeof(first));

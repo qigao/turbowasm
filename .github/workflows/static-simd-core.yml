@@ -1,0 +1,354 @@
+name: TurboWasm static SIMD installed qualification
+
+# This separately qualifies the Salts 3 / SaltsCore static SIMD integration.
+# Existing production/release workflows still select the Salts 2.3 SDK.
+# This profile does not complete that production cutover or qualify CNet.
+on:
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "cmake/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "examples/**"
+      - ".github/workflows/static-simd-core.yml"
+  push:
+    branches: [master]
+    paths:
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "cmake/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "examples/**"
+      - ".github/workflows/static-simd-core.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: turbowasm-static-simd-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installed-static-simd:
+    name: Static SIMD / ${{ matrix.id }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - id: linux-release
+            os: ubuntu-24.04
+            triplet: x64-linux
+            build_type: Release
+            address_sanitizer: "OFF"
+            flags: ""
+          - id: linux-asan-ubsan
+            os: ubuntu-24.04
+            triplet: x64-linux
+            build_type: RelWithDebInfo
+            address_sanitizer: "ON"
+            flags: "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          - id: windows-release
+            os: windows-2025
+            triplet: qigao-x64-windows-v145
+            build_type: Release
+            address_sanitizer: "OFF"
+            flags: ""
+          - id: macos-release
+            os: macos-15
+            triplet: arm64-osx
+            build_type: Release
+            address_sanitizer: "OFF"
+            flags: ""
+    defaults:
+      run:
+        shell: bash
+    env:
+      CORE_SOURCE_SHA: 4c678e1fe3d0b9f44ea0dd1fc2d80454e43d8434
+      # Qualified Salts 3 reflection integration over the native static module.
+      SALTS_SOURCE_SHA: bf71a34f336f96f73631ead619b294674d2765d0
+      TURBOWASM_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      BUILD_TYPE: ${{ matrix.build_type }}
+      INSTRUMENT_FLAGS: ${{ matrix.flags }}
+      LOG_ROOT: build-static-simd/logs
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - name: Check out the exact TurboWasm head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TURBOWASM_SOURCE_SHA }}
+          persist-credentials: false
+      - name: Require exact dependency commits
+        run: |
+          set -euo pipefail
+          for pin in "$CORE_SOURCE_SHA" "$SALTS_SOURCE_SHA"; do
+            if [[ ! "$pin" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Replace each dependency pin with its verified 40-character commit before publishing this workflow." >&2
+              exit 1
+            fi
+          done
+      - name: Check out the exact native owner
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-core
+          ref: ${{ env.CORE_SOURCE_SHA }}
+          path: _core_owner
+          persist-credentials: false
+      - name: Check out the exact Salts reflection integration
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.SALTS_SOURCE_SHA }}
+          path: _salts_owner
+          persist-credentials: false
+      - name: Verify all three heads and record SDK locations
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TURBOWASM_SOURCE_SHA"
+          test "$(git -C _core_owner rev-parse HEAD)" = "$CORE_SOURCE_SHA"
+          test "$(git -C _salts_owner rev-parse HEAD)" = "$SALTS_SOURCE_SHA"
+          mkdir -p "$LOG_ROOT"
+          printf 'TurboWasm=%s\nSaltsCore=%s\nSalts=%s\n' \
+            "$TURBOWASM_SOURCE_SHA" "$CORE_SOURCE_SHA" "$SALTS_SOURCE_SHA" \
+            | tee "$LOG_ROOT/source-heads.txt"
+          python3 _salts_owner/tools/check_ace_only_sources.py \
+            --core-root _core_owner 2>&1 | tee "$LOG_ROOT/source-ownership.log"
+          python3 _core_owner/tools/check_ci_ctest_regex.py \
+            .github/workflows/static-simd-core.yml 2>&1 | tee "$LOG_ROOT/ctest-regex.log"
+          core_sdk="$RUNNER_TEMP/static-simd-core-sdk"
+          salts_sdk="$RUNNER_TEMP/static-simd-salts-sdk"
+          turbowasm_sdk="$RUNNER_TEMP/static-simd-turbowasm-sdk"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            core_sdk="$(cygpath -m "$core_sdk")"
+            salts_sdk="$(cygpath -m "$salts_sdk")"
+            turbowasm_sdk="$(cygpath -m "$turbowasm_sdk")"
+          fi
+          printf 'CORE_SDK=%s\nSALTS_ROOT=%s\nTURBOWASM_ROOT=%s\n' \
+            "$core_sdk" "$salts_sdk" "$turbowasm_sdk" >> "$GITHUB_ENV"
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - name: Verified compiler output cache
+        uses: qigao/stun/.github/actions/setup-ccache@6498e9710609820da7d99a938627cc44f17f00ed
+        with:
+          profile: turbowasm-static-simd-${{ matrix.id }}
+          source_sha: ${{ env.TURBOWASM_SOURCE_SHA }}
+      - name: Canonical vcpkg and curl-only Core SIMDe cache
+        id: cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@7bb5b556a001bc82d2922a04a718e986a7f47f54
+        with:
+          token: ${{ github.token }}
+          triplet: ${{ matrix.triplet }}
+          host-triplet: ${{ matrix.triplet }}
+          manifest-root: _core_owner
+          features: simd
+      - name: Build and install the Core graph with static SIMD and TinyTest
+        env:
+          CORE_TOOLCHAIN: ${{ steps.cache.outputs.toolchain_file }}
+        run: |
+          set -euo pipefail
+          cmake -S _core_owner -B build-static-simd/core -G Ninja \
+            "-DCMAKE_BUILD_TYPE=$BUILD_TYPE" -DBUILD_TESTING=OFF \
+            -DSALTSCORE_BUILD_SIMD=ON -DSALTSCORE_BUILD_TINYTEST=ON \
+            "-DCMAKE_TOOLCHAIN_FILE=$CORE_TOOLCHAIN" \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
+            -DVCPKG_HOST_TRIPLET=${{ matrix.triplet }} \
+            -DVCPKG_MANIFEST_FEATURES=simd \
+            -DCMAKE_POLICY_DEFAULT_CMP0141=NEW \
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
+            "-DCMAKE_C_FLAGS=$INSTRUMENT_FLAGS" \
+            "-DCMAKE_CXX_FLAGS=$INSTRUMENT_FLAGS" \
+            "-DCMAKE_INSTALL_PREFIX=$CORE_SDK" \
+            2>&1 | tee "$LOG_ROOT/core-configure.log"
+          cmake --build build-static-simd/core --config "$BUILD_TYPE" --parallel 2 \
+            2>&1 | tee "$LOG_ROOT/core-build.log"
+          cmake --install build-static-simd/core --config "$BUILD_TYPE" \
+            2>&1 | tee "$LOG_ROOT/core-install.log"
+      - name: Build and install the complete Salts 3 graph
+        run: |
+          set -euo pipefail
+          cmake -S _salts_owner -B build-static-simd/salts -G Ninja \
+            "-DCMAKE_BUILD_TYPE=$BUILD_TYPE" \
+            -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=OFF -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_POLICY_DEFAULT_CMP0141=NEW \
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
+            "-DCMAKE_C_FLAGS=$INSTRUMENT_FLAGS" \
+            "-DCMAKE_CXX_FLAGS=$INSTRUMENT_FLAGS" \
+            "-DCMAKE_PREFIX_PATH=$CORE_SDK" \
+            "-DCMAKE_INSTALL_PREFIX=$SALTS_ROOT" \
+            2>&1 | tee "$LOG_ROOT/salts-configure.log"
+          cmake --build build-static-simd/salts --config "$BUILD_TYPE" --parallel 2 \
+            2>&1 | tee "$LOG_ROOT/salts-build.log"
+          cmake --install build-static-simd/salts --config "$BUILD_TYPE" \
+            2>&1 | tee "$LOG_ROOT/salts-install.log"
+      - name: Configure the TurboWasm default graph and build every target
+        run: |
+          set -euo pipefail
+          # CNet is not in this Core SDK. Keep every other feature at its
+          # product default, including HostFS; MIR is already off by default.
+          cmake -S . -B build-static-simd/turbowasm -G Ninja \
+            "-DCMAKE_BUILD_TYPE=$BUILD_TYPE" \
+            -DTURBOWASM_ENABLE_WASI02_CNET_ADAPTER=OFF \
+            -DENABLE_SANITIZER_ADDRESS=${{ matrix.address_sanitizer }} \
+            -DCMAKE_POLICY_DEFAULT_CMP0141=NEW \
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
+            "-DCMAKE_C_FLAGS=$INSTRUMENT_FLAGS" \
+            "-DCMAKE_CXX_FLAGS=$INSTRUMENT_FLAGS" \
+            "-DCMAKE_PREFIX_PATH=$SALTS_ROOT;$CORE_SDK" \
+            "-DCMAKE_INSTALL_PREFIX=$TURBOWASM_ROOT" \
+            2>&1 | tee "$LOG_ROOT/turbowasm-configure.log"
+          cmake --build build-static-simd/turbowasm --config "$BUILD_TYPE" --parallel 2 \
+            2>&1 | tee "$LOG_ROOT/turbowasm-build.log"
+      - name: Require and run SIMD, JIT SIMD and native HostFS tests
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            export PATH="$(cygpath -u "$CORE_SDK")/bin:$(cygpath -u "$SALTS_ROOT")/bin:$PATH"
+          elif [[ "$RUNNER_OS" == macOS ]]; then
+            export DYLD_LIBRARY_PATH="$CORE_SDK/lib:$SALTS_ROOT/lib:${DYLD_LIBRARY_PATH:-}"
+          else
+            export LD_LIBRARY_PATH="$CORE_SDK/lib:$SALTS_ROOT/lib:${LD_LIBRARY_PATH:-}"
+          fi
+          ctest --test-dir build-static-simd/turbowasm -C "$BUILD_TYPE" \
+            --show-only=json-v1 > "$LOG_ROOT/turbowasm-ctest.json"
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import re
+          graph = json.loads(pathlib.Path("build-static-simd/logs/turbowasm-ctest.json").read_text())
+          required_hostfs = {
+              "turbowasm_wasi_fs_host_concurrency_test",
+              "turbowasm_wasi_fs_contract_host_test",
+              "turbowasm_wasi_fs_host_security_test",
+          }
+          selected = {test["name"]: test for test in graph["tests"]
+                      if re.fullmatch(r"turbowasm_.*simd.*_test", test["name"])
+                      or test["name"] in required_hostfs}
+          required_simd = {
+              "turbowasm_simd_test",
+              "turbowasm_simd_descriptor_validation_test",
+              "turbowasm_simd_memory_validation_test",
+              "turbowasm_simd_instance_test",
+              "turbowasm_simd_exec_table_test",
+              "turbowasm_simd_memory_instance_test",
+              "turbowasm_simd_lane_instance_test",
+              "turbowasm_simd_advanced_instance_test",
+              "turbowasm_simd_widen_instance_test",
+              "turbowasm_simd_conversion_instance_test",
+              "turbowasm_jit_simd_helper_test",
+              "turbowasm_simd_native_test",
+          }
+          required = required_simd | required_hostfs
+          missing = required - selected.keys()
+          disabled = [name for name, test in selected.items()
+                      if any(prop["name"] == "DISABLED" and
+                             str(prop["value"]).lower() in {"true", "on", "1", "yes"}
+                             for prop in test.get("properties", []))]
+          if missing or disabled:
+              raise SystemExit(f"Missing required SIMD/HostFS tests: {sorted(missing)}; disabled: {disabled}")
+          print("Registered SIMD and HostFS tests: " + ", ".join(sorted(selected)))
+          PY
+          # The wildcard also includes any registered relaxed_simd tests;
+          # current relaxed-SIMD coverage lives in the existing SIMD suites.
+          {
+            ctest --test-dir build-static-simd/turbowasm -C "$BUILD_TYPE" \
+              --no-tests=error --output-on-failure --timeout 120 \
+              -R '^turbowasm_.*simd.*_test$'
+          } 2>&1 | tee "$LOG_ROOT/turbowasm-simd-tests.log"
+          # The default HostFS graph now consumes the sole installed Core FS
+          # owner. Its concurrency, contract and security checks stay separate.
+          {
+            ctest --test-dir build-static-simd/turbowasm -C "$BUILD_TYPE" \
+              --no-tests=error --output-on-failure --timeout 120 \
+              -R '^turbowasm_wasi_fs_(host_concurrency|contract_host|host_security)_test$'
+          } 2>&1 | tee "$LOG_ROOT/turbowasm-hostfs-tests.log"
+      - name: Install TurboWasm and build the entire original installed-consumer graph
+        run: |
+          set -euo pipefail
+          cmake --install build-static-simd/turbowasm --config "$BUILD_TYPE" \
+            2>&1 | tee "$LOG_ROOT/turbowasm-install.log"
+          cmake -S tests/installed_consumer -B build-static-simd/installed-consumer -G Ninja \
+            "-DCMAKE_BUILD_TYPE=$BUILD_TYPE" \
+            -DCMAKE_POLICY_DEFAULT_CMP0141=NEW \
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
+            "-DCMAKE_C_FLAGS=$INSTRUMENT_FLAGS" \
+            "-DCMAKE_CXX_FLAGS=$INSTRUMENT_FLAGS" \
+            "-DCMAKE_PREFIX_PATH=$TURBOWASM_ROOT;$SALTS_ROOT;$CORE_SDK" \
+            2>&1 | tee "$LOG_ROOT/installed-configure.log"
+          cmake --build build-static-simd/installed-consumer --config "$BUILD_TYPE" --parallel 2 \
+            2>&1 | tee "$LOG_ROOT/installed-build.log"
+      - name: Execute every installed consumer, including the real main.c SIMD path
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            export PATH="$(cygpath -u "$TURBOWASM_ROOT")/bin:$(cygpath -u "$SALTS_ROOT")/bin:$(cygpath -u "$CORE_SDK")/bin:$PATH"
+          elif [[ "$RUNNER_OS" == macOS ]]; then
+            export DYLD_LIBRARY_PATH="$TURBOWASM_ROOT/lib:$SALTS_ROOT/lib:$CORE_SDK/lib:${DYLD_LIBRARY_PATH:-}"
+          else
+            export LD_LIBRARY_PATH="$TURBOWASM_ROOT/lib:$SALTS_ROOT/lib:$CORE_SDK/lib:${LD_LIBRARY_PATH:-}"
+          fi
+          ctest --test-dir build-static-simd/installed-consumer -C "$BUILD_TYPE" \
+            --show-only=json-v1 > "$LOG_ROOT/installed-ctest.json"
+          python3 - <<'PY'
+          import json
+          import pathlib
+          graph = json.loads(pathlib.Path("build-static-simd/logs/installed-ctest.json").read_text())
+          selected = [test for test in graph["tests"]
+                      if test["name"] == "turbowasm_installed_consumer"]
+          if len(selected) != 1 or any(
+              prop["name"] == "DISABLED" and
+              str(prop["value"]).lower() in {"true", "on", "1", "yes"}
+              for prop in selected[0].get("properties", [])
+          ):
+              raise SystemExit("The real installed main.c consumer must be registered and enabled")
+          PY
+          {
+            ctest --test-dir build-static-simd/installed-consumer -C "$BUILD_TYPE" \
+              --no-tests=error --output-on-failure --timeout 120
+          } 2>&1 | tee "$LOG_ROOT/installed-simd-test.log"
+      - name: Record real compiler cache statistics
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$LOG_ROOT"
+          ccache --show-stats 2>&1 | tee "$LOG_ROOT/compiler-cache.log"
+      - name: Archive exact heads, build logs and CTest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-simd-${{ matrix.id }}-${{ env.TURBOWASM_SOURCE_SHA }}
+          path: |
+            build-static-simd/logs/
+            build-static-simd/*/CMakeCache.txt
+            build-static-simd/*/CMakeFiles/CMakeConfigureLog.yaml
+            build-static-simd/*/Testing/Temporary/
+          if-no-files-found: warn
+
+  static-simd-qualified:
+    name: Static SIMD qualification requires all four profiles
+    if: always()
+    needs: installed-static-simd
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require Linux, sanitizers, Windows and macOS success
+        shell: bash
+        env:
+          MATRIX_RESULT: ${{ needs.installed-static-simd.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$MATRIX_RESULT" != success ]]; then
+            echo "Static SIMD qualification is incomplete: every profile, including macOS, must succeed." >&2
+            exit 1
+          fi

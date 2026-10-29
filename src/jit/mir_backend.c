@@ -1456,19 +1456,19 @@ static uint8_t turbowasm_mir_simd_splat_scalar_type(
         return 0u;
 
     switch (descriptor->vector_desc->lane_kind) {
-        case CMETA_VECTOR_I8:
-        case CMETA_VECTOR_U8:
-        case CMETA_VECTOR_I16:
-        case CMETA_VECTOR_U16:
-        case CMETA_VECTOR_I32:
-        case CMETA_VECTOR_U32:
+        case SALTS_SIMD_LANE_I8:
+        case SALTS_SIMD_LANE_U8:
+        case SALTS_SIMD_LANE_I16:
+        case SALTS_SIMD_LANE_U16:
+        case SALTS_SIMD_LANE_I32:
+        case SALTS_SIMD_LANE_U32:
             return 0x7fu;
-        case CMETA_VECTOR_I64:
-        case CMETA_VECTOR_U64:
+        case SALTS_SIMD_LANE_I64:
+        case SALTS_SIMD_LANE_U64:
             return 0x7eu;
-        case CMETA_VECTOR_F32:
+        case SALTS_SIMD_LANE_F32:
             return 0x7du;
-        case CMETA_VECTOR_F64:
+        case SALTS_SIMD_LANE_F64:
             return 0x7cu;
         default:
             return 0u;
