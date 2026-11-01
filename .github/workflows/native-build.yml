@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: qigao/vcpkg-cache
-          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          ref: v0.1.0
           path: build/vcpkg-cache-contract
           persist-credentials: false
       # Archive one bounded local cache instead of uploading every object through
@@ -103,7 +103,7 @@ jobs:
               echo "TURBOWASM_GUEST_LLVM_ROOT=$guest_llvm_root" >> "$GITHUB_ENV"
             fi
           fi
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.0
         with:
           mode: read
           triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.triplet }}
