@@ -6,7 +6,9 @@
   "features": {
     "chttp-example": {
       "description": "Crypto package required by the optional installed Chttp SDK",
-      "dependencies": ["gmssl"]
+      "dependencies": [
+        "gmssl"
+      ]
     },
     "mir": {
       "description": "Optional MIR JIT backend",

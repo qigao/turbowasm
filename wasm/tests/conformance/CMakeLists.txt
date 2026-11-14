@@ -80,9 +80,16 @@ if(TURBOWASM_CORE3_TOOLS)
   return()
 endif()
 
+if(NOT TURBOWASM_WABT_ROOT)
+  message(FATAL_ERROR "Missing explicit SHA256-verified WABT host tool root")
+endif()
 find_program(_turbowasm_wast2json NAMES wast2json
-  PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_HOST_TRIPLET}/tools/wabt"
+  PATHS "${TURBOWASM_WABT_ROOT}/bin"
   NO_DEFAULT_PATH REQUIRED)
+if(NOT _turbowasm_wast2json OR
+   NOT EXISTS "${_turbowasm_wast2json}")
+  message(FATAL_ERROR "Pinned WABT wast2json host executable is missing")
+endif()
 
 add_test(NAME turbowasm_conformance_harness
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/run_core.py"

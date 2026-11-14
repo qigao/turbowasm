@@ -10,7 +10,6 @@ on:
       - "CMake*Presets.json"
       - "presets/**"
       - "vcpkg.json"
-      - "cmake/vcpkg-cache.nuget.config"
       - ".github/workflows/native-build.yml"
       - "cmake/TurboWasmConfig.cmake.in"
       - "cmake/ci/restore-salts-sdk.ps1"
