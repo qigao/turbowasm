@@ -1,7 +1,7 @@
 #ifndef METALLIC_THREAD_INTERNAL_H
 #define METALLIC_THREAD_INTERNAL_H
 #include <threads.h>
-#include "../../src/internal/thread_lock.h"
+#include "../../wasm/src/internal/thread_lock.h"
 
 enum { METALLIC_THREAD_CAPACITY = 32, METALLIC_TSS_CAPACITY = 128,
        METALLIC_THREAD_STACK_BYTES = 128 * 1024, METALLIC_THREAD_TLS_LIMIT = 64 * 1024 };

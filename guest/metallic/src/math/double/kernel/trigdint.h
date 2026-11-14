@@ -1,6 +1,6 @@
 /* Correctly-rounded double sin/cos/tan — accurate (128-bit Dint) path.
  *
- * Ported from metallic-rs (src/f64_/trig.rs).  Reached only on the Ziv
+ * Ported from metallic-rs (wasm/src/f64_/trig.rs).  Reached only on the Ziv
  * fallback: re-reduce x to a 128-bit reduced angle whose residual fraction is
  * read out *normalized* (full 128-bit relative precision even when x is very
  * near a multiple of pi/2, which the double-double path would lose), evaluate

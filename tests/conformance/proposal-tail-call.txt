@@ -1,3 +1,0 @@
-# WebAssembly tail-call proposal-specific core tests.
-return_call.wast
-return_call_indirect.wast

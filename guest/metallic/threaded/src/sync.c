@@ -1,4 +1,4 @@
-#include "../../src/wasi/wasi.h"
+#include "../../wasm/src/wasi/wasi.h"
 #include "internal.h"
 #include <limits.h>
 

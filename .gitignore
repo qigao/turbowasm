@@ -4,3 +4,5 @@
 /stage/
 /.codegraph/
 __pycache__/
+.env
+.openidea/

@@ -1,7 +1,7 @@
 /* C23 log10p1: log10(1 + x), correctly rounded.
  *
  * log2p1's structure with the base-10 constant (see log2p1.c); port of
- * metallic-rs `log10p1` (src/f64_/log.rs).  The exact cases
+ * metallic-rs `log10p1` (wasm/src/f64_/log.rs).  The exact cases
  * log10p1(10^n - 1) = n pass through the table leg's gate naturally. */
 
 #include "kernel/lncells.h"

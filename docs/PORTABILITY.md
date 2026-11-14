@@ -56,17 +56,17 @@ cross-build that intentionally disables:
 - WASI threads and WASI NativeIO;
 - littlefs;
 - command-line tools;
-- executable tests/conformance runners.
+- executable wasm/tests/conformance runners.
 
 It builds and installs `TurboWasm::Runtime`, `TurboWasm::WASI`, and
 `TurboWasm::WASIHostFS`, then cross-compiles installed-package consumers with
 the Android NDK. This is the canonical non-desktop, interpreter-first
 qualification. Android binaries are not executed on the Linux CI host.
 
-## Tools and tests are not Runtime requirements
+## Tools and wasm/tests are not Runtime requirements
 
-Developer tools and conformance tests may use host stdio/filesystem APIs such
-as `fopen`, and some tests contain explicit Win32/POSIX setup code. Those
+Developer tools and conformance wasm/tests may use host stdio/filesystem APIs such
+as `fopen`, and some wasm/tests contain explicit Win32/POSIX setup code. Those
 dependencies are outside the installed Runtime library and are disabled by the
 embedded Android profile.
 

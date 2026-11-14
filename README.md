@@ -47,7 +47,7 @@ The repository currently provides:
   reserving one worker per admitted child (the root runs outside that pool);
 - caller-owned Runtime allocation plus module/allocation/linear-memory/table
   resource limits for embedded deployments;
-- C/C++ public ABI tests;
+- C/C++ public ABI wasm/tests;
 - an installed CMake package, module-validation CLI and WASI command runner;
 - an optional local Metallic wasm32 guest SDK for C11 applications.
 
@@ -70,7 +70,7 @@ null and subtype checks; cross-instance tails switch owners after the native
 frame unwinds. Each instance/backend retains one execution owner,
 while distinct instances can import the same shared backing. Native MIR
 memory64 verification passed the Linux and macOS MIR test profiles; see the
-[qualification record](tests/conformance/README.md). Windows x64 uses the shared
+[qualification record](wasm/tests/conformance/README.md). Windows x64 uses the shared
 `mir-jit` port revision 3, and `ci-win-user` enables the MIR test graph.
 The Component Model host API is exposed separately
 through the optional `TurboWasm::Component` façade; it does not enter the
@@ -80,7 +80,7 @@ operations. MIR also lowers table.size, table.init, table.copy, elem.drop and
 table.get/set/grow/fill
 through Runtime for table32/table64, including mixed-width and imported tables.
 MIR lowers the complete GC instruction family through Runtime: struct/array
-construction and access, segment operations, casts/tests and cast branches,
+construction and access, segment operations, casts/wasm/tests and cast branches,
 external-reference conversions and i31. Constructor operands and intermediate
 references use the native frame's rooted value cells; store quotas and collection
 remain Runtime-owned. MIR also lowers typed exceptions with lexical catch
@@ -117,7 +117,7 @@ indirect ABI with aligned, checked memory access and a separate result pointer.
 The Component host API also exposes explicit async loading, bounded instances,
 task driving and cancellation, authenticated host-wait completion, typed
 future/stream endpoint moves, transfer results and cooperative shutdown.
-See [component.h](include/turbowasm/component.h) for the ownership/error contract
+See [component.h](wasm/include/component.h) for the ownership/error contract
 and [the async interface](ARCHITECTURE.md#public-async-c-interface) for examples.
 Async tasks and transfers consume owned leaves only through explicit move entry
 points; returned storage remains charged until actual destruction. Existing
@@ -139,7 +139,7 @@ does not introduce a platform vector calling convention or MIR vector registers.
 
 ## Core 3.0 and managed references
 
-The interpreter passes the complete pinned [Core 3.0 suite](tests/conformance/README.md):
+The interpreter passes the complete pinned [Core 3.0 suite](wasm/tests/conformance/README.md):
 258 files, 63970 binary commands, zero failures and zero unsupported commands.
 The 1229 text-syntax assertions are checked by wasm-tools and reported separately;
 TurboWasm itself accepts binary modules. This qualification does not imply full
@@ -160,10 +160,11 @@ borrow their original owner instances. All store operations use the owner thread
 shared-memory threads do not enable shared GC execution.
 
 See the complete, installed-package-tested [GC example](examples/gc.c) and
-[store API](include/turbowasm/store.h). It retains a struct across instance/module
-destruction and collection. To build the example independently, set
-`CMAKE_PREFIX_PATH` to the installed TurboWasm and Salts SDK roots when configuring
-`examples/CMakeLists.txt`.
+[store API](wasm/include/store.h). It retains a struct across instance/module
+destruction and collection. The existing `wasm/tests/installed_consumer` suite builds
+the example against the SDK selected by `TURBOWASM_ROOT`. The installed TurboWasm
+package resolves Salts only from `SALTS_ROOT`; it does not use a system SDK or
+require a `Salts_DIR` override.
 
 Store defaults are finite: 64 MiB of requested metadata/payload bytes, 65536
 objects, and 4096 root registrations (host roots plus active frames). Override
@@ -181,7 +182,7 @@ schema 1 artifacts from source.
 `TurboWasm::WASI02IO` supplies bounded shared stream/poll readiness.
 `TurboWasm::WASI02CNet` adds externally driven TCP, including connect/accept,
 portable addresses/options, reusable subscriptions, streams and half-close.
-Its public header is `<turbowasm/wasi02_cnet.h>`; the provider-neutral facade
+Its public header is `<wasi02_cnet.h>`; the provider-neutral facade
 and Runtime retain their existing dependency boundaries.
 
 Enable `TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND=ON` with a Salts SDK exporting
@@ -214,14 +215,14 @@ metadata and dropping a subscription does not cancel transport.
 
 The installed TCP consumer test performs real async WIT ping/pong through
 memory32 and memory64, plus IPv4/IPv6, backpressure, flush, inherited options,
-half-close and retained-carrier shutdown. UDP/DNS tests cover message boundaries,
+half-close and retained-carrier shutdown. UDP/DNS wasm/tests cover message boundaries,
 empty packets, ordered address results and retained subscriptions. See
 [the socket design](ARCHITECTURE.md#wasi-socket-backend-and-reusable-io-readiness).
 
 For branch SDK qualification, dispatch TurboWasm CI with `salts_ci_run` set to
 a successful Salts SDK preparation run. CI verifies the artifact's source
 commit, builds the full native matrix and runs the existing installed-package
-tests. The override selects the dependency only; native CI presets enable socket
+wasm/tests. The override selects the dependency only; native CI presets enable socket
 coverage for both prerequisite artifacts and ordinary published SDKs.
 Set `skip_windows=true` for an explicitly partial qualification of Linux,
 macOS and Android. In that mode, each prerequisite Salts platform job must
@@ -238,7 +239,7 @@ The existing file descriptor table also routes socket `fd_read`, `fd_write`
 and `fd_close`. These are memory32 Preview1 imports; native socket creation,
 bind, connect and DNS remain explicit host capabilities.
 
-Include `<turbowasm/wasi_sockets.h>` and opt in with
+Include `<wasi_sockets.h>` and opt in with
 `turbowasm_wasi_preview1_init_v2`. The old initializer remains available.
 The table is borrowed and must outlive WASI and every consumer instance.
 
@@ -263,7 +264,7 @@ the execution. One-shot invocation returns `AGAIN` when it would need to wait.
 `next_timeout` reports the next timer delay in nanoseconds, or `UINT64_MAX`.
 
 `TurboWasm::WASICNet` composes the existing CNet owner with Preview1; it adds
-no worker or backend observation loop. Include `<turbowasm/wasi_cnet.h>`,
+no worker or backend observation loop. Include `<wasi_cnet.h>`,
 create host TCP/UDP carriers through the existing CNet providers, then move
 them using `turbowasm_wasi_cnet_listener_move`, `tcp_move` or `udp_move`.
 The CNet adapter must have no published facade bindings or stream/poll/error
@@ -297,16 +298,16 @@ waits and releases staging. `shutdown_request` wakes calls with `INTR`;
 `destroy_checked`, close remaining fds and drain CNet's actual native terminals
 before destroying its owner, IO domain and backend.
 
-The executable tests in `tests/wasi_preview1_sockets_test.c` and
-`tests/wasi_preview1_cnet_test.c` use the checked-in Core fixture
-`tests/fixtures/wasi_preview1_sockets.wat`; the native test executes real IPv4
-and IPv6 TCP/UDP. The installed package runs the same public-API tests plus a
+The executable wasm/tests in `wasm/tests/wasi_preview1_sockets_test.c` and
+`wasm/tests/wasi_preview1_cnet_test.c` use the checked-in Core fixture
+`wasm/tests/fixtures/wasi_preview1_sockets.wat`; the native test executes real IPv4
+and IPv6 TCP/UDP. The installed package runs the same public-API wasm/tests plus a
 C++ consumer. MIR profiles attach a native backend to the fixture and verify
 that executed import wrappers compile.
 
 ## Native WASI 0.2 UDP and DNS
 
-Include `<turbowasm/wasi02_network.h>` for the complete provider-neutral
+Include `<wasi02_network.h>` for the complete provider-neutral
 `udp`, `udp-create-socket` and `ip-name-lookup@0.2.8` bundles. Existing TCP
 provider/config layouts remain unchanged. Versioned config helpers initialize
 finite defaults; zero facade capacities omit the corresponding capability.
@@ -351,7 +352,7 @@ changing the UDP association. A concurrency-conflict requires routing retained
 terminals before retrying. Closed poll aliases retain their original metadata
 and count against the configured pair capacity. Name streams return pending,
 ordered addresses, EOF or an exact resolver error; cancel/drop keeps in-flight
-c-ares storage until its real terminal. External DNS is unnecessary for tests.
+c-ares storage until its real terminal. External DNS is unnecessary for wasm/tests.
 
 CNet's [WebSocket API](../salts/cnet/include/cnet/websocket.h) remains available
 to hosts. WASI sockets 0.2.8 does not define a WebSocket interface.
@@ -392,11 +393,11 @@ consumers can include `${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuest.cmake` after
 compatible with the LTO archive used by that SDK.
 
 Guest code can call application host APIs grouped by module. The SDK installs
-`<turbowasm/import.h>` for explicit typed import declarations:
+`<import.h>` for explicit typed import declarations:
 
 ```c
 #include <stdint.h>
-#include <turbowasm/import.h>
+#include <import.h>
 
 TURBOWASM_IMPORT("app:clock/v1", "now_ns")
 int64_t app_clock_now_ns(void);
@@ -582,9 +583,9 @@ To cross-compile CMeta core from local Salts source, include
 `turbowasm_add_cmeta_guest_library(guest_cmeta /absolute/path/salts/cmeta)`.
 Pass that guest target in `LIBRARIES` and its `cmeta/include` directory in
 `INCLUDE_DIRECTORIES`. The source needs the Wasm C11 `aligned_alloc` path in
-`cmeta/src/data.c`. Set the parent environment variable
+`cmeta/wasm/src/data.c`. Set the parent environment variable
 `TURBOWASM_GUEST_CMETA_SOURCE_DIR` before configuring a Metallic user preset to
-enable the project's CMeta guest tests. This compiles portable core sources,
+enable the project's CMeta guest wasm/tests. This compiles portable core sources,
 excluding CMetaNative; host SDK archives cannot be linked into Wasm. Metadata,
 function pointers and object ownership stay within the guest instance.
 
@@ -617,15 +618,15 @@ The separate C11 threads profile is exercised by
 `turbowasm_guest_c11_threads_test`, including synchronization, TSS, allocation
 and shared Preview1 clock/args/environment/vector I/O. Clang supplies C11
 language support and `stdatomic.h`; Metallic supplies the guest C library.
-Compiled tests cover 8/16/32/64-bit integer atomics, pointer arithmetic, CAS,
+Compiled wasm/tests cover 8/16/32/64-bit integer atomics, pointer arithmetic, CAS,
 flags, fences and release/acquire publication with real guest workers. This
 does not qualify arbitrary aggregate or wider-than-64-bit atomics.
-Its libc tests also cover
+Its libc wasm/tests also cover
 per-stream byte/wide I/O serialization, close/reopen against flush-all, independent
 stream progress, exit callback registration, random state, signal handlers,
 thread-local string/calendar buffers and once-only preopen discovery. Filesystem
-callbacks in these libc tests are controlled providers; they do not establish
-concurrent HostFS support by themselves. Separate native filesystem tests cover
+callbacks in these libc wasm/tests are controlled providers; they do not establish
+concurrent HostFS support by themselves. Separate native filesystem wasm/tests cover
 table admission/close races, per-file vector I/O and directory cursor ordering,
 bounded HostFS slot reservation and rename/open exclusion. A separate compiled
 Metallic guest runs four C11 workers against production HostFS, covering create,
@@ -673,21 +674,21 @@ CI supplies LLVM 21 and also enables MIR and mixed-tier guest regression.
 macOS uses AppleClang for native SDK ABI compatibility and installs LLVM/linker 21
 separately for guest compilation. Both platforms run the installed consumer suite.
 
-The guest tests also cover restartable UTF-8/UTF-16/UTF-32 conversions: split
+The guest wasm/tests also cover restartable UTF-8/UTF-16/UTF-32 conversions: split
 sequences, independent implicit state, null-input semantics, surrogate pairing,
 invalid prefixes and bounded wide-string conversion. Numeric regression uses a
 64-bit bit-by-bit oracle for all 128 shift counts, integer conversion boundaries
 and fixed binary128 division results (including subnormal ties). These bounded
 checks do not replace the upstream complete math/oracle suite.
-Buffering tests cover visibility, positioning, normal/quick/immediate exit,
+Buffering wasm/tests cover visibility, positioning, normal/quick/immediate exit,
 buffer lifetime, allocation failure, and scripted short I/O/error recovery at
 the guest's WASI import boundary.
 
 ## Dependency boundary
 
 TurboWasm does not depend on SaltsUtils. The Preview1 ABI plan in
-`src/wasi_preview1_adapter_plan.h` is maintained with its CMeta declarations in
-`src/wasi_preview1.c`; `turbowasm_wasi_adapter_plan_test` checks every function
+`wasm/src/wasi_preview1_adapter_plan.h` is maintained with its CMeta declarations in
+`wasm/src/wasi_preview1.c`; `turbowasm_wasi_adapter_plan_test` checks every function
 and parameter against those declarations. The external DataBind generator and
 byte-for-byte regeneration check have been removed in favor of this existing
 semantic test. Remove `TURBOWASM_QUALIFY_WASI_ADAPTER_PLAN` and
@@ -794,7 +795,7 @@ hit/miss statistics in each job. This avoids the per-object GHA backend writes
 that failed during full-graph qualification. The compiler launcher comes from
 the CI environment through the user presets; ordinary local builds do not
 require sccache. vcpkg binary caching remains independent.
-For published Salts SDKs, including 2.2.0, the build and installed-package tests
+For published Salts SDKs, including 2.2.0, the build and installed-package wasm/tests
 normalize the imported `/experimental:c11atomics` option to MSVC's equivalent
 `-experimental:c11atomics` spelling. sccache 0.18.0 treats the unrecognized slash
 spelling as an input file, while retaining the dash spelling as an argument.
@@ -811,7 +812,7 @@ Commit `27d6efb` passes all five profiles in both the
 [cold build](https://github.com/qigao/turbowasm/actions/runs/37738464606) and
 [cache-restored build](https://github.com/qigao/turbowasm/actions/runs/37738955984),
 with zero cache write errors. Restored Linux and macOS MIR builds each record
-300 hits and one miss and pass 209/209 tests. Windows records 196 hits, zero
+300 hits and one miss and pass 209/209 wasm/tests. Windows records 196 hits, zero
 misses and 76 uncached calls; its cacheable-hit percentage excludes those calls.
 The same commit passes the four-platform
 [SDK build and packaging](https://github.com/qigao/turbowasm/actions/runs/37738470020).
@@ -821,7 +822,7 @@ After atomics-option normalization, commit `2efaf00` passes the
 and [four-platform SDK packaging](https://github.com/qigao/turbowasm/actions/runs/37740259898).
 Its [restored Windows CI](https://github.com/qigao/turbowasm/actions/runs/37740607137/job/113190251265)
 records 272 hits, zero misses, zero non-cacheable calls and zero cache write
-errors, passing 170 tests plus 16 installed-package tests. The
+errors, passing 170 wasm/tests plus 16 installed-package wasm/tests. The
 [restored Windows SDK build](https://github.com/qigao/turbowasm/actions/runs/37740611588/job/113190297701)
 records 56 hits and zero misses, non-cacheable calls or cache write errors.
 The hit percentages exclude other compiler requests: sccache separately reports

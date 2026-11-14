@@ -1,6 +1,6 @@
 /* tgamma(x) = Γ(x), correctly rounded (<= 0.5 ulp).
  *
- * Ported from metallic-rs (src/f64_/gamma.rs), adapted for WASM in
+ * Ported from metallic-rs (wasm/src/f64_/gamma.rs), adapted for WASM in
  * kernel/gamma.h (hot double-double products use Dekker splits — fma() is a
  * software call here; only the near-DBL_MAX sites keep fma() residuals).
  *

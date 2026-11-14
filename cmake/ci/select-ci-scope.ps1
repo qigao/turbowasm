@@ -21,18 +21,18 @@ if (-not $selected) {
         $changed = @(git diff --name-only --no-renames $range --)
     }
     if ($LASTEXITCODE -ne 0) { throw "Cannot determine changed files for $EventName" }
-    # Runtime, Component and their tests share implementation across all hosts.
+    # Runtime, Component and their wasm/tests share implementation across all hosts.
     # Only prose changes can omit the native graph; other changes qualify all five.
     $selected = @($changed | Where-Object { $_ -notmatch '\.(md|rst)$' }).Count -gt 0
 }
 
 # The platform and toolchain contract is shared by CI and SDK packaging.
 $profiles = @(
-    @{ id = 'linux-release'; family = 'linux'; runner = 'ubuntu-24.04'; rid = 'linux-x64'; triplet = 'x64-linux'; host_triplet = 'x64-linux'; preset = 'ci-linux-user'; sdk_preset = 'ci-sdk-user'; consumer = 'ci-user'; tests = $true; littlefs = $true },
-    @{ id = 'windows-release'; family = 'windows'; runner = 'windows-2025'; rid = 'windows-x64'; triplet = 'x64-windows'; host_triplet = 'x64-windows'; preset = 'ci-win-user'; sdk_preset = 'ci-win-sdk-user'; consumer = 'ci-win-user'; tests = $true },
+    @{ id = 'linux-release'; family = 'linux'; runner = 'ubuntu-24.04'; rid = 'linux-x64'; triplet = 'x64-linux'; host_triplet = 'x64-linux'; preset = 'ci-linux-user'; sdk_preset = 'ci-sdk-user'; consumer = 'ci-user'; wasm/tests = $true; littlefs = $true },
+    @{ id = 'windows-release'; family = 'windows'; runner = 'windows-2025'; rid = 'windows-x64'; triplet = 'x64-windows'; host_triplet = 'x64-windows'; preset = 'ci-win-user'; sdk_preset = 'ci-win-sdk-user'; consumer = 'ci-win-user'; wasm/tests = $true },
     @{ id = 'android-arm64-v8a-release'; family = 'android'; runner = 'ubuntu-24.04'; rid = 'android-arm64-v8a'; triplet = 'arm64-android'; host_triplet = 'x64-linux'; preset = 'ci-android-user'; sdk_preset = 'ci-android-sdk-user'; consumer = 'ci-android-user' },
-    @{ id = 'linux-mir-release'; family = 'linux'; runner = 'ubuntu-24.04'; rid = 'linux-x64'; triplet = 'x64-linux'; host_triplet = 'x64-linux'; preset = 'ci-mir-user'; tests = $true },
-    @{ id = 'macos-mir-release'; sdk_id = 'macos-release'; family = 'mac'; runner = 'macos-15'; rid = 'macos-arm64'; triplet = 'arm64-osx'; host_triplet = 'arm64-osx'; preset = 'ci-macos-mir-user'; sdk_preset = 'ci-sdk-user'; tests = $true }
+    @{ id = 'linux-mir-release'; family = 'linux'; runner = 'ubuntu-24.04'; rid = 'linux-x64'; triplet = 'x64-linux'; host_triplet = 'x64-linux'; preset = 'ci-mir-user'; wasm/tests = $true },
+    @{ id = 'macos-mir-release'; sdk_id = 'macos-release'; family = 'mac'; runner = 'macos-15'; rid = 'macos-arm64'; triplet = 'arm64-osx'; host_triplet = 'arm64-osx'; preset = 'ci-macos-mir-user'; sdk_preset = 'ci-sdk-user'; wasm/tests = $true }
 )
 $builds = @()
 if ($selected) {
@@ -53,7 +53,7 @@ if ($selected) {
         if ($Profile -eq 'sdk') {
             $entry.preset = $entry.sdk_preset
             if ($entry.ContainsKey('sdk_id')) { $entry.id = $entry.sdk_id }
-            foreach ($key in @('consumer', 'tests', 'littlefs')) { $entry.Remove($key) }
+            foreach ($key in @('consumer', 'wasm/tests', 'littlefs')) { $entry.Remove($key) }
             $entry.package = $true
         }
         $entry.Remove('sdk_preset'); $entry.Remove('sdk_id')

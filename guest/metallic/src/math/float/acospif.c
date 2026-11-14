@@ -1,6 +1,6 @@
 /* C23 acospif: acos(x)/pi, correctly rounded.
  *
- * Port of metallic-rs `acospif` (src/f32_/atan.rs): the one-step 16-cell
+ * Port of metallic-rs `acospif` (wasm/src/f32_/atan.rs): the one-step 16-cell
  * structure shared with asinpif -- acospi(x) = g*sqrt(1-|x|) for x >= 0,
  * folded about 1 below, and 1/2 - z*q(z^2) in the tiny cell.  Certified by
  * the exhaustive 2^32 sweep in the oracle suite. */

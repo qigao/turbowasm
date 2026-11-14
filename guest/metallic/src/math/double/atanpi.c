@@ -1,6 +1,6 @@
 /* C23 atanpi: atan(x)/pi, correctly rounded.
  *
- * Port of metallic-rs `atanpi` (src/f64_/atan.rs ~ line 1705), re-tailored
+ * Port of metallic-rs `atanpi` (wasm/src/f64_/atan.rs ~ line 1705), re-tailored
  * to lift this repo's certified atan engines by 1/pi (kernel/invpi.h): the
  * double-double atantab_atan_dd_ fast leg and the 128-bit atantab_atan_dint_
  * fallback each gain one 1/pi product before their Ziv gate.  The tiny band

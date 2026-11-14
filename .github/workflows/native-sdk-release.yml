@@ -15,8 +15,8 @@ on:
       - "cmake/TurboWasmConfig.cmake.in"
       - "cmake/ci/restore-salts-sdk.ps1"
       - "cmake/ci/select-ci-scope.ps1"
-      - "include/turbowasm/**"
-      - "src/**"
+      - "wasm/include/**"
+      - "wasm/src/**"
   push:
     tags: ["v*"]
   workflow_dispatch:
@@ -84,8 +84,8 @@ jobs:
           set -euxo pipefail
           for rid in linux-x64 windows-x64 macos-arm64 android-arm64-v8a; do
             test -f "package/sdk/$rid/lib/cmake/TurboWasm/TurboWasmConfig.cmake"
-            test -f "package/sdk/$rid/include/turbowasm/turbowasm.h"
-            test -f "package/sdk/$rid/include/turbowasm/component.h"
+            test -f "package/sdk/$rid/wasm/include/turbowasm.h"
+            test -f "package/sdk/$rid/wasm/include/component.h"
             grep -F "TurboWasm::Runtime" "package/sdk/$rid/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
             grep -F "TurboWasm::Component" "package/sdk/$rid/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
             ! grep -Eq "TurboWasm::(CFlow|NativeIO|WASI|WASI02)" "package/sdk/$rid/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
@@ -109,14 +109,14 @@ jobs:
             exit 1
           fi
           unzip -Z1 "$nupkg" | sort | tee "$RUNNER_TEMP/turbowasm-nupkg.txt"
-          grep -Fx "sdk/linux-x64/include/turbowasm/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
-          grep -Fx "sdk/linux-x64/include/turbowasm/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
-          grep -Fx "sdk/windows-x64/include/turbowasm/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
-          grep -Fx "sdk/windows-x64/include/turbowasm/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
-          grep -Fx "sdk/macos-arm64/include/turbowasm/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
-          grep -Fx "sdk/macos-arm64/include/turbowasm/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
-          grep -Fx "sdk/android-arm64-v8a/include/turbowasm/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
-          grep -Fx "sdk/android-arm64-v8a/include/turbowasm/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/linux-x64/wasm/include/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/linux-x64/wasm/include/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/windows-x64/wasm/include/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/windows-x64/wasm/include/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/macos-arm64/wasm/include/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/macos-arm64/wasm/include/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/android-arm64-v8a/wasm/include/turbowasm.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
+          grep -Fx "sdk/android-arm64-v8a/wasm/include/component.h" "$RUNNER_TEMP/turbowasm-nupkg.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: turbowasm-native-nuget

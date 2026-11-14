@@ -1,6 +1,6 @@
 /* C23 acospi: acos(x)/pi, correctly rounded.
  *
- * Port of metallic-rs `acospi` (src/f64_/atan.rs ~ line 1933), re-tailored
+ * Port of metallic-rs `acospi` (wasm/src/f64_/atan.rs ~ line 1933), re-tailored
  * to lift this repo's certified acos setup by 1/pi (kernel/invpi.h): the
  * double-double pi/2 -+ asin_dd_ leg gains one 1/pi product before its Ziv
  * gate.  acospi(1) = +0, acospi(-1) = 1, and acospi(0) = 1/2 exactly; no

@@ -1,6 +1,6 @@
 /* C23 exp10f: 10^x, correctly rounded.
  *
- * Port of metallic-rs `exp10f` (src/f32_/exp.rs): promote to double, one
+ * Port of metallic-rs `exp10f` (wasm/src/f32_/exp.rs): promote to double, one
  * Cody-Waite reduction x - n*log10(2) (the hi word has 15 trailing zero
  * significand bits, so n*hi is exact for |n| < 2^15 and the subtraction is
  * exact by Sterbenz -- no FMA needed), a degree-10 polynomial for 10^r on

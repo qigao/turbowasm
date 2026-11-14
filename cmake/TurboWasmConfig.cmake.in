@@ -1,8 +1,23 @@
 @PACKAGE_INIT@
 set(_turbowasm_package_prefix "${PACKAGE_PREFIX_DIR}")
 
-include(CMakeFindDependencyMacro)
-find_dependency(Salts CONFIG)
+if(NOT DEFINED ENV{SALTS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
+  set(TurboWasm_FOUND FALSE)
+  set(TurboWasm_NOT_FOUND_MESSAGE "SALTS_ROOT must name the installed Salts SDK")
+  return()
+endif()
+
+# Re-resolve the explicit root after invalidating CMake's previous result;
+# find_dependency may skip this lookup in a diamond dependency graph.
+unset(Salts_DIR CACHE)
+unset(Salts_DIR)
+find_package(Salts CONFIG QUIET PATHS "$ENV{SALTS_ROOT}"
+             NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+if(NOT Salts_FOUND)
+  set(TurboWasm_FOUND FALSE)
+  set(TurboWasm_NOT_FOUND_MESSAGE "Salts was not found in SALTS_ROOT: $ENV{SALTS_ROOT}")
+  return()
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/TurboWasmTargets.cmake")
 

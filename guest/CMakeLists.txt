@@ -16,7 +16,7 @@ endif()
 find_program(TURBOWASM_GUEST_CLANG NAMES clang REQUIRED)
 find_program(TURBOWASM_GUEST_AR NAMES llvm-ar REQUIRED)
 if(NOT IS_ABSOLUTE "${TURBOWASM_METALLIC_SOURCE_DIR}" OR
-   NOT EXISTS "${TURBOWASM_METALLIC_SOURCE_DIR}/src/crt/crt1.c" OR
+   NOT EXISTS "${TURBOWASM_METALLIC_SOURCE_DIR}/wasm/src/crt/crt1.c" OR
    NOT EXISTS "${TURBOWASM_METALLIC_SOURCE_DIR}/include/stdio.h" OR
    NOT EXISTS "${TURBOWASM_METALLIC_SOURCE_DIR}/LICENSE")
   message(FATAL_ERROR "TURBOWASM_METALLIC_SOURCE_DIR must point to a local Metallic source checkout")
@@ -25,7 +25,7 @@ set(metallic_source "${TURBOWASM_METALLIC_SOURCE_DIR}")
 set(TURBOWASM_GUEST_INCLUDE "${metallic_source}/include")
 include(${CMAKE_CURRENT_SOURCE_DIR}/TurboWasmGuest.cmake)
 # Match upstream's explicit two-depth source selection, restricted to vendor code.
-file(GLOB metallic_sources RELATIVE "${metallic_source}" "${metallic_source}/src/*/*.c" "${metallic_source}/src/*/*/*.c")
+file(GLOB metallic_sources RELATIVE "${metallic_source}" "${metallic_source}/wasm/src/*/*.c" "${metallic_source}/wasm/src/*/*/*.c")
 set(metallic_objects)
 set(metallic_variants single)
 if(TURBOWASM_BUILD_METALLIC_THREADS OR (TURBOWASM_BUILD_TESTS AND TARGET TurboWasm::WASIThreads))
@@ -40,12 +40,12 @@ if(variant STREQUAL "threaded")
   set(variant_directory thread-objects)
   set(variant_options -D__METALLIC_THREADS__=1 -matomics -pthread -ftls-model=local-exec
     -I "${metallic_source}/threaded/include")
-  list(APPEND variant_sources threaded/src/threads.c threaded/src/sync.c threaded/src/entry.S
-    threaded/src/stdio_lock.c threaded/src/crt.c)
+  list(APPEND variant_sources threaded/wasm/src/threads.c threaded/wasm/src/sync.c threaded/wasm/src/entry.S
+    threaded/wasm/src/stdio_lock.c threaded/wasm/src/crt.c)
 endif()
 foreach(source IN LISTS variant_sources)
   set(metallic_unit_options)
-  if(source MATCHES "^src/setjmp/")
+  if(source MATCHES "^wasm/src/setjmp/")
     # LLVM creates these helper declarations during late SJLJ lowering. Keep
     # their definitions outside that LTO module to avoid renamed duplicates.
     set(metallic_unit_options -fno-lto)
@@ -59,9 +59,9 @@ foreach(source IN LISTS variant_sources)
       -MMD -MF "${object}.d" -MT "${object}"
       -c "${metallic_source}/${source}" -o "${object}"
     DEPENDS "${metallic_source}/${source}" DEPFILE "${object}.d" VERBATIM)
-  if(source STREQUAL "src/crt/crt1.c")
+  if(source STREQUAL "wasm/src/crt/crt1.c")
     set(metallic_${variant}_crt "${object}")
-  elseif(source STREQUAL "src/crt/crt1-reactor.c")
+  elseif(source STREQUAL "wasm/src/crt/crt1-reactor.c")
     set(metallic_${variant}_reactor_crt "${object}")
   else()
     list(APPEND variant_objects "${object}")
@@ -172,7 +172,7 @@ if(TURBOWASM_BUILD_METALLIC_THREADS)
   endif()
 endif()
 if(TURBOWASM_BUILD_TESTS)
-  add_subdirectory(${PROJECT_SOURCE_DIR}/tests/guest ${CMAKE_CURRENT_BINARY_DIR}/tests)
+  add_subdirectory(${PROJECT_SOURCE_DIR}/wasm/tests/guest ${CMAKE_CURRENT_BINARY_DIR}/wasm/tests)
 endif()
 install(DIRECTORY "${metallic_source}/include/" DESTINATION share/turbowasm/guest/include)
 install(DIRECTORY include/ DESTINATION share/turbowasm/guest/include)

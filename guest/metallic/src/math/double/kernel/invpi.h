@@ -2,7 +2,7 @@
  * functions (atanpi, asinpi, acospi, atan2pi): the lift from this repo's
  * radian engines to half-turn results.
  *
- * Literals ported from metallic-rs src/f64_/atan.rs (INV_PI ~ line 491,
+ * Literals ported from metallic-rs wasm/src/f64_/atan.rs (INV_PI ~ line 491,
  * INV_PI_DINT ~ line 501, INV_PI_TINT ~ line 2473) and re-verified here
  * against an independent ~500-bit rational 1/pi (Machin series, exact
  * Fraction arithmetic): each is the round-to-nearest at its width. */

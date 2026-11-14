@@ -28,7 +28,7 @@ void __metallic_sig_ign(int);
 #define SIGSEGV 11
 #define SIGTERM 15
 
-/* Common POSIX extension. Not required by C11, but tests and many
+/* Common POSIX extension. Not required by C11, but wasm/tests and many
  * portable programs use it as a "safe" user-defined signal number.
  */
 #define SIGUSR1 10

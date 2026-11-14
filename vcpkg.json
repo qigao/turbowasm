@@ -15,7 +15,7 @@
       ]
     },
     "spec-tools": {
-      "description": "Host WABT tools for conformance tests",
+      "description": "Host WABT tools for conformance wasm/tests",
       "dependencies": [
         {
           "name": "wabt",

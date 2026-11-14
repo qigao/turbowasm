@@ -6,6 +6,59 @@
     "patch": 0
   },
   "include": [
-    "presets/ConfigurePresets.json"
+    "presets/ConfigurePresets.json",
+    "presets/BuildPresets.json",
+    "presets/TestPresets.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "native-runtime",
+      "hidden": true,
+      "environment": {
+        "PATH": "${sourceDir}/build/${presetName}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/$env{VCPKG_CONFIGURATION_SUBDIR}bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/bin${pathListSep}$env{SALTS_BASE_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/$env{VCPKG_CONFIGURATION_SUBDIR}lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/lib${pathListSep}$env{SALTS_BASE_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+      }
+    },
+    {
+      "name": "full-native",
+      "hidden": true,
+      "inherits": [
+        "ISNative",
+        "base",
+        "release-mode"
+      ],
+      "cacheVariables": {
+        "BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "full-native-asan-ubsan",
+      "hidden": true,
+      "inherits": [
+        "ISLinux",
+        "asan-ubsan-mode",
+        "full-native"
+      ]
+    },
+    {
+      "name": "full-native-tsan",
+      "hidden": true,
+      "inherits": [
+        "ISLinux",
+        "tsan-mode",
+        "full-native"
+      ]
+    },
+    {
+      "name": "android-release",
+      "hidden": true,
+      "inherits": [
+        "android-base",
+        "release-mode"
+      ],
+      "cacheVariables": {
+        "CMAKE_ANDROID_ARCH_ABI": "$env{SALTSCORE_ANDROID_ABI}"
+      }
+    }
   ]
 }

@@ -1,6 +1,6 @@
 /* C23 log2p1: log2(1 + x), correctly rounded.
  *
- * Port of metallic-rs `log2p1` (src/f64_/log.rs).  The band structure
+ * Port of metallic-rs `log2p1` (wasm/src/f64_/log.rs).  The band structure
  * mirrors log1p, every leg lifted by a double-double log2(e): the small and
  * mid series legs and the exact-split lean table leg keep their gates
  * scaled by the constant plus a relative 2^-101 floor for the product's

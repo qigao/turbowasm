@@ -1,6 +1,6 @@
 /* C23 atanpif: atan(x)/pi, correctly rounded.
  *
- * Port of metallic-rs `atanpif` (src/f32_/atan.rs): atanf's rational kernel
+ * Port of metallic-rs `atanpif` (wasm/src/f32_/atan.rs): atanf's rational kernel
  * scaled by 1/pi, with the |x| > 1 reflection folding into an exact +-1/2
  * (atanpi(+-inf) = +-1/2 falls out).  The kernel's double rounding cannot
  * steer a handful of f32 ties; the exhaustive 2^32 sweep pins those inputs

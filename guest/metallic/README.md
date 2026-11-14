@@ -26,7 +26,7 @@ WASI snapshot_preview1 directly.  Programs link it like any other library:
     clang --target=wasm32-unknown-unknown-wasm -nostdlib \
         -I include main.c metallic.a -o app.out
 
-Host I/O lives in [src/wasi/wasi.h](src/wasi/wasi.h), where each binding
+Host I/O lives in [wasm/src/wasi/wasi.h](wasm/src/wasi/wasi.h), where each binding
 carries the `import_module("wasi_snapshot_preview1")` attribute so the
 linker emits them as wasm imports without needing `--allow-undefined`.
 
@@ -52,7 +52,7 @@ host ownership and the `<metallic/threads.h>` close extension.
 library, while Clang supplies C11 language support and atomic code generation.
 The threaded profile enables `-matomics -pthread`, imports shared Wasm memory
 and uses actual Wasm atomic instructions. The default single-thread profile
-does not provide inter-thread synchronization. Compiled guest tests exercise
+does not provide inter-thread synchronization. Compiled guest wasm/tests exercise
 8/16/32/64-bit unsigned integer atomics, pointer arithmetic, compare-exchange,
 atomic flags, fences and release/acquire publication. This coverage does not
 claim arbitrary aggregate or wider-than-64-bit atomic support.
@@ -119,11 +119,11 @@ hammers the published hard-to-round cases plus a broad random sample. See
 
 ## Testing
 
-* `make check.native` — native tests (some pre-existing math accuracy failures
+* `make check.native` — native wasm/tests (some pre-existing math accuracy failures
   against the host libm).
-* `make check.wasm.fast` — wasm tests under `wasmtime`, excluding the 10
+* `make check.wasm.fast` — wasm wasm/tests under `wasmtime`, excluding the 10
   pre-existing soft-float/integer failures. CI runs this.
-* `make check.wasm` — full wasm suite including the known-broken tests.
+* `make check.wasm` — full wasm suite including the known-broken wasm/tests.
 * `make check.oracle.long-double` — compare the selected binary128 functions
   against CORE-MATH's complete worst-case corpora (requires Clang, quadmath,
   and a CORE-MATH checkout).

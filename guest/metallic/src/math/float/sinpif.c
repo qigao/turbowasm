@@ -1,6 +1,6 @@
 /* C23 sinpif: sin(pi x), correctly rounded.
  *
- * Port of metallic-rs `sinpif` (src/f32_/trig.rs) -- CORE-MATH cr_sinpif's
+ * Port of metallic-rs `sinpif` (wasm/src/f32_/trig.rs) -- CORE-MATH cr_sinpif's
  * structure with metallic-rs's own Taylor residuals: an integer reduction of
  * the signed mantissa yields the 1/64-half-turn grid index and the exact
  * fixed-point residual, one 128-entry signed table covers the full circle

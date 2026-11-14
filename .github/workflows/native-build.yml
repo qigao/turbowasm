@@ -203,12 +203,12 @@ jobs:
           if errorlevel 1 exit /b 1
           cmake --build --preset "install-${{ matrix.preset }}" --parallel 2
           if errorlevel 1 exit /b 1
-      - name: Run Unix tests
-        if: matrix.tests && runner.os != 'Windows'
+      - name: Run Unix wasm/tests
+        if: matrix.wasm/tests && runner.os != 'Windows'
         shell: bash
         run: ctest --preset '${{ matrix.preset }}'
-      - name: Run Windows tests
-        if: matrix.tests && runner.os == 'Windows'
+      - name: Run Windows wasm/tests
+        if: matrix.wasm/tests && runner.os == 'Windows'
         shell: cmd
         run: |
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
@@ -216,9 +216,9 @@ jobs:
           set "VCPKG_ROOT=%TURBOWASM_VCPKG_ROOT%"
           ctest --preset "${{ matrix.preset }}"
           if errorlevel 1 exit /b 1
-      - name: Build existing installed-package tests on Unix
+      - name: Build existing installed-package wasm/tests on Unix
         if: matrix.consumer && runner.os != 'Windows'
-        working-directory: tests/installed_consumer
+        working-directory: wasm/tests/installed_consumer
         shell: bash
         env:
           TURBOWASM_ROOT: ${{ github.workspace }}/stage/sdk/${{ matrix.rid }}
@@ -226,12 +226,12 @@ jobs:
           set -euo pipefail
           cmake --preset '${{ matrix.consumer }}'
           cmake --build --preset '${{ matrix.consumer }}' --parallel 2
-          if [ '${{ matrix.tests }}' = true ]; then
+          if [ '${{ matrix.wasm/tests }}' = true ]; then
             ctest --preset '${{ matrix.consumer }}'
           fi
-      - name: Run existing installed-package tests on Windows
+      - name: Run existing installed-package wasm/tests on Windows
         if: matrix.consumer && runner.os == 'Windows'
-        working-directory: tests/installed_consumer
+        working-directory: wasm/tests/installed_consumer
         shell: cmd
         env:
           TURBOWASM_ROOT: ${{ github.workspace }}/stage/sdk/${{ matrix.rid }}

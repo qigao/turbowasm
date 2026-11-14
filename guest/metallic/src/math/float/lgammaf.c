@@ -48,7 +48,7 @@ static double lgamma_poly_eval_(double x, const double *c, int n)
 }
 
 /* Fast-path helpers ported verbatim from CORE-MATH (MIT license,
- * Copyright (c) 2023-2025 Alexei Sibidanov), src/binary32/lgamma/lgammaf.c
+ * Copyright (c) 2023-2025 Alexei Sibidanov), wasm/src/binary32/lgamma/lgammaf.c
  * (as_sinpi / as_ln).  Plain f64, ~2^-43 relative error -- far inside the
  * 2^-36 Ziv gate envelope -- and no calls into the expensive double-double
  * log/sin kernels. */

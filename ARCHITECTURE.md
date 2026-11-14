@@ -142,7 +142,7 @@ exponentially with arity and does not solve mixed types or future reference
 carriers. The array boundary adds scalar loads at function entry. Regression
 coverage checks mixed memory64 addresses/float payloads, more than two integer
 parameters, NaN payloads, negative zero, input immutability and trap parity;
-MIR tests require a compiled handle. Removing this boundary requires reverting
+MIR wasm/tests require a compiled handle. Removing this boundary requires reverting
 entry emission, invocation and admission together, never only the scanner.
 
 ### MIR scalar result boundary
@@ -363,7 +363,7 @@ interpreted behavior remains the compatibility baseline.
 Native `throw`, `throw_ref` and `try_table` share Runtime exception objects,
 resolved tag identities and the instance's pending-exception state. A private
 throw adapter creates the same payload representation as the interpreter. A
-catch adapter tests clauses in binary order and commits a matched payload into
+catch adapter wasm/tests clauses in binary order and commits a matched payload into
 the invocation's rooted scratch before clearing the pending exception. No public
 ABI, exception ownership or cross-instance propagation contract changes.
 
@@ -1239,7 +1239,7 @@ boundary and the same generative resource view, not expose private imports or
 replace missing providers with successful stubs. WASI-specific constructors must
 eventually compose their capability owners with the async options/lifecycle.
 
-The joined declarations are in `include/turbowasm/component.h`; adapters reuse
+The joined declarations are in `wasm/include/component.h`; adapters reuse
 the private owner bodies. Windows ASan qualification passes the formal host
 task, argument/result and options/adapter targets, including actual memory32/64
 guest echoes of mixed string/own/future values, detached-string charging, typed
@@ -1249,20 +1249,20 @@ returned allocations charged until destruction. Async tasks use the transfer
 type predicate; synchronous calls retain their existing type gate. A composite
 transfer test exposed stale admission references after result promotion; payload
 handoff now retires those references before the canonical cells can be freed.
-Public wait/shutdown suspension tests exercise actual imported I/O, stale
-continuations and delayed destructor failure. The installed C/C++ tests pass
+Public wait/shutdown suspension wasm/tests exercise actual imported I/O, stale
+continuations and delayed destructor failure. The installed C/C++ wasm/tests pass
 16/16 and exercise public typed endpoint round trips, tasks, transfer batches,
 shutdown and C++ linkage/layout. Commit `86561c4` passes all five
 [native CI profiles](https://github.com/qigao/turbowasm/actions/runs/37764949070):
-Windows 172/172 plus 16 installed tests, Linux MIR 213/213 in 3.30 s and macOS
+Windows 172/172 plus 16 installed wasm/tests, Linux MIR 213/213 in 3.30 s and macOS
 MIR 213/213 in 3.67 s. Android builds the full configured graph and installed
 consumers without a host execution claim. This qualifies the installed host
 surface; nested providers and WASI-specific async constructors remain separate.
 Commit `407bb4e` also passes all five
 [native CI profiles](https://github.com/qigao/turbowasm/actions/runs/37765881571),
 including the synchronous-result quota fix: Windows 172/172 in 2.58 s plus
-16 installed tests in 0.14 s, Linux MIR 213/213 in 3.31 s and macOS MIR 213/213
-in 3.98 s. Local Windows ASan passes 172 regular tests and both pinned Core 3
+16 installed wasm/tests in 0.14 s, Linux MIR 213/213 in 3.31 s and macOS MIR 213/213
+in 3.98 s. Local Windows ASan passes 172 regular wasm/tests and both pinned Core 3
 conformance suites; installed consumers pass 16/16. The final focused suites
 pass 107 host-task, 26 options/adapter, 58 argument/result and 11 shutdown-wait
 cases, covering exact synchronous composite byte limits and detached storage.
@@ -1278,8 +1278,8 @@ transfer and public instance-handle release while remaining charged; returning o
 destroying a prefix/tail must drop each owned leaf once. Exercise shutdown with
 guest destructor fuel/I/O suspension and outstanding host results. Qualify the
 same behavior under interpreted execution, Windows ASan and Linux/macOS MIR,
-then run existing installed C/C++ consumer tests against the actual new public
-surface. Green private-owner tests alone do not open the loader gate.
+then run existing installed C/C++ consumer wasm/tests against the actual new public
+surface. Green private-owner wasm/tests alone do not open the loader gate.
 
 ### Internal adapters and qualification history
 
@@ -1345,7 +1345,7 @@ owner cases (65,152 assertions); related Component/WASI/Runtime regression passe
 and callbacks. Commit `70293a3` passes all five
 [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37752379838)
 with restored Salts 3.0.0: Linux MIR 213/213 in 1.88 s, macOS MIR 213/213 in
-4.09 s, and Windows 172 main tests in 3.20 s plus 16 installed-package tests in
+4.09 s, and Windows 172 main wasm/tests in 3.20 s plus 16 installed-package wasm/tests in
 0.20 s. This qualifies task/host-owner wait authentication, including real
 compiled callback suspension before the joined public surface was installed.
 
@@ -1404,8 +1404,8 @@ related Component/WASI/Runtime regression passes 88/88 in 10.67 s.
 Commit `89fa006` passes all five
 [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37748449762)
 with the newly published Salts 3.0.0 SDK: Linux MIR 213/213 in 1.96 s,
-macOS MIR 213/213 in 4.03 s, and Windows 172 tests plus 16 installed-package
-tests. The MIR suites include actual compiled task-body assertions. The new
+macOS MIR 213/213 in 4.03 s, and Windows 172 wasm/tests plus 16 installed-package
+wasm/tests. The MIR suites include actual compiled task-body assertions. The new
 address assertions explicitly use TinyTest's `const void *` trait on every
 compiler; they do not rely on implicit pointer-to-integer conversion.
 This supplies transactional endpoint ownership for the remaining whole-tree
@@ -1449,7 +1449,7 @@ overflow, cyclic inputs, instance retention, own/borrow rollback and publication
 destructor failure, and every snapshot allocation failure. Windows ASan passes
 17 cases and 11,831 assertions; the related Component/WASI/Runtime graph passes
 85/85 in 7.84 s. Public task/endpoint integration remains a separate step;
-these initial snapshot tests do not claim an available public async execution API.
+these initial snapshot wasm/tests do not claim an available public async execution API.
 Commit `19b5dde` passed all five
 [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37718126233):
 Linux MIR 206/206 in 2.52 s and macOS MIR 206/206 in 2.51 s, including the
@@ -1829,7 +1829,7 @@ Runtime allocation failure. The Windows ASan task suite passes 64 cases and
 (170/170 including both Core 3 conformance suites, 232.09 s) and all five
 [native CI jobs](https://github.com/qigao/turbowasm/actions/runs/37713987970).
 Linux MIR passed 205/205 in 2.94 s and macOS MIR 205/205 in 2.78 s, including
-the same host-task tests with nested Core calls compiled by MIR.
+the same host-task wasm/tests with nested Core calls compiled by MIR.
 
 Private async canonical calls can target these host entries directly. Argument
 preparation lifts caller memory into retained canonical values without allocating
@@ -1914,7 +1914,7 @@ functions, so internal parsing cannot accidentally expose partial execution.
 Option syntax, duplicate/conflict rules and index bounds belong to decoding;
 actual Core callback/realloc signatures and runtime capabilities belong to
 instantiation. This temporary private gate is removed only with complete async
-task, canonical builtin and lifetime integration, followed by end-to-end tests.
+task, canonical builtin and lifetime integration, followed by end-to-end wasm/tests.
 
 The private decoder also owns async canonical builtin descriptors in the existing
 Runtime-budgeted metadata arrays. Each successful definition consumes one Core
@@ -1996,7 +1996,7 @@ cancel returns BLOCKED when acknowledgement is pending. A ready callee callback
 runs one eager quantum with the initiating Core caller's remaining fuel and
 interrupt check, charging fuel back before returning. Subsequent scheduling uses
 the callee's own resumable execution and never retains the caller's control
-pointer. These tests exercise the internal ownership adapter; automatic canonical
+pointer. These wasm/tests exercise the internal ownership adapter; automatic canonical
 argument/result wiring and retained public Component owners remain gated work.
 
 Async argument preparation must execute inside the callee's retained Core
@@ -2711,7 +2711,7 @@ provider layout remains unchanged. Generic sources use
 available. Stream/splice and connect/accept publication reserve facade result
 storage and canonical handles before consuming provider results.
 
-Real loopback tests exercise IPv4/IPv6, inherited listener options, repeated
+Real loopback wasm/tests exercise IPv4/IPv6, inherited listener options, repeated
 subscriptions, bounded transfer/flush, immediate half-close, detached streams
 and shutdown with retained carriers. Pinned Component fixtures exercise WIT
 connect, wait, finish-connect, write, blocking-read and cleanup through memory32
@@ -2734,16 +2734,16 @@ not aliases added to this implementation.
 
 ### Evidence and dependency boundary
 
-At the design baseline, `include/turbowasm/wasi02_sockets.h` described TCP
-providers. `src/wasi02_sockets.c` implements the typed state machine, connects
+At the design baseline, `wasm/include/wasi02_sockets.h` described TCP
+providers. `wasm/src/wasi02_sockets.c` implements the typed state machine, connects
 successful connect/accept results to the existing stream resource table, and
-rejects absent provider methods. `tests/wasi02_tcp_state_test.c` qualifies that
-contract with a fake provider. The concrete provider in `src/wasi02_cnet.c`
+rejects absent provider methods. `wasm/tests/wasi02_tcp_state_test.c` qualifies that
+contract with a fake provider. The concrete provider in `wasm/src/wasi02_cnet.c`
 then supplied create/bind/listen/options only;
-`tests/wasi02_cnet_control_test.c` explicitly checks that connect, accept,
+`wasm/tests/wasi02_cnet_control_test.c` explicitly checks that connect, accept,
 remote-address, subscribe and shutdown callbacks remain absent.
 
-`src/wasi02_poll_native_io.c` records readiness for one terminal NativeIO
+`wasm/src/wasi02_poll_native_io.c` records readiness for one terminal NativeIO
 request. That contract remains useful for completion-bound sources, but cannot
 represent a socket subscription reused across bind/connect/listen operations.
 At that baseline the installed WASI02 facade selected only the synchronous exec
@@ -2757,7 +2757,7 @@ SDK version. Configure must compile/link-check the required public symbols
 against the actual selected SDK; do not access CNet internals or provide an
 alternate raw-socket implementation when a capability is missing.
 
-At the design baseline, Salts' `cnet/src/cnet_resolver.h` was private and yielded
+At the design baseline, Salts' `cnet/wasm/src/cnet_resolver.h` was private and yielded
 one selected native address; the public UDP API lacked an unbound/configurable
 WASI socket contract. The prerequisite branch now adds `cnet/name_lookup.h`
 and versioned datagram controls. Configure checks these actual installed SDK
@@ -3132,7 +3132,7 @@ limits explicitly instead of silently truncating the address list. A resolved
 result already accepted for delivery wins a later cancellation; otherwise keep
 the query slot and callback context until cancellation is terminal. DNS deadlines
 join the same host drive loop. Numeric fixtures and an injected resolver make
-tests deterministic; external Internet/DNS availability is not a CI prerequisite.
+wasm/tests deterministic; external Internet/DNS availability is not a CI prerequisite.
 
 ### Alternatives, compatibility and delivery gates
 
@@ -3155,7 +3155,7 @@ Already approved Component async ownership remains in force.
 
 | Gate | Complete implementation required before promotion | Qualification |
 | --- | --- | --- |
-| A: shared readiness | Source/domain tokens, wrapped stream/error owners, mixed wait-any, precise cancellation and retirement | Existing poll/stream tests plus reusable subscription, mixed source, duplicate/stale token, quota, reentry and OOM rollback cases |
+| A: shared readiness | Source/domain tokens, wrapped stream/error owners, mixed wait-any, precise cancellation and retirement | Existing poll/stream wasm/tests plus reusable subscription, mixed source, duplicate/stale token, quota, reentry and OOM rollback cases |
 | B: native TCP | Every installed TCP provider method, real connect/accept/read/write/flush/half-close, async WASI02 constructor, installed IO/CNet targets | IPv4/IPv6 loopback client/server Component fixtures, options inheritance, memory32/64, pause/backpressure, partial sends, delayed cancellation and detached resource lifetime |
 | C: native UDP | Salts prerequisites, all stable UDP descriptors/providers/resources and publication paths | Empty and oversized messages, connected/unconnected peers, replacement, ordered partial batches, saturation, cancellation and loopback fixtures |
 | D: name lookup | Public Salts resolver contract, stable lookup descriptors/provider, IDNA and bounded ordered result stream | Numeric IPv4/IPv6, Unicode/invalid names, multiple results, deterministic failures/timeouts, source reuse and terminal cancellation |
@@ -3166,10 +3166,10 @@ the native owner. Include failed canonical result allocation after native accept
 read-result preallocation failure before consumption, one-shot wait rejection,
 every destroy order,
 generation exhaustion and whole-domain teardown. Add existing installed C/C++
-consumer tests for the new targets and full public async socket round trips.
+consumer wasm/tests for the new targets and full public async socket round trips.
 Run the configured CTest graph on Windows/Linux/macOS, ASan locally, and MIR
 execution fixtures on Linux/macOS. Android qualification is build/install until
-a runtime runner exists. CI builds the complete configured graph and runs tests
+a runtime runner exists. CI builds the complete configured graph and runs wasm/tests
 through CTest. No gate is advertised through placeholder methods.
 
 Before publication, the build options can keep new gates private. After a gate
@@ -3238,8 +3238,8 @@ and CI orchestration. Native CI and packaging share one workflow, while SDK
 packaging retains its Runtime + Component scope. vcpkg owns optional MIR/WABT
 dependencies; first-party SDKs are resolved only through explicit roots.
 
-Validation covers the existing runtime/SIMD/threads/filesystem tests, C++ public
-headers, installed-package tests, and CI conformance suites. Windows, Linux,
+Validation covers the existing runtime/SIMD/threads/filesystem wasm/tests, C++ public
+headers, installed-package wasm/tests, and CI conformance suites. Windows, Linux,
 macOS and Android keep distinct profiles. Rollback requires reverting the API
 and build migration together and selecting the matching earlier SDK; there is
 no automatic dependency downgrade.
@@ -3262,7 +3262,7 @@ Core 3.0 includes recursive type groups, declared subtyping, GC structures and
 arrays, typed function references, and 64-bit table addresses. Function-only
 types and instance-owned borrowed references could not express this contract;
 the implemented composite types and store/root boundary extend them. The normative baseline is the
-[Core 3.0 specification](https://webassembly.github.io/spec/core/), with tests
+[Core 3.0 specification](https://webassembly.github.io/spec/core/), with wasm/tests
 from the `wg-3.0` tag (`9d36019973201a19f9c9ebb0f10828b2fe2374aa`).
 The pinned suite qualifies 63970 binary commands in 258 files with zero failures
 and zero unsupported commands. Another 1229 text-syntax checks belong to the
@@ -3324,7 +3324,7 @@ instance/execution boundaries with fewer hidden lifetime rules. Its cost is
 stop-the-world collection and a new public ownership contract. MIR may continue
 using its documented interpreter admission path for unsupported functions;
 native GC lowering uses the invocation root source described above, qualified by
-collection/quota/failure tests and complete Core 3.0 differential replay.
+collection/quota/failure wasm/tests and complete Core 3.0 differential replay.
 
 Migration is ordered: strict upstream reporting, reference/control validation,
 canonical recursive types, store/root lifecycle, GC execution and constants,
@@ -3374,7 +3374,7 @@ address-space limit, not the width of a guest address. Validation covers
 address typing, high offsets, arithmetic overflow, atomic alignment, growth
 failure, imported backing, waits, and native/interpreter equivalence. Rollback
 can restore feature admission without migrating stored data. Native regression
-tests require compiled handles for both memory widths, concurrent imported atomic
+wasm/tests require compiled handles for both memory widths, concurrent imported atomic
 increments, wait/notify across growth, alignment/bounds traps, interruption and
 all atomic descriptor families. The semantics reference is the
 [WebAssembly Threads execution specification](https://webassembly.github.io/threads/core/exec/instructions.html).
@@ -3443,11 +3443,11 @@ persisted guest data.
 At revision `15730ef`, [native socket CI](https://github.com/qigao/turbowasm/actions/runs/37807592953)
 used Salts prerequisite revision `9cf0af75` from
 [SDK preparation](https://github.com/qigao/salts/actions/runs/37805023643).
-Linux passed 177 runtime tests and 21 installed-package tests; Linux MIR and
-macOS MIR each reported 217 tests with no failures, including the native UDP/DNS
+Linux passed 177 runtime wasm/tests and 21 installed-package wasm/tests; Linux MIR and
+macOS MIR each reported 217 wasm/tests with no failures, including the native UDP/DNS
 and memory32/memory64 Component fixtures. Android completed the runtime and
 installed-consumer builds. Windows CI was explicitly omitted; the latest local
-Windows ASAN runtime/conformance regression passed 178 tests. This qualifies
+Windows ASAN runtime/conformance regression passed 178 wasm/tests. This qualifies
 the new socket backend with the prerequisite SDK, not the published Salts SDK.
 
 References: [WASI UDP 0.2.8](https://github.com/WebAssembly/wasi-sockets/blob/v0.2.8/wit/udp.wit),
@@ -3485,7 +3485,7 @@ or create a second Unicode implementation, so neither is selected.
 Qualification must cover all four separators with ignored suffixes, ordinary
 relative names with ignored suffixes, repeated/interior empty labels, root-only
 names, malformed UTF-8, contextual/Bidi failures, maximal DNS lengths and output
-capacity failures. Upstream tests must also prove STRICT still rejects final
+capacity failures. Upstream wasm/tests must also prove STRICT still rejects final
 dots and all errors leave output unchanged. TurboWasm reuses its public network
 and installed-consumer suites. Migration waits for the upstream SDK; rollback
 reverts profile selection and retains the documented rc.2 edge-case limitation.
@@ -3666,15 +3666,15 @@ Existing Preview1 users keep their initializer/configuration and fd policies.
 New consumers rebuild to use the versioned socket config and per-descriptor
 binding. No native handle or persistent data format is changed. Generated CMeta
 adapter metadata retains existing ordinals and appends the admitted standard
-imports; metadata, linker signatures and executable tests share the existing
+imports; metadata, linker signatures and executable wasm/tests share the existing
 manifest/generator path rather than a second signature table.
 
 Qualification covers mixed file/socket fd allocation, rights reduction,
 fdstat/nonblocking flags, accept capacity/OOM rollback, stale generations and
-close during waits. Real IPv4/IPv6 TCP tests exercise vectored short transfers,
-PEEK, WAITALL, EOF, half-close and inherited accept rights. UDP tests exercise
+close during waits. Real IPv4/IPv6 TCP wasm/tests exercise vectored short transfers,
+PEEK, WAITALL, EOF, half-close and inherited accept rights. UDP wasm/tests exercise
 empty messages, PEEK, exact message boundaries and truncation. Mixed clock/fd
-poll tests cover duplicates, terminal errors, relative/absolute deadlines,
+poll wasm/tests cover duplicates, terminal errors, relative/absolute deadlines,
 cancellation, source retirement, guest memory growth and no premature storage
 reuse. Add formal installed C/C++ consumers and execute Core guest fixtures
 under interpreter and MIR. Continue Linux/macOS execution and Android
@@ -3685,8 +3685,8 @@ old Preview1 API and completed WASI 0.2 socket gates.
 
 ### Preview1 implementation and qualification boundary
 
-The standard imports are implemented in `src/wasi_preview1_sockets.inc`, with
-one canonical CMeta manifest in `src/wasi_preview1.c`. `wasi_fs.c` owns copied
+The standard imports are implemented in `wasm/src/wasi_preview1_sockets.inc`, with
+one canonical CMeta manifest in `wasm/src/wasi_preview1.c`. `wasi_fs.c` owns copied
 per-descriptor providers, rights, flags, reservations, claims and retained
 identities. `wasi_cnet.inc` projects the existing TCP/UDP owners without linking
 back to the WASI facade. `TurboWasm::WASICNet` is an installed composition target.
@@ -3721,7 +3721,7 @@ commit `9cf0af7504f32ea0773830e93dfdbd10e4c15ef1`; Windows CI was explicitly
 skipped. Qualification results:
 
 - Linux Release: 179 CTest entries passed, followed by 24 installed C/C++
-  consumer tests, including the public-only descriptor, real CNet and C++ tests.
+  consumer wasm/tests, including the public-only descriptor, real CNet and C++ wasm/tests.
 - Linux MIR and macOS MIR Release: each CTest graph completed with 221 entries
   and no failures. Both new MIR variants passed; the fixtures assert that
   executed guest wrappers reached compiled MIR state.
@@ -3730,11 +3730,11 @@ skipped. Qualification results:
 - Local Windows ASAN: `ctest --preset win-core3-asan-user --output-on-failure`
   passed all 180 entries, including both pinned Core 3 conformance suites.
   The installed ASAN consumer graph passed all 23 entries using the
-  `ci-win-user` configure/build/test presets in `tests/installed_consumer`.
+  `ci-win-user` configure/build/test presets in `wasm/tests/installed_consumer`.
 
-The socket tests exercise actual IPv4/IPv6 TCP and connected UDP, cancellation,
+The socket wasm/tests exercise actual IPv4/IPv6 TCP and connected UDP, cancellation,
 partial receive, PEEK/WAITALL, truncation, empty datagrams, FIN and descriptor
-ownership. Descriptor tests cover rights reduction, accepted-child rights,
+ownership. Descriptor wasm/tests cover rights reduction, accepted-child rights,
 guest-memory validation and growth during suspension, clocks, duplicate poll
 subscriptions, capacity exhaustion, close and shutdown.
 
@@ -3742,7 +3742,7 @@ Integration with the `master` CNet substrate from #413/#414 preserves its
 single-owner external progress and terminal listener-drain contracts through the
 completed public CNet/IO API. The early private initializer and polling entry
 points are superseded by the public IO domain, reusable pollables and explicit
-shutdown API; their regression tests now exercise those public entry points.
+shutdown API; their regression wasm/tests now exercise those public entry points.
 A separate listen-ready state keeps a completed start-listen ready until
 finish-listen consumes it, before accept readiness takes over. Repeated advance
 does not submit duplicate accepts, and cancellation cannot reuse the physical
@@ -3757,7 +3757,7 @@ The approved first three stages add an optional wasm32 guest SDK and a separate
 with a local source override through `TURBOWASM_METALLIC_SOURCE_DIR`; its headers and allocator run inside
 guest linear memory. Salts remains a native host dependency, never a guest libc.
 Configuration does not fetch, copy or patch the sources. Libc fixes are maintained
-in the local source tree and the C guest tests qualify its behavior.
+in the local source tree and the C guest wasm/tests qualify its behavior.
 The initial audit used upstream `66ea0f480a16a9341be94ed4e66be28b3c3802d5`.
 LLVM produces LTO objects in a conventional
 archive, with the command CRT linked explicitly. This avoids requiring
@@ -3795,7 +3795,7 @@ threads, general locale/fenv behavior and upstream long-double
 soft-float gaps remain outside these stages.
 
 Validation uses compiled C guests through the real runner and formal filesystem
-tests, including exit order, allocation limits, args/environment, rename,
+wasm/tests, including exit order, allocation limits, args/environment, rename,
 append, temporary files and clock conversion. The dependency and profile are
 optional; disabling the guest build restores the native-only build graph.
 Reverting the provider extension requires rebuilding native consumers.
@@ -4011,11 +4011,11 @@ isolation, destructor iterations, contended allocation/I/O and terminal wakeup.
 Rollback disables the optional profile; existing guest artifacts do not relink
 to its ABI implicitly.
 
-The owned host pool is implemented. The private `tests/guest/thread_abi.c`
+The owned host pool is implemented. The private `wasm/tests/guest/thread_abi.c`
 qualification uses fixed per-child stacks/TLS and compiler-generated shared
 initialization; it does not install a partial C11 threads library. LLVM 21 emits
 a `__wasm_init_memory` start function with an atomic once guard, passive data
-segments and a per-instance `__tls_base`. The tests verify repeated siblings
+segments and a per-instance `__tls_base`. The wasm/tests verify repeated siblings
 preserve initialized and zero-filled data after mutation, run constructors only
 on the root, reset child TLS on reuse, isolate errno/SJLJ/stack addresses, reject
 root and nested over-capacity spawn, and reject live/worker destruction. The
@@ -4060,7 +4060,7 @@ its record before constructors. Child return and thrd_exit converge on one TSS
 destructor path; root thrd_exit drains children and exits the process with zero.
 The implementation is kept in a separate threaded include/source directory;
 the opt-in SDK installation and command/Reactor integration are described below.
-`tests/guest/c11_threads.c` exercises create/join/detach/exit, stale handles,
+`wasm/tests/guest/c11_threads.c` exercises create/join/detach/exit, stale handles,
 once, recursive/contended mutexes, timed condition waits, broadcast, sleep,
 TSS deletion/destructor passes, concurrent allocation and admission recovery.
 Environment initialization uses checked allocator-owned storage and call_once
@@ -4071,12 +4071,12 @@ is retained. The allocator remains the sole owner of program-break mutation.
 
 Implementation status: the budgeted Runtime creation entry and inherited child
 startup control are implemented and covered by Runtime and installed-consumer
-tests. The guest close entry, separate threaded CRT/profile installation and
+wasm/tests. The guest close entry, separate threaded CRT/profile installation and
 threaded command/Reactor/CMeta consumers are now implemented. The formal profile
 suite runs both in-tree and against installed headers, helpers and archives.
 Final cross-platform qualification and the full #426 acceptance audit remain.
 
-The thread archive and compiled tests cover C11 synchronization,
+The thread archive and compiled wasm/tests cover C11 synchronization,
 libc state, native HostFS and owner-dispatched sockets. Installing that archive
 alone would leave startup, host resource ownership and Reactor shutdown to
 undocumented test conventions. LLVM shared-memory output also contains a
@@ -4230,7 +4230,7 @@ The protected Runtime APIs, Preview1 clock, args/environment and vector
 fd_read/fd_write are implemented. Tests cover shared and unshared memory32/64,
 two importers observing the same storage before/after growth, failed-copy
 preservation, and compiled guest threads concurrently performing short vector
-I/O and first-time environment lookup. The vector tests check the exact 1 MiB
+I/O and first-time environment lookup. The vector wasm/tests check the exact 1 MiB
 boundary, rejection above it, OOB before provider effects, zero vectors, and
 provider errors/over-reported reads without publishing output. Shared path and
 random snapshots and fixed v2 fdstat outputs are described below. Remaining v2
@@ -4510,7 +4510,7 @@ The additions are opt-in; v1/v2 callers and existing public struct layouts do
 not change. Threaded callers must adopt the explicit owner loop and shutdown
 order. Rollback disables this initializer and its threaded socket integration,
 leaving protected copies and the existing single-owner v2 adapter intact. Do not
-publish placeholder declarations before the complete implementation and tests.
+publish placeholder declarations before the complete implementation and wasm/tests.
 
 The initializer now integrates the private bounded queue with the Preview1 wait
 registry, payload reservations and active-call accounting. Worker cancellation
@@ -4518,7 +4518,7 @@ only marks its registered wait: owner scans pin the subscription frame and
 publish completion before the worker can retire it. Terminal call notifications
 retain the dispatch context until the wake callback returns; `next_timeout`
 reports immediate progress while those acknowledgements remain in flight.
-Native barrier tests cover admission, cleanup after stop, callback thread
+Native barrier wasm/tests cover admission, cleanup after stop, callback thread
 identity, ordinary-file independence, cancellation versus readiness, close/rebind,
 rights contraction and acknowledgement lifetime. Real compiled Metallic C11
 guests exchange TCP/UDP messages and poll while their root joins children on a
@@ -4599,7 +4599,7 @@ Validation must include barrier-controlled blocked read versus close/rebind,
 independent descriptor progress, callback reentry, duplicate close, close error
 retry, full-table open with no provider effects, reserved-slot races, rights
 reduction during open, flags commit ordering, retained preopen copies and stale
-generations. HostFS tests cover concurrent files, cursor/append consistency,
+generations. HostFS wasm/tests cover concurrent files, cursor/append consistency,
 root readdir initialization and rename/open exclusion. Existing v2 socket,
 Preview1, WASI 0.2 and installed consumers remain regression gates; native race
 diagnostics are additional evidence and do not instrument guest C code.
@@ -4616,7 +4616,7 @@ The threaded `clock()` uses only the provider's process CPU-time clock and
 returns `(clock_t)-1` if it cannot be determined (C11 7.27.2.1). Wall time cannot
 approximate summed worker CPU time or exclude time blocked in host callbacks.
 The existing single-thread profile's monotonic fallback remains unchanged.
-Compiled root/child tests run against the build-tree and installed archives,
+Compiled root/child wasm/tests run against the build-tree and installed archives,
 covering unavailable CPU time, no wall-clock substitution and 64-bit conversion.
 
 The threaded archive appends a recursive lock and flush-reference
@@ -4661,11 +4661,11 @@ the fixed C locale remains immutable. Preopen discovery uses once publication,
 and temporary-file sequence allocation is atomic (exclusive creation remains
 the authority against pathname collisions). The shared filesystem/provider
 path is qualified separately by the concurrent-filesystem and protected-copy
-tests above; asynchronous host signals remain outside this profile.
+wasm/tests above; asynchronous host signals remain outside this profile.
 
 Preopen initialization retains provider errors, unknown tags, oversized names
 and exhausted name storage as terminal initialization errors; callers never see
-a partially discovered set. Formal compiled-guest tests cover the synchronization
+a partially discovered set. Formal compiled-guest wasm/tests cover the synchronization
 above and controlled filesystem callbacks, including concurrent first lookup,
 error retention, unknown errno/tag admission and no truncated name request.
 They do not substitute for concurrent HostFS/provider qualification.
@@ -4701,25 +4701,25 @@ Registration does not make a native library directly accessible to a guest.
 
 ### Existing contracts and selected approach
 
-[`link.h`](include/turbowasm/link.h) already provides
+[`link.h`](wasm/include/link.h) already provides
 `turbowasm_linker_define_host_function(linker, module_name, name, type, fn, context)`.
-[`link.c`](src/link.c) resolves the namespace/name pair, checks the exact carrier
+[`link.c`](wasm/src/link.c) resolves the namespace/name pair, checks the exact carrier
 signature, and copies the callback/context binding into the consumer instance.
 Missing imports produce `TURBOWASM_LINK_ERROR`; signature mismatches produce
 `TURBOWASM_TYPE_MISMATCH`. Duplicate host entries and mixing a Wasm provider
 instance with host functions under the same namespace are rejected.
-[`host_function_test.c`](tests/host_function_test.c) covers direct/tail calls,
+[`host_function_test.c`](wasm/tests/host_function_test.c) covers direct/tail calls,
 linker destruction after binding, missing functions, signature mismatch, namespace
 collision and callback traps. Compiled C imports are already demonstrated by
-[`reactor.c`](tests/guest/reactor.c) and its
-[`host test`](tests/guest/reactor_test.c).
+[`reactor.c`](wasm/tests/guest/reactor.c) and its
+[`host test`](wasm/tests/guest/reactor_test.c).
 
 Use these existing imports with one guest header and one native adapter per
 business API module. The guest header owns the wire declarations; the adapter
 owns decoding, capability checks and error translation into the host service.
 The host service retains its native implementation and resource ownership.
 Module registration follows the existing `turbowasm_wasi_preview1_define` facade
-pattern in [`wasi_preview1.c`](src/wasi_preview1.c), using the existing linker as
+pattern in [`wasi_preview1.c`](wasm/src/wasi_preview1.c), using the existing linker as
 the sole binding authority.
 
 ```text
@@ -4759,7 +4759,7 @@ through `context` and writes one `TURBOWASM_VALUE_I64` result. The guest can cal
 `app_clock_now_ns()` normally. A module with several operations exposes several
 typed imports and one application registration facade, rather than a dispatch
 opcode. `app_clock_define(linker, clock)` is now an application example facade,
-not an installed TurboWasm Runtime API. The guest SDK's `<turbowasm/import.h>`
+not an installed TurboWasm Runtime API. The guest SDK's `<import.h>`
 provides `TURBOWASM_IMPORT(module, name)` without changing the wire ABI. It uses
 Clang's Wasm import attributes and rejects native compilation. The existing
 guest CMake helper supplies this include directory both in-tree and installed.
@@ -4784,7 +4784,7 @@ linker and does not instantiate a consumer from it. It releases contexts it owns
 once no consumer uses them. Successful binding permits linker destruction while
 the callbacks and contexts remain alive. Do not claim a facade can roll back
 entries in an arbitrary existing linker. A future public batch registration API
-would need separate all-or-nothing admission and allocation-failure tests.
+would need separate all-or-nothing admission and allocation-failure wasm/tests.
 
 ### Authority, ABI and lifetime protocol
 
@@ -4846,7 +4846,7 @@ An incompatible ABI gets a new namespace; compatible additions keep existing
 operations unchanged. Rollback removes the optional headers/adapters and rebuilds
 only their consumers; no existing data format or runtime migration is required.
 
-`tests/guest/clock_test.c` covers two namespaces with identical function names,
+`wasm/tests/guest/clock_test.c` covers two namespaces with identical function names,
 different contexts for two instances of the same compiled C guest, missing/denied
 imports, exact signature mismatch, duplicates and provider collisions,
 registration allocation failures with complete composition cleanup, Reactor
@@ -4981,11 +4981,11 @@ its parser, transport, TLS, timeout and cleanup contracts instead of maintaining
 a second HTTP implementation. TLS behavior and other platforms require separate
 qualification; the current integration test is plaintext Windows loopback.
 
-[`http_test.c`](tests/guest/http_test.c) and its compiled guest exercise binary
+[`http_test.c`](wasm/tests/guest/http_test.c) and its compiled guest exercise binary
 responses, repeated calls after linker destruction, insufficient/zero capacity,
 unchanged outputs on failure, denied endpoints, overlap, both out-of-bounds
 outputs, 404/302 behavior, response limits, timeout/drain and reuse, missing
-module admission, and connection errors against a real Chttp server. Method tests
+module admission, and connection errors against a real Chttp server. Method wasm/tests
 verify all five additional wire methods, HEAD/204 empty responses, host Content-Type,
 empty/binary/aliased inputs, exact request capacity and overflow, request and write
 output bounds, per-method grants, no implicit write replay, and POST timeout/drain

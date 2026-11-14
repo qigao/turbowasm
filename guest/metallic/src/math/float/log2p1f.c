@@ -1,6 +1,6 @@
 /* C23 log2p1f: log2(1 + x), correctly rounded.
  *
- * Structure of metallic-rs `log2p1f` (src/f32_/log.rs) on this library's
+ * Structure of metallic-rs `log2p1f` (wasm/src/f32_/log.rs) on this library's
  * logtabf kernel: for |x| < 0.0234375 a table-free f64 polynomial x*P(x)
  * closed by the exact product x*log2e-to-24-bits (24x24 <= 48 bits, so the
  * plain product + add matches the reference fma bit for bit); elsewhere

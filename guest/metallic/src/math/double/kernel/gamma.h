@@ -2,7 +2,7 @@
 #define METALLIC_KERNEL_GAMMA_DOUBLE_H
 
 /* Correctly-rounded f64 tgamma/lgamma machinery, ported from metallic-rs
- * (src/f64_/gamma.rs) and adapted for WASM: no scalar FMA, so every
+ * (wasm/src/f64_/gamma.rs) and adapted for WASM: no scalar FMA, so every
  * double-double product uses Dekker splits (reusing exptab.h's primitives)
  * rather than fma().  See .claude/skills/program-math-functions.
  *

@@ -3,7 +3,7 @@
 #include <float.h>
 #include <stdint.h>
 
-/* See src/math/double/nexttoward.c for the design rationale. */
+/* See wasm/src/math/double/nexttoward.c for the design rationale. */
 float nexttowardf(float from, long double to)
 {
     if (to != to)

@@ -1,6 +1,6 @@
 /* C23 atan2pi: atan2(y, x)/pi, correctly rounded.
  *
- * Port of metallic-rs `atan2pi` (src/f64_/atan.rs ~ line 2601), re-tailored
+ * Port of metallic-rs `atan2pi` (wasm/src/f64_/atan.rs ~ line 2601), re-tailored
  * to lift this repo's atan2 engines by 1/pi (kernel/invpi.h).  Every special
  * ray is exactly representable in half-turns: (+-0, x>0) = +-0, (+-0, x<0) =
  * +-1, (y, +-0) = +-1/2, (+-inf, +inf) = +-1/4, (+-inf, -inf) = +-3/4,

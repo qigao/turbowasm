@@ -1,6 +1,6 @@
-/* See src/math/double/nearbyint.c for the design rationale.
+/* See wasm/src/math/double/nearbyint.c for the design rationale.
  *
- * On wasm32, src/math/float/rintf.c already provides an alias
+ * On wasm32, wasm/src/math/float/rintf.c already provides an alias
  * nearbyintf -> rintf. For native builds we add the shim here.
  */
 #ifndef __wasm__

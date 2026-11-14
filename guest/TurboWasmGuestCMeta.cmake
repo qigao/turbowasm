@@ -11,7 +11,7 @@ function(_turbowasm_cmeta_guest_sources name source_dir out_sources)
   foreach(unit IN ITEMS abi cmeta component container_type data declared_type enum
       fingerprint manifest_view entry function fixed_array interface operation
       object infer invokable type_identity vector)
-    list(APPEND sources "${source_dir}/src/${unit}.c")
+    list(APPEND sources "${source_dir}/wasm/src/${unit}.c")
   endforeach()
   set(${out_sources} "${sources}" PARENT_SCOPE)
 endfunction()

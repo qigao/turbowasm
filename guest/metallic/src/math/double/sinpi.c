@@ -1,6 +1,6 @@
 /* C23 sinpi: sin(pi*x), correctly rounded.
  *
- * Port of metallic-rs `sinpi` (src/f64_/trig.rs), itself mirroring
+ * Port of metallic-rs `sinpi` (wasm/src/f64_/trig.rs), itself mirroring
  * CORE-MATH's cr_sinpi fast path: an integer reduction of the signed
  * mantissa puts the grid index (1/2048 half-turns) and the exact residual
  * bits in two shifts, sincosn's two's-complement bit logic folds quadrants

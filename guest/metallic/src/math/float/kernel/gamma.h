@@ -15,7 +15,7 @@
  * nearest float with the residual breaking ties so the wide -> double -> float
  * path cannot double-round on a midpoint.
  *
- * The EFT primitives mirror the file-local mul_/add_ in src/math/double/fma.c;
+ * The EFT primitives mirror the file-local mul_/add_ in wasm/src/math/double/fma.c;
  * fma() is a true correctly-rounded fused op on this target (no hardware FMA,
  * FP_FAST_FMA undefined), so it is used for the two-product residual. */
 

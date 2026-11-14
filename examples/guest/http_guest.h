@@ -3,7 +3,7 @@
 
 #include "http_abi.h"
 #include <stdint.h>
-#include <turbowasm/import.h>
+#include <import.h>
 
 #if !defined(__wasm32__)
 #error "app:http/v1 uses wasm32 memory offsets"

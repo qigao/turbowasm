@@ -1,6 +1,6 @@
 /* nearbyint differs from rint only in that it must not raise FE_INEXACT.
  *
- * On wasm32, src/math/double/rint.c already provides:
+ * On wasm32, wasm/src/math/double/rint.c already provides:
  *     double nearbyint(double) __attribute__((alias("rint")));
  * which is unconditionally correct because the WebAssembly floating-point
  * environment has no exception flags — see include/fenv.h, where every

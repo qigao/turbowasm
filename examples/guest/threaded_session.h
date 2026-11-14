@@ -1,8 +1,8 @@
 #ifndef TURBOWASM_EXAMPLE_THREADED_SESSION_H
 #define TURBOWASM_EXAMPLE_THREADED_SESSION_H
 
-#include <turbowasm/turbowasm.h>
-#include <turbowasm/wasi_threads.h>
+#include <turbowasm.h>
+#include <wasi_threads.h>
 #include <stdatomic.h>
 
 /* Embedding example, not an installed Runtime ABI. One session owns one root;

@@ -1,4 +1,4 @@
-#include <turbowasm/turbowasm.h>
+#include <turbowasm.h>
 
 /* (module (type (struct (field i32)))
  *   (func (result anyref) (struct.new_default 0))) */

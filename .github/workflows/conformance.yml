@@ -10,8 +10,8 @@ on:
       - "vcpkg.json"
       - "cmake/**"
       - "include/**"
-      - "src/**"
-      - "tests/conformance/**"
+      - "wasm/src/**"
+      - "wasm/tests/conformance/**"
       - ".github/workflows/conformance.yml"
   workflow_dispatch:
     inputs:
@@ -72,9 +72,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile tests/conformance/verify_component_model.py
-          python3 tests/conformance/verify_component_model.py \
-            --manifest tests/conformance/component-model.json \
+          python3 -m py_compile wasm/tests/conformance/verify_component_model.py
+          python3 wasm/tests/conformance/verify_component_model.py \
+            --manifest wasm/tests/conformance/component-model.json \
             --root "$COMPONENT_MODEL_ROOT"
 
   conformance:
@@ -143,7 +143,7 @@ jobs:
           set -euo pipefail
           cmake --preset "$CONFORMANCE_PRESET"
           cmake --build --preset "$CONFORMANCE_PRESET" --parallel 2
-      - name: Run formal conformance tests
+      - name: Run formal conformance wasm/tests
         shell: bash
         env:
           CONFORMANCE_SUITE: ${{ matrix.suite }}

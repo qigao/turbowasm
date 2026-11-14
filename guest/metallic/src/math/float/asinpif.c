@@ -1,6 +1,6 @@
 /* C23 asinpif: asin(x)/pi, correctly rounded.
  *
- * Port of metallic-rs `asinpif` (src/f32_/atan.rs): a one-step 16-cell
+ * Port of metallic-rs `asinpif` (wasm/src/f32_/atan.rs): a one-step 16-cell
  * lookup with no fallback tier -- see kernel/asinpif.h.  The reference
  * combines with FMA; the plain mul/add here re-passes the exhaustive 2^32
  * sweep in the oracle suite, which is the proof. */

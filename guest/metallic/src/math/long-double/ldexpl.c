@@ -3,7 +3,7 @@
 #include <math.h>
 #include <stdint.h>
 
-/* Binary128 scalbn / ldexp.  Mirrors src/math/double/scalbn.h at u128
+/* Binary128 scalbn / ldexp.  Mirrors wasm/src/math/double/scalbn.h at u128
  * width: reinterpret the sign-free bits as __int128, normalize so the
  * implicit-1 always lives at bit 112, add `exp` to the (possibly
  * negative-after-normalization) biased exponent, then reassemble.

@@ -1,5 +1,5 @@
 /* Lean plain-double fast leg for the log family, ported from metallic-rs
- * src/f64_/log.rs (LN_CELLS / LN1P_Q_COEFFS, generated there by
+ * wasm/src/f64_/log.rs (LN_CELLS / LN1P_Q_COEFFS, generated there by
  * tools/gen_ln_exact_f64.py; do not edit the tables by hand) and adapted for
  * WASM: no scalar FMA, so the exact reduced argument z = r*m - 1 is formed in
  * 64-bit integers instead of metallic-rs's fma(r, m, -1).

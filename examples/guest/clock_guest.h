@@ -2,7 +2,7 @@
 #define TURBOWASM_EXAMPLE_CLOCK_GUEST_H
 
 #include <stdint.h>
-#include <turbowasm/import.h>
+#include <import.h>
 
 #ifdef __cplusplus
 extern "C" {

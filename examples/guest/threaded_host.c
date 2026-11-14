@@ -1,5 +1,5 @@
 #include "threaded_session.h"
-#include <turbowasm/wasi.h>
+#include <wasi.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
 #include <stdio.h>

@@ -9,7 +9,7 @@ float acosf(float x)
     const double pi_2 = 1.57079632679489661923;
     double a = fabs((double)x);
 
-    /* Fast leg ported from CORE-MATH's cr_acosf (src/binary32/acos/acosf.c,
+    /* Fast leg ported from CORE-MATH's cr_acosf (wasm/src/binary32/acos/acosf.c,
      * MIT, (c) 2023 Alexei Sibidanov): for |x| < 0x1.c2a1dcp-1 a degree-31
      * odd polynomial x·P(x²) approximates asin(x) in plain doubles — no FMA,
      * matching the wasm target, so CORE-MATH's proven error bound carries

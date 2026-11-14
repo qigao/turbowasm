@@ -1,6 +1,6 @@
 /* C23 exp10m1: 10^x - 1, correctly rounded.
  *
- * Port of metallic-rs `exp10m1` (src/f64_/exp.rs) -- exp2m1's architecture
+ * Port of metallic-rs `exp10m1` (wasm/src/f64_/exp.rs) -- exp2m1's architecture
  * with exp10's base-10 reduction: the mantissa-space -1 over the two-level
  * fold, the result-anchored small band at |x| <= 0.0625 (plain leg added in
  * this port, then double-double, then the 128-bit dint tier that replaces

@@ -47,57 +47,57 @@ if(NOT TARGET Salts::Platform)
 endif()
 
 add_library(turbowasm
-  src/store.c
-  src/gc_exec.c
-  src/artifact.c
-  src/atomic.c
-  src/component_binary.c
-  src/component_async_state.c
-  src/component_task.c
-  src/component_subtask.c
-  src/component_async_call.c
-  src/component_task_builtin.c
-  src/component_waitable.c
-  src/component_endpoint.c
-  src/component_endpoint_builtin.c
-  src/component_buffer.c
-  src/component_canonical.c
-  src/component_string.c
-  src/component_core_call.c
-  src/component_exec.c
-  src/component_exec_async.c
-  src/component_exec_async_resource.c
-  src/component_resource.c
-  src/component_resource_binding.c
-  src/component_type_graph.c
-  src/component_type_view.c
-  src/execution.c
-  src/instance.c
-  src/instance_state.c
-  src/jit_reference_helper.c
-  src/jit_gc_helper.c
-  src/jit_table_helper.c
-  src/jit_memory_helper.c
-  src/jit_simd_helper.c
-  src/link.c
-  src/module.c
-  src/reader.c
-  src/relaxed_simd.c
-  src/runtime_alloc.c
-  src/sha256.c
-  src/simd.c
-  src/simd_exec_table.c
-  src/status.c
-  src/value.c
-  src/validation_context.c
-  src/validate.c
-  src/validate_composite.c
-  src/validate_data.c
-  src/validate_element.c
-  src/validate_instr.c
-  src/validate_simd_table.c
-  src/validate_linkage.c
-  src/validate_type.c)
+  wasm/src/store.c
+  wasm/src/gc_exec.c
+  wasm/src/artifact.c
+  wasm/src/atomic.c
+  wasm/src/component_binary.c
+  wasm/src/component_async_state.c
+  wasm/src/component_task.c
+  wasm/src/component_subtask.c
+  wasm/src/component_async_call.c
+  wasm/src/component_task_builtin.c
+  wasm/src/component_waitable.c
+  wasm/src/component_endpoint.c
+  wasm/src/component_endpoint_builtin.c
+  wasm/src/component_buffer.c
+  wasm/src/component_canonical.c
+  wasm/src/component_string.c
+  wasm/src/component_core_call.c
+  wasm/src/component_exec.c
+  wasm/src/component_exec_async.c
+  wasm/src/component_exec_async_resource.c
+  wasm/src/component_resource.c
+  wasm/src/component_resource_binding.c
+  wasm/src/component_type_graph.c
+  wasm/src/component_type_view.c
+  wasm/src/execution.c
+  wasm/src/instance.c
+  wasm/src/instance_state.c
+  wasm/src/jit_reference_helper.c
+  wasm/src/jit_gc_helper.c
+  wasm/src/jit_table_helper.c
+  wasm/src/jit_memory_helper.c
+  wasm/src/jit_simd_helper.c
+  wasm/src/link.c
+  wasm/src/module.c
+  wasm/src/reader.c
+  wasm/src/relaxed_simd.c
+  wasm/src/runtime_alloc.c
+  wasm/src/sha256.c
+  wasm/src/simd.c
+  wasm/src/simd_exec_table.c
+  wasm/src/status.c
+  wasm/src/value.c
+  wasm/src/validation_context.c
+  wasm/src/validate.c
+  wasm/src/validate_composite.c
+  wasm/src/validate_data.c
+  wasm/src/validate_element.c
+  wasm/src/validate_instr.c
+  wasm/src/validate_simd_table.c
+  wasm/src/validate_linkage.c
+  wasm/src/validate_type.c)
 
 add_library(TurboWasm::Runtime ALIAS turbowasm)
 
@@ -121,12 +121,12 @@ endif()
 
 if(TURBOWASM_ENABLE_COMPONENT)
   add_library(turbowasm_component
-    src/component_api.c
-    src/component_async_api.c
-    src/component_host_task.c
-    src/component_host_shutdown.c
-    src/component_host_transfer.c
-    src/component_host_endpoint.c)
+    wasm/src/component_api.c
+    wasm/src/component_async_api.c
+    wasm/src/component_host_task.c
+    wasm/src/component_host_shutdown.c
+    wasm/src/component_host_transfer.c
+    wasm/src/component_host_endpoint.c)
   add_library(TurboWasm::Component ALIAS turbowasm_component)
   set_target_properties(turbowasm_component PROPERTIES
     EXPORT_NAME Component)
@@ -136,7 +136,7 @@ if(TURBOWASM_ENABLE_COMPONENT)
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<INSTALL_INTERFACE:include>
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src)
   target_link_libraries(turbowasm_component
     PUBLIC TurboWasm::Runtime)
 
@@ -152,13 +152,13 @@ if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
    TARGET TurboWasm::Component)
   # W1 stays internal until the descriptor/execution ABI is qualified.
   add_library(turbowasm_wasi02_core STATIC
-    src/wasi02_component.c
-    src/wasi02_descriptor.c
-    src/wasi02_provider.c)
+    wasm/src/wasi02_component.c
+    wasm/src/wasi02_descriptor.c
+    wasm/src/wasi02_provider.c)
   target_compile_features(turbowasm_wasi02_core PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_core
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src)
   target_link_libraries(turbowasm_wasi02_core
     PRIVATE TurboWasm::Component)
   if(MSVC)
@@ -173,11 +173,11 @@ if(TARGET turbowasm_wasi02_core AND TARGET TurboWasm::Component)
   # W4 pollable capability stays internal until stream/poll qualification
   # completes. It depends only on the typed WASI 0.2 core + Component layer.
   add_library(turbowasm_wasi02_poll_core STATIC
-    src/wasi02_poll.c)
+    wasm/src/wasi02_poll.c)
   target_compile_features(turbowasm_wasi02_poll_core PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_poll_core
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src
       ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(turbowasm_wasi02_poll_core
     PRIVATE
@@ -198,7 +198,7 @@ if(TURBOWASM_ENABLE_CFLOW_ADAPTER)
   endif()
 
   add_library(turbowasm_cflow
-    src/cflow_adapter.c)
+    wasm/src/cflow_adapter.c)
   add_library(TurboWasm::CFlow ALIAS turbowasm_cflow)
   set_target_properties(turbowasm_cflow PROPERTIES
     EXPORT_NAME CFlow)
@@ -226,7 +226,7 @@ if(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER)
   endif()
 
   add_library(turbowasm_native_io
-    src/native_io_adapter.c)
+    wasm/src/native_io_adapter.c)
   add_library(TurboWasm::NativeIO ALIAS turbowasm_native_io)
   set_target_properties(turbowasm_native_io PROPERTIES
     EXPORT_NAME NativeIO)
@@ -253,11 +253,11 @@ if(TARGET turbowasm_wasi02_core AND
   # W4c stream provider bridge remains internal until Component execution,
   # pollable subscription, and blocking semantics qualify.
   add_library(turbowasm_wasi02_streams_core STATIC
-    src/wasi02_streams.c)
+    wasm/src/wasi02_streams.c)
   target_compile_features(turbowasm_wasi02_streams_core PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_streams_core
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src
       ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(turbowasm_wasi02_streams_core
     PRIVATE
@@ -278,12 +278,12 @@ if(TARGET turbowasm_wasi02_core AND
   # S2 typed sockets state/provider contract. Keep this backend-neutral:
   # CNet/NativeIO integration belongs to #393.
   add_library(turbowasm_wasi02_sockets_core STATIC
-    src/wasi02_sockets.c
-    src/wasi02_network.c)
+    wasm/src/wasi02_sockets.c
+    wasm/src/wasi02_network.c)
   target_compile_features(turbowasm_wasi02_sockets_core PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_sockets_core
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src
       ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(turbowasm_wasi02_sockets_core
     PRIVATE
@@ -310,11 +310,11 @@ if(TURBOWASM_ENABLE_WASI02_CNET_ADAPTER AND
   # TurboWasm::WASI02 target. This slice owns only the CNet TCP control plane;
   # data-plane streams/pollables are added separately.
   add_library(turbowasm_wasi02_cnet_core STATIC
-    src/wasi02_cnet.c)
+    wasm/src/wasi02_cnet.c)
   target_compile_features(turbowasm_wasi02_cnet_core PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_cnet_core
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src
       ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(turbowasm_wasi02_cnet_core
     PRIVATE
@@ -332,11 +332,11 @@ if(TARGET turbowasm_wasi02_poll_core AND TARGET TurboWasm::NativeIO)
   # W4b3 NativeIO completion routing remains internal until stream/poll
   # qualification is complete. It never submits I/O or exposes native handles.
   add_library(turbowasm_wasi02_poll_native_io_core STATIC
-    src/wasi02_poll_native_io.c)
+    wasm/src/wasi02_poll_native_io.c)
   target_compile_features(turbowasm_wasi02_poll_native_io_core PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_poll_native_io_core
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src
       ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(turbowasm_wasi02_poll_native_io_core
     PRIVATE
@@ -352,10 +352,10 @@ endif()
 
 if(TURBOWASM_ENABLE_WASI_ADAPTER)
   add_library(turbowasm_wasi
-    src/wasi_preview1.c
-    src/wasi_dispatch.c
-    src/wasi_provider.c
-    src/wasi_fs.c)
+    wasm/src/wasi_preview1.c
+    wasm/src/wasi_dispatch.c
+    wasm/src/wasi_provider.c
+    wasm/src/wasi_fs.c)
   add_library(TurboWasm::WASI ALIAS turbowasm_wasi)
   set_target_properties(turbowasm_wasi PROPERTIES
     EXPORT_NAME WASI)
@@ -378,11 +378,11 @@ if(TARGET turbowasm_wasi02_core AND TARGET TurboWasm::WASI)
   # W3 filesystem capability bridge stays internal until resource/package
   # qualification is complete. Keep the W1/W2 core free of Preview1/WASI deps.
   add_library(turbowasm_wasi02_fs_core STATIC
-    src/wasi02_filesystem.c)
+    wasm/src/wasi02_filesystem.c)
   target_compile_features(turbowasm_wasi02_fs_core PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_fs_core
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src
       ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(turbowasm_wasi02_fs_core
     PRIVATE
@@ -406,11 +406,11 @@ if(TARGET turbowasm_wasi02_core AND
   # Internal aggregate import dispatcher used to qualify one Component exec
   # across the W2/W3/W4 capability families before the public W5 façade.
   add_library(turbowasm_wasi02_exec_core STATIC
-    src/wasi02_exec.c)
+    wasm/src/wasi02_exec.c)
   target_compile_features(turbowasm_wasi02_exec_core PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_exec_core
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src
       ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(turbowasm_wasi02_exec_core
     PRIVATE
@@ -432,19 +432,19 @@ endif()
 if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
    TARGET TurboWasm::Component)
   set(_turbowasm_wasi02_public_sources
-    src/wasi02_api.c
-    src/wasi02_component.c
-    src/wasi02_descriptor.c
-    src/wasi02_provider.c
-    src/wasi02_poll.c
-    src/wasi02_streams.c
-    src/wasi02_sockets.c
-    src/wasi02_network.c
-    src/wasi02_exec.c)
+    wasm/src/wasi02_api.c
+    wasm/src/wasi02_component.c
+    wasm/src/wasi02_descriptor.c
+    wasm/src/wasi02_provider.c
+    wasm/src/wasi02_poll.c
+    wasm/src/wasi02_streams.c
+    wasm/src/wasi02_sockets.c
+    wasm/src/wasi02_network.c
+    wasm/src/wasi02_exec.c)
 
   if(TARGET TurboWasm::WASI)
     list(APPEND _turbowasm_wasi02_public_sources
-      src/wasi02_filesystem.c)
+      wasm/src/wasi02_filesystem.c)
   endif()
 
   add_library(turbowasm_wasi02
@@ -458,7 +458,7 @@ if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<INSTALL_INTERFACE:include>
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src)
   target_link_libraries(turbowasm_wasi02
     PUBLIC TurboWasm::Component)
 
@@ -481,12 +481,12 @@ if(TURBOWASM_ENABLE_WASI02_ADAPTER AND
 endif()
 
 if(TARGET turbowasm_wasi02)
-  add_library(turbowasm_wasi02_io STATIC src/wasi02_io.c)
+  add_library(turbowasm_wasi02_io STATIC wasm/src/wasi02_io.c)
   add_library(TurboWasm::WASI02IO ALIAS turbowasm_wasi02_io)
   set_target_properties(turbowasm_wasi02_io PROPERTIES EXPORT_NAME WASI02IO)
   target_compile_features(turbowasm_wasi02_io PUBLIC c_std_11)
   target_include_directories(turbowasm_wasi02_io PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    "${CMAKE_CURRENT_SOURCE_DIR}/wasm/src" "${CMAKE_CURRENT_SOURCE_DIR}/include")
   target_link_libraries(turbowasm_wasi02_io PUBLIC turbowasm_wasi02 PRIVATE Salts::Core)
   if(TARGET turbowasm_wasi02_cnet_core)
     target_link_libraries(turbowasm_wasi02_cnet_core PRIVATE turbowasm_wasi02_io)
@@ -530,12 +530,12 @@ if(TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND)
   if(NOT TURBOWASM_CNET_DIRECTIONAL_EOF)
     message(FATAL_ERROR "WASI02 native TCP requires a Salts SDK with cnet_connection_preserve_send_on_eof; the selected SDK cannot satisfy directional WASI streams")
   endif()
-  add_library(turbowasm_wasi02_cnet STATIC src/wasi02_cnet.c)
+  add_library(turbowasm_wasi02_cnet STATIC wasm/src/wasi02_cnet.c)
   add_library(TurboWasm::WASI02CNet ALIAS turbowasm_wasi02_cnet)
   set_target_properties(turbowasm_wasi02_cnet PROPERTIES EXPORT_NAME WASI02CNet)
   target_compile_definitions(turbowasm_wasi02_cnet PRIVATE TURBOWASM_WASI02_NATIVE_TCP=1)
   target_compile_features(turbowasm_wasi02_cnet PUBLIC c_std_11)
-  target_include_directories(turbowasm_wasi02_cnet PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_include_directories(turbowasm_wasi02_cnet PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/wasm/src")
   target_link_libraries(turbowasm_wasi02_cnet PUBLIC TurboWasm::WASI02IO Salts::CNet PRIVATE Salts::IDNA)
 endif()
 
@@ -558,7 +558,7 @@ if(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER)
   endif()
 
   add_library(turbowasm_wasi_host_fs
-    src/wasi_host_fs.c)
+    wasm/src/wasi_host_fs.c)
   add_library(TurboWasm::WASIHostFS ALIAS turbowasm_wasi_host_fs)
   set_target_properties(turbowasm_wasi_host_fs PROPERTIES
     EXPORT_NAME WASIHostFS)
@@ -596,7 +596,7 @@ if(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER)
   endforeach()
 
   add_library(turbowasm_wasi_littlefs
-    src/wasi_littlefs.c
+    wasm/src/wasi_littlefs.c
     "${TURBOWASM_LITTLEFS_SOURCE_DIR}/lfs.c"
     "${TURBOWASM_LITTLEFS_SOURCE_DIR}/lfs_util.c")
   add_library(TurboWasm::WASILittleFS ALIAS turbowasm_wasi_littlefs)
@@ -621,7 +621,7 @@ if(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER)
   endif()
 
   add_library(turbowasm_wasi_native_io
-    src/wasi_native_io.c)
+    wasm/src/wasi_native_io.c)
   add_library(TurboWasm::WASINativeIO ALIAS turbowasm_wasi_native_io)
   set_target_properties(turbowasm_wasi_native_io PROPERTIES
     EXPORT_NAME WASINativeIO)
@@ -650,7 +650,7 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
   endif()
 
   add_library(turbowasm_wasi_threads
-    src/wasi_threads.c)
+    wasm/src/wasi_threads.c)
   add_library(TurboWasm::WASIThreads ALIAS turbowasm_wasi_threads)
   set_target_properties(turbowasm_wasi_threads PROPERTIES
     EXPORT_NAME WASIThreads)
@@ -660,7 +660,7 @@ if(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER)
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<INSTALL_INTERFACE:include>
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src)
   target_link_libraries(turbowasm_wasi_threads
     PUBLIC
       TurboWasm::Runtime
@@ -684,12 +684,12 @@ if(TURBOWASM_ENABLE_MIR_JIT)
   # The backend is an internal, non-installed component until the tiering
   # integration defines its explicit runtime/plugin ownership.
   add_library(turbowasm_mir_backend STATIC
-    src/jit/mir_backend.c)
+    wasm/src/jit/mir_backend.c)
   target_compile_features(turbowasm_mir_backend PRIVATE c_std_11)
   target_include_directories(turbowasm_mir_backend
     PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/include
-      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+      ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src)
   target_link_libraries(turbowasm_mir_backend
     PRIVATE
       Salts::SIMD
@@ -734,11 +734,11 @@ endif()
 
 if(TURBOWASM_BUILD_TESTS)
   enable_testing()
-  add_subdirectory(tests)
+  add_subdirectory(wasm/tests)
 endif()
 
 if(TURBOWASM_BUILD_CONFORMANCE_RUNNER)
-  add_subdirectory(tests/conformance)
+  add_subdirectory(wasm/tests/conformance)
 endif()
 
 install(
@@ -843,7 +843,7 @@ if(TURBOWASM_BUILD_TOOLS)
 endif()
 
 install(
-  DIRECTORY include/turbowasm
+  DIRECTORY wasm/include
   DESTINATION include
   FILES_MATCHING PATTERN "*.h")
 

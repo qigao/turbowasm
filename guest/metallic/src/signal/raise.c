@@ -1,7 +1,7 @@
 #include <signal.h>
 #include <stdlib.h>
 
-/* Internal helper from src/signal/signal.c — not exposed in <signal.h>. */
+/* Internal helper from wasm/src/signal/signal.c — not exposed in <signal.h>. */
 __sighandler_t __metallic_signal_handler(int);
 
 int raise(int sig)

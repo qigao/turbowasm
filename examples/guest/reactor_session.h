@@ -1,7 +1,7 @@
 #ifndef TURBOWASM_EXAMPLE_REACTOR_SESSION_H
 #define TURBOWASM_EXAMPLE_REACTOR_SESSION_H
 
-#include <turbowasm/turbowasm.h>
+#include <turbowasm.h>
 #include <stdatomic.h>
 
 /* Example embedding policy, not an installed Runtime ABI. Initialize storage

@@ -1,6 +1,0 @@
-# WebAssembly exception-handling proposal-specific core tests.
-tag.wast
-throw.wast
-throw_ref.wast
-try_table.wast
-unwind.wast

@@ -1,6 +1,6 @@
 /* C23 exp10m1f: 10^x - 1, correctly rounded.
  *
- * Port of metallic-rs `exp10m1f` (src/f32_/exp.rs): exp2m1f's structure over
+ * Port of metallic-rs `exp10m1f` (wasm/src/f32_/exp.rs): exp2m1f's structure over
  * the base-10 grid a = 32*log2(10)*x (the residual's rounding stays below
  * 2^-46 of the result), with its own Taylor small band and the same shared
  * table and kernel.  One sweep-pinned tie precedes the double fallback.

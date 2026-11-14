@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /* Long-double nexttoward for IEEE 754 binary128. Mirrors the pattern
- * in src/math/double/nextafter.c using __int128.
+ * in wasm/src/math/double/nextafter.c using __int128.
  */
 long double nexttowardl(long double from, long double to)
 {

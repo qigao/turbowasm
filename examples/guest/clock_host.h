@@ -1,7 +1,7 @@
 #ifndef TURBOWASM_EXAMPLE_CLOCK_HOST_H
 #define TURBOWASM_EXAMPLE_CLOCK_HOST_H
 
-#include <turbowasm/link.h>
+#include <link.h>
 
 #ifdef __cplusplus
 extern "C" {

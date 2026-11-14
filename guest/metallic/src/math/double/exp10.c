@@ -1,6 +1,6 @@
 /* C23 exp10: 10^x, correctly rounded.
  *
- * Port of metallic-rs `exp10` (src/f64_/exp.rs).  The fast leg reduces
+ * Port of metallic-rs `exp10` (wasm/src/f64_/exp.rs).  The fast leg reduces
  * directly in base 10 -- t = round(4096*x*log2(10)), delta = x - t*log10(2)/
  * 4096 -- and folds 10^delta through the shared two-level grid with ln10
  * baked into the tail polynomial, so no double-double x*ln10 is ever formed.

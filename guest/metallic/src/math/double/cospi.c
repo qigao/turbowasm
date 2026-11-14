@@ -1,6 +1,6 @@
 /* C23 cospi: cos(pi*x), correctly rounded.
  *
- * Port of metallic-rs `cospi` (src/f64_/trig.rs).  The structure mirrors
+ * Port of metallic-rs `cospi` (wasm/src/f64_/trig.rs).  The structure mirrors
  * sinpi -- the quarter-turn shift rides the grid index (+2048 before
  * halving), the mantissa stays unsigned (cosine is even), and the cross
  * term flips sign -- with the same sincosn table, residual polynomials, and

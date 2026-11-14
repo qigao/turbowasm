@@ -92,7 +92,7 @@ def main() -> int:
                 failures.append(f"{rel}: direct platform header <{header}>")
 
         for pattern, label in FORBIDDEN_PATTERNS:
-            if (rel == Path("src/runtime_alloc.c") and
+            if (rel == Path("wasm/src/runtime_alloc.c") and
                     label.startswith("direct ")):
                 continue
             if re.search(pattern, text):

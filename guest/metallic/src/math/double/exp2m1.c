@@ -1,6 +1,6 @@
 /* C23 exp2m1: 2^x - 1, correctly rounded.
  *
- * Port of metallic-rs `exp2m1` (src/f64_/exp.rs).  The main band |x| >= 1/4
+ * Port of metallic-rs `exp2m1` (wasm/src/f64_/exp.rs).  The main band |x| >= 1/4
  * rides exp2's exact base-2 reduction through the lean two-level fold with
  * the -1 taken in mantissa space (expm1's off-window); straddles fall to the
  * ~2^-105 exp2lvlacc pipeline with the same mantissa-space subtraction, and

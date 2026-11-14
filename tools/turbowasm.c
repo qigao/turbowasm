@@ -1,4 +1,4 @@
-#include <turbowasm/turbowasm.h>
+#include <turbowasm.h>
 
 #include <stdio.h>
 #include <stdlib.h>

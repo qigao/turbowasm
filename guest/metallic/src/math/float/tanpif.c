@@ -1,6 +1,6 @@
 /* C23 tanpif: tan(pi x), correctly rounded.
  *
- * Port of metallic-rs `tanpif` (src/f32_/trig.rs) -- CORE-MATH cr_tanpif's
+ * Port of metallic-rs `tanpif` (wasm/src/f32_/trig.rs) -- CORE-MATH cr_tanpif's
  * structure: one odd rational in f64 over the reduced period
  * z = x - round(x), with the poles and zeros carried by exact factors and
  * quarter-integers returned as +-1 / signed zero / +-inf up front.

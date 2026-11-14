@@ -1,6 +1,6 @@
 #ifndef TURBOWASM_COMMAND_H
 #define TURBOWASM_COMMAND_H
-#include <turbowasm/turbowasm.h>
+#include <turbowasm.h>
 #include <stdio.h>
 
 /* Internal runner contract. All paths, arrays and streams are borrowed until

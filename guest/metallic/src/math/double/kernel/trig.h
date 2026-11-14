@@ -1,6 +1,6 @@
 /* Correctly-rounded double sin/cos/tan — fast (double-double) path.
  *
- * Ported from metallic-rs (src/f64_/trig.rs).  The Rust original leans on
+ * Ported from metallic-rs (wasm/src/f64_/trig.rs).  The Rust original leans on
  * hardware FMA for its double-double products; here every product is a
  * Dekker two_prod via split_() instead, since WASM has no scalar FMA and the
  * library's fma() is a software routine (see CLAUDE.md, the math/ exception).

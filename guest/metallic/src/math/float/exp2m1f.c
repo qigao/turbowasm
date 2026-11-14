@@ -1,6 +1,6 @@
 /* C23 exp2m1f: 2^x - 1, correctly rounded.
  *
- * Port of metallic-rs `exp2m1f` (src/f32_/exp.rs): expm1f's 1/32-step
+ * Port of metallic-rs `exp2m1f` (wasm/src/f32_/exp.rs): expm1f's 1/32-step
  * reduction with an *exact* base-2 residual (a = 32x and h = a - m are
  * exact), the shared 2^(j/32) table and 2^(h/32) kernel, and an own-Taylor
  * small band.  A straddle of the +-sv*2^-42 gate falls back to the

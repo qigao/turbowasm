@@ -1,6 +1,6 @@
 /* C23 atan2pif: atan2(y, x)/pi, correctly rounded.
  *
- * Structure of metallic-rs `atan2pif` (src/f32_/atan.rs) on this library's
+ * Structure of metallic-rs `atan2pif` (wasm/src/f32_/atan.rs) on this library's
  * atan2f machinery: every special ray is an exact dyadic in half-turns
  * (+-1/4 and +-3/4 at infinite corners, +-1/2 on the axes, +-0/+-1 at zero
  * y), so the bases of the quadrant folds carry no rounding error at all --

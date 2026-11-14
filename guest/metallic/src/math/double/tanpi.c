@@ -1,6 +1,6 @@
 /* C23 tanpi: tan(pi*x), correctly rounded.
  *
- * Port of metallic-rs `tanpi` (src/f64_/trig.rs), itself mirroring
+ * Port of metallic-rs `tanpi` (wasm/src/f64_/trig.rs), itself mirroring
  * CORE-MATH's cr_tanpi: the signed-mantissa reduction folds the period and
  * the half-period tangent reflection into a 1/64 grid (iq in 0..=32,
  * tanpitab.h), the exact fixed-point residual takes a short odd tangent

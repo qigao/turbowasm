@@ -30,7 +30,7 @@ float hypotf(float x, float y)
     uint64_t rbits = reinterpret(uint64_t, r);
 
     /* Past FLT_MAX the single rounding (float)r already yields the correct
-     * FLT_MAX/inf; the bit tests below would read meaningless low bits. */
+     * FLT_MAX/inf; the bit wasm/tests below would read meaningless low bits. */
     if (rbits > 0x47EFFFFFE0000000)
         return rf;
 

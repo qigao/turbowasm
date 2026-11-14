@@ -2,7 +2,7 @@
 #define TURBOWASM_EXAMPLE_HTTP_HOST_H
 
 #include "http_abi.h"
-#include <turbowasm/link.h>
+#include <link.h>
 #include <http_client/http.h>
 
 /* Host policy bits, independent of Chttp's native method enum. Zero in an

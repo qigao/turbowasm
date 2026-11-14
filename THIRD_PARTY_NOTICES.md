@@ -18,7 +18,7 @@ licenses and notices of its linked SDK/package dependencies.
 
 ## Metallic
 
-`guest/metallic/src` and `guest/metallic/include` originate from
+`guest/metallic/wasm/src` and `guest/metallic/include` originate from
 [jdh8/metallic](https://github.com/jdh8/metallic), commit
 `66ea0f480a16a9341be94ed4e66be28b3c3802d5` (2026-09-20).
 The upstream README is retained for reference; this repository builds the
@@ -27,7 +27,7 @@ sources through `guest/CMakeLists.txt`, not the upstream Makefile.
 Metallic is MIT licensed, copyright 2017–2019 Chen-Pang He. The complete license
 is retained in [guest/metallic/LICENSE](guest/metallic/LICENSE) and installed
 with the guest SDK. Embedded third-party notices remain in the source, including
-dlmalloc's public-domain/CC0 notice in `src/stdlib/malloc.c`.
+dlmalloc's public-domain/CC0 notice in `wasm/src/stdlib/malloc.c`.
 
 Local changes cover command startup/exit, checked heap growth, aligned allocation
 admission, fopen allocation failure, temporary files, zero-length stdio, standard
@@ -66,4 +66,4 @@ This is an optional wasm32 guest library, not a native runtime dependency.
 The default profile remains single-threaded; the opt-in C11 threads profile
 does not provide pthread compatibility. Neither profile provides a shell or arbitrary
 locales/rounding modes. Upstream documents ten failing soft-float/128-bit shift
-tests; importing its sources does not establish complete C11 conformance.
+wasm/tests; importing its sources does not establish complete C11 conformance.

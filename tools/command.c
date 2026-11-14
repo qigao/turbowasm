@@ -1,6 +1,6 @@
 #include "command.h"
-#include <turbowasm/wasi_host_fs.h>
-#include <turbowasm/wasi_sockets.h>
+#include <wasi_host_fs.h>
+#include <wasi_sockets.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>

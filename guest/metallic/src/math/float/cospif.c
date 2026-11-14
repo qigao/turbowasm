@@ -1,6 +1,6 @@
 /* C23 cospif: cos(pi x), correctly rounded.
  *
- * Port of metallic-rs `cospif` (src/f32_/trig.rs) -- CORE-MATH cr_cospif's
+ * Port of metallic-rs `cospif` (wasm/src/f32_/trig.rs) -- CORE-MATH cr_cospif's
  * structure, sharing sinpif's tables: the unsigned mantissa (cosine is even)
  * reduces to the same 1/64-half-turn grid with a +32 quarter-turn shift, and
  * grid-exact inputs read the table directly.  Certified by the exhaustive

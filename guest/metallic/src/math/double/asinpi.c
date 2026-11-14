@@ -1,6 +1,6 @@
 /* C23 asinpi: asin(x)/pi, correctly rounded.
  *
- * Port of metallic-rs `asinpi` (src/f64_/atan.rs ~ line 2202), re-tailored
+ * Port of metallic-rs `asinpi` (wasm/src/f64_/atan.rs ~ line 2202), re-tailored
  * to lift this repo's certified asin engines by 1/pi (kernel/invpi.h): the
  * double-double asin_dd_ leg and the 128-bit asin_dint_ fallback each gain
  * one 1/pi product before their Ziv gate.  asinpi(+-1) = +-1/2 exactly.

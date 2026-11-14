@@ -1,6 +1,6 @@
 /* C23 rsqrt: 1/sqrt(x), correctly rounded.
  *
- * Port of metallic-rs `rsqrt` (src/f64_/misc.rs), itself CORE-MATH's cr_rsqrt
+ * Port of metallic-rs `rsqrt` (wasm/src/f64_/misc.rs), itself CORE-MATH's cr_rsqrt
  * reshaped: seed (1/x)*sqrt(x), one Newton step to a double-double at
  * ~2^-104 relative, a bit-pattern Ziv window, and an exact 128-bit integer
  * refinement for the straddles.  The result is never subnormal (outputs span

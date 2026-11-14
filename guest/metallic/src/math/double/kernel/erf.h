@@ -1,7 +1,7 @@
 #ifndef METALLIC_KERNEL_ERF_H
 #define METALLIC_KERNEL_ERF_H
 
-/* Correctly-rounded erf/erfc kernel, ported from metallic-rs (src/f64_/erf.rs),
+/* Correctly-rounded erf/erfc kernel, ported from metallic-rs (wasm/src/f64_/erf.rs),
  * adapted for WASM: no scalar FMA, so all double-double products reuse the
  * Dekker-split helpers of the exp kernel (exptab.h) instead of fma().
  *
@@ -108,7 +108,7 @@ static inline sum_t erf_exp_dd_(sum_t w, int64_t *qout)
     return p;
 }
 
-/* Generated from metallic-rs src/f64_/erf.rs by tools/extract (do not hand-edit). */
+/* Generated from metallic-rs wasm/src/f64_/erf.rs by tools/extract (do not hand-edit). */
 #define CH (1.1283791670955126)
 #define ERF_ONE_THRESHOLD (6.2499218008406645)
 #define ERFC_ZERO_THRESHOLD (27.226017111108362)

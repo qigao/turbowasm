@@ -1,6 +1,6 @@
 /* C23 rsqrtf: 1/sqrt(x), correctly rounded.
  *
- * Port of metallic-rs `rsqrtf` (src/f32_/misc.rs): the promoted division and
+ * Port of metallic-rs `rsqrtf` (wasm/src/f32_/misc.rs): the promoted division and
  * square root leave the double result accurate enough that its single
  * rounding to float is correct for all but one subnormal input and two
  * mantissa families, which CORE-MATH's cr_rsqrtf patches with a constructed

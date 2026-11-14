@@ -2,7 +2,7 @@
 #define METALLIC_KERNEL_TANPITAB_H
 
 /* Grid table and reconstruction quotient of the C23 tanpi, ported from
- * metallic-rs (src/f64_/trig.rs: TANPI_T, TANPI_PH, TANPI_ZC,
+ * metallic-rs (wasm/src/f64_/trig.rs: TANPI_T, TANPI_PH, TANPI_ZC,
  * tanpi_reconstruct; itself a port of CORE-MATH's cr_tanpi). */
 
 #include "exptab.h"

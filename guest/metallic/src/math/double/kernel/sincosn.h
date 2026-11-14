@@ -2,7 +2,7 @@
 #define METALLIC_KERNEL_SINCOSN_H
 
 /* Two-level (sin, cos) grid at s*pi/2048 shared by the C23 sinpi/cospi pair,
- * ported from metallic-rs (src/f64_/trig.rs: sincosn, SINCOSN_SN/SM/CM,
+ * ported from metallic-rs (wasm/src/f64_/trig.rs: sincosn, SINCOSN_SN/SM/CM,
  * SINPI_ZS/ZC; itself a port of CORE-MATH sinpi's sincosn).  The <= 25-bit
  * table highs keep the angle-addition cross products exact in plain doubles,
  * so no FMA (which WASM lacks) is needed on this hot path. */

@@ -8,7 +8,7 @@
  * log1p needs this ~150-bit (triple-double) refinement instead.
  *
  * WASM adaptation: CORE-MATH fuses every product with a hardware FMA.  WASM has
- * no scalar FMA, and metallic's software fma() (src/math/double/fma.c) costs
+ * no scalar FMA, and metallic's software fma() (wasm/src/math/double/fma.c) costs
  * ~100 cycles, so the fma(a, b, -a*b) product residuals -- exact numbers --
  * are computed with Dekker splits instead (bit-identical; every operand here
  * is O(1), far from the ~2^997 split overflow, and every residual is normal).
