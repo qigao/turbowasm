@@ -766,6 +766,13 @@ include directory and installs them beside TurboWasm's public headers. The
 public vector descriptor continues to use CMeta reflection. Interpreter and
 MIR execution use the SDK's native SIMD descriptors and existing operations.
 
+### Releases
+
+GitHub Releases provide source archives and a Windows x64 LLVM-MinGW SDK
+archive. The SDK contains the native Slate installation and both Metallic
+guest profiles. Use the matching dependency SDKs from `.env.example` when
+linking an application against the native static libraries.
+
 ### Historical CMake and CI configuration
 
 The commands and CI results below refer to the previous combined Salts SDK
@@ -825,12 +832,10 @@ the selected user preset before configuring; no manual MIR prefix is needed.
 Windows CI uses `windows-2025` and the Windows triplet supplied by the shared
 cache action, matching its compiler/SDK contract.
 
-CI and native SDK releases share `.github/workflows/native-build.yml` and use
-`ci-*-user` presets. `cmake/ci/select-ci-scope.ps1` owns the platform matrix:
-code changes and manual CI runs select all five qualification profiles by default;
-prose-only PRs skip native builds and still report `CI result`. SDK preparation
-selects the four shipping platforms from the same definitions. Manual SDK runs
-build package artifacts; publication remains restricted to release tags.
+The historical native CI used `.github/workflows/native-build.yml` and
+`ci-*-user` presets. `cmake/ci/select-ci-scope.ps1` owns the platform matrix.
+Code changes and manual CI runs select all five qualification profiles by
+default. Prose-only PRs skip native builds and still report `CI result`.
 The shared workflow uses Mozilla's [sccache Action](https://github.com/mozilla-actions/sccache-action)
 for C/C++ compiler caching. `actions/cache` restores and saves a bounded 1 GiB
 local cache per OS, architecture and preset, with independent writer keys and

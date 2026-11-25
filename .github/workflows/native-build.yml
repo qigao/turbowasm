@@ -6,9 +6,6 @@ on:
       builds:
         type: string
         required: true
-      version:
-        type: string
-        default: 0.0.0-ci
       salts_ci_run:
         type: string
         default: ''
@@ -199,12 +196,12 @@ jobs:
           if errorlevel 1 exit /b 1
           cmake --build --preset "install-${{ matrix.preset }}" --parallel 2
           if errorlevel 1 exit /b 1
-      - name: Run Unix wasm/tests
-        if: matrix.wasm/tests && runner.os != 'Windows'
+      - name: Run Unix tests
+        if: matrix.tests && runner.os != 'Windows'
         shell: bash
         run: ctest --preset '${{ matrix.preset }}'
-      - name: Run Windows wasm/tests
-        if: matrix.wasm/tests && runner.os == 'Windows'
+      - name: Run Windows tests
+        if: matrix.tests && runner.os == 'Windows'
         shell: cmd
         run: |
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
@@ -222,7 +219,7 @@ jobs:
           set -euo pipefail
           cmake --preset '${{ matrix.consumer }}'
           cmake --build --preset '${{ matrix.consumer }}' --parallel 2
-          if [ '${{ matrix.wasm/tests }}' = true ]; then
+          if [ '${{ matrix.tests }}' = true ]; then
             ctest --preset '${{ matrix.consumer }}'
           fi
       - name: Run existing installed-package wasm/tests on Windows
@@ -251,23 +248,3 @@ jobs:
             build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 7
-      - name: Record SDK provenance
-        if: matrix.package
-        shell: pwsh
-        env:
-          PACKAGE_VERSION: ${{ inputs.version }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage/sdk/$env:TURBOWASM_SDK_RID"
-          $commit = git rev-parse HEAD
-          if ($LASTEXITCODE -ne 0) { throw 'Could not read source commit' }
-          @("version=$env:PACKAGE_VERSION", "commit=$commit", "rid=$env:TURBOWASM_SDK_RID",
-            'profile=runtime+component', "salts_version=$env:SALTS_VERSION") |
-            Set-Content (Join-Path $prefix 'turbowasm-sdk-manifest.txt')
-      - uses: actions/upload-artifact@v4
-        if: matrix.package
-        with:
-          name: turbowasm-sdk-${{ matrix.rid }}
-          path: stage/sdk
-          if-no-files-found: error
-          compression-level: 9
