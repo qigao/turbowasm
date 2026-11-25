@@ -1,9 +1,9 @@
-#include "../../guest/metallic/wasm/src/wasi/wasi.h"
+#include "../../../guest/metallic/src/wasi/wasi.h"
 #include <threads.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
-#include "internal.h"
+#include "../../../guest/metallic/src/threads/internal.h"
 
 #define REQUIRE(x) do { if (!(x)) return __LINE__; } while (0)
 #define SOCKET_IMPORT(name) __attribute__((import_module("wasi_snapshot_preview1"), import_name(#name)))

@@ -1,6 +1,6 @@
-#include "../wasm/src/component_binary.h"
-#include "../wasm/src/component_exec.h"
-#include "../wasm/src/instance_internal.h"
+#include "../src/component_binary.h"
+#include "../src/component_exec.h"
+#include "../src/instance_internal.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

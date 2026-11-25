@@ -1,5 +1,5 @@
 #include <wasi02_cnet.h>
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 #include <tinytest.h>
 
 static void check_external_progress(size_t endpoints, size_t requests, bool admissible) {

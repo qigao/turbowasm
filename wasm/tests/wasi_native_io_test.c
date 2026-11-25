@@ -2,7 +2,7 @@
 #include <wasi.h>
 #include <wasi_native_io.h>
 
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 #include <salts/native_io.h>
 
 #ifdef NDEBUG
@@ -68,12 +68,12 @@ int turbowasm_test_native_io_backend_cancel(
 /* Compile the exact production bridge against the deterministic OS boundary. */
 #define native_io_backend_submit turbowasm_test_native_io_backend_submit
 #define native_io_backend_cancel turbowasm_test_native_io_backend_cancel
-#include "../wasm/src/native_io_adapter.c"
+#include "../src/native_io_adapter.c"
 #undef native_io_backend_cancel
 #undef native_io_backend_submit
 
 /* Compile the exact production WASI NativeIO provider in the same test TU. */
-#include "../wasm/src/wasi_native_io.c"
+#include "../src/wasi_native_io.c"
 
 static const uint8_t module_bytes[] = {
     0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,

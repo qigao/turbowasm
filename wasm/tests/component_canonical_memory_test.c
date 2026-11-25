@@ -1,5 +1,5 @@
-#include "../wasm/src/component_canonical.h"
-#include "../wasm/src/instance_internal.h"
+#include "../src/component_canonical.h"
+#include "../src/instance_internal.h"
 
 #include <turbowasm.h>
 

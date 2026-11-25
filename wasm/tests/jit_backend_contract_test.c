@@ -1,4 +1,4 @@
-#include "../wasm/src/jit_backend.h"
+#include "../src/jit_backend.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

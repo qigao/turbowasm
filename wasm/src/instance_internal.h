@@ -6,7 +6,7 @@
 
 #include "atomic.h"
 
-#include <salts/thread.h>
+#include <threads/threads.h>
 
 #include "module_internal.h"
 #include "jit_backend.h"
@@ -23,7 +23,7 @@ enum {
 };
 
 typedef struct turbowasm_memory_waiter {
-    cmeta_cond_t condition;
+    sync_cond_t condition;
     uint64_t address;
     bool active;
     bool notified;
@@ -31,8 +31,8 @@ typedef struct turbowasm_memory_waiter {
 
 typedef struct turbowasm_instance_memory {
     uint8_t *data;
-    cmeta_rwlock_t access_lock;
-    cmeta_mutex_t waiter_mutex;
+    sync_rwlock_t access_lock;
+    sync_mutex_t waiter_mutex;
     turbowasm_memory_waiter *waiters;
     uint32_t waiter_count;
     uint32_t waiter_capacity;

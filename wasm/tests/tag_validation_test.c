@@ -1,5 +1,5 @@
-#include "../wasm/src/module_internal.h"
-#include "../wasm/src/validation_context.h"
+#include "../src/module_internal.h"
+#include "../src/validation_context.h"
 
 #include <turbowasm.h>
 

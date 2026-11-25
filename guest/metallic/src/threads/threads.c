@@ -1,5 +1,4 @@
 #include "internal.h"
-#include <metallic/threads.h>
 #include <setjmp.h>
 #include <stddef.h>
 #include <stdlib.h>

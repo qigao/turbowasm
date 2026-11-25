@@ -2,7 +2,7 @@
 #include "runtime_alloc.h"
 #include <wasi_cnet.h>
 
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 #include <stdbool.h>
 #include <stdint.h>

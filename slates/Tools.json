@@ -1,0 +1,11 @@
+{
+  "tools": {
+    "python": {
+      "program": "python"
+    },
+    "metallic": {
+      "program": "python",
+      "args": ["$root/guest/build_guest.py"]
+    }
+  }
+}

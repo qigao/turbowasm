@@ -168,7 +168,7 @@ spec("native GC instruction boundary") {
         outcome result = compare("mixed", integer(37), NULL);
         check_equal(result.status, TURBOWASM_OK); check_equal(collections, 2u);
         vector.kind = TURBOWASM_VALUE_V128; vector.as.v128.shape = TURBOWASM_V128_RAW;
-        cmeta_simd_v128_load(&vector.as.v128.bits, bits); same_value(result.value, vector);
+        simd_v128_load(&vector.as.v128.bits, bits); same_value(result.value, vector);
         vector.as.v128.shape = TURBOWASM_V128_F64X2;
         result = compare("vector-array", vector, NULL); check_equal(result.status, TURBOWASM_OK);
         same_value(result.value, vector);

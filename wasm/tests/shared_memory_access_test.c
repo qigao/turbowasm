@@ -259,8 +259,8 @@ static void test_cross_memory_copy_uses_stable_lock_order(void) {
     synthetic_memory_fixture fixture;
     copy_thread_context forward = {0};
     copy_thread_context reverse = {0};
-    cmeta_thread_t thread_a = NULL;
-    cmeta_thread_t thread_b = NULL;
+    sync_thread_t thread_a = NULL;
+    sync_thread_t thread_b = NULL;
     uint8_t a[1024];
     uint8_t b[1024];
 
@@ -282,14 +282,14 @@ static void test_cross_memory_copy_uses_stable_lock_order(void) {
     reverse.destination_memory = 0u;
     reverse.source_memory = 1u;
 
-    assert(cmeta_thread_create(
+    assert(sync_thread_create(
                &thread_a, copy_thread, &forward) == 0);
-    assert(cmeta_thread_create(
+    assert(sync_thread_create(
                &thread_b, copy_thread, &reverse) == 0);
-    assert(cmeta_thread_join(&thread_a) == 0);
-    assert(cmeta_thread_join(&thread_b) == 0);
-    cmeta_thread_destroy(&thread_a);
-    cmeta_thread_destroy(&thread_b);
+    assert(sync_thread_join(&thread_a) == 0);
+    assert(sync_thread_join(&thread_b) == 0);
+    sync_thread_destroy(&thread_a);
+    sync_thread_destroy(&thread_b);
 
     assert(forward.status == TURBOWASM_OK);
     assert(reverse.status == TURBOWASM_OK);

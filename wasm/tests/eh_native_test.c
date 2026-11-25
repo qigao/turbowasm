@@ -175,7 +175,7 @@ spec("native exception dispatch") {
         args[1] = invoke(&native, "make", &arg, 1, NULL).values[0];
         check_equal(turbowasm_root_retain(&store, &args[1], &root), TURBOWASM_OK);
         args[0] = (turbowasm_value){0}; args[0].kind = TURBOWASM_VALUE_V128; args[0].as.v128.shape = TURBOWASM_V128_F64X2;
-        cmeta_simd_v128_load(&args[0].as.v128.bits, bits);
+        simd_v128_load(&args[0].as.v128.bits, bits);
         expected = invoke(&reference, "mixed", args, 2, NULL); actual = invoke(&native, "mixed", args, 2, NULL);
         check_equal(actual.status, TURBOWASM_OK); check_equal(expected.status, TURBOWASM_OK); check_equal(actual.count, 6u);
         for (i = 0; i < actual.count; ++i) same_value(actual.values[i], expected.values[i]);

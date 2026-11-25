@@ -1,4 +1,4 @@
-#include "../../guest/metallic/wasm/src/wasi/wasi.h"
+#include "../../../guest/metallic/src/wasi/wasi.h"
 #include <threads.h>
 #include <stdatomic.h>
 #include <errno.h>
@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include "internal.h"
+#include "../../../guest/metallic/src/threads/internal.h"
 
 #define REQUIRE(x) do { if (!(x)) return __LINE__; } while (0)
 
@@ -192,6 +192,11 @@ int conditions(void) {
     cnd_destroy(&condition); mtx_destroy(&condition_lock);
     struct timespec duration = {0, 1000000}, remaining = {1, 1};
     REQUIRE(thrd_sleep(&duration, &remaining) == 0 && remaining.tv_sec == 0 && remaining.tv_nsec == 0);
+    uint64_t remaining_seconds = 1;
+    uint32_t remaining_nanos = 1;
+    REQUIRE(thrd_sleep_abi(0, 0) == 0);
+    REQUIRE(thrd_sleep_remaining_abi(0, 0, &remaining_seconds, &remaining_nanos) == 0);
+    REQUIRE(remaining_seconds == 0 && remaining_nanos == 0);
     duration.tv_nsec = 1000000000;
     REQUIRE(thrd_sleep(&duration, NULL) == -2);
     duration = (struct timespec){-1, 0};
@@ -255,6 +260,23 @@ int synchronization_limits(void) {
     struct timespec duration = {INT64_MAX, 999999999}, remaining = {71, 73};
     REQUIRE(thrd_sleep(&duration, &remaining) == -2);
     REQUIRE(remaining.tv_sec == 71 && remaining.tv_nsec == 73);
+
+    uint64_t remaining_seconds = 71;
+    uint32_t remaining_nanos = 73;
+    REQUIRE(thrd_sleep_remaining_abi(0, UINT32_MAX, &remaining_seconds, &remaining_nanos) == -2);
+    REQUIRE(remaining_seconds == 71 && remaining_nanos == 73);
+    REQUIRE(thrd_sleep_remaining_abi(UINT64_MAX, 0, &remaining_seconds, &remaining_nanos) == -2);
+    REQUIRE(remaining_seconds == 0 && remaining_nanos == 0);
+
+    REQUIRE(mtx_init(&mutex, mtx_timed) == thrd_success);
+    REQUIRE(cnd_init(&exhausted) == thrd_success);
+    REQUIRE(mtx_timedlock_abi(&mutex, INT64_MAX, UINT32_MAX) == thrd_error);
+    REQUIRE(mtx_timedlock_abi(&mutex, INT64_MAX, 999999999) == thrd_success);
+    REQUIRE(cnd_timedwait_abi(&exhausted, &mutex, 0, UINT32_MAX) == thrd_error);
+    REQUIRE(cnd_timedwait_abi(&exhausted, &mutex, INT64_MIN, 0) == thrd_timedout);
+    REQUIRE(mtx_unlock(&mutex) == thrd_success);
+    cnd_destroy(&exhausted);
+    mtx_destroy(&mutex);
     return 0;
 }
 

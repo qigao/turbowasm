@@ -1,6 +1,6 @@
 #include "wasi02_io_api.h"
 #include "runtime_alloc.h"
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 #include <stdatomic.h>
 #include <string.h>
 

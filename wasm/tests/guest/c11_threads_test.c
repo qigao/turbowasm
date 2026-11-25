@@ -2,8 +2,8 @@
 #include <turbowasm.h>
 #include <wasi.h>
 #include <wasi_threads.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +25,7 @@ static atomic_uint writes, reads, io_errors;
 enum { STDIO_RECORDS = 1, STDIO_PROGRESS, STDIO_CLOSE_FLUSH, STDIO_ERROR_RELEASE, STDIO_REOPEN };
 static unsigned stdio_mode;
 static atomic_uint stdio_entered, stdio_release, stdio_fail_remaining, stdio_closes;
-static cmeta_mutex_t stdio_mutex;
+static sync_mutex_t stdio_mutex;
 static char stdio_output[2][16384];
 static size_t stdio_size[2], stdio_input_position;
 static uint32_t preopen_error;
@@ -59,13 +59,13 @@ static turbowasm_status preopen_provider(void *context, turbowasm_host_call *cal
         error = TURBOWASM_WASI_ERRNO_FAULT;
     results[0] = (turbowasm_value){.kind=TURBOWASM_VALUE_I32, .as.i32=(int32_t)error};
     *count = 1; *trap = TURBOWASM_TRAP_NONE;
-    cmeta_thread_yield();
+    sync_thread_yield();
     return TURBOWASM_OK;
 }
 
 static void stdio_wait_release(void) {
     atomic_store(&stdio_entered, 1);
-    while (!atomic_load(&stdio_release)) cmeta_thread_yield();
+    while (!atomic_load(&stdio_release)) sync_thread_yield();
 }
 static uint32_t stdio_write(uint32_t fd, const turbowasm_wasi_const_buffer *buffers,
     size_t count, uint32_t *written) {
@@ -77,15 +77,15 @@ static uint32_t stdio_write(uint32_t fd, const turbowasm_wasi_const_buffer *buff
         atomic_store(&stdio_release, 1);
     size_t take = buffers[0].size < 2 ? buffers[0].size : 2;
     unsigned slot = fd == 2 ? 1 : 0;
-    cmeta_mutex_lock(&stdio_mutex);
+    sync_mutex_lock(&stdio_mutex);
     if (take > sizeof(stdio_output[slot]) - stdio_size[slot]) {
-        cmeta_mutex_unlock(&stdio_mutex); return TURBOWASM_WASI_ERRNO_NOMEM;
+        sync_mutex_unlock(&stdio_mutex); return TURBOWASM_WASI_ERRNO_NOMEM;
     }
     memcpy(stdio_output[slot] + stdio_size[slot], buffers[0].data, take);
     stdio_size[slot] += take;
-    cmeta_mutex_unlock(&stdio_mutex);
+    sync_mutex_unlock(&stdio_mutex);
     *written = (uint32_t)take;
-    cmeta_thread_yield();
+    sync_thread_yield();
     return 0;
 }
 static uint32_t stdio_read(uint32_t fd, const turbowasm_wasi_buffer *buffers,
@@ -96,7 +96,7 @@ static uint32_t stdio_read(uint32_t fd, const turbowasm_wasi_buffer *buffers,
         *(char *)buffers[0].data = 'Q'; *read = 1; return 0;
     }
     if (stdio_mode != STDIO_RECORDS) return TURBOWASM_WASI_ERRNO_IO;
-    cmeta_mutex_lock(&stdio_mutex);
+    sync_mutex_lock(&stdio_mutex);
     size_t position = stdio_input_position;
     *read = position < 64 * 5 ? 1 : 0;
     if (*read) {
@@ -105,8 +105,8 @@ static uint32_t stdio_read(uint32_t fd, const turbowasm_wasi_buffer *buffers,
         *(char *)buffers[0].data = row[column];
         ++stdio_input_position;
     }
-    cmeta_mutex_unlock(&stdio_mutex);
-    cmeta_thread_yield();
+    sync_mutex_unlock(&stdio_mutex);
+    sync_thread_yield();
     return 0;
 }
 
@@ -161,7 +161,7 @@ static turbowasm_name name(const char *s) { return (turbowasm_name){(const uint8
 static uint32_t clock_time(void *context, uint32_t id, uint64_t precision, uint64_t *out) {
     (void)context; (void)precision;
     if (id > 1) return TURBOWASM_WASI_ERRNO_INVAL;
-    *out = id ? cmeta_hrtime() : cmeta_realtime_ms() * UINT64_C(1000000);
+    *out = id ? hrtime() : realtime_ms() * UINT64_C(1000000);
     return 0;
 }
 static uint32_t write_output(void *context, uint32_t fd, const turbowasm_wasi_const_buffer *buffers,
@@ -267,7 +267,7 @@ spec("Metallic C11 threads internal profile") {
         atomic_store(&stdio_closes, 0); atomic_store(&stdio_fail_remaining, 1);
         preopen_error = 0; preopen_large = false; preopen_invalid_tag = false;
         atomic_store(&preopen_probes, 0); atomic_store(&preopen_names, 0);
-        cmeta_mutex_init(&stdio_mutex);
+        sync_mutex_init(&stdio_mutex);
         check_equal(turbowasm_wasi_threads_init_pool(&threads, 4), TURBOWASM_OK);
         check_true(turbowasm_wasi_threads_execution_policy_init(&policy, &threads));
         check_equal(turbowasm_instance_create(&memory, &memory_module), TURBOWASM_OK);
@@ -310,13 +310,13 @@ spec("Metallic C11 threads internal profile") {
     after_each() {
         atomic_store(&stdio_release, 1);
         turbowasm_wasi_threads_proc_exit(&threads, &root, 0);
-        while (turbowasm_wasi_threads_active(&threads)) cmeta_thread_yield();
+        while (turbowasm_wasi_threads_active(&threads)) sync_thread_yield();
         turbowasm_instance_destroy(&root);
         check_true(turbowasm_wasi_threads_destroy(&threads));
         turbowasm_wasi_preview1_destroy(&wasi);
         turbowasm_linker_destroy(&linker);
         turbowasm_instance_destroy(&memory);
-        cmeta_mutex_destroy(&stdio_mutex);
+        sync_mutex_destroy(&stdio_mutex);
     }
     it("creates, identifies, joins and exits threads with stale-handle rejection") { call_test("lifecycle"); }
     it("serializes contended updates and once publication with recursive locks") { call_test("synchronization"); }
@@ -337,9 +337,9 @@ spec("Metallic C11 threads internal profile") {
     it("rolls back rejected spawn and recovers capacity after join and detach") { call_test("capacity"); }
     it("bounds retained joinable results independently of live host worker capacity") {
         call_test("retained_fill");
-        uint64_t start = cmeta_hrtime();
+        uint64_t start = hrtime();
         while (turbowasm_wasi_threads_active(&threads) &&
-            cmeta_hrtime() - start < UINT64_C(10000000000)) cmeta_thread_yield();
+            hrtime() - start < UINT64_C(10000000000)) sync_thread_yield();
         check_equal(turbowasm_wasi_threads_active(&threads), (size_t)0);
         call_test("retained_recover");
     }

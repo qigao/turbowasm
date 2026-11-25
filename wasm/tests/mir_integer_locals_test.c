@@ -1,7 +1,7 @@
-#include "../wasm/src/instance_internal.h"
-#include "../wasm/src/jit/mir_backend.h"
-#include "../wasm/src/module_internal.h"
-#include "../wasm/src/validation_context.h"
+#include "../src/instance_internal.h"
+#include "../src/jit/mir_backend.h"
+#include "../src/module_internal.h"
+#include "../src/validation_context.h"
 
 #include <turbowasm.h>
 

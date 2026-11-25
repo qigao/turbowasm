@@ -1,5 +1,5 @@
-#include "../wasm/src/wasi02_sockets.h"
-#include "../wasm/src/component_type_graph.h"
+#include "../src/wasi02_sockets.h"
+#include "../src/component_type_graph.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

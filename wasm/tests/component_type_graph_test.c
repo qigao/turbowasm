@@ -1,4 +1,4 @@
-#include "../wasm/src/component_type_graph.h"
+#include "../src/component_type_graph.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

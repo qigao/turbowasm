@@ -1,6 +1,6 @@
 #include <turbowasm.h>
 
-#include "../wasm/src/module_internal.h"
+#include "../src/module_internal.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

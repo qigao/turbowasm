@@ -150,6 +150,7 @@ def main():
     parser.add_argument("--wast2json")
     parser.add_argument("--runner")
     parser.add_argument("--work-dir")
+    parser.add_argument("--reject-runtime-unsupported", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -227,6 +228,8 @@ def main():
     ]
     for flag in selector["wast2json_flags"]:
         command.append(f"--wast2json-flag={flag}")
+    if args.reject_runtime_unsupported:
+        command.append("--reject-runtime-unsupported")
 
     completed = subprocess.run(command, check=False)
     if owned_temp is not None:

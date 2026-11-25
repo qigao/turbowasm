@@ -1,4 +1,4 @@
-#include <metallic/threads.h>
+#include <threads.h>
 #include <stdatomic.h>
 #include <stdint.h>
 

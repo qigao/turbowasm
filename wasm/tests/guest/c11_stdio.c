@@ -1,5 +1,5 @@
-#include "../../guest/metallic/wasm/src/wasi/wasi.h"
-#include "../../guest/metallic/wasm/src/stdio/FILE_.h"
+#include "../../../guest/metallic/src/wasi/wasi.h"
+#include "../../../guest/metallic/src/stdio/FILE_.h"
 #include <threads.h>
 #include <stdio.h>
 #include <stdlib.h>

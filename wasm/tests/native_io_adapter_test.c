@@ -1,7 +1,7 @@
-#include <native_io.h>
+#include "../include/native_io.h"
 #include <turbowasm.h>
 
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 #ifdef NDEBUG
 #undef NDEBUG

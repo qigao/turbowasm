@@ -1,4 +1,4 @@
-#include <metallic/threads.h>
+#include <threads.h>
 #include <limits.h>
 
 /* One bounded request slot, owned by the mutex. The host serializes root calls;

@@ -1,0 +1,237 @@
+{
+  "targets": {
+    "guest_hello": {
+      "kind": "header_only",
+      "when": { "config": ["guests", "http-guest-tests"] },
+      "preTasks": [
+        {
+          "name": "guest_hello",
+          "tool": "metallic",
+          "inputs": [
+            "$root/guest/build_guest.py",
+            "$moduledir/hello.c",
+            "$builddir/guest/sdk/single/crt1.o",
+            "$builddir/guest/sdk/single/metallic.a"
+          ],
+          "outputs": ["$builddir/guest/guest_hello.wasm"],
+          "args": [
+            "guest",
+            "--kind",
+            "command",
+            "--output",
+            "$builddir/guest/guest_hello.wasm",
+            "--source",
+            "$moduledir/hello.c",
+            "--crt",
+            "$builddir/guest/sdk/single/crt1.o",
+            "--library",
+            "$builddir/guest/sdk/single/metallic.a"
+          ]
+        }
+      ]
+    },
+    "guest_counter": {
+      "kind": "header_only",
+      "when": { "config": ["guests", "http-guest-tests"] },
+      "preTasks": [
+        {
+          "name": "guest_counter",
+          "tool": "metallic",
+          "inputs": [
+            "$root/guest/build_guest.py",
+            "$moduledir/counter.c",
+            "$builddir/guest/sdk/single/crt1-reactor.o",
+            "$builddir/guest/sdk/single/metallic.a"
+          ],
+          "outputs": ["$builddir/guest/guest_counter.wasm"],
+          "args": [
+            "guest",
+            "--kind",
+            "reactor",
+            "--output",
+            "$builddir/guest/guest_counter.wasm",
+            "--source",
+            "$moduledir/counter.c",
+            "--crt",
+            "$builddir/guest/sdk/single/crt1-reactor.o",
+            "--library",
+            "$builddir/guest/sdk/single/metallic.a",
+            "--export",
+            "counter_add",
+            "--export",
+            "counter_initializations",
+            "--export",
+            "counter_close"
+          ]
+        }
+      ]
+    },
+    "guest_clock": {
+      "kind": "header_only",
+      "when": { "config": ["guests", "http-guest-tests"] },
+      "preTasks": [
+        {
+          "name": "guest_clock",
+          "tool": "metallic",
+          "inputs": [
+            "$root/guest/build_guest.py",
+            "$moduledir/clock.c",
+            "$moduledir/clock_guest.h",
+            "$builddir/guest/sdk/single/crt1-reactor.o",
+            "$builddir/guest/sdk/single/metallic.a"
+          ],
+          "outputs": ["$builddir/guest/guest_clock.wasm"],
+          "args": [
+            "guest",
+            "--kind",
+            "reactor",
+            "--output",
+            "$builddir/guest/guest_clock.wasm",
+            "--source",
+            "$moduledir/clock.c",
+            "--crt",
+            "$builddir/guest/sdk/single/crt1-reactor.o",
+            "--library",
+            "$builddir/guest/sdk/single/metallic.a",
+            "--export",
+            "clock_initial",
+            "--export",
+            "clock_sample",
+            "--export",
+            "clock_close"
+          ]
+        }
+      ]
+    },
+    "guest_http": {
+      "kind": "header_only",
+      "when": { "config": ["guests", "http-guest-tests"] },
+      "preTasks": [
+        {
+          "name": "guest_http",
+          "tool": "metallic",
+          "inputs": [
+            "$root/guest/build_guest.py",
+            "$moduledir/http.c",
+            "$moduledir/http_guest.h",
+            "$moduledir/http_abi.h",
+            "$builddir/guest/sdk/single/crt1-reactor.o",
+            "$builddir/guest/sdk/single/metallic.a"
+          ],
+          "outputs": ["$builddir/guest/guest_http.wasm"],
+          "args": [
+            "guest",
+            "--kind",
+            "reactor",
+            "--output",
+            "$builddir/guest/guest_http.wasm",
+            "--source",
+            "$moduledir/http.c",
+            "--crt",
+            "$builddir/guest/sdk/single/crt1-reactor.o",
+            "--library",
+            "$builddir/guest/sdk/single/metallic.a",
+            "--export",
+            "fetch",
+            "--export",
+            "response_length",
+            "--export",
+            "response_address",
+            "--export",
+            "http_close"
+          ]
+        }
+      ]
+    },
+    "guest_threaded_counter": {
+      "kind": "header_only",
+      "when": { "config": ["guests", "http-guest-tests"] },
+      "preTasks": [
+        {
+          "name": "guest_threaded_counter",
+          "tool": "metallic",
+          "inputs": [
+            "$root/guest/build_guest.py",
+            "$moduledir/threaded_counter.c",
+            "$builddir/guest/sdk/threaded/crt1-reactor.o",
+            "$builddir/guest/sdk/threaded/metallic-threaded.a"
+          ],
+          "outputs": ["$builddir/guest/guest_threaded_counter.wasm"],
+          "args": [
+            "guest",
+            "--kind",
+            "reactor",
+            "--output",
+            "$builddir/guest/guest_threaded_counter.wasm",
+            "--source",
+            "$moduledir/threaded_counter.c",
+            "--crt",
+            "$builddir/guest/sdk/threaded/crt1-reactor.o",
+            "--library",
+            "$builddir/guest/sdk/threaded/metallic-threaded.a",
+            "--export",
+            "counter_add",
+            "--export",
+            "counter_close",
+            "--threaded"
+          ]
+        }
+      ]
+    },
+    "turbowasm_reactor_example": {
+      "kind": "executable",
+      "when": { "config": ["guests", "http-guest-tests"] },
+      "sources": {
+        "files": ["reactor_host.c", "reactor_session.c"]
+      },
+      "private": {
+        "deps": ["turbowasm"]
+      },
+      "runtimeDeps": ["guest_counter"]
+    },
+    "turbowasm_clock_example": {
+      "kind": "executable",
+      "when": { "config": ["guests", "http-guest-tests"] },
+      "sources": {
+        "files": ["clock_main.c", "clock_host.c", "reactor_session.c"]
+      },
+      "private": {
+        "deps": ["turbowasm", "saltsbase_core"]
+      },
+      "runtimeDeps": ["guest_clock"]
+    },
+    "turbowasm_http_example": {
+      "kind": "executable",
+      "when": { "config": ["guests", "http-guest-tests"] },
+      "sources": {
+        "files": ["http_main.c", "reactor_session.c"]
+      },
+      "private": {
+        "deps": ["turbowasm_http_example_adapter", "saltsbase_core"]
+      },
+      "runtimeDeps": ["guest_http"]
+    },
+    "turbowasm_threaded_reactor_example": {
+      "kind": "executable",
+      "when": { "config": ["guests", "http-guest-tests"] },
+      "sources": {
+        "files": ["threaded_host.c", "threaded_session.c"]
+      },
+      "private": {
+        "deps": ["turbowasm_wasi_threads", "turbowasm_wasi"]
+      },
+      "runtimeDeps": ["guest_threaded_counter"]
+    },
+    "turbowasm_http_example_adapter": {
+      "kind": "static",
+      "when": { "config": ["guests", "http-guest-tests"] },
+      "sources": {
+        "files": ["http_host.c"]
+      },
+      "public": {
+        "includeDirs": ["."],
+        "deps": ["turbowasm", "chttp_client"]
+      }
+    }
+  }
+}

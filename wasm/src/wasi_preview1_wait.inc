@@ -2,10 +2,10 @@
  * Provider and clock callbacks, allocation, Runtime suspension and user wake
  * callbacks always run outside that mutex. */
 static void tw_p1_lock(struct tw_p1_async *a) {
-    if (a->dispatch) cmeta_mutex_lock(&a->dispatch->mutex);
+    if (a->dispatch) sync_mutex_lock(&a->dispatch->mutex);
 }
 static void tw_p1_unlock(struct tw_p1_async *a) {
-    if (a->dispatch) cmeta_mutex_unlock(&a->dispatch->mutex);
+    if (a->dispatch) sync_mutex_unlock(&a->dispatch->mutex);
 }
 static bool tw_p1_stopping_locked(struct tw_p1_async *a) {
     return a->dispatch ? a->dispatch->stopping : a->stopping;
@@ -53,7 +53,7 @@ static turbowasm_status tw_p1_park(turbowasm_wasi_preview1_impl *p, turbowasm_ho
         d->wake(d->wake_context);
         tw_p1_lock(a);
         while (!w->completed) {
-            cmeta_cond_timedwait(&d->changed, &d->mutex, a->interrupt_interval_ns);
+            sync_cond_timedwait(&d->changed, &d->mutex, a->interrupt_interval_ns);
             /* Query the invocation only on its worker and outside adapter
              * locks. Cancellation never withdraws a frame the owner can read. */
             tw_p1_unlock(a);
@@ -107,7 +107,7 @@ turbowasm_status turbowasm_wasi_preview1_advance(turbowasm_wasi_preview1 *wasi) 
         }
         w->inspecting = false;
         if (ready && status == TURBOWASM_OK) { w->completion = completion; w->completed = true; }
-        if (a->dispatch) cmeta_cond_broadcast(&a->dispatch->changed);
+        if (a->dispatch) sync_cond_broadcast(&a->dispatch->changed);
         /* Publication releases the owner's last access to the frame. Workers
          * only retire completed records, including cancelled registrations. */
         tw_p1_unlock(a);

@@ -1,5 +1,7 @@
 #include <value.h>
 
+#include <salts/simd.h>
+
 static const cmeta_type_identity turbowasm_v128_type_identity =
     CMETA_TYPE_ID_ATOM_INIT("turbowasm.value.v128");
 static const cmeta_type_identity turbowasm_funcref_type_identity =
@@ -105,7 +107,7 @@ turbowasm_status turbowasm_v128_load(turbowasm_v128 *out,
     if (shape != TURBOWASM_V128_RAW &&
         turbowasm_v128_descriptor(shape) == NULL)
         return TURBOWASM_UNSUPPORTED;
-    cmeta_simd_v128_load(&out->bits, bytes);
+    simd_v128_load(&out->bits, bytes);
     out->shape = shape;
     return TURBOWASM_OK;
 }
@@ -117,6 +119,6 @@ turbowasm_status turbowasm_v128_store(void *bytes,
     if (value->shape != TURBOWASM_V128_RAW &&
         turbowasm_v128_descriptor(value->shape) == NULL)
         return TURBOWASM_INVALID_ARGUMENT;
-    cmeta_simd_v128_store(bytes, &value->bits);
+    simd_v128_store(bytes, &value->bits);
     return TURBOWASM_OK;
 }

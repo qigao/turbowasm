@@ -5,8 +5,8 @@
 typedef struct probe {
     tw_wasi_dispatch dispatch;
     turbowasm_wasi_fs fs;
-    cmeta_mutex_t mutex;
-    cmeta_cond_t changed;
+    sync_mutex_t mutex;
+    sync_cond_t changed;
     size_t wakes, done, effects, wrong_owner, regular_effects;
     bool block_wake, wake_released;
     const void *owner;
@@ -15,52 +15,52 @@ typedef struct probe {
 
 static void wake(void *context) {
     probe *p = context;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     ++p->wakes;
-    cmeta_cond_broadcast(&p->changed);
-    while (p->block_wake && !p->wake_released) cmeta_cond_wait(&p->changed, &p->mutex);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_cond_broadcast(&p->changed);
+    while (p->block_wake && !p->wake_released) sync_cond_wait(&p->changed, &p->mutex);
+    sync_mutex_unlock(&p->mutex);
 }
 static void completed(probe *p) {
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     ++p->done; ++p->wakes;
-    cmeta_cond_broadcast(&p->changed);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_cond_broadcast(&p->changed);
+    sync_mutex_unlock(&p->mutex);
 }
 static void init(probe *p, size_t capacity) {
-    *p = (probe){.owner = cmeta_thread_current_token()};
-    cmeta_mutex_init(&p->mutex); cmeta_cond_init(&p->changed);
+    *p = (probe){.owner = sync_thread_current_token()};
+    sync_mutex_init(&p->mutex); sync_cond_init(&p->changed);
     check(p->mutex && p->changed);
     check_equal(tw_wasi_dispatch_init(&p->dispatch, capacity, wake, p), TURBOWASM_OK);
 }
 static void destroy(probe *p) {
     check_equal(tw_wasi_dispatch_destroy(&p->dispatch), TURBOWASM_OK);
-    cmeta_cond_destroy(&p->changed); cmeta_mutex_destroy(&p->mutex);
+    sync_cond_destroy(&p->changed); sync_mutex_destroy(&p->mutex);
 }
 static void wait_wake(probe *p, size_t target) {
-    cmeta_mutex_lock(&p->mutex);
-    while (p->wakes < target) cmeta_cond_wait(&p->changed, &p->mutex);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
+    while (p->wakes < target) sync_cond_wait(&p->changed, &p->mutex);
+    sync_mutex_unlock(&p->mutex);
 }
 static void drive(probe *p, size_t target) {
     size_t seen = 0;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     while (p->done < target) {
-        while (p->done < target && p->wakes == seen) cmeta_cond_wait(&p->changed, &p->mutex);
+        while (p->done < target && p->wakes == seen) sync_cond_wait(&p->changed, &p->mutex);
         seen = p->wakes;
-        cmeta_mutex_unlock(&p->mutex);
+        sync_mutex_unlock(&p->mutex);
         check_equal(tw_wasi_dispatch_advance(&p->dispatch), TURBOWASM_OK);
-        cmeta_mutex_lock(&p->mutex);
+        sync_mutex_lock(&p->mutex);
     }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
 }
-static void join(cmeta_thread_t *thread) {
-    check_equal(cmeta_thread_join(thread), SALTS_OK); cmeta_thread_destroy(thread);
+static void join(sync_thread_t *thread) {
+    check_equal(sync_thread_join(thread), SALTS_OK); sync_thread_destroy(thread);
 }
 static uint32_t effect(void *context) {
     probe *p = context;
     ++p->effects;
-    if (p->owner != cmeta_thread_current_token()) ++p->wrong_owner;
+    if (p->owner != sync_thread_current_token()) ++p->wrong_owner;
     p->reentrant_advance = tw_wasi_dispatch_advance(&p->dispatch);
     p->reentrant_destroy = tw_wasi_dispatch_destroy(&p->dispatch);
     p->reentrant_stop = tw_wasi_dispatch_stop(&p->dispatch);
@@ -80,30 +80,30 @@ static void request(void *context) {
             w->error = tw_wasi_dispatch_call(&w->p->dispatch, effect, w->p, w->cleanup, w->mandatory);
             if (w->error == TURBOWASM_WASI_ERRNO_BUSY && w->repetitions) {
                 ++w->busy;
-                cmeta_thread_yield();
+                sync_thread_yield();
             } else break;
         } while (true);
         if (w->error != 17) break;
     }
     completed(w->p);
 }
-static void start(work *w, cmeta_thread_t *thread) {
-    check_equal(cmeta_thread_create(thread, request, w), SALTS_OK);
+static void start(work *w, sync_thread_t *thread) {
+    check_equal(sync_thread_create(thread, request, w), SALTS_OK);
 }
 
 static void bounded_shutdown(void) {
     probe p; init(&p, 1);
     work a = {.p = &p}, b = {.p = &p}, cleanup = {.p = &p, .cleanup = true, .mandatory = true};
-    cmeta_thread_t ta, tb, tc;
+    sync_thread_t ta, tb, tc;
     start(&a, &ta); wait_wake(&p, 1);
     check_equal(tw_wasi_dispatch_destroy(&p.dispatch), TURBOWASM_INVALID_ARGUMENT);
     start(&b, &tb); join(&tb);
     check_equal(b.error, TURBOWASM_WASI_ERRNO_BUSY);
     check_equal(p.effects, (size_t)0);
     start(&cleanup, &tc);
-    cmeta_mutex_lock(&p.dispatch.mutex);
-    while (!p.dispatch.cleanup_waiters) cmeta_cond_wait(&p.dispatch.changed, &p.dispatch.mutex);
-    cmeta_mutex_unlock(&p.dispatch.mutex);
+    sync_mutex_lock(&p.dispatch.mutex);
+    while (!p.dispatch.cleanup_waiters) sync_cond_wait(&p.dispatch.changed, &p.dispatch.mutex);
+    sync_mutex_unlock(&p.dispatch.mutex);
     check_equal(tw_wasi_dispatch_stop(&p.dispatch), TURBOWASM_OK);
     start(&b, &tb); join(&tb);
     check_equal(b.error, TURBOWASM_WASI_ERRNO_INTR);
@@ -118,23 +118,23 @@ static void bounded_shutdown(void) {
 
 static void acknowledgement_lifetime(void) {
     probe p; init(&p, 1); p.block_wake = true;
-    work w = {.p = &p}; cmeta_thread_t thread; start(&w, &thread); wait_wake(&p, 1);
+    work w = {.p = &p}; sync_thread_t thread; start(&w, &thread); wait_wake(&p, 1);
     check_equal(tw_wasi_dispatch_advance(&p.dispatch), TURBOWASM_OK);
     /* The provider is done, but the caller still owns its acknowledgement
      * path and wake context. Destruction must reject this intermediate state. */
     check_equal(tw_wasi_dispatch_destroy(&p.dispatch), TURBOWASM_INVALID_ARGUMENT);
-    cmeta_mutex_lock(&p.mutex); p.wake_released = true;
-    cmeta_cond_broadcast(&p.changed); cmeta_mutex_unlock(&p.mutex);
+    sync_mutex_lock(&p.mutex); p.wake_released = true;
+    sync_cond_broadcast(&p.changed); sync_mutex_unlock(&p.mutex);
     join(&thread); check_equal(w.error, 17u); destroy(&p);
 }
 
 static uint32_t file_effect(probe *p, turbowasm_wasi_fs_file file) {
     if (file.object == 3) {
         ++p->regular_effects;
-        if (p->owner == cmeta_thread_current_token()) ++p->wrong_owner;
+        if (p->owner == sync_thread_current_token()) ++p->wrong_owner;
     } else {
         ++p->effects;
-        if (p->owner != cmeta_thread_current_token()) ++p->wrong_owner;
+        if (p->owner != sync_thread_current_token()) ++p->wrong_owner;
     }
     return 0;
 }
@@ -274,8 +274,8 @@ static void filesystem_routing(void) {
     check_equal(turbowasm_wasi_fs_bind_socket_move(&p.fs, 4, &ops, &file,
         TURBOWASM_WASI_FILETYPE_SOCKET_STREAM, 0, UINT64_MAX, UINT64_MAX, &descriptor), TURBOWASM_OK);
     check_equal(tw_wasi_fs_detach_dispatch(&p.fs, &p.dispatch), TURBOWASM_INVALID_ARGUMENT);
-    fs_work w = {.p = &p}; cmeta_thread_t thread;
-    check_equal(cmeta_thread_create(&thread, fs_worker, &w), SALTS_OK);
+    fs_work w = {.p = &p}; sync_thread_t thread;
+    check_equal(sync_thread_create(&thread, fs_worker, &w), SALTS_OK);
     /* The worker finishes both ordinary file callbacks before the first
      * queued socket callback, with no owner progress. */
     wait_wake(&p, 1); check_equal(p.regular_effects, (size_t)2);
@@ -297,7 +297,7 @@ spec("Bounded WASI owner dispatch") {
     it("wraps a bounded queue repeatedly and preserves callback errors") {
         probe p; init(&p, 2);
         for (size_t i = 0; i < 64; ++i) {
-            work w = {.p = &p}; cmeta_thread_t thread; start(&w, &thread);
+            work w = {.p = &p}; sync_thread_t thread; start(&w, &thread);
             drive(&p, i + 1); join(&thread); check_equal(w.error, 17u);
         }
         check_equal(p.effects, (size_t)64); check_equal(p.wrong_owner, (size_t)0); destroy(&p);
@@ -305,7 +305,7 @@ spec("Bounded WASI owner dispatch") {
     it("accepts concurrent producers through a small queue without replay or loss") {
         probe p; init(&p, 2);
         enum { WORKERS = 8, ROUNDS = 32 };
-        work workers[WORKERS]; cmeta_thread_t threads[WORKERS];
+        work workers[WORKERS]; sync_thread_t threads[WORKERS];
         for (size_t i = 0; i < WORKERS; ++i) {
             workers[i] = (work){.p = &p, .repetitions = ROUNDS}; start(&workers[i], &threads[i]);
         }

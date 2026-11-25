@@ -1,4 +1,4 @@
-#include "../wasm/src/wasi02_streams.h"
+#include "../src/wasi02_streams.h"
 
 #include <turbowasm.h>
 

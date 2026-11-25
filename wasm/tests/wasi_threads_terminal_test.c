@@ -1,7 +1,7 @@
 #include <tinytest.h>
 #include <turbowasm.h>
 #include <wasi_threads.h>
-#include <salts/thread.h>
+#include <threads/threads.h>
 #include <stdatomic.h>
 #include <string.h>
 
@@ -75,7 +75,7 @@ static int32_t spawn(int32_t value) {
 static void wait_for_markers(int expected) {
     for (unsigned i = 0; i < 200000; ++i) {
         if (invoke(4, NULL) == expected) return;
-        cmeta_thread_yield();
+        sync_thread_yield();
     }
     check_equal(invoke(4, NULL), expected);
 }
@@ -83,13 +83,13 @@ static void wait_for_marker(void) { wait_for_markers(1); }
 static void gate(void *context) {
     (void)context;
     atomic_store(&gate_entered, 1);
-    while (!atomic_load(&gate_release)) cmeta_thread_yield();
+    while (!atomic_load(&gate_release)) sync_thread_yield();
 }
 static void unrelated(void *context) {
     (void)context; atomic_fetch_add(&unrelated_calls, 1);
 }
 static void wait_for_gate(void) {
-    for (unsigned i = 0; i < 200000 && !atomic_load(&gate_entered); ++i) cmeta_thread_yield();
+    for (unsigned i = 0; i < 200000 && !atomic_load(&gate_entered); ++i) sync_thread_yield();
     check_equal(atomic_load(&gate_entered), 1u);
 }
 

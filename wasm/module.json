@@ -1,0 +1,344 @@
+{
+  "modules": ["tests"],
+  "targets": {
+    "turbowasm": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "src/store.c",
+          "src/gc_exec.c",
+          "src/artifact.c",
+          "src/atomic.c",
+          "src/component_binary.c",
+          "src/component_async_state.c",
+          "src/component_task.c",
+          "src/component_subtask.c",
+          "src/component_async_call.c",
+          "src/component_task_builtin.c",
+          "src/component_waitable.c",
+          "src/component_endpoint.c",
+          "src/component_endpoint_builtin.c",
+          "src/component_buffer.c",
+          "src/component_canonical.c",
+          "src/component_string.c",
+          "src/component_core_call.c",
+          "src/component_exec.c",
+          "src/component_exec_async.c",
+          "src/component_exec_async_resource.c",
+          "src/component_resource.c",
+          "src/component_resource_binding.c",
+          "src/component_type_graph.c",
+          "src/component_type_view.c",
+          "src/execution.c",
+          "src/instance.c",
+          "src/instance_state.c",
+          "src/jit_reference_helper.c",
+          "src/jit_gc_helper.c",
+          "src/jit_table_helper.c",
+          "src/jit_memory_helper.c",
+          "src/jit_simd_helper.c",
+          "src/link.c",
+          "src/module.c",
+          "src/reader.c",
+          "src/relaxed_simd.c",
+          "src/runtime_alloc.c",
+          "src/sha256.c",
+          "src/simd.c",
+          "src/simd_exec_table.c",
+          "src/status.c",
+          "src/value.c",
+          "src/validation_context.c",
+          "src/validate.c",
+          "src/validate_composite.c",
+          "src/validate_data.c",
+          "src/validate_element.c",
+          "src/validate_instr.c",
+          "src/validate_simd_table.c",
+          "src/validate_linkage.c",
+          "src/validate_type.c"
+        ]
+      },
+      "public": {
+        "includeDirs": ["include"],
+        "deps": ["cmeta_cmeta", "saltsbase_simd"]
+      },
+      "private": {
+        "deps": ["saltsbase_coroutine", "saltsbase_core"]
+      },
+      "install": {
+        "headers": [
+          {
+            "from": "include/*.h",
+            "to": "include"
+          },
+          {
+            "from": "$builddir/sdk_include/salts/simd.h",
+            "to": "include/salts"
+          }
+        ]
+      }
+    },
+    "turbowasm_component": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "src/component_api.c",
+          "src/component_async_api.c",
+          "src/component_host_task.c",
+          "src/component_host_shutdown.c",
+          "src/component_host_transfer.c",
+          "src/component_host_endpoint.c"
+        ]
+      },
+      "public": {
+        "deps": ["turbowasm"]
+      }
+    },
+    "turbowasm_wasi02_core": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi02_component.c", "src/wasi02_descriptor.c", "src/wasi02_provider.c"]
+      },
+      "private": {
+        "includeDirs": ["src"],
+        "deps": ["turbowasm_component"]
+      },
+      "testOnly": true
+    },
+    "turbowasm_wasi02_poll_core": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi02_poll.c"]
+      },
+      "private": {
+        "includeDirs": ["src"],
+        "deps": ["turbowasm_wasi02_core", "turbowasm_component"]
+      },
+      "testOnly": true
+    },
+    "turbowasm_cflow": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/cflow_adapter.c"]
+      },
+      "public": {
+        "deps": ["turbowasm", "cmeta_cflow"]
+      }
+    },
+    "turbowasm_native_io": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/native_io_adapter.c"]
+      },
+      "public": {
+        "deps": ["turbowasm", "saltsbase_native_io"]
+      },
+      "install": {
+        "headers": [{ "from": "$builddir/sdk_include/salts/native_io.h", "to": "include/salts" }]
+      }
+    },
+    "turbowasm_wasi02_streams_core": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi02_streams.c"]
+      },
+      "private": {
+        "includeDirs": ["src"],
+        "deps": ["turbowasm_wasi02_core", "turbowasm_wasi02_poll_core", "turbowasm_component"]
+      },
+      "testOnly": true
+    },
+    "turbowasm_wasi02_sockets_core": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi02_sockets.c", "src/wasi02_network.c"]
+      },
+      "private": {
+        "includeDirs": ["src"],
+        "deps": ["turbowasm_wasi02_core", "turbowasm_wasi02_poll_core", "turbowasm_wasi02_streams_core", "turbowasm_component"]
+      },
+      "testOnly": true
+    },
+    "turbowasm_wasi02_cnet_core": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi02_cnet.c"]
+      },
+      "private": {
+        "includeDirs": ["src"],
+        "deps": ["turbowasm_wasi02_sockets_core", "salts_cnet", "turbowasm_wasi02_io"]
+      },
+      "testOnly": true
+    },
+    "turbowasm_wasi02_poll_native_io_core": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi02_poll_native_io.c"]
+      },
+      "private": {
+        "includeDirs": ["src"],
+        "deps": ["turbowasm_wasi02_poll_core", "turbowasm_native_io"]
+      },
+      "testOnly": true
+    },
+    "turbowasm_wasi": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi_preview1.c", "src/wasi_dispatch.c", "src/wasi_provider.c", "src/wasi_fs.c"]
+      },
+      "public": {
+        "deps": ["turbowasm"]
+      },
+      "private": {
+        "deps": ["saltsbase_core"]
+      }
+    },
+    "turbowasm_wasi02_fs_core": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi02_filesystem.c"]
+      },
+      "private": {
+        "includeDirs": ["src"],
+        "deps": ["turbowasm_wasi02_core", "turbowasm_wasi02_streams_core", "turbowasm_wasi", "turbowasm_component"]
+      },
+      "testOnly": true
+    },
+    "turbowasm_wasi02_exec_core": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi02_exec.c"]
+      },
+      "private": {
+        "includeDirs": ["src"],
+        "deps": [
+          "turbowasm_wasi02_core",
+          "turbowasm_wasi02_fs_core",
+          "turbowasm_wasi02_poll_core",
+          "turbowasm_wasi02_streams_core",
+          "turbowasm_wasi02_sockets_core",
+          "turbowasm_component"
+        ]
+      },
+      "testOnly": true
+    },
+    "turbowasm_wasi02": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "src/wasi02_api.c",
+          "src/wasi02_component.c",
+          "src/wasi02_descriptor.c",
+          "src/wasi02_provider.c",
+          "src/wasi02_poll.c",
+          "src/wasi02_streams.c",
+          "src/wasi02_sockets.c",
+          "src/wasi02_network.c",
+          "src/wasi02_exec.c",
+          "src/wasi02_filesystem.c"
+        ]
+      },
+      "public": {
+        "deps": ["turbowasm_component"]
+      },
+      "private": {
+        "deps": ["turbowasm_wasi"],
+        "defines": {
+          "TURBOWASM_WASI02_HAS_FILESYSTEM": "1"
+        }
+      }
+    },
+    "turbowasm_wasi02_io": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi02_io.c"]
+      },
+      "public": {
+        "deps": ["turbowasm_wasi02"]
+      },
+      "private": {
+        "deps": ["saltsbase_core"]
+      }
+    },
+    "turbowasm_wasi02_cnet": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi02_cnet.c"]
+      },
+      "public": {
+        "deps": ["turbowasm_wasi02_io", "salts_cnet"]
+      },
+      "private": {
+        "deps": ["saltsbase_unicode"],
+        "defines": {
+          "TURBOWASM_WASI02_NATIVE_TCP": "1"
+        }
+      }
+    },
+    "turbowasm_wasi_cnet": {
+      "kind": "header_only",
+      "public": {
+        "deps": ["turbowasm_wasi", "turbowasm_wasi02_cnet"]
+      }
+    },
+    "turbowasm_wasi_host_fs": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi_host_fs.c"]
+      },
+      "public": {
+        "deps": ["turbowasm_wasi"]
+      },
+      "private": {
+        "deps": ["saltsbase_core"]
+      }
+    },
+    "turbowasm_wasi_littlefs": {
+      "kind": "static",
+      "when": { "config": "littlefs" },
+      "sources": {
+        "files": [
+          "src/wasi_littlefs.c",
+          "${envPath:TURBOWASM_LITTLEFS_SOURCE_DIR}/lfs.c",
+          "${envPath:TURBOWASM_LITTLEFS_SOURCE_DIR}/lfs_util.c"
+        ]
+      },
+      "public": { "deps": ["turbowasm_wasi"] },
+      "private": { "requiredIncludeDirs": ["${envPath:TURBOWASM_LITTLEFS_SOURCE_DIR}"] }
+    },
+    "turbowasm_wasi_native_io": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi_native_io.c"]
+      },
+      "public": {
+        "deps": ["turbowasm_wasi", "turbowasm_native_io"]
+      }
+    },
+    "turbowasm_wasi_threads": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/wasi_threads.c"]
+      },
+      "public": {
+        "deps": ["turbowasm", "cmeta_cflow"]
+      },
+      "private": {
+        "deps": ["saltsbase_core"]
+      }
+    },
+    "turbowasm_mir_backend": {
+      "kind": "static",
+      "sources": {
+        "files": ["src/jit/mir_backend.c"]
+      },
+      "private": {
+        "includeDirs": ["include", "src"],
+        "deps": ["turbowasm", "vcpkg_mir"],
+        "defines": {
+          "TURBOWASM_ENABLE_MIR_JIT": "1"
+        }
+      }
+    }
+  }
+}

@@ -2,8 +2,8 @@
 #include "wasi_provider_private.h"
 #include "wasi_dispatch_private.h"
 
-#include <salts/thread.h>
-#include <tstr.h>
+#include <threads/threads.h>
+#include <core/tstr.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +25,7 @@ typedef struct turbowasm_wasi_fs_impl {
     turbowasm_wasi_fs_provider provider;
     turbowasm_wasi_fs_slot *slots;
     uint32_t capacity, active_count;
-    cmeta_mutex_t mutex;
+    sync_mutex_t mutex;
     tw_wasi_dispatch *dispatch;
 } turbowasm_wasi_fs_impl;
 
@@ -43,7 +43,7 @@ static turbowasm_status tw_dispatch_attachment(turbowasm_wasi_fs *fs,
     tw_wasi_dispatch *d, bool attach) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p || !tw_wasi_dispatch_is_owner(d)) return TURBOWASM_INVALID_ARGUMENT;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     bool busy = attach ? p->dispatch != NULL : p->dispatch != d;
     for (uint32_t i = 0; i < p->capacity; ++i) {
         const turbowasm_wasi_fs_slot *s = &p->slots[i];
@@ -51,7 +51,7 @@ static turbowasm_status tw_dispatch_attachment(turbowasm_wasi_fs *fs,
             (s->active && s->ops.recv != NULL);
     }
     if (!busy) p->dispatch = attach ? d : NULL;
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return busy ? TURBOWASM_INVALID_ARGUMENT : TURBOWASM_OK;
 }
 turbowasm_status tw_wasi_fs_attach_dispatch(turbowasm_wasi_fs *fs, tw_wasi_dispatch *d) {
@@ -99,16 +99,16 @@ static uint32_t tw_pin_locked(turbowasm_wasi_fs_impl *p, turbowasm_wasi_fs_slot 
 }
 static uint32_t tw_pin_fd(turbowasm_wasi_fs_impl *p, uint32_t fd, uint64_t rights, tw_fs_pin *out) {
     if (!p) return TURBOWASM_WASI_ERRNO_BADF;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     uint32_t error = tw_pin_locked(p, tw_fd(p, fd), rights, out);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return error;
 }
 static uint32_t tw_unpin(turbowasm_wasi_fs_impl *p, tw_fs_pin *pin, uint32_t error) {
     if (pin->slot) {
-        cmeta_mutex_lock(&p->mutex);
+        sync_mutex_lock(&p->mutex);
         --pin->slot->pins;
-        cmeta_mutex_unlock(&p->mutex);
+        sync_mutex_unlock(&p->mutex);
         pin->slot = NULL;
     }
     return error;
@@ -159,7 +159,7 @@ turbowasm_status turbowasm_wasi_fs_init(turbowasm_wasi_fs *fs, const turbowasm_w
     if (!p) return TURBOWASM_OUT_OF_MEMORY;
     p->slots = calloc(config->descriptor_capacity, sizeof(*p->slots));
     if (!p->slots) { free(p); return TURBOWASM_OUT_OF_MEMORY; }
-    cmeta_mutex_init(&p->mutex);
+    sync_mutex_init(&p->mutex);
     if (!p->mutex) { free(p->slots); free(p); return TURBOWASM_OUT_OF_MEMORY; }
     p->provider = config->provider;
     p->capacity = (uint32_t)config->descriptor_capacity;
@@ -170,13 +170,13 @@ turbowasm_status turbowasm_wasi_fs_destroy(turbowasm_wasi_fs *fs) {
     if (!fs) return TURBOWASM_INVALID_ARGUMENT;
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p) return TURBOWASM_OK;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     bool busy = p->active_count != 0 || p->dispatch != NULL;
     for (uint32_t i = 0; i < p->capacity; ++i)
         busy |= p->slots[i].leases || p->slots[i].pins || p->slots[i].reserved;
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     if (busy) return TURBOWASM_INVALID_ARGUMENT;
-    cmeta_mutex_destroy(&p->mutex);
+    sync_mutex_destroy(&p->mutex);
     free(p->slots); free(p); fs->impl = NULL;
     return TURBOWASM_OK;
 }
@@ -192,9 +192,9 @@ static turbowasm_status tw_bind(turbowasm_wasi_fs *fs, uint32_t fd, bool next,
     tstr copy = preopen ? tstr_new_len(path, strlen(path)) : NULL;
     if (preopen && !copy) return TURBOWASM_OUT_OF_MEMORY;
     turbowasm_status status = TURBOWASM_OK;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     if (ops && p->dispatch && !tw_wasi_dispatch_is_owner(p->dispatch)) {
-        cmeta_mutex_unlock(&p->mutex); tstr_free(copy); return TURBOWASM_INVALID_ARGUMENT;
+        sync_mutex_unlock(&p->mutex); tstr_free(copy); return TURBOWASM_INVALID_ARGUMENT;
     }
     if (next) fd = tw_next_fd_locked(p);
     if (tw_fd_occupied(p, fd)) status = TURBOWASM_INVALID_ARGUMENT;
@@ -209,7 +209,7 @@ static turbowasm_status tw_bind(turbowasm_wasi_fs *fs, uint32_t fd, bool next,
             if (out_fd) *out_fd = fd;
         }
     }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     tstr_free(copy);
     return status;
 }
@@ -235,30 +235,30 @@ bool turbowasm_wasi_fs_descriptor_info_get(const turbowasm_wasi_fs *fs, uint32_t
     turbowasm_wasi_fs_descriptor_info *out) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p || !out) return false;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_fd(p, fd);
     if (s) tw_info(p, s, out);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return s != NULL;
 }
 bool turbowasm_wasi_fs_retained_descriptor_info_get(const turbowasm_wasi_fs *fs,
     turbowasm_wasi_fs_descriptor d, turbowasm_wasi_fs_descriptor_info *out) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p || !out) return false;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_identity(p, d);
     bool valid = s && s->active;
     if (valid) tw_info(p, s, out);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return valid;
 }
 size_t turbowasm_wasi_fs_preopen_count(const turbowasm_wasi_fs *fs) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p) return 0;
     size_t count = 0;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     for (uint32_t i = 0; i < p->capacity; ++i) count += p->slots[i].active && p->slots[i].preopen;
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return count;
 }
 bool turbowasm_wasi_fs_preopen_at(const turbowasm_wasi_fs *fs, size_t index,
@@ -266,52 +266,52 @@ bool turbowasm_wasi_fs_preopen_at(const turbowasm_wasi_fs *fs, size_t index,
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p || !out) return false;
     bool found = false;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     for (uint32_t i = 0; i < p->capacity; ++i) {
         turbowasm_wasi_fs_slot *s = &p->slots[i];
         if (s->active && s->preopen && index-- == 0) { tw_info(p, s, out); found = true; break; }
     }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return found;
 }
 uint32_t tw_wasi_fd_preopen_pin(turbowasm_wasi_fs *fs, uint32_t fd,
     turbowasm_wasi_fs_descriptor_info *out) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p || !out) return TURBOWASM_WASI_ERRNO_INVAL;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_fd(p, fd);
     tw_fs_pin pin = {0};
     uint32_t error = !s ? TURBOWASM_WASI_ERRNO_BADF :
         !s->preopen ? TURBOWASM_WASI_ERRNO_NOTCAPABLE : tw_pin_locked(p, s, 0, &pin);
     if (!error) tw_info(p, s, out);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return error;
 }
 void tw_wasi_fd_preopen_unpin(turbowasm_wasi_fs *fs, turbowasm_wasi_fs_descriptor d) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p) return;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_identity(p, d);
     if (s && s->pins) --s->pins;
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
 }
 static uint32_t tw_close(turbowasm_wasi_fs_impl *p, bool by_fd, uint32_t fd,
     turbowasm_wasi_fs_descriptor d) {
     if (!p) return TURBOWASM_WASI_ERRNO_BADF;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = by_fd ? tw_fd(p, fd) : tw_identity(p, d);
-    if (!s || !s->active) { cmeta_mutex_unlock(&p->mutex); return TURBOWASM_WASI_ERRNO_BADF; }
+    if (!s || !s->active) { sync_mutex_unlock(&p->mutex); return TURBOWASM_WASI_ERRNO_BADF; }
     if (s->closing || s->pins || s->metadata_busy) {
-        cmeta_mutex_unlock(&p->mutex); return TURBOWASM_WASI_ERRNO_BUSY;
+        sync_mutex_unlock(&p->mutex); return TURBOWASM_WASI_ERRNO_BUSY;
     }
     s->closing = true;
     tw_wasi_fd_lease value;
     tw_snapshot(p, s, &value);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     uint32_t error = tw_wasi_provider_call(&value,
         &(tw_wasi_provider_request){.operation = TW_PROVIDER_CLOSE});
     tstr path = NULL;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     s->closing = false;
     if (!error) {
         path = s->guest_path; s->guest_path = NULL;
@@ -320,7 +320,7 @@ static uint32_t tw_close(turbowasm_wasi_fs_impl *p, bool by_fd, uint32_t fd,
         if (!s->leases) s->file = (turbowasm_wasi_fs_file){0};
         --p->active_count;
     }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     tstr_free(path);
     return error;
 }
@@ -342,10 +342,10 @@ uint32_t turbowasm_wasi_fs_path_open(turbowasm_wasi_fs *fs, uint32_t fd, uint32_
     if ((base & ~pin.value.rights_inheriting) || (inheriting & ~pin.value.rights_inheriting))
         return tw_unpin(p, &pin, TURBOWASM_WASI_ERRNO_NOTCAPABLE);
     if (!pin.value.ops.file.path_open) return tw_unpin(p, &pin, TURBOWASM_WASI_ERRNO_NOSYS);
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     uint32_t child_fd = tw_next_fd_locked(p);
     turbowasm_wasi_fs_slot *child = tw_reserve_locked(p, child_fd);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     if (!child) return tw_unpin(p, &pin, TURBOWASM_WASI_ERRNO_MFILE);
     turbowasm_wasi_fs_file opened = {0};
     error = tw_wasi_provider_call(&pin.value, &(tw_wasi_provider_request){.operation = TW_PROVIDER_PATH_OPEN,
@@ -353,7 +353,7 @@ uint32_t turbowasm_wasi_fs_path_open(turbowasm_wasi_fs *fs, uint32_t fd, uint32_
     /* Successful providers transfer a valid identity. A zero generation is a
      * provider contract violation, not a resource that can safely be closed. */
     if (!error && !opened.generation) error = TURBOWASM_WASI_ERRNO_IO;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     if (error) { child->reserved = false; child->guest_fd = 0; }
     else {
         uint64_t current = pin.slot->rights_inheriting;
@@ -362,7 +362,7 @@ uint32_t turbowasm_wasi_fs_path_open(turbowasm_wasi_fs *fs, uint32_t fd, uint32_
         *out_fd = child_fd;
     }
     --pin.slot->pins;
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return error;
 }
 uint32_t turbowasm_wasi_fs_fd_read(void *context, uint32_t fd,
@@ -481,12 +481,12 @@ uint32_t turbowasm_wasi_fs_path_rename(turbowasm_wasi_fs *fs,
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p || !source || !target || !source_length || !target_length) return TURBOWASM_WASI_ERRNO_INVAL;
     tw_fs_pin a = {0}, b = {0};
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *as = tw_fd(p, source_fd), *bs = tw_fd(p, target_fd);
     uint32_t error = !as || !bs ? TURBOWASM_WASI_ERRNO_BADF :
         tw_pin_locked(p, as, TURBOWASM_WASI_RIGHT_PATH_RENAME_SOURCE, &a);
     if (!error) error = tw_pin_locked(p, bs, TURBOWASM_WASI_RIGHT_PATH_RENAME_TARGET, &b);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     if (!error) {
         if (a.value.ops.file.context != b.value.ops.file.context ||
             a.value.ops.file.path_rename != b.value.ops.file.path_rename) error = TURBOWASM_WASI_ERRNO_XDEV;
@@ -505,10 +505,10 @@ uint32_t turbowasm_wasi_fs_path_rename(turbowasm_wasi_fs *fs,
 bool tw_wasi_fd_is_socket(turbowasm_wasi_fs *fs, uint32_t fd) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p) return false;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_fd(p, fd);
     bool socket = s && s->ops.recv != NULL;
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return socket;
 }
 uint32_t tw_wasi_fd_acquire(turbowasm_wasi_fs *fs, uint32_t fd, uint64_t rights, tw_wasi_fd_lease *out) {
@@ -517,10 +517,10 @@ uint32_t tw_wasi_fd_acquire(turbowasm_wasi_fs *fs, uint32_t fd, uint64_t rights,
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs); tw_fs_pin pin = {0};
     uint32_t error = tw_pin_fd(p, fd, rights, &pin);
     if (error) return error;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     if (pin.slot->leases == UINT32_MAX) error = TURBOWASM_WASI_ERRNO_BUSY;
     else ++pin.slot->leases;
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     if (error) return tw_unpin(p, &pin, error);
     uint8_t type = pin.value.type;
     if (!type && pin.value.ops.file.stat) {
@@ -531,11 +531,11 @@ uint32_t tw_wasi_fd_acquire(turbowasm_wasi_fs *fs, uint32_t fd, uint64_t rights,
     }
     if (!error && pin.value.ops.retain) error = tw_wasi_provider_call(&pin.value,
         &(tw_wasi_provider_request){.operation = TW_PROVIDER_RETAIN});
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     if (error) --pin.slot->leases;
     else { *out = pin.value; out->type = type; out->held = true; }
     --pin.slot->pins;
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return error;
 }
 void tw_wasi_fd_release(turbowasm_wasi_fs *fs, tw_wasi_fd_lease *lease) {
@@ -544,90 +544,90 @@ void tw_wasi_fd_release(turbowasm_wasi_fs *fs, tw_wasi_fd_lease *lease) {
     if (!p) return;
     if ((lease->claimed && lease->ops.finish) || lease->ops.release)
         (void)tw_wasi_provider_call(lease, &(tw_wasi_provider_request){.operation = TW_PROVIDER_CLEANUP});
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_identity(p, lease->descriptor);
     if (s) {
         if (lease->claimed) s->claims &= (uint8_t)~(1u << lease->direction);
         --s->leases;
         if (!s->active && !s->leases) s->file = (turbowasm_wasi_fs_file){0};
     }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     *lease = (tw_wasi_fd_lease){0};
 }
 uint32_t tw_wasi_fd_check(turbowasm_wasi_fs *fs, const tw_wasi_fd_lease *lease, uint64_t rights) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p || !lease || !lease->held) return TURBOWASM_WASI_ERRNO_BADF;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_identity(p, lease->descriptor);
     uint32_t error = !s || !s->active ? TURBOWASM_WASI_ERRNO_BADF : s->closing ? TURBOWASM_WASI_ERRNO_BUSY :
         (s->rights_base & rights) == rights ? 0 : TURBOWASM_WASI_ERRNO_NOTCAPABLE;
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return error;
 }
 uint32_t tw_wasi_fd_claim(turbowasm_wasi_fs *fs, tw_wasi_fd_lease *lease, uint8_t direction) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p || !lease || !lease->held || direction > 2) return TURBOWASM_WASI_ERRNO_INVAL;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_identity(p, lease->descriptor);
     uint8_t bit = (uint8_t)(1u << direction);
     uint32_t error = !s || !s->active ? TURBOWASM_WASI_ERRNO_BADF :
         s->closing || lease->claimed || (s->claims & bit) ? TURBOWASM_WASI_ERRNO_BUSY : 0;
     if (!error) { s->claims |= bit; lease->claimed = true; lease->direction = direction; }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return error;
 }
 uint32_t tw_wasi_fd_set_flags(turbowasm_wasi_fs *fs, uint32_t fd, uint16_t flags) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs); tw_fs_pin pin = {0};
     if (!p) return TURBOWASM_WASI_ERRNO_BADF;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     uint32_t error = tw_pin_locked(p, tw_fd(p, fd), TURBOWASM_WASI_RIGHT_FD_FDSTAT_SET_FLAGS, &pin);
     if (!error) {
         if (pin.slot->metadata_busy) { --pin.slot->pins; pin.slot = NULL; error = TURBOWASM_WASI_ERRNO_BUSY; }
         else pin.slot->metadata_busy = true;
     }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     if (error) return error;
     if (pin.value.ops.recv) {
         if (flags & ~TURBOWASM_WASI_FDFLAG_NONBLOCK) error = TURBOWASM_WASI_ERRNO_NOTSUP;
     } else if (pin.value.ops.file.set_flags) error = tw_wasi_provider_call(&pin.value,
         &(tw_wasi_provider_request){.operation = TW_PROVIDER_FLAGS, .as.flags = flags});
     else if (flags != pin.value.flags) error = TURBOWASM_WASI_ERRNO_NOTSUP;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     if (!error) pin.slot->flags = flags;
     pin.slot->metadata_busy = false;
     --pin.slot->pins;
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return error;
 }
 uint32_t tw_wasi_fd_set_rights(turbowasm_wasi_fs *fs, uint32_t fd, uint64_t base, uint64_t inheriting) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p) return TURBOWASM_WASI_ERRNO_BADF;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_fd(p, fd);
     uint32_t error = !s ? TURBOWASM_WASI_ERRNO_BADF : s->closing ? TURBOWASM_WASI_ERRNO_BUSY :
         ((base & ~s->rights_base) || (inheriting & ~s->rights_inheriting)) ? TURBOWASM_WASI_ERRNO_NOTCAPABLE : 0;
     if (!error) { s->rights_base = base; s->rights_inheriting = inheriting; }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return error;
 }
 uint32_t tw_wasi_fd_reserve(turbowasm_wasi_fs *fs, turbowasm_wasi_fs_descriptor *out, uint32_t *fd) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p || !out || !fd) return TURBOWASM_WASI_ERRNO_INVAL;
     *out = (turbowasm_wasi_fs_descriptor){0}; *fd = 0;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     uint32_t candidate = tw_next_fd_locked(p);
     turbowasm_wasi_fs_slot *s = tw_reserve_locked(p, candidate);
     if (s) { *out = tw_descriptor(p, s); *fd = candidate; }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return s ? 0 : TURBOWASM_WASI_ERRNO_MFILE;
 }
 void tw_wasi_fd_abort(turbowasm_wasi_fs *fs, turbowasm_wasi_fs_descriptor d) {
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs);
     if (!p) return;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_identity(p, d);
     if (s && s->reserved) { s->reserved = false; s->guest_fd = 0; }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
 }
 void tw_wasi_fd_publish(turbowasm_wasi_fs *fs, turbowasm_wasi_fs_descriptor d,
     turbowasm_wasi_fs_file file, const tw_wasi_fd_lease *parent, uint16_t flags) {
@@ -635,12 +635,12 @@ void tw_wasi_fd_publish(turbowasm_wasi_fs *fs, turbowasm_wasi_fs_descriptor d,
     uint64_t rights = TURBOWASM_WASI_RIGHT_FD_READ | TURBOWASM_WASI_RIGHT_FD_WRITE |
         TURBOWASM_WASI_RIGHT_FD_FDSTAT_SET_FLAGS | TURBOWASM_WASI_RIGHT_FD_FILESTAT_GET |
         TURBOWASM_WASI_RIGHT_POLL_FD_READWRITE | TURBOWASM_WASI_RIGHT_SOCK_SHUTDOWN;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     turbowasm_wasi_fs_slot *s = tw_identity(p, d), *current = tw_identity(p, parent->descriptor);
     /* The caller owns a live reservation and parent lease through publication. */
     tw_publish_locked(p, s, file, &parent->ops, TURBOWASM_WASI_FILETYPE_SOCKET_STREAM,
         flags, current->rights_inheriting & rights, 0, NULL);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
 }
 uint32_t tw_wasi_fd_ready(turbowasm_wasi_fs *fs, const tw_wasi_fd_lease *lease, uint8_t direction,
     turbowasm_wasi_readiness *out) {
@@ -648,9 +648,9 @@ uint32_t tw_wasi_fd_ready(turbowasm_wasi_fs *fs, const tw_wasi_fd_lease *lease, 
     *out = (turbowasm_wasi_readiness){0};
     turbowasm_wasi_fs_impl *p = tw_fs_impl(fs); tw_fs_pin pin = {0};
     if (!p || !lease || !lease->held) return TURBOWASM_WASI_ERRNO_BADF;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     uint32_t error = tw_pin_locked(p, tw_identity(p, lease->descriptor), TURBOWASM_WASI_RIGHT_POLL_FD_READWRITE, &pin);
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     if (error) return error;
     if (lease->ops.ready) error = tw_wasi_provider_call(lease,
         &(tw_wasi_provider_request){.operation = TW_PROVIDER_READY, .as.ready = {direction, out}});

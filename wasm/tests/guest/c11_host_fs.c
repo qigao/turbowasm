@@ -1,11 +1,11 @@
-#include "../../guest/metallic/wasm/src/wasi/wasi.h"
+#include "../../../guest/metallic/src/wasi/wasi.h"
 #include <threads.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <errno.h>
-#include "internal.h"
+#include "../../../guest/metallic/src/threads/internal.h"
 
 #define REQUIRE(x) do { if (!(x)) return __LINE__; } while (0)
 enum { WORKERS = 4, ROUNDS = 8, RETRIES = 10000 };

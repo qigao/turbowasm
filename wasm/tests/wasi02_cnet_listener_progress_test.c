@@ -1,5 +1,5 @@
 #include <wasi02_cnet.h>
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 #include <tinytest.h>
 
 static void listener_cancel_drain(bool shutdown) {

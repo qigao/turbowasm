@@ -1,5 +1,5 @@
-#include "../wasm/src/instance_internal.h"
-#include "../wasm/src/jit_simd_helper.h"
+#include "../src/instance_internal.h"
+#include "../src/jit_simd_helper.h"
 
 #include <turbowasm.h>
 
@@ -35,13 +35,13 @@ static void test_slot_ops_and_reduce(void) {
                INT64_C(0x0706050403020100),
                INT64_C(0x0f0e0d0c0b0a0908)) ==
            TURBOWASM_OK);
-    cmeta_simd_v128_store(raw, &slots[0].bits);
+    simd_v128_store(raw, &slots[0].bits);
     for (uint32_t index = 0u; index < 16u; ++index)
         assert(raw[index] == (uint8_t)index);
 
     assert(turbowasm_jit_simd_splat_i64(
                &context, 0x11, 1, 7) == TURBOWASM_OK);
-    cmeta_simd_v128_store(lanes, &slots[1].bits);
+    simd_v128_store(lanes, &slots[1].bits);
     assert(lanes[0] == 7 && lanes[1] == 7 &&
            lanes[2] == 7 && lanes[3] == 7);
 
@@ -49,7 +49,7 @@ static void test_slot_ops_and_reduce(void) {
                &context,
                0xae, /* i32x4.add */
                2, 1, 1, -1, 0) == TURBOWASM_OK);
-    cmeta_simd_v128_store(lanes, &slots[2].bits);
+    simd_v128_store(lanes, &slots[2].bits);
     assert(lanes[0] == 14 && lanes[1] == 14 &&
            lanes[2] == 14 && lanes[3] == 14);
 
@@ -81,10 +81,10 @@ static void test_slot_copy(void) {
     context.simd_slot_count = 3u;
     reset_status(&context);
 
-    cmeta_simd_v128_load(&slots[0].bits, expected);
+    simd_v128_load(&slots[0].bits, expected);
     assert(turbowasm_jit_simd_copy(
                &context, 2, 0) == TURBOWASM_OK);
-    cmeta_simd_v128_store(actual, &slots[2].bits);
+    simd_v128_store(actual, &slots[2].bits);
     assert(memcmp(actual, expected, sizeof(actual)) == 0);
     assert(context.call_status == TURBOWASM_OK);
     assert(context.call_trap == TURBOWASM_TRAP_NONE);
@@ -122,7 +122,7 @@ static void test_memory_helper_and_trap(void) {
     context.simd_slot_count = 2u;
     reset_status(&context);
 
-    cmeta_simd_v128_load(&slots[0].bits, input);
+    simd_v128_load(&slots[0].bits, input);
 
     assert(turbowasm_jit_simd_memory(
                &context,
@@ -133,13 +133,13 @@ static void test_memory_helper_and_trap(void) {
                0x00, /* v128.load */
                0, 1, 0, 0) == TURBOWASM_OK);
 
-    cmeta_simd_v128_store(output, &slots[1].bits);
+    simd_v128_store(output, &slots[1].bits);
     assert(memcmp(input, output, sizeof(input)) == 0);
 
     {
         int32_t input1[4] = {5, 6, 7, 8};
         memset(output, 0, sizeof(output));
-        cmeta_simd_v128_load(&slots[0].bits, input1);
+        simd_v128_load(&slots[0].bits, input1);
         assert(turbowasm_jit_simd_memory(
                    &context,
                    0x0b, /* v128.store */
@@ -148,7 +148,7 @@ static void test_memory_helper_and_trap(void) {
                    &context,
                    0x00, /* v128.load */
                    1, 1, 0, 0) == TURBOWASM_OK);
-        cmeta_simd_v128_store(output, &slots[1].bits);
+        simd_v128_store(output, &slots[1].bits);
         assert(memcmp(input1, output, sizeof(input1)) == 0);
     }
 
@@ -220,34 +220,34 @@ static void test_relaxed_helper_parity(void) {
 
     for (index = 0u; index < 16u; ++index)
         source[index] = UINT8_C(0x80) + (uint8_t)index;
-    cmeta_simd_v128_load(&slots[0].bits, source);
-    cmeta_simd_v128_load(&slots[1].bits, indexes);
+    simd_v128_load(&slots[0].bits, source);
+    simd_v128_load(&slots[1].bits, indexes);
 
     assert(turbowasm_jit_simd_op(
                &context,
                0x100, /* i8x16.relaxed_swizzle */
                2, 0, 1, -1, 0) == TURBOWASM_OK);
-    cmeta_simd_v128_store(actual_bytes, &slots[2].bits);
+    simd_v128_store(actual_bytes, &slots[2].bits);
     for (index = 0u; index < 16u; ++index)
         assert(actual_bytes[index] == source[0]);
 
-    cmeta_simd_v128_load(&slots[0].bits, trunc_source);
+    simd_v128_load(&slots[0].bits, trunc_source);
     assert(turbowasm_jit_simd_op(
                &context,
                0x101, /* i32x4.relaxed_trunc_f32x4_s */
                2, 0, -1, -1, 0) == TURBOWASM_OK);
-    cmeta_simd_v128_store(trunc_actual, &slots[2].bits);
+    simd_v128_store(trunc_actual, &slots[2].bits);
     assert(memcmp(
         trunc_actual, trunc_expected, sizeof(trunc_actual)) == 0);
 
-    cmeta_simd_v128_load(&slots[0].bits, left);
-    cmeta_simd_v128_load(&slots[1].bits, right);
-    cmeta_simd_v128_load(&slots[2].bits, mask);
+    simd_v128_load(&slots[0].bits, left);
+    simd_v128_load(&slots[1].bits, right);
+    simd_v128_load(&slots[2].bits, mask);
     assert(turbowasm_jit_simd_op(
                &context,
                0x10b, /* i32x4.relaxed_laneselect */
                3, 0, 1, 2, 0) == TURBOWASM_OK);
-    cmeta_simd_v128_store(select_actual, &slots[3].bits);
+    simd_v128_store(select_actual, &slots[3].bits);
     assert(memcmp(
         select_actual, select_expected,
         sizeof(select_actual)) == 0);
@@ -282,7 +282,7 @@ static void test_value_cells_preserve_shape(void) {
     context.simd_slot_count = 2u;
     input.kind = TURBOWASM_VALUE_V128;
     input.as.v128.shape = TURBOWASM_V128_F64X2;
-    cmeta_simd_v128_load(&input.as.v128.bits, bits);
+    simd_v128_load(&input.as.v128.bits, bits);
     assert(turbowasm_jit_simd_value_load(&context, 0, &input) == TURBOWASM_OK);
     assert(turbowasm_jit_simd_copy(&context, 1, 0) == TURBOWASM_OK);
     assert(turbowasm_jit_simd_value_store(&context, 1, &output) == TURBOWASM_OK);

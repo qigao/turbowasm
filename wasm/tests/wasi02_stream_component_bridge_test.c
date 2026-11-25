@@ -1,4 +1,4 @@
-#include "../wasm/src/wasi02_streams.h"
+#include "../src/wasi02_streams.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

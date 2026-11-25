@@ -2,7 +2,7 @@
 #include <wasi_threads.h>
 
 #include <cflow/executor.h>
-#include <salts/thread.h>
+#include <threads/threads.h>
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -140,7 +140,7 @@ static void wait_for_marker(turbowasm_instance *root) {
     for (attempt = 0u; attempt < 200000u; ++attempt) {
         if (invoke_i32(root, 3u) == 1)
             return;
-        cmeta_thread_yield();
+        sync_thread_yield();
     }
     assert(invoke_i32(root, 3u) == 1);
 }

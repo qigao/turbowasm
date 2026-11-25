@@ -1,0 +1,14 @@
+{
+  "modules": ["guest"],
+  "targets": {
+    "turbowasm_gc_example": {
+      "kind": "executable",
+      "sources": {
+        "files": ["gc.c"]
+      },
+      "private": {
+        "deps": ["turbowasm"]
+      }
+    }
+  }
+}

@@ -2,10 +2,10 @@
 #include <wasi_threads.h>
 #include <wasi_host_fs.h>
 #include <wasi_sockets.h>
-#include <cmeta_fs.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
-#include <tstr.h>
+#include <file/fs.h>
+#include <core/clock.h>
+#include <threads/threads.h>
+#include <core/tstr.h>
 #include <stdatomic.h>
 #include <string.h>
 
@@ -23,7 +23,7 @@ static turbowasm_wasi_preview1 wasi;
 static turbowasm_linker linker;
 static atomic_uint random_calls;
 static tstr directory;
-static cmeta_fs_buf_t program;
+static fs_buf_t program;
 
 static turbowasm_name name(const char *s) {
     return (turbowasm_name){(const uint8_t *)s, (uint32_t)strlen(s)};
@@ -31,7 +31,7 @@ static turbowasm_name name(const char *s) {
 static uint32_t clock_time(void *context, uint32_t id, uint64_t precision, uint64_t *out) {
     (void)context; (void)precision;
     if (id > 1) return TURBOWASM_WASI_ERRNO_INVAL;
-    *out = id ? cmeta_hrtime() : cmeta_realtime_ms() * UINT64_C(1000000);
+    *out = id ? hrtime() : realtime_ms() * UINT64_C(1000000);
     return 0;
 }
 /* Deterministic test provider: wasm/tests projection/concurrent invocation, not
@@ -65,11 +65,11 @@ spec("compiled Metallic C11 threads with native HostFS") {
         directory = tstr_new_len(NULL, 2047);
         tstr temp = tstr_new_len(NULL, 2047);
         check(directory != NULL); check(temp != NULL);
-        check_equal(cmeta_fs_get_tmpdir(temp, 2048), 0);
-        check_equal(cmeta_fs_path_join(directory, 2048, temp, "turbowasm_c11_host_fs"), 0);
+        check_equal(fs_get_tmpdir(temp, 2048), 0);
+        check_equal(fs_path_join(directory, 2048, temp, "turbowasm_c11_host_fs"), 0);
         tstr_free(temp);
-        check_equal(cmeta_fs_mkdir(directory, 0755), 0);
-        check_equal(cmeta_fs_read_file(GUEST_C11_HOST_FS_PATH, &program), 0);
+        check_equal(fs_mkdir(directory, 0755), 0);
+        check_equal(fs_read_file(GUEST_C11_HOST_FS_PATH, &program), 0);
         check_equal(turbowasm_module_load_borrowed(&module, (const uint8_t *)program.base, program.len), TURBOWASM_OK);
         check_equal(turbowasm_module_load_borrowed(&memory_module, memory_bytes, sizeof(memory_bytes)), TURBOWASM_OK);
         check_equal(turbowasm_instance_create(&memory, &memory_module), TURBOWASM_OK);
@@ -98,7 +98,7 @@ spec("compiled Metallic C11 threads with native HostFS") {
         check_equal(turbowasm_wasi_preview1_define(&wasi, &linker), TURBOWASM_OK);
         check_equal(turbowasm_instance_create_linked(&root, &module, &linker), TURBOWASM_OK);
         call("initialize"); call("filesystem");
-        while (turbowasm_wasi_threads_active(&threads)) cmeta_thread_yield();
+        while (turbowasm_wasi_threads_active(&threads)) sync_thread_yield();
         check(!turbowasm_wasi_threads_group_fatal(&threads, NULL, NULL));
         check_equal(atomic_load(&random_calls), 32u);
         /* Every opened guest file has been closed; only the preopen remains. */
@@ -114,8 +114,8 @@ spec("compiled Metallic C11 threads with native HostFS") {
         check_equal(turbowasm_wasi_fs_destroy(&fs), TURBOWASM_OK);
         check_equal(turbowasm_wasi_host_fs_destroy(&host_fs), TURBOWASM_OK);
         turbowasm_module_destroy(&module); turbowasm_module_destroy(&memory_module);
-        cmeta_fs_buf_free(&program);
-        check_equal(cmeta_fs_rmdir(directory), 0); /* no leaked named files */
+        fs_buf_free(&program);
+        check_equal(fs_rmdir(directory), 0); /* no leaked named files */
         tstr_free(directory);
     }
 }

@@ -1,5 +1,5 @@
-#include "../wasm/src/component_resource.h"
-#include "../wasm/src/runtime_alloc.h"
+#include "../src/component_resource.h"
+#include "../src/runtime_alloc.h"
 
 #include <turbowasm.h>
 

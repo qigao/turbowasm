@@ -1,7 +1,7 @@
 /* Private extension compiled in the CNet adapter translation unit so the
  * existing owner, admission guard and backend stay the sole authority. */
 #include <cnet/name_lookup.h>
-#include <salts_idna.h>
+#include <idna.h>
 #include <limits.h>
 #include "component_resource.h"
 
@@ -403,10 +403,10 @@ static int dns_normalize(tw_cnet_impl *p, turbowasm_wasi02_string_view name,
         p->busy = false; turbowasm_runtime_scope_leave(scope); return SALTS_ENOMEM;
     }
     char *mapped = (char *)(scratch + scalar_count);
-    salts_idna_workspace workspace = {
+    idna_workspace workspace = {
         mapped, mapped_bytes, mapped + mapped_bytes, normalized_bytes, scratch, scalar_count
     };
-    salts_idna_status status = salts_idna_to_ascii(
+    idna_status status = idna_to_ascii(
         vstr_from_buf((const char *)name.data, domain_size),
         SALTS_IDNA_UNICODE17_UTS46_35_DNS, &workspace, ascii, 256, out_size);
     turbowasm_rt_free(scratch);

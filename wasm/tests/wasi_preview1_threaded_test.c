@@ -1,5 +1,5 @@
 #include "wasi_preview1_socket_fixture.h"
-#include <salts/thread.h>
+#include <threads/threads.h>
 #include <stdatomic.h>
 #include <string.h>
 
@@ -9,8 +9,8 @@ typedef struct threaded_probe {
     turbowasm_wasi_fs fs;
     turbowasm_wasi_descriptor_ops ops;
     p1_guest guests[WORKERS];
-    cmeta_mutex_t mutex;
-    cmeta_cond_t changed;
+    sync_mutex_t mutex;
+    sync_cond_t changed;
     const void *owner;
     size_t wakes, done;
     unsigned wrong_owner, reads, retains, releases, finishes;
@@ -30,11 +30,11 @@ typedef struct threaded_work {
 
 static void wake_owner(void *context) {
     threaded_probe *p = context;
-    cmeta_mutex_lock(&p->mutex); ++p->wakes;
-    cmeta_cond_broadcast(&p->changed); cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_lock(&p->mutex); ++p->wakes;
+    sync_cond_broadcast(&p->changed); sync_mutex_unlock(&p->mutex);
 }
 static void owner_callback(threaded_probe *p) {
-    if (p->owner != cmeta_thread_current_token()) ++p->wrong_owner;
+    if (p->owner != sync_thread_current_token()) ++p->wrong_owner;
 }
 static uint32_t close_socket(void *c, turbowasm_wasi_fs_file f) {
     threaded_probe *p = c; owner_callback(p);
@@ -55,12 +55,12 @@ static uint32_t ready_socket(void *c, turbowasm_wasi_fs_file f, uint8_t directio
     (void)f; (void)direction; threaded_probe *p = c; owner_callback(p);
     p->reentrant_advance = turbowasm_wasi_preview1_advance(&p->wasi);
     p->reentrant_destroy = turbowasm_wasi_preview1_destroy_checked(&p->wasi);
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     if (p->block_scan) {
-        p->scan_entered = true; cmeta_cond_broadcast(&p->changed);
-        while (!p->release_scan) cmeta_cond_wait(&p->changed, &p->mutex);
+        p->scan_entered = true; sync_cond_broadcast(&p->changed);
+        while (!p->release_scan) sync_cond_wait(&p->changed, &p->mutex);
     }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     *out = (turbowasm_wasi_readiness){.ready = p->ready, .bytes = p->ready ? 4 : 0};
     return 0;
 }
@@ -77,10 +77,10 @@ static uint32_t read_socket(void *c, turbowasm_wasi_fs_file f,
     const turbowasm_wasi_buffer *b, size_t n, uint32_t *out) {
     if (f.object == WORKERS) {
         threaded_probe *p = c;
-        cmeta_mutex_lock(&p->mutex);
-        p->scan_entered = true; cmeta_cond_broadcast(&p->changed);
-        while (!p->release_scan) cmeta_cond_wait(&p->changed, &p->mutex);
-        cmeta_mutex_unlock(&p->mutex); *out = 0; return 0;
+        sync_mutex_lock(&p->mutex);
+        p->scan_entered = true; sync_cond_broadcast(&p->changed);
+        while (!p->release_scan) sync_cond_wait(&p->changed, &p->mutex);
+        sync_mutex_unlock(&p->mutex); *out = 0; return 0;
     }
     uint16_t flags; return recv_socket(c, f, b, n, 0, false, out, &flags);
 }
@@ -105,8 +105,8 @@ static turbowasm_wasi_preview1_config_v2 config(threaded_probe *p, size_t capaci
     return v;
 }
 static void setup_with_budget(threaded_probe *p, size_t count, size_t capacity, size_t budget) {
-    *p = (threaded_probe){.owner = cmeta_thread_current_token()}; atomic_init(&p->interrupt, false);
-    cmeta_mutex_init(&p->mutex); cmeta_cond_init(&p->changed);
+    *p = (threaded_probe){.owner = sync_thread_current_token()}; atomic_init(&p->interrupt, false);
+    sync_mutex_init(&p->mutex); sync_cond_init(&p->changed);
     p->ops = (turbowasm_wasi_descriptor_ops){.size = sizeof(p->ops), .api_version = 1,
         .file = {.context = p, .close = close_socket, .read = read_socket, .write = write_socket},
         .retain = retain_socket, .release = release_socket, .finish = finish_socket,
@@ -134,13 +134,13 @@ static void teardown(threaded_probe *p, size_t count) {
     check_equal(p->retains, p->releases); check_equal(p->wrong_owner, 0u);
     check_equal(turbowasm_wasi_preview1_destroy_checked(&p->wasi), TURBOWASM_OK);
     check_equal(turbowasm_wasi_fs_destroy(&p->fs), TURBOWASM_OK);
-    cmeta_cond_destroy(&p->changed); cmeta_mutex_destroy(&p->mutex);
+    sync_cond_destroy(&p->changed); sync_mutex_destroy(&p->mutex);
 }
 static bool should_interrupt(void *context) {
     threaded_probe *p = context; bool value = atomic_load(&p->interrupt);
     if (value) {
-        cmeta_mutex_lock(&p->mutex); p->interruption_seen = true;
-        cmeta_cond_broadcast(&p->changed); cmeta_mutex_unlock(&p->mutex);
+        sync_mutex_lock(&p->mutex); p->interruption_seen = true;
+        sync_cond_broadcast(&p->changed); sync_mutex_unlock(&p->mutex);
     }
     return value;
 }
@@ -162,22 +162,22 @@ static void worker(void *context) {
     w->status = turbowasm_instance_invoke_with_options(&p->guests[w->index].instance,
         P1_WRAPPER_BASE + w->operation, args, n, &result, 1, &results, &w->trap, &options);
     w->error = (uint32_t)result.as.i32;
-    cmeta_mutex_lock(&p->mutex); ++p->done; ++p->wakes;
-    cmeta_cond_broadcast(&p->changed); cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_lock(&p->mutex); ++p->done; ++p->wakes;
+    sync_cond_broadcast(&p->changed); sync_mutex_unlock(&p->mutex);
 }
-static void start(threaded_work *w, cmeta_thread_t *t) { check_equal(cmeta_thread_create(t, worker, w), SALTS_OK); }
-static void join(cmeta_thread_t *t) { check_equal(cmeta_thread_join(t), SALTS_OK); cmeta_thread_destroy(t); }
+static void start(threaded_work *w, sync_thread_t *t) { check_equal(sync_thread_create(t, worker, w), SALTS_OK); }
+static void join(sync_thread_t *t) { check_equal(sync_thread_join(t), SALTS_OK); sync_thread_destroy(t); }
 static void drive(threaded_probe *p, size_t done, size_t wakes) {
     size_t seen = 0;
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     while ((!done || p->done < done) && (!wakes || p->wakes < wakes)) {
-        while (p->wakes == seen) cmeta_cond_wait(&p->changed, &p->mutex);
+        while (p->wakes == seen) sync_cond_wait(&p->changed, &p->mutex);
         seen = p->wakes;
-        cmeta_mutex_unlock(&p->mutex);
+        sync_mutex_unlock(&p->mutex);
         check_equal(turbowasm_wasi_preview1_advance(&p->wasi), TURBOWASM_OK);
-        cmeta_mutex_lock(&p->mutex);
+        sync_mutex_lock(&p->mutex);
     }
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
 }
 static void check_worker(threaded_work *w, turbowasm_status status, uint32_t error) {
     check_equal(w->status, status); check_equal(w->trap, TURBOWASM_TRAP_NONE);
@@ -189,18 +189,18 @@ static void check_worker(threaded_work *w, turbowasm_status status, uint32_t err
 }
 static void cancel_during_scan(void *context) {
     threaded_probe *p = context;
-    cmeta_mutex_lock(&p->mutex);
-    while (!p->scan_entered) cmeta_cond_wait(&p->changed, &p->mutex);
+    sync_mutex_lock(&p->mutex);
+    while (!p->scan_entered) sync_cond_wait(&p->changed, &p->mutex);
     atomic_store(&p->interrupt, true);
-    while (!p->interruption_seen) cmeta_cond_wait(&p->changed, &p->mutex);
+    while (!p->interruption_seen) sync_cond_wait(&p->changed, &p->mutex);
     p->premature_return = p->done != 0;
-    p->release_scan = true; cmeta_cond_broadcast(&p->changed); cmeta_mutex_unlock(&p->mutex);
+    p->release_scan = true; sync_cond_broadcast(&p->changed); sync_mutex_unlock(&p->mutex);
 }
 
 spec("Threaded Preview1 socket waits") {
     it("parks synchronous workers and delivers readiness with owner-only callbacks") {
         threaded_probe p; setup(&p, 1, 1);
-        threaded_work w = {.p = &p, .operation = P1_RECV}; cmeta_thread_t thread; start(&w, &thread);
+        threaded_work w = {.p = &p, .operation = P1_RECV}; sync_thread_t thread; start(&w, &thread);
         drive(&p, 0, 3); /* retain, recv and wait registration each wake the owner */
         check_equal(turbowasm_wasi_preview1_destroy_checked(&p.wasi), TURBOWASM_INVALID_ARGUMENT);
         p.ready = true; check_equal(turbowasm_wasi_preview1_advance(&p.wasi), TURBOWASM_OK);
@@ -214,9 +214,9 @@ spec("Threaded Preview1 socket waits") {
     it("acknowledges cancellation after a pinned owner scan before releasing guest state") {
         threaded_probe p; setup(&p, 1, 1);
         threaded_work w = {.p = &p, .operation = P1_RECV, .interruptible = true};
-        cmeta_thread_t thread, controller; start(&w, &thread); drive(&p, 0, 3);
+        sync_thread_t thread, controller; start(&w, &thread); drive(&p, 0, 3);
         p.block_scan = true; p.ready = true;
-        check_equal(cmeta_thread_create(&controller, cancel_during_scan, &p), SALTS_OK);
+        check_equal(sync_thread_create(&controller, cancel_during_scan, &p), SALTS_OK);
         check_equal(turbowasm_wasi_preview1_advance(&p.wasi), TURBOWASM_OK);
         join(&controller); drive(&p, 1, 0); join(&thread);
         check_worker(&w, TURBOWASM_INTERRUPTED, 0); check_false(p.premature_return);
@@ -226,7 +226,7 @@ spec("Threaded Preview1 socket waits") {
     }
     it("shutdown wakes all parked workers and preserves cleanup and close admission") {
         threaded_probe p; setup(&p, WORKERS, WORKERS);
-        threaded_work work[WORKERS]; cmeta_thread_t threads[WORKERS];
+        threaded_work work[WORKERS]; sync_thread_t threads[WORKERS];
         for (unsigned i = 0; i < WORKERS; ++i) {
             work[i] = (threaded_work){.p = &p, .index = i, .operation = P1_RECV}; start(&work[i], &threads[i]);
         }
@@ -251,7 +251,7 @@ spec("Threaded Preview1 socket waits") {
     }
     it("keeps a parked lease distinct from a closed and rebound descriptor") {
         threaded_probe p; setup(&p, 1, 1);
-        threaded_work w = {.p = &p, .operation = P1_RECV}; cmeta_thread_t thread;
+        threaded_work w = {.p = &p, .operation = P1_RECV}; sync_thread_t thread;
         start(&w, &thread); drive(&p, 0, 3);
         check_equal(turbowasm_wasi_fs_close_fd(&p.fs, 4), 0u);
         turbowasm_wasi_fs_file file = {1, 1}; turbowasm_wasi_fs_descriptor descriptor;
@@ -265,7 +265,7 @@ spec("Threaded Preview1 socket waits") {
     }
     it("rechecks contracted rights after worker readiness without consuming input") {
         threaded_probe p; setup(&p, 2, 1);
-        threaded_work w = {.p = &p, .operation = P1_RECV}; cmeta_thread_t thread;
+        threaded_work w = {.p = &p, .operation = P1_RECV}; sync_thread_t thread;
         start(&w, &thread); drive(&p, 0, 3);
         turbowasm_value args[] = {p1_i32(4), p1_i64(0), p1_i64(0)};
         check_equal(p1_invoke(&p.guests[1], P1_WRAPPER_BASE + P1_RIGHTS, args, 3).as.i32, 0);
@@ -276,7 +276,7 @@ spec("Threaded Preview1 socket waits") {
     it("bounds worker wait admission and returns AGAIN without losing the first waiter") {
         threaded_probe p; setup(&p, 2, 1);
         threaded_work a = {.p = &p, .operation = P1_RECV}, b = {.p = &p, .index = 1, .operation = P1_RECV};
-        cmeta_thread_t ta, tb; start(&a, &ta); drive(&p, 0, 3);
+        sync_thread_t ta, tb; start(&a, &ta); drive(&p, 0, 3);
         start(&b, &tb); drive(&p, 1, 0); join(&tb); check_worker(&b, TURBOWASM_OK, TURBOWASM_WASI_ERRNO_AGAIN);
         p.ready = true; check_equal(turbowasm_wasi_preview1_advance(&p.wasi), TURBOWASM_OK);
         drive(&p, 2, 0); join(&ta); check_worker(&a, TURBOWASM_OK, 0); teardown(&p, 2);
@@ -284,7 +284,7 @@ spec("Threaded Preview1 socket waits") {
     it("reserves payload budget across workers and releases it after terminal cleanup") {
         threaded_probe p; setup_with_budget(&p, 2, 2, 4);
         threaded_work a = {.p = &p, .operation = P1_RECV}, b = {.p = &p, .index = 1, .operation = P1_RECV};
-        cmeta_thread_t ta, tb; start(&a, &ta); drive(&p, 0, 3);
+        sync_thread_t ta, tb; start(&a, &ta); drive(&p, 0, 3);
         start(&b, &tb); drive(&p, 1, 0); join(&tb); check_worker(&b, TURBOWASM_OK, TURBOWASM_WASI_ERRNO_NOMEM);
         check_equal(p.reads, 1u);
         p.ready = true; check_equal(turbowasm_wasi_preview1_advance(&p.wasi), TURBOWASM_OK);
@@ -295,7 +295,7 @@ spec("Threaded Preview1 socket waits") {
         threaded_probe p; setup(&p, 1, 1);
         p1_subscription(&p.guests[0], 0, 42, TURBOWASM_WASI_EVENT_CLOCK, TURBOWASM_WASI_CLOCKID_MONOTONIC);
         p1_store(&p.guests[0], 1048, 500); /* relative deadline: 100 + 500 */
-        threaded_work w = {.p = &p, .operation = P1_POLL}; cmeta_thread_t thread; start(&w, &thread);
+        threaded_work w = {.p = &p, .operation = P1_POLL}; sync_thread_t thread; start(&w, &thread);
         drive(&p, 0, 1);
         uint64_t delay = 0; check_equal(turbowasm_wasi_preview1_next_timeout(&p.wasi, &delay), TURBOWASM_OK);
         check_equal(delay, UINT64_C(500));
@@ -308,16 +308,16 @@ spec("Threaded Preview1 socket waits") {
         check_equal(turbowasm_wasi_fs_bind_descriptor(&p.fs, 4,
             (turbowasm_wasi_fs_file){WORKERS, 1}, false, NULL, &descriptor), TURBOWASM_OK);
         p1_guest_init(&p.guests[0], &p.wasi); p1_iovec(&p.guests[0], 4);
-        threaded_work w = {.p = &p, .operation = P1_READ}; cmeta_thread_t thread; start(&w, &thread);
-        cmeta_mutex_lock(&p.mutex);
-        while (!p.scan_entered) cmeta_cond_wait(&p.changed, &p.mutex);
-        cmeta_mutex_unlock(&p.mutex);
+        threaded_work w = {.p = &p, .operation = P1_READ}; sync_thread_t thread; start(&w, &thread);
+        sync_mutex_lock(&p.mutex);
+        while (!p.scan_entered) sync_cond_wait(&p.changed, &p.mutex);
+        sync_mutex_unlock(&p.mutex);
         check_equal(turbowasm_wasi_preview1_shutdown_request(&p.wasi), TURBOWASM_OK);
         bool complete = true;
         check_equal(turbowasm_wasi_preview1_shutdown_poll(&p.wasi, &complete), TURBOWASM_OK); check_false(complete);
         check_equal(turbowasm_wasi_preview1_destroy_checked(&p.wasi), TURBOWASM_INVALID_ARGUMENT);
-        cmeta_mutex_lock(&p.mutex); p.release_scan = true;
-        cmeta_cond_broadcast(&p.changed); cmeta_mutex_unlock(&p.mutex);
+        sync_mutex_lock(&p.mutex); p.release_scan = true;
+        sync_cond_broadcast(&p.changed); sync_mutex_unlock(&p.mutex);
         drive(&p, 1, 0); join(&thread); check_worker(&w, TURBOWASM_OK, 0);
         check_equal(turbowasm_wasi_preview1_shutdown_poll(&p.wasi, &complete), TURBOWASM_OK); check_true(complete);
         p1_guest_destroy(&p.guests[0]); check_equal(turbowasm_wasi_fs_close_fd(&p.fs, 4), 0u); teardown(&p, 0);

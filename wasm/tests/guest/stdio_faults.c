@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include "../../guest/metallic/wasm/src/wasi/wasi.h"
+#include "../../../guest/metallic/src/wasi/wasi.h"
 
 /* This guest links scripted definitions at the libc's WASI boundary. The
  * command runner still executes the real libc and observes its exit status. */

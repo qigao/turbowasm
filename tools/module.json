@@ -1,0 +1,32 @@
+{
+  "targets": {
+    "turbowasm_cli": {
+      "kind": "executable",
+      "sources": {
+        "files": ["turbowasm.c"]
+      },
+      "private": {
+        "deps": ["turbowasm"]
+      }
+    },
+    "turbowasm_command": {
+      "kind": "static",
+      "sources": {
+        "files": ["command.c"]
+      },
+      "public": {
+        "includeDirs": ["."],
+        "deps": ["turbowasm_wasi_host_fs"]
+      }
+    },
+    "turbowasm-run": {
+      "kind": "executable",
+      "sources": {
+        "files": ["turbowasm_run.c"]
+      },
+      "private": {
+        "deps": ["turbowasm_command", "saltsbase_core"]
+      }
+    }
+  }
+}

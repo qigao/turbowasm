@@ -24,7 +24,7 @@ static turbowasm_module module;
 static turbowasm_instance instance;
 static turbowasm_module imported_module;
 static turbowasm_instance workers[2];
-static cmeta_thread_t threads[2];
+static sync_thread_t threads[2];
 
 enum { WORKER_ITERATIONS = 1000, WAITER_POLL_LIMIT = 1000, ARTIFACT_CAPACITY = 32768 };
 typedef struct worker_call {
@@ -153,7 +153,7 @@ spec("memory64 execution") {
         unsigned index;
         for (index = 0u; index < 2u; ++index) {
             if (threads[index] != NULL)
-                check_equal(cmeta_thread_join(&threads[index]), 0);
+                check_equal(sync_thread_join(&threads[index]), 0);
             turbowasm_instance_destroy(&workers[index]);
         }
         turbowasm_module_destroy(&imported_module);
@@ -254,10 +254,10 @@ spec("memory64 execution") {
             calls[index].instance = &workers[index];
             calls[index].function = 0u;
             calls[index].iterations = WORKER_ITERATIONS;
-            check_equal(cmeta_thread_create(&threads[index], run_worker, &calls[index]), 0);
+            check_equal(sync_thread_create(&threads[index], run_worker, &calls[index]), 0);
         }
         for (index = 0u; index < 2u; ++index) {
-            check_equal(cmeta_thread_join(&threads[index]), 0);
+            check_equal(sync_thread_join(&threads[index]), 0);
             check_equal(calls[index].status, TURBOWASM_OK);
             check_equal(calls[index].trap, TURBOWASM_TRAP_NONE);
         }
@@ -273,14 +273,14 @@ spec("memory64 execution") {
         calls[0].instance = &workers[0];
         calls[0].function = 2u;
         calls[0].iterations = 1u;
-        check_equal(cmeta_thread_create(&threads[0], run_worker, &calls[0]), 0);
+        check_equal(sync_thread_create(&threads[0], run_worker, &calls[0]), 0);
         for (attempt = 0u; attempt < WAITER_POLL_LIMIT; ++attempt) {
-            cmeta_mutex_lock(&memory->waiter_mutex);
+            sync_mutex_lock(&memory->waiter_mutex);
             waiter_count = memory->waiter_count;
-            cmeta_mutex_unlock(&memory->waiter_mutex);
+            sync_mutex_unlock(&memory->waiter_mutex);
             if (waiter_count == 1u)
                 break;
-            cmeta_sleep_ms(1u);
+            sleep_ms(1u);
         }
         check_equal(waiter_count, 1u);
         calls[1].instance = &workers[1];
@@ -293,7 +293,7 @@ spec("memory64 execution") {
         run_worker(&calls[1]);
         check_equal(calls[1].status, TURBOWASM_OK);
         check_equal(calls[1].result.as.i32, 1);
-        check_equal(cmeta_thread_join(&threads[0]), 0);
+        check_equal(sync_thread_join(&threads[0]), 0);
         check_equal(calls[0].status, TURBOWASM_OK);
         check_equal(calls[0].result.as.i32, 0);
         check_equal(integer(S_SIZE, 0, 0, 0), INT64_C(2));

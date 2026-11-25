@@ -2,7 +2,7 @@
 
 #include "instance_internal.h"
 
-#include <salts/thread.h>
+#include <threads/threads.h>
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -40,7 +40,7 @@ struct turbowasm_wasi_threads_impl {
     turbowasm_status fatal_status;
     turbowasm_trap fatal_trap;
     uint32_t exit_code;
-    cmeta_mutex_t mutex;
+    sync_mutex_t mutex;
     bool mutex_initialized;
 };
 
@@ -87,7 +87,7 @@ static void turbowasm_wasi_threads_publish_fatal(
     if (impl == NULL)
         return;
 
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     if (!atomic_load_explicit(
             &impl->fatal, memory_order_relaxed) &&
         !atomic_load_explicit(
@@ -98,7 +98,7 @@ static void turbowasm_wasi_threads_publish_fatal(
             &impl->fatal, true, memory_order_release);
         first = true;
     }
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
 
     /*
      * Shared imported memories resolve to the same provider waiter registry
@@ -120,7 +120,7 @@ static void turbowasm_wasi_threads_publish_exit(
     if (impl == NULL)
         return;
 
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     if (!atomic_load_explicit(
             &impl->fatal, memory_order_relaxed) &&
         !atomic_load_explicit(
@@ -130,7 +130,7 @@ static void turbowasm_wasi_threads_publish_exit(
             &impl->exit_requested, true, memory_order_release);
         first = true;
     }
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
 
     if (first && source != NULL && source->impl != NULL) {
         turbowasm_instance_interrupt_waiters(
@@ -242,13 +242,13 @@ static void turbowasm_wasi_threads_release_slot(
     owner = slot->owner;
     turbowasm_instance_destroy(&slot->child);
 
-    cmeta_mutex_lock(&owner->mutex);
+    sync_mutex_lock(&owner->mutex);
     slot->active = false;
     slot->start_arg = 0u;
     slot->tid = 0;
     if (owner->active != 0u)
         --owner->active;
-    cmeta_mutex_unlock(&owner->mutex);
+    sync_mutex_unlock(&owner->mutex);
 }
 
 static void turbowasm_wasi_threads_run(void *user) {
@@ -313,20 +313,20 @@ static int32_t turbowasm_wasi_threads_reserve(
     if (impl == NULL || out_slot_index == NULL)
         return TURBOWASM_WASI_THREADS_SPAWN_BAD_MODULE;
 
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     if (atomic_load_explicit(
             &impl->fatal, memory_order_acquire) ||
         atomic_load_explicit(
             &impl->exit_requested, memory_order_acquire)) {
-        cmeta_mutex_unlock(&impl->mutex);
+        sync_mutex_unlock(&impl->mutex);
         return TURBOWASM_WASI_THREADS_SPAWN_GROUP_TERMINATED;
     }
     if (impl->active >= impl->capacity) {
-        cmeta_mutex_unlock(&impl->mutex);
+        sync_mutex_unlock(&impl->mutex);
         return TURBOWASM_WASI_THREADS_SPAWN_CAPACITY;
     }
     if (impl->next_tid >= TURBOWASM_WASI_THREADS_TID_LIMIT) {
-        cmeta_mutex_unlock(&impl->mutex);
+        sync_mutex_unlock(&impl->mutex);
         return TURBOWASM_WASI_THREADS_SPAWN_TID_EXHAUSTED;
     }
 
@@ -335,7 +335,7 @@ static int32_t turbowasm_wasi_threads_reserve(
             break;
     }
     if (index == impl->capacity) {
-        cmeta_mutex_unlock(&impl->mutex);
+        sync_mutex_unlock(&impl->mutex);
         return TURBOWASM_WASI_THREADS_SPAWN_CAPACITY;
     }
 
@@ -344,7 +344,7 @@ static int32_t turbowasm_wasi_threads_reserve(
     impl->slots[index].tid = result;
     ++impl->active;
     *out_slot_index = index;
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
     return result;
 }
 
@@ -354,7 +354,7 @@ static void turbowasm_wasi_threads_rollback(
         return;
 
     turbowasm_instance_destroy(&slot->child);
-    cmeta_mutex_lock(&slot->owner->mutex);
+    sync_mutex_lock(&slot->owner->mutex);
     if (slot->active) {
         slot->active = false;
         if (slot->owner->active != 0u)
@@ -362,7 +362,7 @@ static void turbowasm_wasi_threads_rollback(
     }
     slot->start_arg = 0u;
     slot->tid = 0;
-    cmeta_mutex_unlock(&slot->owner->mutex);
+    sync_mutex_unlock(&slot->owner->mutex);
 }
 
 static turbowasm_status turbowasm_wasi_threads_spawn(
@@ -401,17 +401,17 @@ static turbowasm_status turbowasm_wasi_threads_spawn(
         goto done;
     }
 
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     if (impl->module == NULL) {
         impl->module = module;
         impl->start_function_index = start_function_index;
     } else if (impl->module != module ||
                impl->start_function_index != start_function_index) {
-        cmeta_mutex_unlock(&impl->mutex);
+        sync_mutex_unlock(&impl->mutex);
         spawn_result = TURBOWASM_WASI_THREADS_SPAWN_BAD_MODULE;
         goto done;
     }
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
 
     spawn_result = turbowasm_wasi_threads_reserve(
         impl, &slot_index);
@@ -514,7 +514,7 @@ turbowasm_status turbowasm_wasi_threads_init(
         return TURBOWASM_OUT_OF_MEMORY;
     }
 
-    cmeta_mutex_init(&impl->mutex);
+    sync_mutex_init(&impl->mutex);
     if (impl->mutex == NULL) {
         free(impl->slots);
         free(impl);
@@ -577,12 +577,12 @@ bool turbowasm_wasi_threads_destroy(
     impl = (turbowasm_wasi_threads_impl *)threads->impl;
     if (impl->owns_executor && cflow_executor_is_current(impl->executor))
         return false;
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     if (impl->active != 0u) {
-        cmeta_mutex_unlock(&impl->mutex);
+        sync_mutex_unlock(&impl->mutex);
         return false;
     }
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
 
     if (impl->owns_executor) {
         /* active becomes zero inside the finalizer, before the executor has
@@ -594,7 +594,7 @@ bool turbowasm_wasi_threads_destroy(
         free(impl->executor);
     }
     if (impl->mutex_initialized)
-        cmeta_mutex_destroy(&impl->mutex);
+        sync_mutex_destroy(&impl->mutex);
     free(impl->slots);
     free(impl);
     threads->impl = NULL;
@@ -636,9 +636,9 @@ size_t turbowasm_wasi_threads_active(
         return 0u;
 
     impl = (turbowasm_wasi_threads_impl *)threads->impl;
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     active = impl->active;
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
     return active;
 }
 
@@ -656,12 +656,12 @@ bool turbowasm_wasi_threads_group_fatal(
             &impl->fatal, memory_order_acquire))
         return false;
 
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     if (out_status != NULL)
         *out_status = impl->fatal_status;
     if (out_trap != NULL)
         *out_trap = impl->fatal_trap;
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
     return true;
 }
 
@@ -694,10 +694,10 @@ bool turbowasm_wasi_threads_group_exit_code(
             &impl->exit_requested, memory_order_acquire))
         return false;
 
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     if (out_exit_code != NULL)
         *out_exit_code = impl->exit_code;
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
     return true;
 }
 

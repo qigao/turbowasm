@@ -1,0 +1,71 @@
+{
+  "include": [
+    "slates/Platforms.json",
+    "slates/Tools.json",
+    "slates/UserEnvironments.json"
+  ],
+  "defaultPreset": "release",
+  "styles": {
+    "assertions": { "flags": ["-UNDEBUG"] }
+  },
+  "modules": ["third_party", "wasm", "guest", "tools", "examples"],
+  "presets": {
+    "base": {
+      "cStd": "c11",
+      "cxxStd": "c++17",
+      "tests": false,
+      "toolchain": "llvm-mingw-x64",
+      "flags": ["-Wall", "-Wextra", "-Wpedantic"]
+    },
+    "release": {
+      "inherits": "base",
+      "config": "release",
+      "options": {
+        "optimization": "speed"
+      },
+      "defines": {
+        "NDEBUG": null
+      }
+    },
+    "debug": {
+      "inherits": "base",
+      "config": "debug",
+      "options": {
+        "optimization": "none",
+        "debugInfo": "full"
+      }
+    },
+    "tests": {
+      "inherits": "release",
+      "tests": true
+    },
+    "debug-tests": {
+      "inherits": "debug",
+      "tests": true
+    },
+    "littlefs": {
+      "inherits": "tests",
+      "config": "littlefs"
+    },
+    "conformance": {
+      "inherits": "tests",
+      "config": "conformance"
+    },
+    "core3": {
+      "inherits": "tests",
+      "config": "core3"
+    },
+    "guests": {
+      "inherits": "release",
+      "config": "guests"
+    },
+    "guest-tests": {
+      "inherits": "tests",
+      "config": "guests"
+    },
+    "http-guest-tests": {
+      "inherits": "guest-tests",
+      "config": "http-guest-tests"
+    }
+  }
+}

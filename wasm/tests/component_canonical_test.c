@@ -1,4 +1,4 @@
-#include "../wasm/src/component_canonical.h"
+#include "../src/component_canonical.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

@@ -1,11 +1,11 @@
 #include "wasi_preview1_socket_fixture.h"
 #include <wasi_cnet.h>
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 #include <string.h>
 #if defined(GUEST_C11_SOCKET_PATH)
 #include <wasi_threads.h>
-#include <cmeta_fs.h>
-#include <salts/thread.h>
+#include <file/fs.h>
+#include <threads/threads.h>
 #include <stdatomic.h>
 static turbowasm_wasi_threads guest_threads;
 static atomic_bool owner_woken;
@@ -286,10 +286,10 @@ static void guest_worker(void *context) {
     atomic_store(&w->done, true); wake_owner(NULL);
 }
 static void compiled_guest(bool exiting) {
-    cmeta_fs_buf_t program = {0}; turbowasm_module module = {0}, memory_module = {0};
+    fs_buf_t program = {0}; turbowasm_module module = {0}, memory_module = {0};
     turbowasm_instance memory = {0}; turbowasm_linker linker = {0}; guest_work w = {0};
     atomic_init(&w.done, false);
-    check_equal(cmeta_fs_read_file(GUEST_C11_SOCKET_PATH, &program), 0);
+    check_equal(fs_read_file(GUEST_C11_SOCKET_PATH, &program), 0);
     check_equal(turbowasm_module_load_borrowed(&module, (const uint8_t *)program.base, program.len), TURBOWASM_OK);
     check_equal(turbowasm_module_load_borrowed(&memory_module, shared_memory_bytes, sizeof(shared_memory_bytes)), TURBOWASM_OK);
     check_equal(turbowasm_instance_create(&memory, &memory_module), TURBOWASM_OK);
@@ -307,11 +307,11 @@ static void compiled_guest(bool exiting) {
     check_equal(turbowasm_instance_create_linked(&w.root, &module, &linker), TURBOWASM_OK);
     w.initialize = exported(&module, "initialize"); w.entry = exported(&module, exiting ? "exit_waiters" : "sockets");
     check_not_equal(w.initialize, UINT32_MAX); check_not_equal(w.entry, UINT32_MAX);
-    cmeta_thread_t worker; check_equal(cmeta_thread_create(&worker, guest_worker, &w), SALTS_OK);
+    sync_thread_t worker; check_equal(sync_thread_create(&worker, guest_worker, &w), SALTS_OK);
     /* Root joins C11 children on a separate native thread. The initializing
      * owner keeps native transport and Preview1 cleanup moving throughout. */
     while (!atomic_load(&w.done) || turbowasm_wasi_threads_active(&guest_threads)) pump();
-    check_equal(cmeta_thread_join(&worker), SALTS_OK); cmeta_thread_destroy(&worker);
+    check_equal(sync_thread_join(&worker), SALTS_OK); sync_thread_destroy(&worker);
     info("threaded socket guest: status=%d trap=%d line=%d", w.status, w.trap, w.line);
     if (exiting) {
         uint32_t code = 0;
@@ -322,7 +322,7 @@ static void compiled_guest(bool exiting) {
     check(!turbowasm_wasi_threads_group_fatal(&guest_threads, NULL, NULL));
     turbowasm_instance_destroy(&w.root); check(turbowasm_wasi_threads_destroy(&guest_threads));
     turbowasm_linker_destroy(&linker); turbowasm_instance_destroy(&memory);
-    turbowasm_module_destroy(&module); turbowasm_module_destroy(&memory_module); cmeta_fs_buf_free(&program);
+    turbowasm_module_destroy(&module); turbowasm_module_destroy(&memory_module); fs_buf_free(&program);
 }
 #endif
 

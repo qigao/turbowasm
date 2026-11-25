@@ -1,6 +1,6 @@
 #include <wasi_native_io.h>
 
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 #include <stddef.h>
 #include <stdlib.h>

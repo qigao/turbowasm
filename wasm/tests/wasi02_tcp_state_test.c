@@ -1,4 +1,4 @@
-#include "../wasm/src/wasi02_sockets.h"
+#include "../src/wasi02_sockets.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

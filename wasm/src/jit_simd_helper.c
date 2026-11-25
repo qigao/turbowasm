@@ -17,7 +17,7 @@ static void turbowasm_jit_simd_record(
     context->call_trap = trap;
 }
 
-static cmeta_v128 *turbowasm_jit_simd_slot(
+static simd_v128 *turbowasm_jit_simd_slot(
     turbowasm_jit_invocation_context *context,
     int64_t index) {
     if (context == NULL || context->simd_slots == NULL ||
@@ -26,7 +26,7 @@ static cmeta_v128 *turbowasm_jit_simd_slot(
     return &context->simd_slots[(uint32_t)index].bits;
 }
 
-static const cmeta_v128 *turbowasm_jit_simd_slot_const(
+static const simd_v128 *turbowasm_jit_simd_slot_const(
     const turbowasm_jit_invocation_context *context,
     int64_t index) {
     if (context == NULL || context->simd_slots == NULL ||
@@ -45,35 +45,35 @@ static int64_t turbowasm_jit_simd_status(
 }
 
 static bool turbowasm_jit_simd_scalar_i64(
-    const cmeta_vector_desc *desc,
+    const simd_desc *desc,
     int64_t raw,
-    cmeta_simd_scalar *out) {
+    simd_scalar *out) {
     if (desc == NULL || out == NULL)
         return false;
 
     switch (desc->lane_kind) {
-        case CMETA_VECTOR_I8:
+        case SALTS_SIMD_LANE_I8:
             out->i8 = (int8_t)raw;
             return true;
-        case CMETA_VECTOR_U8:
+        case SALTS_SIMD_LANE_U8:
             out->u8 = (uint8_t)raw;
             return true;
-        case CMETA_VECTOR_I16:
+        case SALTS_SIMD_LANE_I16:
             out->i16 = (int16_t)raw;
             return true;
-        case CMETA_VECTOR_U16:
+        case SALTS_SIMD_LANE_U16:
             out->u16 = (uint16_t)raw;
             return true;
-        case CMETA_VECTOR_I32:
+        case SALTS_SIMD_LANE_I32:
             out->i32 = (int32_t)(uint32_t)raw;
             return true;
-        case CMETA_VECTOR_U32:
+        case SALTS_SIMD_LANE_U32:
             out->u32 = (uint32_t)raw;
             return true;
-        case CMETA_VECTOR_I64:
+        case SALTS_SIMD_LANE_I64:
             out->i64 = raw;
             return true;
-        case CMETA_VECTOR_U64:
+        case SALTS_SIMD_LANE_U64:
             out->u64 = (uint64_t)raw;
             return true;
         default:
@@ -86,7 +86,7 @@ int64_t turbowasm_jit_simd_const(
     int64_t out_slot,
     int64_t low_bits,
     int64_t high_bits) {
-    cmeta_v128 *out;
+    simd_v128 *out;
     uint8_t bytes[16];
     uint64_t low = (uint64_t)low_bits;
     uint64_t high = (uint64_t)high_bits;
@@ -103,7 +103,7 @@ int64_t turbowasm_jit_simd_const(
         bytes[8u + index] = (uint8_t)(high >> (8u * index));
     }
 
-    cmeta_simd_v128_load(out, bytes);
+    simd_v128_load(out, bytes);
     context->simd_slots[out_slot].shape = TURBOWASM_V128_RAW;
     return (int64_t)TURBOWASM_OK;
 }
@@ -112,9 +112,9 @@ int64_t turbowasm_jit_simd_copy(
     turbowasm_jit_invocation_context *context,
     int64_t out_slot,
     int64_t in_slot) {
-    cmeta_v128 *out =
+    simd_v128 *out =
         turbowasm_jit_simd_slot(context, out_slot);
-    const cmeta_v128 *in =
+    const simd_v128 *in =
         turbowasm_jit_simd_slot_const(context, in_slot);
 
     if (out == NULL || in == NULL) {
@@ -154,8 +154,8 @@ int64_t turbowasm_jit_simd_splat_i64(
     int64_t out_slot,
     int64_t scalar) {
     const turbowasm_simd_exec_descriptor *descriptor;
-    cmeta_simd_scalar value = {0};
-    cmeta_v128 *out;
+    simd_scalar value = {0};
+    simd_v128 *out;
 
     descriptor = turbowasm_simd_exec_descriptor_find((uint32_t)opcode);
     out = turbowasm_jit_simd_slot(context, out_slot);
@@ -164,7 +164,7 @@ int64_t turbowasm_jit_simd_splat_i64(
         out == NULL ||
         !turbowasm_jit_simd_scalar_i64(
             descriptor->vector_desc, scalar, &value) ||
-        !cmeta_simd_splat(descriptor->vector_desc, out, value)) {
+        !simd_splat(descriptor->vector_desc, out, value)) {
         return turbowasm_jit_simd_status(
             context, TURBOWASM_UNSUPPORTED,
             TURBOWASM_TRAP_NONE);
@@ -180,14 +180,14 @@ int64_t turbowasm_jit_simd_splat_f32(
     int64_t out_slot,
     float scalar) {
     const turbowasm_simd_exec_descriptor *descriptor;
-    cmeta_simd_scalar value = {0};
-    cmeta_v128 *out;
+    simd_scalar value = {0};
+    simd_v128 *out;
 
     descriptor = turbowasm_simd_exec_descriptor_find((uint32_t)opcode);
     out = turbowasm_jit_simd_slot(context, out_slot);
     if (descriptor == NULL ||
         descriptor->kind != TURBOWASM_SIMD_EXEC_SPLAT ||
-        descriptor->vector_desc != &cmeta_vector_f32x4 ||
+        descriptor->vector_desc != &simd_f32x4 ||
         out == NULL) {
         return turbowasm_jit_simd_status(
             context, TURBOWASM_UNSUPPORTED,
@@ -195,7 +195,7 @@ int64_t turbowasm_jit_simd_splat_f32(
     }
 
     value.f32 = scalar;
-    if (!cmeta_simd_splat(descriptor->vector_desc, out, value))
+    if (!simd_splat(descriptor->vector_desc, out, value))
         return turbowasm_jit_simd_status(
             context, TURBOWASM_UNSUPPORTED,
             TURBOWASM_TRAP_NONE);
@@ -210,14 +210,14 @@ int64_t turbowasm_jit_simd_splat_f64(
     int64_t out_slot,
     double scalar) {
     const turbowasm_simd_exec_descriptor *descriptor;
-    cmeta_simd_scalar value = {0};
-    cmeta_v128 *out;
+    simd_scalar value = {0};
+    simd_v128 *out;
 
     descriptor = turbowasm_simd_exec_descriptor_find((uint32_t)opcode);
     out = turbowasm_jit_simd_slot(context, out_slot);
     if (descriptor == NULL ||
         descriptor->kind != TURBOWASM_SIMD_EXEC_SPLAT ||
-        descriptor->vector_desc != &cmeta_vector_f64x2 ||
+        descriptor->vector_desc != &simd_f64x2 ||
         out == NULL) {
         return turbowasm_jit_simd_status(
             context, TURBOWASM_UNSUPPORTED,
@@ -225,7 +225,7 @@ int64_t turbowasm_jit_simd_splat_f64(
     }
 
     value.f64 = scalar;
-    if (!cmeta_simd_splat(descriptor->vector_desc, out, value))
+    if (!simd_splat(descriptor->vector_desc, out, value))
         return turbowasm_jit_simd_status(
             context, TURBOWASM_UNSUPPORTED,
             TURBOWASM_TRAP_NONE);
@@ -243,10 +243,10 @@ int64_t turbowasm_jit_simd_op(
     int64_t c_slot,
     int64_t scalar_count) {
     const turbowasm_simd_exec_descriptor *descriptor;
-    cmeta_v128 *out;
-    const cmeta_v128 *a;
-    const cmeta_v128 *b;
-    const cmeta_v128 *c;
+    simd_v128 *out;
+    const simd_v128 *a;
+    const simd_v128 *b;
+    const simd_v128 *c;
     bool supported = false;
 
     descriptor = turbowasm_simd_exec_descriptor_find((uint32_t)opcode);
@@ -263,104 +263,104 @@ int64_t turbowasm_jit_simd_op(
     switch (descriptor->kind) {
         case TURBOWASM_SIMD_EXEC_UNARY:
             supported = a != NULL &&
-                cmeta_simd_unary(
+                simd_unary(
                     descriptor->vector_desc,
-                    (cmeta_simd_unary_op)descriptor->op,
+                    (simd_unary_op)descriptor->op,
                     out, a);
             break;
 
         case TURBOWASM_SIMD_EXEC_BINARY:
             supported = a != NULL && b != NULL &&
-                cmeta_simd_binary(
+                simd_binary(
                     descriptor->vector_desc,
-                    (cmeta_simd_binary_op)descriptor->op,
+                    (simd_binary_op)descriptor->op,
                     out, a, b);
             break;
 
         case TURBOWASM_SIMD_EXEC_COMPARE:
             supported = a != NULL && b != NULL &&
-                cmeta_simd_compare(
+                simd_compare(
                     descriptor->vector_desc,
-                    (cmeta_simd_compare_op)descriptor->op,
+                    (simd_compare_op)descriptor->op,
                     out, a, b);
             break;
 
         case TURBOWASM_SIMD_EXEC_SHIFT:
             supported = a != NULL &&
-                cmeta_simd_shift(
+                simd_shift(
                     descriptor->vector_desc,
-                    (cmeta_simd_shift_op)descriptor->op,
+                    (simd_shift_op)descriptor->op,
                     out, a, (uint32_t)scalar_count);
             break;
 
         case TURBOWASM_SIMD_EXEC_SELECT:
             supported = a != NULL && b != NULL && c != NULL &&
-                cmeta_simd_select(
+                simd_select(
                     descriptor->vector_desc,
                     out, a, b, c);
             break;
 
         case TURBOWASM_SIMD_EXEC_SATURATING:
             supported = a != NULL && b != NULL &&
-                cmeta_simd_saturating_binary(
+                simd_saturating_binary(
                     descriptor->vector_desc,
-                    (cmeta_simd_saturating_op)descriptor->op,
+                    (simd_saturating_op)descriptor->op,
                     out, a, b);
             break;
 
         case TURBOWASM_SIMD_EXEC_NARROW:
             supported = a != NULL && b != NULL &&
-                cmeta_simd_narrow(
+                simd_narrow(
                     descriptor->vector_desc, out, a, b);
             break;
 
         case TURBOWASM_SIMD_EXEC_EXTEND_HALF:
             supported = a != NULL &&
-                cmeta_simd_extend_half(
+                simd_extend_half(
                     descriptor->vector_desc,
-                    (cmeta_simd_half)descriptor->op,
+                    (simd_half)descriptor->op,
                     out, a);
             break;
 
         case TURBOWASM_SIMD_EXEC_EXTMUL_HALF:
             supported = a != NULL && b != NULL &&
-                cmeta_simd_extmul_half(
+                simd_extmul_half(
                     descriptor->vector_desc,
-                    (cmeta_simd_half)descriptor->op,
+                    (simd_half)descriptor->op,
                     out, a, b);
             break;
 
         case TURBOWASM_SIMD_EXEC_EXTADD_PAIRWISE:
             supported = a != NULL &&
-                cmeta_simd_extadd_pairwise(
+                simd_extadd_pairwise(
                     descriptor->vector_desc, out, a);
             break;
 
         case TURBOWASM_SIMD_EXEC_Q15MULR:
             supported = a != NULL && b != NULL &&
-                cmeta_simd_q15mulr_sat(
+                simd_q15mulr_sat(
                     descriptor->vector_desc, out, a, b);
             break;
 
         case TURBOWASM_SIMD_EXEC_DOT_PAIRWISE:
             supported = a != NULL && b != NULL &&
-                cmeta_simd_dot_pairwise(
+                simd_dot_pairwise(
                     descriptor->vector_desc, out, a, b);
             break;
 
         case TURBOWASM_SIMD_EXEC_CONVERT:
             supported = a != NULL && descriptor->source_desc != NULL &&
-                cmeta_simd_convert(
+                simd_convert(
                     descriptor->vector_desc,
                     descriptor->source_desc,
-                    (cmeta_simd_convert_op)descriptor->op,
-                    (cmeta_simd_lane_policy)descriptor->lane_policy,
+                    (simd_convert_op)descriptor->op,
+                    (simd_lane_policy)descriptor->lane_policy,
                     out, a);
             break;
 
         case TURBOWASM_SIMD_EXEC_SWIZZLE:
             supported = a != NULL && b != NULL &&
-                cmeta_simd_swizzle_bytes(out, a, b);
+                simd_swizzle_bytes(out, a, b);
             break;
 
         case TURBOWASM_SIMD_EXEC_RELAXED: {
@@ -395,7 +395,7 @@ int64_t turbowasm_jit_simd_reduce(
     int64_t opcode,
     int64_t in_slot) {
     const turbowasm_simd_exec_descriptor *descriptor;
-    const cmeta_v128 *in;
+    const simd_v128 *in;
     uint32_t value = 0u;
 
     descriptor = turbowasm_simd_exec_descriptor_find((uint32_t)opcode);
@@ -403,9 +403,9 @@ int64_t turbowasm_jit_simd_reduce(
     if (descriptor == NULL ||
         descriptor->kind != TURBOWASM_SIMD_EXEC_REDUCE ||
         in == NULL ||
-        !cmeta_simd_reduce(
+        !simd_reduce(
             descriptor->vector_desc,
-            (cmeta_simd_reduce_op)descriptor->op,
+            (simd_reduce_op)descriptor->op,
             in, &value)) {
         turbowasm_jit_simd_record(
             context, TURBOWASM_UNSUPPORTED,
@@ -423,7 +423,7 @@ int64_t turbowasm_jit_simd_memory(
     int64_t slot,
     int64_t address,
     int64_t offset) {
-    cmeta_v128 *value;
+    simd_v128 *value;
     uint8_t shared_bytes[16] = {0};
     uint8_t *memory;
     bool shared = false;
@@ -482,7 +482,7 @@ int64_t turbowasm_jit_simd_memory(
                     ? TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS
                     : TURBOWASM_TRAP_NONE);
         }
-        cmeta_simd_v128_load(value, memory);
+        simd_v128_load(value, memory);
         context->simd_slots[slot].shape = TURBOWASM_V128_RAW;
         return (int64_t)TURBOWASM_OK;
     }
@@ -507,7 +507,7 @@ int64_t turbowasm_jit_simd_memory(
             }
         }
 
-        cmeta_simd_v128_store(memory, value);
+        simd_v128_store(memory, value);
         if (shared) {
             status = turbowasm_instance_memory_write_bytes(
                 context->instance,

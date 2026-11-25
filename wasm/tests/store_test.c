@@ -5,7 +5,7 @@
 #endif
 #include <assert.h>
 #include <stdlib.h>
-#include <salts/thread.h>
+#include <threads/threads.h>
 
 typedef struct owner_probe {
     turbowasm_store *store;
@@ -192,10 +192,10 @@ static void test_execution_roots_and_owned_types(void) {
     args[1].as.i32 = CHURN_COUNT;
     assert(turbowasm_execution_create(&execution, &consumer, 2u, args, 2u) == TURBOWASM_OK);
     {
-        cmeta_thread_t thread = NULL;
+        sync_thread_t thread = NULL;
         owner_probe probe = {&store, &execution, TURBOWASM_OK, TURBOWASM_OK};
-        assert(cmeta_thread_create(&thread, check_other_thread, &probe) == 0);
-        assert(cmeta_thread_join(&thread) == 0);
+        assert(sync_thread_create(&thread, check_other_thread, &probe) == 0);
+        assert(sync_thread_join(&thread) == 0);
         assert(probe.collect_status == TURBOWASM_INVALID_ARGUMENT);
         assert(probe.resume_status == TURBOWASM_INVALID_ARGUMENT);
         assert(turbowasm_execution_state_get(&execution) == TURBOWASM_EXECUTION_READY);

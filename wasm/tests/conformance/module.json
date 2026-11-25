@@ -1,0 +1,357 @@
+{
+  "targets": {
+    "turbowasm_conformance_driver": {
+      "kind": "header_only",
+      "test": {
+        "tool": "python",
+        "args": ["$moduledir/test_run_core.py"],
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_spec_runner": {
+      "kind": "executable",
+      "testOnly": true,
+      "when": {
+        "config": ["conformance", "core3"]
+      },
+      "sources": {
+        "files": ["spec_runner.c"]
+      },
+      "private": {
+        "includeDirs": ["../../src"],
+        "deps": ["turbowasm", "saltsbase_core"]
+      }
+    },
+    "turbowasm_spec_runner_mir": {
+      "kind": "executable",
+      "testOnly": true,
+      "when": {
+        "config": ["conformance", "core3"]
+      },
+      "sources": {
+        "files": ["spec_runner.c"]
+      },
+      "private": {
+        "includeDirs": ["../../src"],
+        "deps": ["turbowasm", "saltsbase_core", "turbowasm_mir_backend"],
+        "defines": {
+          "TURBOWASM_SPEC_ENABLE_MIR": "1"
+        }
+      }
+    },
+    "turbowasm_conformance_harness": {
+      "kind": "header_only",
+      "when": {
+        "config": "conformance"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_core.py",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--wast2json",
+          "${envPath:TURBOWASM_WABT_ROOT}/bin/wast2json${host:exe}",
+          "--core-dir",
+          "$moduledir",
+          "--suite",
+          "$moduledir/result-set-harness-smoke.txt"
+        ],
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_core": {
+      "kind": "header_only",
+      "when": {
+        "config": "conformance"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_core.py",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--wast2json",
+          "${envPath:TURBOWASM_WABT_ROOT}/bin/wast2json${host:exe}",
+          "--core-dir",
+          "${envPath:TURBOWASM_SPEC_ROOT}/test/core",
+          "--suite",
+          "$moduledir/core-smoke.txt"
+        ],
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_mir": {
+      "kind": "header_only",
+      "when": {
+        "config": "conformance"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner", "turbowasm_spec_runner_mir"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_core.py",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--wast2json",
+          "${envPath:TURBOWASM_WABT_ROOT}/bin/wast2json${host:exe}",
+          "--core-dir",
+          "${envPath:TURBOWASM_SPEC_ROOT}/test/core",
+          "--suite",
+          "$moduledir/core-smoke.txt",
+          "--compare-runner",
+          "${artifact:turbowasm_spec_runner_mir}",
+          "--require-mir",
+          "--reject-runtime-unsupported"
+        ],
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_core3": {
+      "kind": "header_only",
+      "when": {
+        "config": "core3"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_core.py",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--wasm-tools",
+          "${envPath:TURBOWASM_CORE3_TOOLS}",
+          "--core-dir",
+          "${envPath:TURBOWASM_SPEC_ROOT}/test/core",
+          "--all-core",
+          "--maximum-unsupported",
+          "0"
+        ],
+        "timeout": 600,
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_core3_references": {
+      "kind": "header_only",
+      "when": {
+        "config": "core3"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_core.py",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--wasm-tools",
+          "${envPath:TURBOWASM_CORE3_TOOLS}",
+          "--core-dir",
+          "${envPath:TURBOWASM_SPEC_ROOT}/test/core",
+          "--suite",
+          "$moduledir/core3-reference-regression.txt",
+          "--maximum-unsupported",
+          "0"
+        ],
+        "timeout": 180,
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_core3-mir": {
+      "kind": "header_only",
+      "when": {
+        "config": "core3"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner", "turbowasm_spec_runner_mir"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_core.py",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--wasm-tools",
+          "${envPath:TURBOWASM_CORE3_TOOLS}",
+          "--core-dir",
+          "${envPath:TURBOWASM_SPEC_ROOT}/test/core",
+          "--all-core",
+          "--maximum-unsupported",
+          "0",
+          "--compare-runner",
+          "${artifact:turbowasm_spec_runner_mir}",
+          "--require-mir"
+        ],
+        "timeout": 600,
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_exception-handling": {
+      "kind": "header_only",
+      "when": {
+        "config": "conformance"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_proposal.py",
+          "--selector",
+          "exception-handling",
+          "--wast2json",
+          "${envPath:TURBOWASM_WABT_ROOT}/bin/wast2json${host:exe}",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--reject-runtime-unsupported"
+        ],
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_threads": {
+      "kind": "header_only",
+      "when": {
+        "config": "conformance"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_proposal.py",
+          "--selector",
+          "threads",
+          "--wast2json",
+          "${envPath:TURBOWASM_WABT_ROOT}/bin/wast2json${host:exe}",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--reject-runtime-unsupported"
+        ],
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_tail-call": {
+      "kind": "header_only",
+      "when": {
+        "config": "conformance"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_proposal.py",
+          "--selector",
+          "tail-call",
+          "--wast2json",
+          "${envPath:TURBOWASM_WABT_ROOT}/bin/wast2json${host:exe}",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--reject-runtime-unsupported"
+        ],
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_custom-page-sizes": {
+      "kind": "header_only",
+      "when": {
+        "config": "conformance"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_proposal.py",
+          "--selector",
+          "custom-page-sizes",
+          "--wast2json",
+          "${envPath:TURBOWASM_WABT_ROOT}/bin/wast2json${host:exe}",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--reject-runtime-unsupported"
+        ],
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_memory64": {
+      "kind": "header_only",
+      "when": {
+        "config": "conformance"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_proposal.py",
+          "--selector",
+          "memory64",
+          "--wast2json",
+          "${envPath:TURBOWASM_WABT_ROOT}/bin/wast2json${host:exe}",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--reject-runtime-unsupported"
+        ],
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_extended-const": {
+      "kind": "header_only",
+      "when": {
+        "config": "conformance"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_proposal.py",
+          "--selector",
+          "extended-const",
+          "--wast2json",
+          "${envPath:TURBOWASM_WABT_ROOT}/bin/wast2json${host:exe}",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--reject-runtime-unsupported"
+        ],
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_multi-memory": {
+      "kind": "header_only",
+      "when": {
+        "config": "conformance"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_proposal.py",
+          "--selector",
+          "multi-memory",
+          "--wast2json",
+          "${envPath:TURBOWASM_WABT_ROOT}/bin/wast2json${host:exe}",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--reject-runtime-unsupported"
+        ],
+        "labels": ["conformance"]
+      }
+    },
+    "turbowasm_conformance_relaxed-simd": {
+      "kind": "header_only",
+      "when": {
+        "config": "conformance"
+      },
+      "runtimeDeps": ["turbowasm_spec_runner"],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$moduledir/run_proposal.py",
+          "--selector",
+          "relaxed-simd",
+          "--wast2json",
+          "${envPath:TURBOWASM_WABT_ROOT}/bin/wast2json${host:exe}",
+          "--runner",
+          "${artifact:turbowasm_spec_runner}",
+          "--reject-runtime-unsupported"
+        ],
+        "labels": ["conformance"]
+      }
+    }
+  }
+}

@@ -47,7 +47,7 @@ struct turbowasm_store_impl {
 };
 
 bool turbowasm_store_is_owner(const turbowasm_store_impl *store) {
-    return store != NULL && store->owner_thread == cmeta_thread_current_token();
+    return store != NULL && store->owner_thread == sync_thread_current_token();
 }
 
 void turbowasm_store_config_init(turbowasm_store_config *config) {
@@ -102,7 +102,7 @@ turbowasm_status turbowasm_store_create(turbowasm_store *store,
     }
     impl->config = settings;
     impl->stats.bytes = (size_t)overhead;
-    impl->owner_thread = cmeta_thread_current_token();
+    impl->owner_thread = sync_thread_current_token();
     for (i = 0u; i < settings.max_objects; ++i) {
         impl->slots[i].generation = 1u;
         impl->slots[i].next_free = i + 1u;

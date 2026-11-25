@@ -2,10 +2,9 @@
 
 ## Optional native HTTP example dependencies
 
-`TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE` consumes an installed Chttp SDK from
-`HTTP_SERVICES_ROOT`, together with its matching Salts and SaltsUtils SDKs.
-Local qualification used Chttp 2.1.0-rc.2 from the sibling `http-services`
-project. Chttp is Apache-2.0 licensed; its SDK retains the full license at
+The Slate `guests` preset consumes Chttp from `CHTTP_ROOT`, together with the
+SaltsBase, SaltsCNet, CMeta and SaltsUtils SDKs from `.env`. The selected
+Chttp release is 0.1.6. Chttp is Apache-2.0 licensed. Its SDK retains the full license at
 `share/licenses/Chttp/LICENSE`. No Chttp source is copied into this repository.
 
 The optional `chttp-example` vcpkg feature supplies
@@ -18,16 +17,17 @@ licenses and notices of its linked SDK/package dependencies.
 
 ## Metallic
 
-`guest/metallic/wasm/src` and `guest/metallic/include` originate from
+`guest/metallic/src` and `guest/metallic/include` originate from
 [jdh8/metallic](https://github.com/jdh8/metallic), commit
 `66ea0f480a16a9341be94ed4e66be28b3c3802d5` (2026-09-20).
-The upstream README is retained for reference; this repository builds the
-sources through `guest/CMakeLists.txt`, not the upstream Makefile.
+The upstream README is retained for reference. The Slate manifest at
+`guest/module.json` declares the local source and header inputs for both
+Metallic profiles.
 
 Metallic is MIT licensed, copyright 2017–2019 Chen-Pang He. The complete license
 is retained in [guest/metallic/LICENSE](guest/metallic/LICENSE) and installed
 with the guest SDK. Embedded third-party notices remain in the source, including
-dlmalloc's public-domain/CC0 notice in `wasm/src/stdlib/malloc.c`.
+dlmalloc's public-domain/CC0 notice in `guest/metallic/src/stdlib/malloc.c`.
 
 Local changes cover command startup/exit, checked heap growth, aligned allocation
 admission, fopen allocation failure, temporary files, zero-length stdio, standard
@@ -46,7 +46,7 @@ the architecture document records references and compiler requirements.
 consumed independently by the compiler's `stdatomic.h`.
 Implicit multibyte conversion states use C11 thread-local storage; explicit
 caller-owned `mbstate_t` behavior remains unchanged.
-The optional `guest/metallic/threaded` profile adds C11 thread
+The optional `guest/metallic/src/threads` profile adds C11 thread
 records, generation-checked handles, TSS, synchronization and a Wasm TLS/stack
 entry trampoline. dlmalloc uses its custom-lock hook in that profile; lazy
 environment storage now uses checked malloc allocation, with once publication

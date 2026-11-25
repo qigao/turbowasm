@@ -15,14 +15,14 @@ size_t mbsrtowcs(wchar_t* restrict dst, const char** restrict src, size_t len, m
             size_t r = mbrtowc(&wc, p, (size_t)-1 / 2, ps);
 
             if (r == (size_t)-1) {
-                *wasm/src = p;
+                *src = p;
                 return (size_t)-1;
             }
 
             dst[written] = wc;
 
             if (!wc) {
-                *wasm/src = 0;
+                *src = 0;
                 return written;
             }
 
@@ -30,11 +30,11 @@ size_t mbsrtowcs(wchar_t* restrict dst, const char** restrict src, size_t len, m
             ++written;
         }
 
-        *wasm/src = p;
+        *src = p;
         return written;
     }
 
-    /* No destination: just count, without advancing *wasm/src */
+    /* No destination: just count, without advancing *src */
     for (;;) {
         wchar_t wc;
         size_t r = mbrtowc(&wc, p, (size_t)-1 / 2, ps);

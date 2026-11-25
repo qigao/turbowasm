@@ -205,8 +205,9 @@ typedef struct turbowasm_wasi_preview1_config {
 
     /*
      * Appended extension fields preserve the established positional layout of
-     * earlier Preview1 config members. When allow_fd_* is true, configure
-     * exactly one of the synchronous or async callback for that direction.
+     * earlier Preview1 config members. For turbowasm_wasi_preview1_init,
+     * configure exactly one of the synchronous or async callbacks for each
+     * enabled direction. See wasi_sockets.h for the v2 descriptor defaults.
      */
     turbowasm_wasi_fd_write_async_fn fd_write_async;
     turbowasm_wasi_fd_read_async_fn fd_read_async;

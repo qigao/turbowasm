@@ -1,5 +1,5 @@
-#include "../wasm/src/instance_internal.h"
-#include "../wasm/src/jit/mir_backend.h"
+#include "../src/instance_internal.h"
+#include "../src/jit/mir_backend.h"
 
 #include <turbowasm.h>
 

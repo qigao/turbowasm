@@ -1,4 +1,4 @@
-#include "../wasm/src/jit/mir_backend.h"
+#include "../src/jit/mir_backend.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -6,7 +6,7 @@
 #include <assert.h>
 #include <stdint.h>
 
-#include "../wasm/src/validation_context.h"
+#include "../src/validation_context.h"
 
 int main(void) {
     turbowasm_jit_backend backend = {0};

@@ -5,7 +5,8 @@
 #include "runtime_alloc.h"
 #include "gc_exec.h"
 
-#include <salts/clock.h>
+#include <core/clock.h>
+#include <salts/simd.h>
 
 #include <errno.h>
 #include <stdint.h>
@@ -28,24 +29,24 @@ static turbowasm_value_kind turbowasm_state_kind_from_valtype(
     }
 }
 
-static cmeta_once_t turbowasm_sc_once = SALTS_ONCE_INIT;
-static cmeta_mutex_t turbowasm_sc_mutex = NULL;
+static sync_once_t turbowasm_sc_once = SALTS_ONCE_INIT;
+static sync_mutex_t turbowasm_sc_mutex = NULL;
 
 static void turbowasm_sc_mutex_init_once(void) {
-    cmeta_mutex_init(&turbowasm_sc_mutex);
+    sync_mutex_init(&turbowasm_sc_mutex);
 }
 
 static bool turbowasm_sc_lock(void) {
-    cmeta_once(&turbowasm_sc_once, turbowasm_sc_mutex_init_once);
+    sync_once(&turbowasm_sc_once, turbowasm_sc_mutex_init_once);
     if (turbowasm_sc_mutex == NULL)
         return false;
-    cmeta_mutex_lock(&turbowasm_sc_mutex);
+    sync_mutex_lock(&turbowasm_sc_mutex);
     return true;
 }
 
 static void turbowasm_sc_unlock(void) {
     if (turbowasm_sc_mutex != NULL)
-        cmeta_mutex_unlock(&turbowasm_sc_mutex);
+        sync_mutex_unlock(&turbowasm_sc_mutex);
 }
 
 turbowasm_status turbowasm_threads_sc_fence(void) {
@@ -296,7 +297,7 @@ static turbowasm_status turbowasm_eval_value_expr(
                     status = TURBOWASM_MALFORMED_MODULE;
                     break;
                 }
-                cmeta_simd_v128_load(
+                simd_v128_load(
                     &value.as.v128.bits, bytes.cursor);
                 status = turbowasm_const_value_stack_push(
                     &stack, value);
@@ -533,11 +534,11 @@ turbowasm_status turbowasm_instance_memory_storage_init(
     }
 
     if (shared) {
-        if (cmeta_rwlock_init(&memory->access_lock) != 0)
+        if (sync_rwlock_init(&memory->access_lock) != 0)
             goto out_of_memory;
         lock_initialized = true;
 
-        cmeta_mutex_init(&memory->waiter_mutex);
+        sync_mutex_init(&memory->waiter_mutex);
         if (memory->waiter_mutex == NULL)
             goto out_of_memory;
         waiter_mutex_initialized = true;
@@ -550,7 +551,7 @@ turbowasm_status turbowasm_instance_memory_storage_init(
 
         while (initialized_waiters <
                TURBOWASM_MEMORY_WAITER_CAPACITY) {
-            cmeta_cond_init(
+            sync_cond_init(
                 &waiters[initialized_waiters].condition);
             if (waiters[initialized_waiters].condition == NULL)
                 goto out_of_memory;
@@ -574,14 +575,14 @@ turbowasm_status turbowasm_instance_memory_storage_init(
 out_of_memory:
     while (initialized_waiters != 0u) {
         --initialized_waiters;
-        cmeta_cond_destroy(
+        sync_cond_destroy(
             &waiters[initialized_waiters].condition);
     }
     turbowasm_rt_free(waiters);
     if (waiter_mutex_initialized)
-        cmeta_mutex_destroy(&memory->waiter_mutex);
+        sync_mutex_destroy(&memory->waiter_mutex);
     if (lock_initialized)
-        cmeta_rwlock_destroy(&memory->access_lock);
+        sync_rwlock_destroy(&memory->access_lock);
     turbowasm_rt_free(data);
     memory->access_lock = NULL;
     memory->waiter_mutex = NULL;
@@ -604,7 +605,7 @@ void turbowasm_instance_memory_storage_destroy(
         for (index = 0u;
              index < memory->waiter_capacity;
              ++index) {
-            cmeta_cond_destroy(
+            sync_cond_destroy(
                 &memory->waiters[index].condition);
         }
     }
@@ -613,7 +614,7 @@ void turbowasm_instance_memory_storage_destroy(
     memory->waiter_capacity = 0u;
 
     if (memory->waiter_mutex_initialized)
-        cmeta_mutex_destroy(&memory->waiter_mutex);
+        sync_mutex_destroy(&memory->waiter_mutex);
     memory->waiter_mutex = NULL;
     memory->waiter_mutex_initialized = false;
 
@@ -621,7 +622,7 @@ void turbowasm_instance_memory_storage_destroy(
     memory->data = NULL;
 
     if (memory->access_lock_initialized)
-        cmeta_rwlock_destroy(&memory->access_lock);
+        sync_rwlock_destroy(&memory->access_lock);
 
     memory->access_lock = NULL;
     memory->access_lock_initialized = false;
@@ -1421,28 +1422,28 @@ static void turbowasm_instance_memory_rdlock(
     turbowasm_instance_memory *memory) {
     if (memory != NULL && memory->shared &&
         memory->access_lock_initialized)
-        cmeta_rwlock_rdlock(&memory->access_lock);
+        sync_rwlock_rdlock(&memory->access_lock);
 }
 
 static void turbowasm_instance_memory_rdunlock(
     turbowasm_instance_memory *memory) {
     if (memory != NULL && memory->shared &&
         memory->access_lock_initialized)
-        cmeta_rwlock_rdunlock(&memory->access_lock);
+        sync_rwlock_rdunlock(&memory->access_lock);
 }
 
 static void turbowasm_instance_memory_wrlock(
     turbowasm_instance_memory *memory) {
     if (memory != NULL && memory->shared &&
         memory->access_lock_initialized)
-        cmeta_rwlock_wrlock(&memory->access_lock);
+        sync_rwlock_wrlock(&memory->access_lock);
 }
 
 static void turbowasm_instance_memory_wrunlock(
     turbowasm_instance_memory *memory) {
     if (memory != NULL && memory->shared &&
         memory->access_lock_initialized)
-        cmeta_rwlock_wrunlock(&memory->access_lock);
+        sync_rwlock_wrunlock(&memory->access_lock);
 }
 
 turbowasm_status turbowasm_instance_memory_check_bytes(
@@ -1879,7 +1880,7 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
      * Registry mutex closes the notify race between the expected-value load
      * and publishing this waiter. Data lock is never held across sleeping.
      */
-    cmeta_mutex_lock(&memory->waiter_mutex);
+    sync_mutex_lock(&memory->waiter_mutex);
     turbowasm_instance_memory_wrlock(memory);
     status = turbowasm_instance_memory_storage_range(
         memory, address, offset, width, &effective);
@@ -1892,7 +1893,7 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
     turbowasm_instance_memory_wrunlock(memory);
 
     if (status != TURBOWASM_OK) {
-        cmeta_mutex_unlock(&memory->waiter_mutex);
+        sync_mutex_unlock(&memory->waiter_mutex);
         turbowasm_sc_unlock();
         if (status == TURBOWASM_TRAPPED)
             *trap = TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS;
@@ -1901,14 +1902,14 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
 
     if (observed !=
         (expected & turbowasm_atomic_width_mask(width))) {
-        cmeta_mutex_unlock(&memory->waiter_mutex);
+        sync_mutex_unlock(&memory->waiter_mutex);
         turbowasm_sc_unlock();
         *out_result = 1u;
         return TURBOWASM_OK;
     }
 
     if (timeout_ns == 0) {
-        cmeta_mutex_unlock(&memory->waiter_mutex);
+        sync_mutex_unlock(&memory->waiter_mutex);
         turbowasm_sc_unlock();
         *out_result = 2u;
         return TURBOWASM_OK;
@@ -1916,7 +1917,7 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
 
     waiter = turbowasm_memory_waiter_acquire_slot(memory);
     if (waiter == NULL) {
-        cmeta_mutex_unlock(&memory->waiter_mutex);
+        sync_mutex_unlock(&memory->waiter_mutex);
         turbowasm_sc_unlock();
         *trap = TURBOWASM_TRAP_TOO_MANY_WAITERS;
         return TURBOWASM_TRAPPED;
@@ -1928,7 +1929,7 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
     ++memory->waiter_count;
 
     if (timeout_ns > 0) {
-        uint64_t now = cmeta_hrtime();
+        uint64_t now = hrtime();
         uint64_t timeout = (uint64_t)timeout_ns;
         deadline = UINT64_MAX - now < timeout
             ? UINT64_MAX
@@ -1955,21 +1956,21 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
         }
 
         if (timeout_ns < 0) {
-            cmeta_cond_wait(
+            sync_cond_wait(
                 &waiter->condition,
                 &memory->waiter_mutex);
             continue;
         }
 
         {
-            uint64_t now = cmeta_hrtime();
+            uint64_t now = hrtime();
             uint64_t remaining;
             if (now >= deadline) {
                 wait_status = -ETIMEDOUT;
                 break;
             }
             remaining = deadline - now;
-            wait_status = cmeta_cond_timedwait(
+            wait_status = sync_cond_timedwait(
                 &waiter->condition,
                 &memory->waiter_mutex,
                 remaining);
@@ -1994,7 +1995,7 @@ static turbowasm_status turbowasm_instance_memory_wait_internal(
     waiter->address = 0u;
     if (memory->waiter_count != 0u)
         --memory->waiter_count;
-    cmeta_mutex_unlock(&memory->waiter_mutex);
+    sync_mutex_unlock(&memory->waiter_mutex);
 
     if (interrupted)
         return TURBOWASM_INTERRUPTED;
@@ -2067,16 +2068,16 @@ void turbowasm_instance_interrupt_waiters(
             memory->waiter_mutex == NULL)
             continue;
 
-        cmeta_mutex_lock(&memory->waiter_mutex);
+        sync_mutex_lock(&memory->waiter_mutex);
         for (waiter_index = 0u;
              waiter_index < memory->waiter_capacity;
              ++waiter_index) {
             turbowasm_memory_waiter *waiter =
                 &memory->waiters[waiter_index];
             if (waiter->active)
-                cmeta_cond_signal(&waiter->condition);
+                sync_cond_signal(&waiter->condition);
         }
-        cmeta_mutex_unlock(&memory->waiter_mutex);
+        sync_mutex_unlock(&memory->waiter_mutex);
     }
 }
 
@@ -2140,7 +2141,7 @@ turbowasm_status turbowasm_instance_memory_notify(
         return TURBOWASM_UNSUPPORTED;
     }
 
-    cmeta_mutex_lock(&memory->waiter_mutex);
+    sync_mutex_lock(&memory->waiter_mutex);
     for (index = 0u;
          index < memory->waiter_capacity &&
          woken < count;
@@ -2155,9 +2156,9 @@ turbowasm_status turbowasm_instance_memory_notify(
 
         waiter->notified = true;
         ++woken;
-        cmeta_cond_signal(&waiter->condition);
+        sync_cond_signal(&waiter->condition);
     }
-    cmeta_mutex_unlock(&memory->waiter_mutex);
+    sync_mutex_unlock(&memory->waiter_mutex);
     turbowasm_sc_unlock();
 
     *out_woken = woken;

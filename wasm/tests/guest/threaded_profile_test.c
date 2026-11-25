@@ -1,8 +1,8 @@
 #include <tinytest.h>
 #include "threaded_session.h"
 #include <wasi.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +19,7 @@ static turbowasm_trap trap;
 static bool clock_error, worker_started, cpu_clock_available;
 static atomic_uint wall_clock_calls, cpu_clock_calls;
 static atomic_bool requested, observe_call, call_entered;
-static cmeta_thread_t worker;
+static sync_thread_t worker;
 static turbowasm_status worker_status;
 static const uint8_t memory_bytes[] = {
     0,97,115,109,1,0,0,0,
@@ -39,14 +39,14 @@ static uint32_t clock_time(void *context, uint32_t id, uint64_t precision, uint6
     }
     atomic_fetch_add(&wall_clock_calls, 1);
     if (clock_error || id > 1) return TURBOWASM_WASI_ERRNO_IO;
-    *out = id ? cmeta_hrtime() : cmeta_realtime_ms() * UINT64_C(1000000);
+    *out = id ? hrtime() : realtime_ms() * UINT64_C(1000000);
     return 0;
 }
 static bool interrupt(void *context) {
     (void)context;
     if (atomic_load(&observe_call)) {
         atomic_store(&call_entered, true);
-        while (!atomic_load(&requested)) cmeta_thread_yield();
+        while (!atomic_load(&requested)) sync_thread_yield();
     }
     return atomic_load(&requested);
 }
@@ -78,9 +78,9 @@ static int32_t close_profile(int32_t mode) {
     return result;
 }
 static void drain(void) {
-    uint64_t start = cmeta_hrtime();
-    while (turbowasm_wasi_threads_active(&threads) && cmeta_hrtime() - start < UINT64_C(10000000000))
-        cmeta_thread_yield();
+    uint64_t start = hrtime();
+    while (turbowasm_wasi_threads_active(&threads) && hrtime() - start < UINT64_C(10000000000))
+        sync_thread_yield();
     check_equal(turbowasm_wasi_threads_active(&threads), (size_t)0);
 }
 static uint32_t exported(const char *symbol) {
@@ -135,7 +135,7 @@ spec("Installed-capable Metallic threaded profile") {
     after_each() {
         atomic_store(&requested, true);
         if (worker_started) {
-            check_equal(cmeta_thread_join(&worker), SALTS_OK); cmeta_thread_destroy(&worker);
+            check_equal(sync_thread_join(&worker), SALTS_OK); sync_thread_destroy(&worker);
         }
         turbowasm_wasi_threads_proc_exit(&threads, &session.instance, 0);
         drain();
@@ -267,10 +267,10 @@ spec("Installed-capable Metallic threaded profile") {
     it("rejects concurrent root calls, close and destroy while an invocation is active") {
         check_equal(open_profile(REACTOR, 10000000), TURBOWASM_OK);
         atomic_store(&observe_call, true);
-        check_equal(cmeta_thread_create(&worker, invoke_worker, NULL), SALTS_OK); worker_started = true;
-        uint64_t start = cmeta_hrtime();
-        while (!atomic_load(&call_entered) && cmeta_hrtime() - start < UINT64_C(10000000000))
-            cmeta_thread_yield();
+        check_equal(sync_thread_create(&worker, invoke_worker, NULL), SALTS_OK); worker_started = true;
+        uint64_t start = hrtime();
+        while (!atomic_load(&call_entered) && hrtime() - start < UINT64_C(10000000000))
+            sync_thread_yield();
         check_true(atomic_load(&call_entered));
         size_t count = 0; turbowasm_value result;
         check_equal(threaded_session_call(&session, "profile_constructor_count", NULL, 0,
@@ -281,7 +281,7 @@ spec("Installed-capable Metallic threaded profile") {
             &application_status, &trap), TURBOWASM_INVALID_ARGUMENT);
         check_false(threaded_session_destroy(&session));
         atomic_store(&requested, true);
-        check_equal(cmeta_thread_join(&worker), SALTS_OK); cmeta_thread_destroy(&worker); worker_started = false;
+        check_equal(sync_thread_join(&worker), SALTS_OK); sync_thread_destroy(&worker); worker_started = false;
         check_equal(worker_status, TURBOWASM_INTERRUPTED);
     }
     it("allows repeated guest close after all child storage was reclaimed") {

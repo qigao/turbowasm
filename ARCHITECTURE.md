@@ -4093,7 +4093,7 @@ turbowasm_status turbowasm_instance_create_linked_with_options(
     const turbowasm_execution_options *start_options,
     turbowasm_trap *trap);
 
-/* Guest-only extension, declared by <metallic/threads.h>. */
+/* Guest-only extension, declared by <threads.h>. */
 int metallic_threads_close(const struct timespec *utc_deadline);
 ```
 

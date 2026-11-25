@@ -1,14 +1,14 @@
 #include "threaded_session.h"
 #include <wasi.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 static uint32_t clock_time(void *context, uint32_t clock, uint64_t precision, uint64_t *out) {
     (void)context; (void)precision;
     if (clock > 1) return TURBOWASM_WASI_ERRNO_INVAL;
-    *out = clock ? cmeta_hrtime() : cmeta_realtime_ms() * UINT64_C(1000000);
+    *out = clock ? hrtime() : realtime_ms() * UINT64_C(1000000);
     return 0;
 }
 
@@ -72,7 +72,7 @@ done:
     /* Even failed startup may have admitted a child. Request exit, then keep
      * providers/module storage alive until all child tasks actually terminate. */
     turbowasm_wasi_threads_proc_exit(&threads, &session.instance, (uint32_t)code);
-    while (turbowasm_wasi_threads_active(&threads)) cmeta_thread_yield();
+    while (turbowasm_wasi_threads_active(&threads)) sync_thread_yield();
     if (!threaded_session_destroy(&session) || !turbowasm_wasi_threads_destroy(&threads)) return 4;
     turbowasm_wasi_preview1_destroy(&wasi); turbowasm_linker_destroy(&linker);
     turbowasm_instance_destroy(&memory); turbowasm_module_destroy(&memory_module);

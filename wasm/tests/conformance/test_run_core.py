@@ -57,6 +57,18 @@ class ConformanceGateTests(unittest.TestCase):
                                     "--maximum-unsupported", "0")
             self.assertEqual(status, 1)
 
+    def test_differential_gate_requires_compiled_mir_when_requested(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "i32.wast").touch()
+            for compiled, expected in [(0, 1), (1, 0)]:
+                with self.subTest(compiled=compiled):
+                    outcome = (1, 0, 0, 1, (compiled, 0, 0, 1), 1, 1, 0)
+                    status, _ = self.invoke(root, outcome, "--all-core",
+                                            "--compare-runner", "mir-runner",
+                                            "--require-mir")
+                    self.assertEqual(status, expected)
+
     def test_null_reference_trap_mapping(self):
         self.assertEqual(run_core.trap_kind("null reference"), 10)
         self.assertEqual(run_core.trap_kind("null function reference"), 10)

@@ -1,12 +1,12 @@
 #include "tinytest.h"
 #include "wasi_fs_private.h"
-#include <salts/thread.h>
+#include <threads/threads.h>
 
 enum operation { OP_NONE, OP_READ, OP_CLOSE, OP_OPEN, OP_FLAGS };
 typedef struct probe {
     turbowasm_wasi_fs fs;
-    cmeta_mutex_t mutex;
-    cmeta_cond_t cond;
+    sync_mutex_t mutex;
+    sync_cond_t cond;
     enum operation blocked;
     bool entered, released;
     uint32_t error, calls[5];
@@ -22,15 +22,15 @@ typedef struct work {
 /* The controller observes callback entry before issuing competing operations.
  * No sleeps or scheduler timing assumptions are needed. */
 static uint32_t effect(probe *p, enum operation op, uint64_t object) {
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     ++p->calls[op];
     if (p->blocked == op && (op == OP_OPEN || object == 4)) {
         p->entered = true;
-        cmeta_cond_broadcast(&p->cond);
-        while (!p->released) cmeta_cond_wait(&p->cond, &p->mutex);
+        sync_cond_broadcast(&p->cond);
+        while (!p->released) sync_cond_wait(&p->cond, &p->mutex);
     }
     uint32_t error = p->error;
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return error;
 }
 static uint32_t close_file(void *context, turbowasm_wasi_fs_file file) {
@@ -80,40 +80,40 @@ static void worker(void *context) {
     default: break;
     }
 }
-static void start(probe *p, work *w, cmeta_thread_t *thread, enum operation op) {
+static void start(probe *p, work *w, sync_thread_t *thread, enum operation op) {
     p->blocked = op; p->entered = p->released = false;
     *w = (work){.p = p, .operation = op};
-    check_equal(cmeta_thread_create(thread, worker, w), SALTS_OK);
-    cmeta_mutex_lock(&p->mutex);
-    while (!p->entered) cmeta_cond_wait(&p->cond, &p->mutex);
-    cmeta_mutex_unlock(&p->mutex);
+    check_equal(sync_thread_create(thread, worker, w), SALTS_OK);
+    sync_mutex_lock(&p->mutex);
+    while (!p->entered) sync_cond_wait(&p->cond, &p->mutex);
+    sync_mutex_unlock(&p->mutex);
 }
-static void finish(probe *p, cmeta_thread_t *thread) {
-    cmeta_mutex_lock(&p->mutex);
+static void finish(probe *p, sync_thread_t *thread) {
+    sync_mutex_lock(&p->mutex);
     p->released = true;
-    cmeta_cond_broadcast(&p->cond);
-    cmeta_mutex_unlock(&p->mutex);
-    check_equal(cmeta_thread_join(thread), SALTS_OK);
-    cmeta_thread_destroy(thread);
+    sync_cond_broadcast(&p->cond);
+    sync_mutex_unlock(&p->mutex);
+    check_equal(sync_thread_join(thread), SALTS_OK);
+    sync_thread_destroy(thread);
 }
 static uint32_t call_count(probe *p, enum operation op) {
-    cmeta_mutex_lock(&p->mutex);
+    sync_mutex_lock(&p->mutex);
     uint32_t count = p->calls[op];
-    cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_unlock(&p->mutex);
     return count;
 }
 static void set_error(probe *p, uint32_t error) {
-    cmeta_mutex_lock(&p->mutex); p->error = error; cmeta_mutex_unlock(&p->mutex);
+    sync_mutex_lock(&p->mutex); p->error = error; sync_mutex_unlock(&p->mutex);
 }
 static probe p;
 static work w;
-static cmeta_thread_t thread;
+static sync_thread_t thread;
 static turbowasm_wasi_fs_descriptor original;
 
 spec("concurrent filesystem admission") {
     before_each() {
         p = (probe){0}; w = (work){0}; thread = NULL;
-        cmeta_mutex_init(&p.mutex); cmeta_cond_init(&p.cond);
+        sync_mutex_init(&p.mutex); sync_cond_init(&p.cond);
         check(p.mutex != NULL); check(p.cond != NULL);
         turbowasm_wasi_fs_config config = {.descriptor_capacity = 3,
             .provider = {.context = &p, .close = close_file, .read = read_file,
@@ -130,7 +130,7 @@ spec("concurrent filesystem admission") {
         set_error(&p, 0);
         for (uint32_t fd = 3; fd <= 5; ++fd) (void)turbowasm_wasi_fs_close_fd(&p.fs, fd);
         check_equal(turbowasm_wasi_fs_destroy(&p.fs), TURBOWASM_OK);
-        cmeta_cond_destroy(&p.cond); cmeta_mutex_destroy(&p.mutex);
+        sync_cond_destroy(&p.cond); sync_mutex_destroy(&p.mutex);
     }
     it("pins blocked reads, permits provider reentry and independent descriptors") {
         start(&p, &w, &thread, OP_READ);

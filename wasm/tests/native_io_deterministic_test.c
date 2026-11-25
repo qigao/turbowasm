@@ -1,7 +1,7 @@
-#include <native_io.h>
+#include "../include/native_io.h"
 #include <turbowasm.h>
 
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -71,7 +71,7 @@ int turbowasm_test_native_io_backend_cancel(
  */
 #define native_io_backend_submit turbowasm_test_native_io_backend_submit
 #define native_io_backend_cancel turbowasm_test_native_io_backend_cancel
-#include "../wasm/src/native_io_adapter.c"
+#include "../src/native_io_adapter.c"
 #undef native_io_backend_cancel
 #undef native_io_backend_submit
 

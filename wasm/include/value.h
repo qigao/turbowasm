@@ -48,6 +48,9 @@ typedef enum turbowasm_v128_shape {
     TURBOWASM_V128_B64X2
 } turbowasm_v128_shape;
 
+/* Preserve the carrier name exposed by earlier TurboWasm headers. */
+typedef simd_v128 cmeta_v128;
+
 typedef struct turbowasm_v128 {
     cmeta_v128 bits;
     turbowasm_v128_shape shape;

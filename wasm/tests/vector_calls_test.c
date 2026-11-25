@@ -60,7 +60,7 @@ static turbowasm_value vector(void) {
     turbowasm_value value = {0};
     value.kind = TURBOWASM_VALUE_V128;
     value.as.v128.shape = TURBOWASM_V128_F32X4;
-    cmeta_simd_v128_load(&value.as.v128.bits, bits);
+    simd_v128_load(&value.as.v128.bits, bits);
     return value;
 }
 static turbowasm_value integer(int32_t number) {

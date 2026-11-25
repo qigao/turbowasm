@@ -1,9 +1,9 @@
-#include "../wasm/src/wasi02_poll_native_io.h"
-#include "../wasm/src/wasi02_sockets.h"
+#include "../src/wasi02_poll_native_io.h"
+#include "../src/wasi02_sockets.h"
 
 #include <turbowasm.h>
 
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 #ifdef NDEBUG
 #undef NDEBUG

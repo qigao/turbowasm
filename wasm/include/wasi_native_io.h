@@ -1,7 +1,7 @@
 #ifndef TURBOWASM_WASI_NATIVE_IO_H
 #define TURBOWASM_WASI_NATIVE_IO_H
 
-#include <native_io.h>
+#include "native_io.h"
 #include <wasi.h>
 
 #include <salts/native_io.h>
@@ -20,7 +20,7 @@ extern "C" {
  * the host through resolve_fd: TurboWasm never exposes or owns OS handles.
  */
 typedef struct turbowasm_wasi_native_io {
-    void *impl;
+  void *impl;
 } turbowasm_wasi_native_io;
 
 /*
@@ -34,24 +34,20 @@ typedef struct turbowasm_wasi_native_io {
  * operation per WASI call cannot preserve datagram vectored-message semantics.
  */
 typedef uint32_t (*turbowasm_wasi_native_io_resolve_fd_fn)(
-    void *context,
-    uint32_t fd,
-    bool write,
-    native_io_endpoint *out_endpoint,
+    void *context, uint32_t fd, bool write, native_io_endpoint *out_endpoint,
     native_io_operation_kind *out_kind);
 
 typedef struct turbowasm_wasi_native_io_config {
-    turbowasm_native_io_bridge *bridge;
-    turbowasm_wasi_native_io_resolve_fd_fn resolve_fd;
-    void *resolve_context;
+  turbowasm_native_io_bridge *bridge;
+  turbowasm_wasi_native_io_resolve_fd_fn resolve_fd;
+  void *resolve_context;
 } turbowasm_wasi_native_io_config;
 
-turbowasm_status turbowasm_wasi_native_io_init(
-    turbowasm_wasi_native_io *provider,
-    const turbowasm_wasi_native_io_config *config);
+turbowasm_status
+turbowasm_wasi_native_io_init(turbowasm_wasi_native_io *provider,
+                              const turbowasm_wasi_native_io_config *config);
 
-void turbowasm_wasi_native_io_destroy(
-    turbowasm_wasi_native_io *provider);
+void turbowasm_wasi_native_io_destroy(turbowasm_wasi_native_io *provider);
 
 /*
  * Install async fd callbacks into a Preview1 config.
@@ -59,11 +55,10 @@ void turbowasm_wasi_native_io_destroy(
  * Existing fd providers are never overwritten. enable_read/enable_write select
  * the directions to install. At least one direction must be enabled.
  */
-turbowasm_status turbowasm_wasi_native_io_apply(
-    turbowasm_wasi_native_io *provider,
-    turbowasm_wasi_preview1_config *wasi_config,
-    bool enable_read,
-    bool enable_write);
+turbowasm_status
+turbowasm_wasi_native_io_apply(turbowasm_wasi_native_io *provider,
+                               turbowasm_wasi_preview1_config *wasi_config,
+                               bool enable_read, bool enable_write);
 
 #ifdef __cplusplus
 }

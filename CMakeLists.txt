@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-include(CMakeOptions.cmake)
+
 
 project(TurboWasm LANGUAGES C CXX)
 
@@ -10,41 +10,19 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(CTest)
 include(cmake/Sanitizers.cmake)
-
-if(NOT DEFINED ENV{SALTS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
-  message(FATAL_ERROR "SALTS_ROOT must point at an installed Salts SDK")
-endif()
-
-file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTS_ROOT_PATH)
-unset(Salts_DIR CACHE)
-unset(Salts_DIR)
-find_package(Salts CONFIG REQUIRED
-  PATHS "${SALTS_ROOT_PATH}"
-  NO_DEFAULT_PATH
-  NO_CMAKE_FIND_ROOT_PATH)
-
+include(CMakeOptions.cmake)
+ find_package(SaltsBase    CONFIG REQUIRED PATHS "$ENV{SALTS_BASE_ROOT}"
+              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+ find_package(CMeta    CONFIG REQUIRED PATHS "$ENV{CMETA_ROOT}"
+              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+ find_package(SaltsUtils     CONFIG REQUIRED PATHS "$ENV{SALTS_UTILS_ROOT}"
+              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+ find_package(SaltsCNet     CONFIG REQUIRED PATHS "$ENV{SALTSCORE_ROOT}"
+              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+ find_package(Chttp CONFIG REQUIRED PATHS "$ENV{CHTTP_ROOT}"
+              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 include(cmake/SaltsCompilerOptions.cmake)
 turbowasm_normalize_salts_c11_atomics()
-
-if(NOT TARGET Salts::CMeta)
-  message(FATAL_ERROR
-    "TurboWasm requires a Salts SDK that exports Salts::CMeta")
-endif()
-
-if(NOT TARGET Salts::SIMD)
-  message(FATAL_ERROR
-    "TurboWasm requires a Salts SDK that exports Salts::SIMD")
-endif()
-
-if(NOT TARGET Salts::Coroutine)
-  message(FATAL_ERROR
-    "TurboWasm requires a Salts SDK that exports Salts::Coroutine")
-endif()
-
-if(NOT TARGET Salts::Platform)
-  message(FATAL_ERROR
-    "TurboWasm requires a Salts SDK that exports Salts::Platform")
-endif()
 
 add_library(turbowasm
   wasm/src/store.c
@@ -113,8 +91,8 @@ target_include_directories(turbowasm
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 target_link_libraries(turbowasm
-  PUBLIC Salts::CMeta Salts::SIMD
-  PRIVATE Salts::Coroutine Salts::Platform)
+  PUBLIC CMeta::CMeta Salts::SIMD
+  PRIVATE Salts::Coroutine Salts::Core)
 if(UNIX)
   target_link_libraries(turbowasm PRIVATE m)
 endif()

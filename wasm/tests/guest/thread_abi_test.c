@@ -1,7 +1,7 @@
 #include <tinytest.h>
 #include <turbowasm.h>
 #include <wasi_threads.h>
-#include <salts/thread.h>
+#include <threads/threads.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,8 +17,8 @@ static uint8_t *module_bytes;
 static turbowasm_instance root, provider;
 static turbowasm_linker linker;
 static turbowasm_wasi_threads threads;
-static cmeta_mutex_t mutex;
-static cmeta_cond_t condition;
+static sync_mutex_t mutex;
+static sync_cond_t condition;
 static unsigned entered[2], self_destroy_rejections;
 static bool released[2], timed_out;
 
@@ -53,38 +53,38 @@ static turbowasm_status hold(void *context, turbowasm_host_call *host,
     if (argc != 1 || !args || (uint32_t)args[0].as.i32 > 1u) return TURBOWASM_INVALID_ARGUMENT;
     unsigned phase = (unsigned)args[0].as.i32;
     bool rejected = !turbowasm_wasi_threads_destroy(&threads);
-    cmeta_mutex_lock(&mutex);
+    sync_mutex_lock(&mutex);
     self_destroy_rejections += rejected;
     ++entered[phase];
-    cmeta_cond_broadcast(&condition);
+    sync_cond_broadcast(&condition);
     while (!released[phase]) {
-        if (cmeta_cond_timedwait(&condition, &mutex, UINT64_C(10000000000)) != 0) {
+        if (sync_cond_timedwait(&condition, &mutex, UINT64_C(10000000000)) != 0) {
             timed_out = true;
             break;
         }
     }
-    cmeta_mutex_unlock(&mutex);
+    sync_mutex_unlock(&mutex);
     *count = 0; *trap = TURBOWASM_TRAP_NONE;
     return TURBOWASM_OK;
 }
 
 static void await_phase(unsigned phase) {
-    cmeta_mutex_lock(&mutex);
+    sync_mutex_lock(&mutex);
     while (entered[phase] < 2 && !timed_out) {
-        if (cmeta_cond_timedwait(&condition, &mutex, UINT64_C(10000000000)) != 0) {
+        if (sync_cond_timedwait(&condition, &mutex, UINT64_C(10000000000)) != 0) {
             timed_out = true;
             break;
         }
     }
     bool success = !timed_out && entered[phase] == 2;
-    cmeta_mutex_unlock(&mutex);
+    sync_mutex_unlock(&mutex);
     check_true(success);
 }
 static void release_phase(unsigned phase) {
-    cmeta_mutex_lock(&mutex);
+    sync_mutex_lock(&mutex);
     released[phase] = true;
-    cmeta_cond_broadcast(&condition);
-    cmeta_mutex_unlock(&mutex);
+    sync_cond_broadcast(&condition);
+    sync_mutex_unlock(&mutex);
 }
 
 spec("Metallic thread ABI") {
@@ -120,7 +120,7 @@ spec("Metallic thread ABI") {
         check_null(threads.impl);
     }
     it("preserves TLS, stacks, data and SJLJ across saturated sibling instances") {
-        cmeta_mutex_init(&mutex); cmeta_cond_init(&condition);
+        sync_mutex_init(&mutex); sync_cond_init(&condition);
         check_not_null(mutex); check_not_null(condition);
         check_equal(turbowasm_wasi_threads_init_pool(&threads, 2), TURBOWASM_OK);
         check_equal(turbowasm_instance_create(&provider, &provider_module), TURBOWASM_OK);
@@ -133,10 +133,10 @@ spec("Metallic thread ABI") {
         check_equal(turbowasm_instance_create_linked(&root, &module, &linker), TURBOWASM_OK);
         check_equal(call("setup", NULL), 0);
         for (unsigned round = 0; round < 3; ++round) {
-            cmeta_mutex_lock(&mutex);
+            sync_mutex_lock(&mutex);
             entered[0] = entered[1] = self_destroy_rejections = 0;
             released[0] = released[1] = timed_out = false;
-            cmeta_mutex_unlock(&mutex);
+            sync_mutex_unlock(&mutex);
             int index = 0;
             check_true(call("spawn", &index) > 0);
             index = 1;
@@ -152,7 +152,7 @@ spec("Metallic thread ABI") {
             release_phase(1);
             /* Completion is finite; the CTest timeout is the deadlock guard.
              * active includes the child C frame and runtime finalizer. */
-            while (turbowasm_wasi_threads_active(&threads)) cmeta_thread_yield();
+            while (turbowasm_wasi_threads_active(&threads)) sync_thread_yield();
             check_false(turbowasm_wasi_threads_group_fatal(&threads, NULL, NULL));
             check_equal(call("results", NULL), 0);
             check_equal(self_destroy_rejections, 4u);
@@ -163,6 +163,6 @@ spec("Metallic thread ABI") {
         check_true(turbowasm_wasi_threads_destroy(&threads));
         turbowasm_linker_destroy(&linker);
         turbowasm_instance_destroy(&provider);
-        cmeta_cond_destroy(&condition); cmeta_mutex_destroy(&mutex);
+        sync_cond_destroy(&condition); sync_mutex_destroy(&mutex);
     }
 }

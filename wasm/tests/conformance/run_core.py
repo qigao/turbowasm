@@ -949,6 +949,7 @@ def run_file(
     compare_runner=None,
     wast2json_flags=None,
     wasm_tools=None,
+    reject_runtime_unsupported=False,
 ):
     wast_path = os.path.join(core_dir, filename)
     frontend_passed = frontend_failed = 0
@@ -1164,6 +1165,9 @@ def run_file(
                 f"SPEC_RUNTIME_UNSUPPORTED_DETAIL {filename} "
                 f"{first_runtime_unsupported}"
             )
+            if reject_runtime_unsupported:
+                failed += 1
+                unsupported -= 1
 
     if failed or result.returncode != 0:
         print(result.stdout)
@@ -1208,6 +1212,10 @@ def main():
     converter.add_argument("--wasm-tools")
     parser.add_argument("--runner", required=True)
     parser.add_argument("--compare-runner")
+    parser.add_argument("--require-mir", action="store_true",
+                        help="Require at least one compiled MIR function")
+    parser.add_argument("--reject-runtime-unsupported", action="store_true",
+                        help="Fail on cases unsupported by the runtime")
     parser.add_argument(
         "--wast2json-flag",
         action="append",
@@ -1231,6 +1239,8 @@ def main():
 
     if args.minimum_passes < 0:
         parser.error("minimum passes must be non-negative")
+    if args.require_mir and not args.compare_runner:
+        parser.error("--require-mir requires --compare-runner")
     if args.maximum_unsupported is not None and args.maximum_unsupported < 0:
         parser.error("maximum unsupported must be non-negative")
     if args.wasm_tools and args.wast2json_flag:
@@ -1274,6 +1284,7 @@ def main():
                 compare_runner=args.compare_runner,
                 wast2json_flags=args.wast2json_flag,
                 wasm_tools=args.wasm_tools,
+                reject_runtime_unsupported=args.reject_runtime_unsupported,
             )
             frontend_passed += text_passed
             frontend_failed += text_failed
@@ -1314,6 +1325,10 @@ def main():
             f"commands={differential_commands} "
             f"mismatches={differential_mismatches}"
         )
+
+    if args.require_mir and mir_compiled == 0:
+        print("MIR replay compiled no functions", file=sys.stderr)
+        return 1
 
     if (args.maximum_unsupported is not None and
             unsupported > args.maximum_unsupported):

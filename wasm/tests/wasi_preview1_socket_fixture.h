@@ -5,8 +5,8 @@
 #include <tinytest.h>
 #include "fixtures/wasi_preview1_sockets.h"
 #if defined(TW_P1_MIR)
-#include "../wasm/src/instance_internal.h"
-#include "../wasm/src/jit/mir_backend.h"
+#include "../src/instance_internal.h"
+#include "../src/jit/mir_backend.h"
 #endif
 
 enum { P1_ACCEPT, P1_RECV, P1_SEND, P1_SHUTDOWN, P1_STAT, P1_FLAGS, P1_RIGHTS,

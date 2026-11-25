@@ -2,7 +2,7 @@
 
 #include "instance_internal.h"
 
-#include <salts/thread.h>
+#include <threads/threads.h>
 
 #ifdef TURBOWASM_SPEC_ENABLE_MIR
 #include "jit/mir_backend.h"
@@ -33,7 +33,7 @@ typedef struct spec_state spec_state;
 typedef struct spec_thread {
     char *name_hex;
     char *manifest_path;
-    cmeta_thread_t handle;
+    sync_thread_t handle;
     spec_state *child;
     int rc;
     bool joined;
@@ -719,7 +719,7 @@ static void spec_command_thread(
         return;
     }
 
-    if (cmeta_thread_create(
+    if (sync_thread_create(
             &thread->handle,
             spec_thread_main,
             thread) != 0) {
@@ -757,7 +757,7 @@ static void spec_command_wait(
         return;
     }
 
-    if (cmeta_thread_join(&thread->handle) != 0) {
+    if (sync_thread_join(&thread->handle) != 0) {
         spec_note_failure(state, line, "thread join failed");
         return;
     }
@@ -794,7 +794,7 @@ static void spec_state_destroy(spec_state *state) {
             continue;
 
         if (!thread->joined && thread->handle != NULL) {
-            (void)cmeta_thread_join(&thread->handle);
+            (void)sync_thread_join(&thread->handle);
             thread->joined = true;
         }
         if (thread->child != NULL) {

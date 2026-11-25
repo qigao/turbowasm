@@ -41,12 +41,16 @@ Implemented C11 hosted-environment headers:
   `<string.h>` `<tgmath.h>` `<time.h>` `<uchar.h>` `<wchar.h>` `<wctype.h>`
 
 The default installed profile opts out of C11 threads through
-`__STDC_NO_THREADS__`. This TurboWasm checkout also has a separate opt-in
-threaded profile under `threaded/`, built and installed by the containing
-project's `TURBOWASM_BUILD_METALLIC_THREADS` option. Its helpers require `THREADS`
-on the program and every guest library; the upstream Makefile does not provide
-this integration. See the containing project's README for ABI, capacities,
-host ownership and the `<metallic/threads.h>` close extension.
+`__STDC_NO_THREADS__`. TurboWasm's Slate guest SDK also builds a threaded
+profile. The program and each linked guest library must use the same profile.
+See the containing project's README for ABI, capacities, host ownership and
+the `metallic_threads_close` extension declared by `<threads.h>`.
+
+The thread declarations can be included from C11 and C++17. Code shared
+with Salts::Core can use the C11 functions or the fixed-width time entry
+points `thrd_sleep_abi`, `thrd_sleep_remaining_abi`, `mtx_timedlock_abi` and
+`cnd_timedwait_abi`. Compile against the thread header for the target runtime
+and keep handles and synchronization objects within that runtime.
 
 `<stdatomic.h>` comes from Clang's compiler headers. Metallic provides the C
 library, while Clang supplies C11 language support and atomic code generation.

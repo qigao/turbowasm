@@ -1,5 +1,5 @@
 #include "command.h"
-#include <tlog.h>
+#include <core/tlog.h>
 #include <string.h>
 
 static bool number(const char *s, uint64_t maximum, uint64_t *out) {
@@ -56,10 +56,10 @@ int main(int argc, char **argv) {
     options.arg_count = (size_t)(argc - i);
     tlog_t *logger = tlog_create(NULL);
     if (!logger) return 125;
-    cmeta_console_sink_opts_t sink_options = { .output = stderr, .use_colors = 0, .pattern = "{message}" };
-    cmeta_log_sink_t *sink = cmeta_sink_console_create(&sink_options);
+    console_sink_opts_t sink_options = { .output = stderr, .use_colors = 0, .pattern = "{message}" };
+    log_sink_t *sink = sink_console_create(&sink_options);
     if (!sink || tlog_add_sink(logger, sink)) {
-        if (sink) cmeta_sink_destroy(sink);
+        if (sink) sink_destroy(sink);
         tlog_destroy(logger);
         return 125;
     }

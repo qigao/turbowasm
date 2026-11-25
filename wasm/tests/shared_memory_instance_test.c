@@ -2,7 +2,7 @@
 
 #include "instance_internal.h"
 
-#include <salts/thread.h>
+#include <threads/threads.h>
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -245,8 +245,8 @@ static void test_shared_backing_across_linked_instances(void) {
     turbowasm_instance consumer_b = {0};
     store_thread_context a = {0};
     store_thread_context b = {0};
-    cmeta_thread_t thread_a = NULL;
-    cmeta_thread_t thread_b = NULL;
+    sync_thread_t thread_a = NULL;
+    sync_thread_t thread_b = NULL;
     turbowasm_value address;
     uint8_t *raw = NULL;
 
@@ -283,12 +283,12 @@ static void test_shared_backing_across_linked_instances(void) {
     b.value = UINT32_C(0x55667788);
     b.iterations = 500u;
 
-    assert(cmeta_thread_create(
+    assert(sync_thread_create(
                &thread_a, store_thread, &a) == 0);
-    assert(cmeta_thread_create(
+    assert(sync_thread_create(
                &thread_b, store_thread, &b) == 0);
-    assert(cmeta_thread_join(&thread_a) == 0);
-    assert(cmeta_thread_join(&thread_b) == 0);
+    assert(sync_thread_join(&thread_a) == 0);
+    assert(sync_thread_join(&thread_b) == 0);
 
     address = i32_value(0);
     assert((uint32_t)invoke_i32(
@@ -314,8 +314,8 @@ static void test_concurrent_size_and_grow(void) {
     turbowasm_instance reader = {0};
     grow_thread_context grow = {0};
     size_thread_context size = {0};
-    cmeta_thread_t grow_thread_handle = NULL;
-    cmeta_thread_t size_thread_handle = NULL;
+    sync_thread_t grow_thread_handle = NULL;
+    sync_thread_t size_thread_handle = NULL;
 
     assert(turbowasm_module_load_borrowed(
                &provider_module,
@@ -335,18 +335,18 @@ static void test_concurrent_size_and_grow(void) {
     size.instance = &reader;
     size.iterations = 500u;
 
-    assert(cmeta_thread_create(
+    assert(sync_thread_create(
                &size_thread_handle,
                size_thread,
                &size) == 0);
-    assert(cmeta_thread_create(
+    assert(sync_thread_create(
                &grow_thread_handle,
                grow_thread,
                &grow) == 0);
 
-    assert(cmeta_thread_join(
+    assert(sync_thread_join(
                &grow_thread_handle) == 0);
-    assert(cmeta_thread_join(
+    assert(sync_thread_join(
                &size_thread_handle) == 0);
 
     assert(grow.previous_pages == 1);

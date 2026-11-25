@@ -1,5 +1,5 @@
-#include "../wasm/src/wasi02_component.h"
-#include "../wasm/src/instance_internal.h"
+#include "../src/wasi02_component.h"
+#include "../src/instance_internal.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

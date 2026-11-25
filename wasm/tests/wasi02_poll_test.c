@@ -1,4 +1,4 @@
-#include "../wasm/src/wasi02_poll.h"
+#include "../src/wasi02_poll.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

@@ -1,5 +1,5 @@
-#include "../wasm/src/instance_internal.h"
-#include "../wasm/src/artifact.h"
+#include "../src/instance_internal.h"
+#include "../src/artifact.h"
 
 #include <turbowasm.h>
 

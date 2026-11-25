@@ -1,4 +1,4 @@
-#include "../wasm/src/wasi02_descriptor.h"
+#include "../src/wasi02_descriptor.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

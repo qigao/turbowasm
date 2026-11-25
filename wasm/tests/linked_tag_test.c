@@ -1,4 +1,4 @@
-#include "../wasm/src/instance_internal.h"
+#include "../src/instance_internal.h"
 
 #include <turbowasm.h>
 

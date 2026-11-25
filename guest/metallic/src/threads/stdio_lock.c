@@ -1,4 +1,4 @@
-#include "../../wasm/src/stdio/FILE.h"
+#include "../stdio/FILE.h"
 #include "internal.h"
 #include <string.h>
 

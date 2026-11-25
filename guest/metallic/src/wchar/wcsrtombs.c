@@ -21,19 +21,19 @@ size_t wcsrtombs(char* restrict dst, const wchar_t** restrict src, size_t len, m
                 if (written >= len)
                     break;
                 dst[written++] = 0;
-                *wasm/src = 0;
+                *src = 0;
                 return written - 1;
             }
 
             need = wcrtomb(buf, *p, ps);
 
             if (need == (size_t)-1) {
-                *wasm/src = p;
+                *src = p;
                 return (size_t)-1;
             }
 
             if (written + need > len) {
-                *wasm/src = p;
+                *src = p;
                 return written;
             }
 
@@ -44,7 +44,7 @@ size_t wcsrtombs(char* restrict dst, const wchar_t** restrict src, size_t len, m
             ++p;
         }
 
-        *wasm/src = p;
+        *src = p;
         return written;
     }
 

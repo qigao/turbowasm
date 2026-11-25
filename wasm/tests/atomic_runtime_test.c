@@ -3,7 +3,7 @@
 #include "atomic.h"
 #include "instance_internal.h"
 
-#include <salts/thread.h>
+#include <threads/threads.h>
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -233,8 +233,8 @@ static void test_shared_atomic_rmw_is_lossless(void) {
     turbowasm_linker linker = {0};
     increment_context a = {0};
     increment_context b = {0};
-    cmeta_thread_t thread_a = NULL;
-    cmeta_thread_t thread_b = NULL;
+    sync_thread_t thread_a = NULL;
+    sync_thread_t thread_b = NULL;
 
     assert(turbowasm_module_load_borrowed(
                &provider_module,
@@ -268,12 +268,12 @@ static void test_shared_atomic_rmw_is_lossless(void) {
     b.instance = &consumer_b;
     b.iterations = 1000u;
 
-    assert(cmeta_thread_create(
+    assert(sync_thread_create(
                &thread_a, increment_thread, &a) == 0);
-    assert(cmeta_thread_create(
+    assert(sync_thread_create(
                &thread_b, increment_thread, &b) == 0);
-    assert(cmeta_thread_join(&thread_a) == 0);
-    assert(cmeta_thread_join(&thread_b) == 0);
+    assert(sync_thread_join(&thread_a) == 0);
+    assert(sync_thread_join(&thread_b) == 0);
 
     assert(invoke_i32(&provider, 0u) == 2000);
 

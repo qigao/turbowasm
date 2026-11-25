@@ -1,8 +1,8 @@
 #include <wasi02_cnet.h>
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 #include <tinytest.h>
 #if !defined(TW_NETWORK_PUBLIC_ONLY)
-#include "wasi02_sockets.h"
+#include "../src/wasi02_sockets.h"
 #endif
 #include "wasi02/fixtures/generated/wasi02_toolchain_fixtures.h"
 #include <string.h>

@@ -1,4 +1,4 @@
-#include "../../wasm/src/wasi/wasi.h"
+#include "../wasi/wasi.h"
 #include "internal.h"
 #include <limits.h>
 
@@ -72,9 +72,14 @@ static int lock_until(mtx_t *mutex, const struct timespec *deadline) {
     }
 }
 int mtx_lock(mtx_t *mutex) { return lock_until(mutex, NULL); }
-int mtx_timedlock(mtx_t *restrict mutex, const struct timespec *restrict deadline) {
-    if (!mutex || !(mutex->type & mtx_timed) || !valid_time(deadline)) return thrd_error;
-    return lock_until(mutex, deadline);
+int mtx_timedlock_abi(mtx_t *mutex, int64_t seconds, uint32_t nanos) {
+    if (!mutex || !(mutex->type & mtx_timed) || nanos >= 1000000000u) return thrd_error;
+    const struct timespec deadline = {seconds, (long)nanos};
+    return lock_until(mutex, &deadline);
+}
+int mtx_timedlock(mtx_t *mutex, const struct timespec *deadline) {
+    if (!valid_time(deadline)) return thrd_error;
+    return mtx_timedlock_abi(mutex, deadline->tv_sec, (uint32_t)deadline->tv_nsec);
 }
 int mtx_unlock(mtx_t *mutex) {
     if (!mutex || atomic_load_explicit(&mutex->owner, memory_order_relaxed) != __metallic_thread_token())
@@ -108,7 +113,7 @@ static int signal_condition(cnd_t *condition, unsigned count) {
 int cnd_signal(cnd_t *condition) { return signal_condition(condition, 1); }
 int cnd_broadcast(cnd_t *condition) { return signal_condition(condition, UINT_MAX); }
 static int condition_wait(cnd_t *condition, mtx_t *mutex, const struct timespec *deadline) {
-    if (!condition || !mutex || (deadline && !valid_time(deadline)) ||
+    if (!condition || !mutex ||
         atomic_load_explicit(&mutex->owner, memory_order_relaxed) != __metallic_thread_token() ||
         mutex->depth != 1) return thrd_error;
     uint64_t sequence = atomic_load_explicit(&condition->sequence, memory_order_acquire);
@@ -129,19 +134,23 @@ static int condition_wait(cnd_t *condition, mtx_t *mutex, const struct timespec 
     return mtx_lock(mutex) == thrd_success ? result : thrd_error;
 }
 int cnd_wait(cnd_t *condition, mtx_t *mutex) { return condition_wait(condition, mutex, NULL); }
-int cnd_timedwait(cnd_t *restrict condition, mtx_t *restrict mutex, const struct timespec *restrict deadline) {
-    if (!deadline) return thrd_error;
-    return condition_wait(condition, mutex, deadline);
+int cnd_timedwait_abi(cnd_t *condition, mtx_t *mutex, int64_t seconds, uint32_t nanos) {
+    if (nanos >= 1000000000u) return thrd_error;
+    const struct timespec deadline = {seconds, (long)nanos};
+    return condition_wait(condition, mutex, &deadline);
+}
+int cnd_timedwait(cnd_t *condition, mtx_t *mutex, const struct timespec *deadline) {
+    if (!valid_time(deadline)) return thrd_error;
+    return cnd_timedwait_abi(condition, mutex, deadline->tv_sec, (uint32_t)deadline->tv_nsec);
 }
 
 static atomic_int sleep_word;
 void thrd_yield(void) {
     __builtin_wasm_memory_atomic_wait32((int *)&sleep_word, 0, 1000);
 }
-int thrd_sleep(const struct timespec *duration, struct timespec *remaining) {
-    if (!valid_time(duration) || duration->tv_sec < 0 || (uint64_t)duration->tv_sec >
-        (UINT64_MAX - (uint64_t)duration->tv_nsec) / UINT64_C(1000000000)) return -2;
-    uint64_t interval = (uint64_t)duration->tv_sec * UINT64_C(1000000000) + (uint64_t)duration->tv_nsec;
+int thrd_sleep_abi(uint64_t seconds, uint32_t nanos) {
+    if (nanos >= 1000000000u || seconds > (UINT64_MAX - nanos) / UINT64_C(1000000000)) return -2;
+    uint64_t interval = seconds * UINT64_C(1000000000) + nanos;
     __wasi_timestamp_t now;
     if (__wasi_clock_time_get(__WASI_CLOCKID_MONOTONIC, 1, &now) || interval > UINT64_MAX - now) return -2;
     uint64_t end = now + interval;
@@ -151,6 +160,18 @@ int thrd_sleep(const struct timespec *duration, struct timespec *remaining) {
         __builtin_wasm_memory_atomic_wait32((int *)&sleep_word, 0, slice);
         if (__wasi_clock_time_get(__WASI_CLOCKID_MONOTONIC, 1, &now)) return -2;
     }
-    if (remaining) *remaining = (struct timespec){0};
     return 0;
+}
+int thrd_sleep_remaining_abi(uint64_t seconds, uint32_t nanos,
+        uint64_t *remaining_seconds, uint32_t *remaining_nanos) {
+    if (nanos >= 1000000000u || !remaining_seconds || !remaining_nanos) return -2;
+    *remaining_seconds = 0;
+    *remaining_nanos = 0;
+    return thrd_sleep_abi(seconds, nanos);
+}
+int thrd_sleep(const struct timespec *duration, struct timespec *remaining) {
+    if (!valid_time(duration) || duration->tv_sec < 0) return -2;
+    int result = thrd_sleep_abi((uint64_t)duration->tv_sec, (uint32_t)duration->tv_nsec);
+    if (result == 0 && remaining) *remaining = (struct timespec){0};
+    return result;
 }

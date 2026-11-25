@@ -1,5 +1,5 @@
-#include "../wasm/src/component_binary.h"
-#include "../wasm/src/component_exec.h"
+#include "../src/component_binary.h"
+#include "../src/component_exec.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

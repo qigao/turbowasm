@@ -142,7 +142,7 @@ static turbowasm_value vector_value(void) {
     const uint64_t bits[] = {UINT64_C(0x7ff8000000001234), UINT64_C(0x8000000000000000)};
     turbowasm_value value = {0};
     value.kind = TURBOWASM_VALUE_V128; value.as.v128.shape = TURBOWASM_V128_F64X2;
-    cmeta_simd_v128_load(&value.as.v128.bits, bits);
+    simd_v128_load(&value.as.v128.bits, bits);
     return value;
 }
 static turbowasm_status host_collect(void *context, turbowasm_host_call *call,

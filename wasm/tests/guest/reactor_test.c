@@ -1,7 +1,7 @@
 #include "tinytest.h"
 #include "reactor_session.h"
 #include <wasi.h>
-#include <salts/thread.h>
+#include <threads/threads.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,7 +40,7 @@ static uint32_t exit_code;
 static char output[64];
 static size_t output_size;
 static atomic_bool host_entered, host_release;
-static cmeta_thread_t worker;
+static sync_thread_t worker;
 static bool worker_started;
 static turbowasm_status worker_status;
 
@@ -122,7 +122,7 @@ static turbowasm_status control(void *context, turbowasm_host_call *host,
             nested_destroy = reactor_session_destroy(&session);
         } else if (reentry_mode == 2) {
             atomic_store(&host_entered, true);
-            while (!atomic_load(&host_release)) cmeta_thread_yield();
+            while (!atomic_load(&host_release)) sync_thread_yield();
         }
     }
     results[0] = (turbowasm_value){.kind = TURBOWASM_VALUE_I32, .as.i32 = value};
@@ -222,7 +222,7 @@ spec("Metallic Reactor lifecycle") {
     }
     after_each() {
         atomic_store(&host_release, true);
-        if (worker_started) check_equal(cmeta_thread_join(&worker), 0);
+        if (worker_started) check_equal(sync_thread_join(&worker), 0);
         check_true(reactor_session_destroy(&other));
         check_true(reactor_session_destroy(&session));
         turbowasm_linker_destroy(&linker); turbowasm_wasi_preview1_destroy(&wasi);
@@ -327,13 +327,13 @@ spec("Metallic Reactor lifecycle") {
     it("rejects concurrent calls and teardown while another owner is active") {
         check_equal(reactor_session_open(&session, &module, &linker, 1000000, &trap), TURBOWASM_OK);
         reentry_mode = 2;
-        check_equal(cmeta_thread_create(&worker, invoke_worker, NULL), 0); worker_started = true;
-        while (!atomic_load(&host_entered)) cmeta_thread_yield();
+        check_equal(sync_thread_create(&worker, invoke_worker, NULL), 0); worker_started = true;
+        while (!atomic_load(&host_entered)) sync_thread_yield();
         int32_t result;
         check_equal(call(&session, "initialized", NULL, &result), TURBOWASM_INVALID_ARGUMENT);
         check_false(reactor_session_destroy(&session));
         atomic_store(&host_release, true);
-        check_equal(cmeta_thread_join(&worker), 0); worker_started = false;
+        check_equal(sync_thread_join(&worker), 0); worker_started = false;
         check_equal(worker_status, TURBOWASM_OK);
     }
     it("links a second compiled Reactor to a retained provider instance") {

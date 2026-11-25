@@ -1,4 +1,4 @@
-#include "../wasm/src/component_exec.h"
+#include "../src/component_exec.h"
 
 #ifdef NDEBUG
 #undef NDEBUG

@@ -364,14 +364,12 @@ no Metallic download during configure or build. Origin, revision, license and
 local changes are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Build with LLVM 20+ `clang`, `llvm-ar` and `wasm-ld` on PATH and a Salts SDK providing
-`SALTS_FS_ROOT_MUTATION_VERSION` (secure rename, exclusive create and append):
+`SALTS_FS_ROOT_MUTATION_VERSION` for secure rename, exclusive create and append.
 
 ```powershell
-# Run from a Visual Studio developer shell with the normal SDK environment.
-cmake --preset win-metallic-user
-cmake --build --preset win-metallic-user
-ctest --preset win-metallic-user -R guest --output-on-failure
-build/win-metallic-user/turbowasm-run.exe build/win-metallic-user/guest/guest_hello.wasm demo
+slate build --preset guests --build-dir out/guests
+slate test --preset guest-tests --label guest
+./out/guests/bin/turbowasm-run.exe ./out/guests/guest/guest_hello.wasm demo
 ```
 
 `turbowasm-run [--dir absolute-host-directory] [--env KEY=VALUE] [--fuel N]
@@ -384,13 +382,11 @@ guest symlinks. The runner rejects command modules with a separate start section
 so instantiation cannot run unmetered guest code. Runtime failures return process
 status 125; guest `proc_exit` returns its low eight bits.
 
-`cmake --build --preset install-win-metallic-user` installs the runner and guest
-headers, `metallic.a`, `crt1.o`, `crt1-reactor.o`, license and the guest CMake helpers. Installed CMake
-consumers can include `${TurboWasm_GUEST_SDK_DIR}/TurboWasmGuest.cmake` after
-`find_package(TurboWasm CONFIG REQUIRED)`, then call
-`turbowasm_add_c_guest(app /absolute/path/app.c)`. This emits `app.wasm` with a
-256 KiB shadow stack and 16 MiB declared maximum memory. LLVM versions must be
-compatible with the LTO archive used by that SDK.
+`slate install --preset guests --build-dir out/guests --prefix out/guest-stage`
+stages the runner and both Metallic profiles under `share/turbowasm/guest`, with
+guest headers, startup objects, archives, and the upstream license. The guest
+link uses a 256 KiB shadow stack and a 16 MiB declared maximum memory. Consumer
+LLVM versions must be compatible with the LTO archive used by the SDK.
 
 Guest code can call application host APIs grouped by module. The SDK installs
 `<import.h>` for explicit typed import declarations:
@@ -421,12 +417,10 @@ The standard runner does not automatically supply custom application modules.
 See the [module API design](ARCHITECTURE.md#module-scoped-guest-to-host-apis) for
 memory, authority and lifecycle rules.
 
-With the Metallic preset configured, build and run the example through CTest
-(Windows commands require a Visual Studio developer shell):
+Run the clock example's interpreter, MIR and host tests through Slate.
 
 ```sh
-cmake --build --preset win-metallic-user --target turbowasm_clock_example turbowasm_guest_clock_interpreter_test
-ctest --preset win-metallic-user -R turbowasm_guest_clock --output-on-failure
+slate test --preset guest-tests --filter turbowasm_guest_clock
 ```
 
 The host executable can also be used as
@@ -483,38 +477,31 @@ input may share storage with the response. Calls never retry automatically.
 In particular, a write may already have committed when the guest receives a
 timeout or `APP_HTTP_BUFFER_TOO_SMALL`; repeating it can repeat the mutation.
 
-Enable `TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE` with the Metallic guest SDK. On Windows,
-`win-http-guest-user` enables it. Set `HTTP_SERVICES_ROOT` to an installed Chttp SDK,
-`SALTS_UTILS_ROOT` to its matching SaltsUtils SDK, and `SALTS_ROOT` to its matching
-Salts SDK; retain the Metallic preset's compiler and guest-source requirements.
-The optional manifest feature supplies Chttp's GmSSL dependency through vcpkg.
-From the Visual Studio developer shell, with the configured `VCPKG_ROOT`:
+The `guests` preset builds the Chttp example using `CHTTP_ROOT` and
+`SALTS_UTILS_ROOT` from `.env`.
 
-```sh
-cmake --preset win-http-guest-user
-cmake --build --preset win-http-guest-user --target turbowasm_http_example turbowasm_guest_http_test
-ctest --preset win-http-guest-user -R turbowasm_guest_http_test --output-on-failure
+```powershell
+slate build --preset guests --target turbowasm_http_example --build-dir out/guests
 ```
 
 With a host-selected local HTTP service running, the native example can be used as:
 
-```sh
-build/win-http-guest-user/guest/turbowasm_http_example.exe build/win-http-guest-user/guest/guest_http.wasm tcp://127.0.0.1:8080 localhost /resource
+```powershell
+./out/guests/bin/turbowasm_http_example.exe ./out/guests/guest/guest_http.wasm tcp://127.0.0.1:8080 localhost /resource
 ```
 
 It prints the HTTP result and body length; the response body stays in guest memory.
-For direct execution, put the matching SDK `bin` directories and the preset's
-vcpkg triplet `bin` directory on `PATH`, as the CTest preset does.
+Slate stages the SDK DLLs beside the executable.
 This command demonstrates GET-only plain HTTP. HTTPS embedders supply a host-owned Chttp
-TLS trust profile. The integration test starts its own loopback server and needs
-no external service. Chttp remains an optional example dependency; these application
-headers and adapters are not part of the installed Runtime API.
+TLS trust profile. The existing integration test starts its own loopback server.
+Its `http-guest-tests` preset requires the Chttp server-engine declarations used
+by the fixture. Chttp 0.1.6 omits these declarations from its public SDK, so this
+test currently fails to compile with the SDK selected in `.env.example`.
 
-The opt-in `TURBOWASM_BUILD_METALLIC_THREADS` option also installs
-`threaded/include`, `threaded/lib/metallic-threaded.a`, separate command/Reactor
-CRTs and profile metadata beneath the guest SDK directory. It requires the guest
-SDK and WASIThreads adapter; the Metallic qualification presets enable it.
-Existing helpers remain single-threaded unless explicitly passed `THREADS`:
+Slate installs the guest headers in `include/` and the threaded archive and
+command/Reactor CRTs in `threaded/lib/` beneath the guest SDK directory.
+Threaded guests require the host WASIThreads adapter. The CMake guest helpers
+select the threaded profile with `THREADS`.
 
 ```cmake
 turbowasm_add_c_guest_library(worker_code THREADS SOURCES worker.c)
@@ -549,7 +536,7 @@ join/wait. Capacity exhaustion returns `thrd_nomem`, while stale handles and
 closed admission return `thrd_error`. These limits do not prevent application
 lock cycles. Timed calls require a working realtime clock provider.
 
-Guest `<metallic/threads.h>` adds `metallic_threads_close(utc_deadline)`: root-only,
+Guest `<threads.h>` declares the root-only extension `metallic_threads_close(utc_deadline)`, which
 permanently closes spawn admission and waits for stack-free child terminals.
 NULL waits without a deadline; an absolute `TIME_UTC` deadline can return
 `thrd_timedout`. Invalid deadlines or clock failure return `thrd_error`.
@@ -686,7 +673,8 @@ the guest's WASI import boundary.
 
 ## Dependency boundary
 
-TurboWasm does not depend on SaltsUtils. The Preview1 ABI plan in
+The native runtime has no SaltsUtils dependency. The optional Chttp example
+uses SaltsUtils through Chttp. The Preview1 ABI plan in
 `wasm/src/wasi_preview1_adapter_plan.h` is maintained with its CMeta declarations in
 `wasm/src/wasi_preview1.c`; `turbowasm_wasi_adapter_plan_test` checks every function
 and parameter against those declarations. The external DataBind generator and
@@ -730,6 +718,58 @@ TurboWasm never includes SIMDe directly and does not expose MIR types through
 the installed `TurboWasm::Runtime` target.
 
 ## Build
+
+Slate 0.1.14 and Ninja build the Windows x64 LLVM-MinGW graph in this checkout.
+Python runs the conformance driver tests and builds the optional Metallic SDK.
+
+```powershell
+slate doctor --preset release
+slate build --preset release
+slate test --preset tests
+slate test --preset debug-tests
+slate install --preset release --components runtime,dev --prefix out/stage
+```
+
+`slate test --preset tests --list` lists registered tests. Use `--filter` for a
+name substring or `--label native` to run the native suite. The Release build
+includes the runtime, Component Model, WASI adapters, MIR backend and tools.
+Slate names the CLI `turbowasm_cli.exe` and the WASI runner `turbowasm-run.exe`.
+The MIR backend stays outside the runtime's public link interface.
+
+The `littlefs` preset adds the littlefs adapter and its contract test from
+`TURBOWASM_LITTLEFS_SOURCE_DIR`. The `conformance` and `core3` presets use a
+pinned WebAssembly spec checkout at `TURBOWASM_SPEC_ROOT` with
+`TURBOWASM_WABT_ROOT` or `TURBOWASM_CORE3_TOOLS` respectively. Use
+`slate test --preset core3 --label conformance` for the Core 3.0 suite.
+The [conformance workflow](.github/workflows/conformance.yml) records the
+external tool versions and the spec checkout used for qualification.
+
+### Upstream dependency versions
+
+Use [.env.example](.env.example) to set the paths to restored SDKs. The native
+graph uses the `qigao-x64-windows-llvm-mingw` triplet under
+`VCPKG_INSTALLED_DIR`. The version variables identify the exact releases to
+restore. Slate consumes their installed paths and resolves process environment
+values ahead of `.env`. `slate doctor` shows the toolchain and path sources.
+
+The current local combination is vcpkg-cache 0.1.9, SaltsBase 0.1.11, CMeta
+0.1.11 and SaltsCNet 0.1.20. The Metallic HTTP example also uses SaltsUtils
+0.1.10 and Chttp 0.1.6. Restore vcpkg-cache with the upstream
+`resolve-release` and `locked` commands. Use the published SDK manifests to
+verify release versions, ABI profiles and SHA-256 before setting the SDK roots.
+Missing dependencies cause configuration, graph generation, or compilation to
+fail at the boundary that first uses them.
+
+The Slate graph uses the split SDKs' import libraries and static archives.
+The build copies the two colliding Salts headers into a generated `salts/`
+include directory and installs them beside TurboWasm's public headers. The
+public vector descriptor continues to use CMeta reflection. Interpreter and
+MIR execution use the SDK's native SIMD descriptors and existing operations.
+
+### Historical CMake and CI configuration
+
+The commands and CI results below refer to the previous combined Salts SDK
+profiles. They use the CMake package and release layout for those revisions.
 
 Use CMake 3.25+, Ninja, a Salts SDK selected by `2.3.0-*`, and the shared
 [qigao/vcpkg-cache](https://github.com/qigao/vcpkg-cache) toolchain. The Salts

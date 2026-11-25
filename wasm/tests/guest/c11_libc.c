@@ -5,7 +5,7 @@
 #include <time.h>
 #include <signal.h>
 #include <errno.h>
-#include "../../guest/metallic/wasm/src/wasi/preopen.h"
+#include "../../../guest/metallic/src/wasi/preopen.h"
 
 #define REQUIRE(x) do { if (!(x)) return __LINE__; } while (0)
 enum { WORKERS = 4, DRAWS = 128 };

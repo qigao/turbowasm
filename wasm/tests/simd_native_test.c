@@ -27,9 +27,9 @@ typedef struct outcome {
 
 static uint8_t scalar_type(const turbowasm_simd_exec_descriptor *d) {
     switch (d->vector_desc->lane_kind) {
-        case CMETA_VECTOR_I64: case CMETA_VECTOR_U64: return 0x7e;
-        case CMETA_VECTOR_F32: return 0x7d;
-        case CMETA_VECTOR_F64: return 0x7c;
+        case SALTS_SIMD_LANE_I64: case SALTS_SIMD_LANE_U64: return 0x7e;
+        case SALTS_SIMD_LANE_F32: return 0x7d;
+        case SALTS_SIMD_LANE_F64: return 0x7c;
         default: return 0x7f;
     }
 }
@@ -132,7 +132,7 @@ static turbowasm_value value(uint8_t type, unsigned seed) {
         case 0x7c: result.kind = TURBOWASM_VALUE_F64; memcpy(&result.as.f64, &wide, sizeof(wide)); break;
         case 0x7b:
             result.kind = TURBOWASM_VALUE_V128; result.as.v128.shape = TURBOWASM_V128_RAW;
-            cmeta_simd_v128_load(&result.as.v128.bits, bits); break;
+            simd_v128_load(&result.as.v128.bits, bits); break;
         default: check(false, "invalid SIMD input");
     }
     return result;

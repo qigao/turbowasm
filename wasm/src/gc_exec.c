@@ -1,5 +1,6 @@
 #include "gc_exec.h"
 #include "validate_type.h"
+#include <salts/simd.h>
 #include <string.h>
 
 static turbowasm_status gc_trap(turbowasm_trap *trap, turbowasm_trap reason) {
@@ -87,7 +88,7 @@ static turbowasm_status array_segment(turbowasm_instance_impl *instance, uint32_
             uint64_t bits = 0u;
             uint32_t j;
             if (value.kind == TURBOWASM_VALUE_V128)
-                cmeta_simd_v128_load(&value.as.v128.bits, data);
+                simd_v128_load(&value.as.v128.bits, data);
             else {
                 for (j = 0u; j < bytes; ++j)
                     bits |= (uint64_t)data[j] << (j * 8u);

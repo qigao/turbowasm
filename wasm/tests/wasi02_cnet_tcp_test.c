@@ -1,7 +1,7 @@
 #include <wasi02_cnet.h>
 #include <wasi02.h>
 #include "wasi02/fixtures/generated/wasi02_toolchain_fixtures.h"
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 #include <tinytest.h>
 #include <string.h>
 

@@ -20,9 +20,14 @@ extern "C" {
 /*
  * Installed WASI 0.2 Component capability façade.
  *
- * The handle owns only TurboWasm adapter state. All callback contexts,
- * filesystem providers and provider resource identities are caller-owned and
- * borrowed. No native fd/HANDLE/socket identity enters this ABI.
+ * Zero-initialize the unique handle before init. The adapter copies the
+ * configuration and borrows its callback contexts and filesystem until
+ * destroy succeeds. Resource ownership follows the producing callback's
+ * contract. Provider identities are opaque to the adapter.
+ *
+ * Use the facade and all its Component instances on one serialized host owner
+ * thread, including creation, execution, resumption and destruction. Callbacks
+ * and allocators must not reenter operations on the same facade or instance.
  */
 typedef struct turbowasm_wasi02 {
     void *impl;
@@ -38,11 +43,16 @@ typedef struct turbowasm_wasi02_environment_entry_view {
     turbowasm_wasi02_string_view value;
 } turbowasm_wasi02_environment_entry_view;
 
+/* now returns seconds since the Unix epoch plus a nanosecond fraction.
+ * resolution returns the clock tick length as seconds plus a nanosecond
+ * fraction. Both fractions must be less than 1,000,000,000. */
 typedef turbowasm_status (*turbowasm_wasi02_wall_clock_fn)(
     void *context,
     uint64_t *out_seconds,
     uint32_t *out_nanoseconds);
 
+/* now returns a non-decreasing nanosecond count from a clock-defined origin.
+ * resolution returns the clock tick length in nanoseconds. */
 typedef turbowasm_status (*turbowasm_wasi02_monotonic_clock_fn)(
     void *context,
     uint64_t *out_value);
@@ -61,6 +71,10 @@ typedef turbowasm_status (*turbowasm_wasi02_insecure_seed_fn)(
     uint64_t *out_first,
     uint64_t *out_second);
 
+/* The environment and argument callbacks return borrowed arrays and string
+ * bytes. Initial cwd returns borrowed string bytes when present. Keep the
+ * storage valid and unmodified until the adapter copies it after callback
+ * return. Use provider-owned storage or storage with a longer lifetime. */
 typedef turbowasm_status (*turbowasm_wasi02_environment_fn)(
     void *context,
     const turbowasm_wasi02_environment_entry_view **out_entries,
@@ -156,6 +170,9 @@ typedef struct turbowasm_wasi02_stream_error {
     turbowasm_value error_rep;
 } turbowasm_wasi02_stream_error;
 
+/* On OK with error NONE, return at most max_bytes. A nonempty result must
+ * point to borrowed storage that stays valid and unmodified until the
+ * adapter copies the bytes after callback return. */
 typedef turbowasm_status (*turbowasm_wasi02_input_read_fn)(
     void *context,
     turbowasm_value stream_rep,

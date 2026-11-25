@@ -2,15 +2,15 @@
 #define TURBOWASM_WASI_DISPATCH_PRIVATE_H
 
 #include <wasi_sockets.h>
-#include <salts/thread.h>
-#include <ring_buffer.h>
+#include <threads/threads.h>
+#include <queue/ring_buffer.h>
 
 /* Internal owner bridge for #426. This is not an installed API. The Preview1
  * integration owns lifecycle admission; callbacks/frames remain borrowed until
  * request acknowledgement. All ring accesses require mutex, including owner. */
 typedef struct tw_wasi_dispatch {
-    cmeta_mutex_t mutex;
-    cmeta_cond_t changed;
+    sync_mutex_t mutex;
+    sync_cond_t changed;
     const void *owner;
     void (*wake)(void *);
     void *wake_context;

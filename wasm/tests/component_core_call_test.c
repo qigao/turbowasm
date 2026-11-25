@@ -1,5 +1,5 @@
-#include "../wasm/src/component_core_call.h"
-#include "../wasm/src/instance_internal.h"
+#include "../src/component_core_call.h"
+#include "../src/instance_internal.h"
 
 #include <turbowasm.h>
 
