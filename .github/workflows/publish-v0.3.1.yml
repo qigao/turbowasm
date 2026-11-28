@@ -1,0 +1,34 @@
+name: Publish TurboWasm v0.3.1
+on:
+  push:
+    branches: [release/v0.3.1]
+    paths:
+      - .github/workflows/publish-v0.3.1.yml
+      - cmake/ci/publish-v0.3.1.py
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: turbowasm-release-v0.3.1
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'qigao/turbowasm' && github.ref == 'refs/heads/release/v0.3.1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 68df0b0ba2568f1c85b7194a31d9bbb4c154eaf2
+          path: qualified
+          persist-credentials: false
+      - name: Verify qualified artifacts, package SDKs and publish v0.3.1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 cmake/ci/publish-v0.3.1.py
