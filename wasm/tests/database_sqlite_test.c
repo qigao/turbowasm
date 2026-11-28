@@ -1,4 +1,4 @@
-#include "database_sqlite.h"
+#include "database_orm.h"
 #include "fixtures/database_bridge.h"
 #include <orm.h>
 #include <orm_runtime.h>
@@ -322,23 +322,24 @@ int main(void) {
         "INSERT INTO items(id,payload,parent_id) VALUES(?1,?2,?3)"
     };
     const char *const read_statements[]={select_sql,"SELECT zeroblob(65) AS large_value"};
-    const tw_db_sqlite_alias native_aliases[]={
-        {filename,false,statements,3},{filename,true,read_statements,2}
+    const tw_db_orm_alias native_aliases[]={
+        {.read_only=false,.statements=statements,.statement_count=3,.source.filename=filename},
+        {.read_only=true,.statements=read_statements,.statement_count=2,.source.filename=filename}
     };
-    const tw_db_sqlite_config native_config={driver,native_aliases,2,2,1,1,16384,
+    const tw_db_orm_config native_config={TW_DB_ORM_SQLITE,driver,native_aliases,2,2,1,1,16384,
         1000,8,4096,4096,65536};
-    tw_db_sqlite sqlite={0};
+    tw_db_orm sqlite={0};
     tw_db_alias invalid_aliases[2]={aliases[0],aliases[1]};
     tw_db_policy invalid_policy={policy.limits,invalid_aliases,2};
     invalid_aliases[0].isolation_mask=TW_DB_MASK(TW_DB_ISOLATION_SERIALIZABLE);
-    assert(tw_db_sqlite_init(&sqlite,&invalid_policy,&native_config)==TW_DB_INVALID_REQUEST);
+    assert(tw_db_orm_init(&sqlite,&invalid_policy,&native_config)==TW_DB_INVALID_REQUEST);
     invalid_aliases[0]=aliases[0];
     invalid_aliases[1].isolation_mask=TW_DB_MASK(TW_DB_ISOLATION_DEFAULT);
-    assert(tw_db_sqlite_init(&sqlite,&invalid_policy,&native_config)==TW_DB_INVALID_REQUEST);
-    assert(tw_db_sqlite_init(&sqlite,&policy,&native_config)==TW_DB_OK);
+    assert(tw_db_orm_init(&sqlite,&invalid_policy,&native_config)==TW_DB_INVALID_REQUEST);
+    assert(tw_db_orm_init(&sqlite,&policy,&native_config)==TW_DB_OK);
     tw_db_worker worker={0};tw_db_bridge bridge={0};tw_db_dispatch dispatch={0};
     const tw_db_worker_config wc={4,PAGE_BYTES,16384,UINT64_C(30000000000),
-        tw_db_sqlite_execute,&sqlite};
+        tw_db_orm_execute,&sqlite};
     assert(tw_db_worker_init(&worker,&bridge,&wc,&dispatch)==TW_DB_OK);
     assert(tw_db_bridge_init(&bridge,&policy,&cap,&dispatch)==TW_DB_OK);
     turbowasm_module module={0};turbowasm_linker linker={0};turbowasm_instance instance={0};
@@ -537,7 +538,7 @@ int main(void) {
     cflow_waitable wait=tw_db_worker_waitable(&worker);cflow_waitable_cancel(&wait);
     assert(tw_db_worker_destroy(&worker)==TW_DB_OK);
     assert(tw_db_bridge_destroy(&bridge)==TW_DB_OK);
-    assert(tw_db_sqlite_destroy(&sqlite)==TW_DB_OK);
+    assert(tw_db_orm_destroy(&sqlite)==TW_DB_OK);
     sync_cond_destroy(&wake.cond);sync_mutex_destroy(&wake.mutex);
     host_database(driver,filename,false);
     assert(remove(filename)==0);

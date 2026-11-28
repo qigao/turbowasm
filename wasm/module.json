@@ -3,11 +3,11 @@
     "tests"
   ],
   "targets": {
-    "turbowasm_database_sqlite": {
+    "turbowasm_database_orm": {
       "kind": "static",
       "sources": {
         "files": [
-          "src/database_sqlite.c",
+          "src/database_orm.c",
           "src/database_sql_result.c"
         ]
       },
