@@ -13,7 +13,9 @@
         "url": "https://github.com/qigao/salts-base/releases/download/v0.1.11/salts-base-0.1.11-manifest.json",
         "sha256": "88e7a6054d15a5b2c42c59dc8e60db4bb47657d791d323681687119b46f0fca3",
         "size": 8144
-      }
+      },
+      "source": "a68d6a51314a60b99fbf3caec1812a58e5d6ef48",
+      "release_id": 455781609
     },
     {
       "repo": "cmeta",
@@ -26,7 +28,9 @@
         "url": "https://github.com/qigao/cmeta/releases/download/v0.1.11/cmeta-0.1.11-manifest.json",
         "sha256": "d9b0635d2cfcf31a469a6542c2d4c8f361825d299a42963d6a1f647207c02426",
         "size": 9689
-      }
+      },
+      "source": "d1df804d8ec929a9dc8d9db080a40e62baaffc9e",
+      "release_id": 455804892
     },
     {
       "repo": "salts-utils",
@@ -39,7 +43,9 @@
         "url": "https://github.com/qigao/salts-utils/releases/download/v0.1.10/salts-utils-0.1.10-manifest.json",
         "sha256": "ec1924cb2fbf4566e0c9778e7724c7dfd2df3720792c2cd0a186752ae1aa99a3",
         "size": 13567
-      }
+      },
+      "source": "f93c7f24b41970739eab6b1fae485baf02269f34",
+      "release_id": 455805973
     },
     {
       "repo": "salts-cnet",
@@ -52,7 +58,9 @@
         "url": "https://github.com/qigao/salts-cnet/releases/download/v0.1.20/salts-cnet-0.1.20-manifest.json",
         "sha256": "3bde78725d04e8a22ebd3204bdd9cd8729a809a37ce1bfb102dd0d4ac91e7d89",
         "size": 9522
-      }
+      },
+      "source": "03c03df92688ac2dbef7ece1e2999ad7d119b63c",
+      "release_id": 455799561
     },
     {
       "repo": "chttp",
@@ -65,7 +73,9 @@
         "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-manifest.json",
         "sha256": "702a2b560fcbb979bb81484a41d255eae9c24189c99e8088adf0b0887748a52d",
         "size": 24785
-      }
+      },
+      "source": "0c125bd511786ea91c636866d7c4feef008b6531",
+      "release_id": 455817981
     }
   ],
   "profiles": {

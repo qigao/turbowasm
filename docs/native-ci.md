@@ -10,7 +10,11 @@ Android use the interpreter profile. No installed-consumer project is run.
 SDKs are restored from the immutable stable-release asset inventory in
 `cmake/ci/sdk-lock.json`: SaltsBase 0.1.11, CMeta 0.1.11, SaltsUtils 0.1.10,
 SaltsCNet 0.1.20, CHttp 0.1.6; vcpkg-cache 0.1.9. The shared curl transport
-verifies each archive's digest and size and the producer manifest. Native
+verifies the exact archive and producer manifest bytes against the lock's
+SHA-256 and size. Lock creation independently verifies the published release
+asset metadata, release target commit and successful producer run; the
+consumer does not impose a common JSON schema on different SDK publishers.
+Native
 toolchain selection is architecture-specific. No Mono or floating Salts packages.
 
 macOS Intel has a real x64 matrix row, but the current release family lacks its

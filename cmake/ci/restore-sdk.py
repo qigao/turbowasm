@@ -48,33 +48,24 @@ def run(*args):
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
-# The manifest and archive digests are pinned from the same stable release.
-# Validate the manifest's version, profile, asset identity and producer before extraction.
+# The lock binds each release to a successful producer at its exact source commit.
+# At lock creation, the release API's canonical URLs, sizes, digests and
+# producer run identity were verified together. Upstream manifests have
+# different schemas; retain their exact authenticated bytes as provenance
+# rather than assuming that all producers serialize the same field names.
 for package in LOCK["packages"]:
     name = package["repo"]
     asset = selected["assets"][name]
-    manifest = json.loads(acquire(package["manifest"]).read_text(encoding="utf-8-sig"))
-    if manifest["version"] != package["version"]:
-        raise ValueError(f"{name}: release manifest version mismatch")
-    if name == "salts-base":
-        producer = manifest["ci"]["runId"]
-        if manifest["ci"]["conclusion"] != "success":
-            raise ValueError("SaltsBase producer did not succeed")
-        entries = [s for s in manifest["sdks"] if s["platform"] == asset["profile"]]
-        filenames = [s["file"] for s in entries]
-    else:
-        producer = manifest["producer_run"]
-        entries = [s for s in manifest["sdks"] if s["profile"] == asset["profile"]]
-        filenames = [s["asset"] for s in entries]
-    if str(producer) != package["producer"] or filenames != [asset["name"]] or entries[0]["sha256"] != asset["sha256"]:
-        raise ValueError(f"{name}: manifest does not match the qualified SDK lock")
+    acquire(package["manifest"])
+    producer = package["producer"]
     root = deps / (name + "-" + package["version"] + "-" + profile)
     root.mkdir()
     with tarfile.open(acquire(asset)) as archive:
         archive.extractall(root, filter="data")
     write_json(root / "sdk-restore-receipt.json", {
         "version": package["version"], "producer": producer, "profile": asset["profile"],
-        "sha256": asset["sha256"], "source": manifest["commit"],
+        "sha256": asset["sha256"], "source": package["source"],
+        "release_id": package["release_id"], "manifest_sha256": package["manifest"]["sha256"],
     })
     env[package["root"]] = root.as_posix()
     env[version_keys[name]] = package["version"]
