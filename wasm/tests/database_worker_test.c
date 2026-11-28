@@ -24,25 +24,25 @@ static const uint8_t put[]={8,0,0,0,'i','t','e','m','.','p','u','t',1,0,0,0,
     TW_DB_I64,8,0,0,0,7,0,0,0,0,0,0,0};
 static const uint8_t payload[]={0,0xff,0x61,0};
 
-typedef struct signal {
+typedef struct worker_signal {
     sync_mutex_t mutex;
     sync_cond_t cond;
     bool ready;
-} signal;
+} worker_signal;
 
-static void signal_init(signal *s) {
+static void signal_init(worker_signal *s) {
     sync_mutex_init(&s->mutex);
     sync_cond_init(&s->cond);
     s->ready=false;
 }
 static void notify(void *context) {
-    signal *s=context;
+    worker_signal *s=context;
     sync_mutex_lock(&s->mutex);
     s->ready=true;
     sync_cond_signal(&s->cond);
     sync_mutex_unlock(&s->mutex);
 }
-static void wait_signal(signal *s) {
+static void wait_signal(worker_signal *s) {
     const uint64_t deadline=hrtime()+UINT64_C(10000000000);
     sync_mutex_lock(&s->mutex);
     while(!s->ready) {
@@ -53,14 +53,14 @@ static void wait_signal(signal *s) {
     s->ready=false;
     sync_mutex_unlock(&s->mutex);
 }
-static void signal_destroy(signal *s) {
+static void signal_destroy(worker_signal *s) {
     sync_cond_destroy(&s->cond);
     sync_mutex_destroy(&s->mutex);
 }
 
 typedef struct backend {
     const void *owner,*lane;
-    signal entered,release;
+    worker_signal entered,release;
     bool block;
     unsigned opens,writes,closes;
     uintptr_t native;
@@ -149,7 +149,7 @@ static uint64_t take(turbowasm_instance *i,uint64_t op) {
     single(i,DROP,op,TW_DB_OK);
     return (uint64_t)r[1].as.i64;
 }
-static void deliver(tw_db_worker *worker,signal *wake) {
+static void deliver(tw_db_worker *worker,worker_signal *wake) {
     cflow_waitable wait=tw_db_worker_waitable(worker);
     assert(cflow_waitable_arm(&wait,(cflow_waker){notify,wake}));
     wait_signal(wake);
@@ -179,7 +179,7 @@ int main(void) {
     turbowasm_instance instance={0};
     turbowasm_execution execution={0};
     backend b={.owner=sync_thread_current_token(),.native=100};
-    signal wake={0};
+    worker_signal wake={0};
     signal_init(&b.entered);signal_init(&b.release);signal_init(&wake);
     tw_db_dispatch dispatch={0};
     const tw_db_worker_config config={4,64,16384,UINT64_C(30000000000),execute,&b};
