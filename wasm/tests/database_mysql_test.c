@@ -65,6 +65,8 @@ static const char *required(const char *name) {
 static uint64_t issue(fixture *f,tw_db_opcode code,uint64_t owner,
     const uint8_t *bytes,size_t size) {
     uint64_t op=submit(&f->instance,code,owner,bytes,size,TW_DB_OK);
+    fprintf(stderr,"MySQL %s opcode=%u op=%" PRIu64 " owner=%" PRIu64 "\n",
+        TEST_TABLE,(unsigned)code,op,owner);
     settle(&f->bridge,&f->worker,&f->wake,&f->instance,op);
     return op;
 }

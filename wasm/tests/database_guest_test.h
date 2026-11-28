@@ -9,6 +9,8 @@
 #undef NDEBUG
 #endif
 #include <assert.h>
+#include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 
 enum { SUBMIT=8,POLL,AWAIT,RECEIPT,READ,TAKE,CANCEL,DROP,PUT,GET };
@@ -69,6 +71,12 @@ static inline void single(turbowasm_instance *i,uint32_t fn,uint64_t op,tw_db_st
 static inline void receipt(turbowasm_instance *i,uint64_t op,tw_db_outcome outcome,size_t size) {
     turbowasm_value a=i64(op),r[3];
     call(i,RECEIPT,&a,1,r,3);
+    if(r[0].as.i32!=TW_DB_OK||r[1].as.i32!=(int32_t)outcome||
+        (uint64_t)r[2].as.i64!=size)
+        fprintf(stderr,"DB receipt op=%" PRIu64 " status=%d outcome=%d bytes=%" PRIu64
+            " expected status=%d outcome=%d bytes=%zu\n",op,
+            (int)r[0].as.i32,(int)r[1].as.i32,(uint64_t)r[2].as.i64,
+            (int)TW_DB_OK,(int)outcome,size);
     assert(r[0].as.i32==TW_DB_OK&&r[1].as.i32==(int32_t)outcome&&
         (uint64_t)r[2].as.i64==size);
 }
