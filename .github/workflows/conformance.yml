@@ -9,7 +9,8 @@ on:
       - "presets/**"
       - "vcpkg.json"
       - "cmake/**"
-      - "include/**"
+      - "wasm/include/**"
+      - ".github/actions/restore-sdk/**"
       - "wasm/src/**"
       - "wasm/tests/conformance/**"
       - ".github/workflows/conformance.yml"
@@ -90,7 +91,7 @@ jobs:
       TURBOWASM_TRIPLET: x64-linux
       TURBOWASM_HOST_TRIPLET: x64-linux
       GITHUB_TOKEN: ${{ github.token }}
-      CONFORMANCE_PRESET: ${{ matrix.suite == 'core3-mir' && 'ci-core3-mir-user' || matrix.suite == 'core3' && 'ci-core3-user' || matrix.suite == 'mir' && 'ci-conformance-mir-user' || 'ci-conformance-user' }}
+      CONFORMANCE_PRESET: llvm-native-release-user
     steps:
       - uses: actions/checkout@v4
         with:
@@ -101,29 +102,16 @@ jobs:
           ref: ${{ startsWith(matrix.suite, 'core3') && env.WASM_CORE3_COMMIT || env.WASM_SPEC_COMMIT }}
           path: build/wasm-spec
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: ./.github/actions/restore-sdk
         with:
-          repository: qigao/vcpkg-cache
-          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
-          path: build/vcpkg-cache-contract
-          persist-credentials: false
+          profile: linux-clang-x64
+          triplet: x64-linux
       - name: Prepare host tools
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config curl
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
-        with:
-          mode: read
-          triplet: x64-linux
-          host-triplet: x64-linux
-          # WABT host binaries are pinned GitHub Release assets, never vcpkg.
-          # The optional native MIR dependency remains a strict published ABI.
-          features: ${{ contains(matrix.suite, 'mir') && 'mir' || '' }}
-      - name: Restore Salts SDK (2.3.0-*)
-        shell: pwsh
-        run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid linux-x64
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config libpipewire-0.3-dev libx11-dev libxext-dev
       - name: Install exact WABT 1.0.42 host tool from GitHub Release using curl
         if: "!startsWith(matrix.suite, 'core3')"
         shell: bash
@@ -166,7 +154,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake --preset "$CONFORMANCE_PRESET"
+          cmake --fresh --preset "$CONFORMANCE_PRESET" \
+            -DBUILD_TESTS=OFF -DTURBOWASM_BUILD_TOOLS=OFF \
+            -DTURBOWASM_BUILD_CONFORMANCE_RUNNER=ON \
+            "-DTURBOWASM_ENABLE_MIR_JIT=${{ contains(matrix.suite, 'mir') && 'ON' || 'OFF' }}" \
+            "-DTURBOWASM_SPEC_ROOT=$GITHUB_WORKSPACE/build/wasm-spec" \
+            "-DTURBOWASM_CORE3_TOOLS=${TURBOWASM_CORE3_TOOLS:-}" \
+            "-DCMAKE_PREFIX_PATH=$VCPKG_INSTALLED_DIR/x64-linux"
           cmake --build --preset "$CONFORMANCE_PRESET" --parallel 2
       - name: Run formal conformance wasm/tests
         shell: bash
@@ -174,8 +168,8 @@ jobs:
           CONFORMANCE_SUITE: ${{ matrix.suite }}
         run: |
           set -euo pipefail
-          ctest --preset "$CONFORMANCE_PRESET" -R '^turbowasm_conformance_driver$'
+          ctest --test-dir "build/$CONFORMANCE_PRESET" --no-tests=error -R '^turbowasm_conformance_driver$'
           if [[ "$CONFORMANCE_SUITE" != core3* ]]; then
-            ctest --preset "$CONFORMANCE_PRESET" -R '^turbowasm_conformance_harness$'
+            ctest --test-dir "build/$CONFORMANCE_PRESET" --no-tests=error -R '^turbowasm_conformance_harness$'
           fi
-          ctest --preset "$CONFORMANCE_PRESET" --verbose -R "^turbowasm_conformance_${CONFORMANCE_SUITE}$"
+          ctest --test-dir "build/$CONFORMANCE_PRESET" --no-tests=error --verbose -R "^turbowasm_conformance_${CONFORMANCE_SUITE}$"
