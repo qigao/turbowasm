@@ -1,0 +1,26 @@
+name: Restore TurboWasm split SDKs
+description: Restore the exact published SDKs and compiler for a target profile
+inputs:
+  profile:
+    required: true
+    description: Published SDK profile
+  triplet:
+    required: true
+    description: vcpkg target triplet
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: qigao/vcpkg-cache
+        ref: v0.1.9
+        path: build/ci-infrastructure/vcpkg-cache
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Restore locked SDKs and target compiler
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python cmake/ci/restore-sdk.py '${{ inputs.profile }}' '${{ inputs.triplet }}'
