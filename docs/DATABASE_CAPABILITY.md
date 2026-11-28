@@ -534,3 +534,19 @@ worker join verifies the persisted row and exact blob; it is not an installed
 consumer test or guest query. Query/FETCH result codec and transaction
 commit/rollback are subsequent M2 slices; no native query-from-WASM or
 transaction support claimed here. Android remains cross-build only.
+
+### Windows explicit-path plugin loading (M2a CI #930)
+
+CMeta v0.1.11 loads absolute plugin paths with
+`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`.
+The ordinary Windows PATH used to start the test executable is not sufficient
+to admit dependencies of a separately installed plugin. The Windows embedding
+host must explicitly register its trusted SDK DLL directories before loading
+the driver. The native SQLite test registers only the selected TurboDB,
+SaltsBase and SaltsUtils bin directories with AddDllDirectory, retains their
+cookies across setup, worker execution and final reopen, and removes the
+directories only after all runtime/plugin leases are unloaded. No global
+loader-policy change, implicit discovery, DLL copying or fallback loader.
+Print the ORM error category/detail if driver admission fails; do not treat
+an OS loader failure as a database query failure. This fix targets the
+Windows-only driver-load failure observed before SQL execution in CI #930.

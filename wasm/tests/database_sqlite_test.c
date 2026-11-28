@@ -16,6 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include <direct.h>
 #else
 #include <unistd.h>
@@ -117,6 +119,31 @@ static void settle(tw_db_bridge *bridge,tw_db_worker *worker,wake_signal *wake,
     assert(tw_db_bridge_destroy_execution(bridge,&execution)==TW_DB_OK);
 }
 
+#ifdef _WIN32
+/* The CMeta explicit-path loader uses DLL_LOAD_DIR | DEFAULT_DIRS. PATH
+ * permits the test executable's initial imports, but is not a trusted
+ * plugin dependency directory. Admit only the selected SDKs' bin roots.
+ * Keep these cookies alive through the final ORM runtime/plugin unload. */
+static DLL_DIRECTORY_COOKIE add_sdk_bin(const char *variable) {
+    const char *root=getenv(variable);
+    assert(root&&*root);
+    char path[4096];
+    int n=snprintf(path,sizeof path,"%s/bin",root);
+    assert(n>0&&(size_t)n<sizeof path);
+    wchar_t wide[4096];
+    int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,path,-1,wide,
+        (int)(sizeof wide/sizeof wide[0]));
+    assert(count>0);
+    for(int i=0;i<count;++i)if(wide[i]==L'/')wide[i]=L'\\';
+    DLL_DIRECTORY_COOKIE cookie=AddDllDirectory(wide);
+    if(!cookie)
+        fprintf(stderr,"AddDllDirectory failed for %s (Win32 error %lu)\n",
+            variable,(unsigned long)GetLastError());
+    assert(cookie);
+    return cookie;
+}
+#endif
+
 /* Trusted host setup and post-join persistence verification. Neither the SQL
  * strings nor the filesystem paths are supplied by a guest. */
 static void host_database(const char *driver,const char *filename,bool setup) {
@@ -127,7 +154,11 @@ static void host_database(const char *driver,const char *filename,bool setup) {
     orm_driver_load_config_t load={0};
     load.struct_size=(uint32_t)sizeof load;load.abi_version=ORM_RUNTIME_ABI_VERSION;
     load.module_path=orm_view(driver);load.expected_driver_id=orm_view("sqlite");
-    assert(orm_runtime_load_driver(rt,&load,&error)==ORM_STATUS_OK);
+    orm_status_t status=orm_runtime_load_driver(rt,&load,&error);
+    if(status!=ORM_STATUS_OK)
+        fprintf(stderr,"SQLite driver load failed: status=%d detail=%s module=%s\n",
+            (int)status,error.message,driver);
+    assert(status==ORM_STATUS_OK);
     orm_config_t connect;orm_config(&connect);
     const orm_option_t options[]={{orm_view("filename"),orm_view(filename)},
         {orm_view("open_mode"),orm_view(setup?"read_write_create":"read_only")}};
@@ -166,6 +197,13 @@ int main(void) {
     assert(n>0&&(size_t)n<sizeof driver);
     n=snprintf(filename,sizeof filename,"%s/turbowasm-db-%d.sqlite",cwd,process_id());
     assert(n>0&&(size_t)n<sizeof filename);
+#ifdef _WIN32
+    const DLL_DIRECTORY_COOKIE sdk_dirs[]={
+        add_sdk_bin("TURBODB_ROOT"),
+        add_sdk_bin("SALTS_BASE_ROOT"),
+        add_sdk_bin("SALTS_UTILS_ROOT")
+    };
+#endif
     host_database(driver,filename,true);
 
     const char *const statements[]={"INSERT INTO items(id,payload) VALUES(?1,?2)"};
@@ -248,5 +286,9 @@ int main(void) {
     sync_cond_destroy(&wake.cond);sync_mutex_destroy(&wake.mutex);
     host_database(driver,filename,false);
     assert(remove(filename)==0);
+#ifdef _WIN32
+    for(size_t i=sizeof sdk_dirs/sizeof sdk_dirs[0];i>0;--i)
+        assert(RemoveDllDirectory(sdk_dirs[i-1]));
+#endif
     return 0;
 }
