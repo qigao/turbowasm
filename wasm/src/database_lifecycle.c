@@ -16,7 +16,8 @@ typedef struct resource_slot {
 } resource_slot;
 
 typedef struct operation_slot {
-    uint64_t token;
+    uint64_t token, dispatch_token;
+    bool discarding;
     tw_db_operation_state state;
     tw_db_request request;
     size_t owner, produced, request_size;
@@ -30,7 +31,7 @@ typedef struct manager_impl {
     operation_slot *operations;
     uint8_t *requests, *results;
     size_t resource_count;
-    uint64_t next_token;
+    uint64_t next_token, shutdown_close;
     bool stopped;
 } manager_impl;
 
@@ -183,8 +184,9 @@ tw_db_status tw_db_manager_submit(tw_db_manager *manager,
         return TW_DB_LIMIT;
     }
     operation_slot *o=&p->operations[oi];
-    *o=(operation_slot){.token=p->next_token++,.state=TW_DB_ADMITTED,
+    *o=(operation_slot){.token=p->next_token,.dispatch_token=p->next_token,.state=TW_DB_ADMITTED,
         .request=q,.owner=ri,.produced=child,.request_size=size};
+    ++p->next_token;
     if (ri!=NO_SLOT) p->resources[ri].active=true;
     if (child!=NO_SLOT) {
         p->resources[child]=(resource_slot){.token=p->next_token++,
@@ -202,8 +204,9 @@ tw_db_status tw_db_manager_start(tw_db_manager *manager,uint64_t operation,tw_db
     operation_slot *o=&p->operations[i];
     if(o->state!=TW_DB_ADMITTED) return TW_DB_WRONG_STATE;
     o->state=TW_DB_RUNNING;
-    *out=(tw_db_work){o->token,o->request,
-        o->owner==NO_SLOT?0:p->resources[o->owner].native};
+    *out=(tw_db_work){o->dispatch_token,o->request,
+        o->owner==NO_SLOT?0:p->resources[o->owner].native,
+        o->owner==NO_SLOT?TW_DB_NONE:p->resources[o->owner].kind};
     return TW_DB_OK;
 }
 
@@ -258,11 +261,28 @@ static void finish(manager_impl *p,operation_slot *o,tw_db_outcome outcome,
 tw_db_status tw_db_manager_complete(tw_db_manager *manager,uint64_t operation,
     tw_db_outcome outcome,uintptr_t native_resource,const uint8_t *bytes,size_t size) {
     manager_impl *p=manager->impl;
-    size_t i=find_operation(p,operation);
+    size_t i=NO_SLOT;
+    if(operation) for(size_t n=0;n<p->capacity.operations;++n)
+        if(p->operations[n].token&&p->operations[n].dispatch_token==operation) {i=n;break;}
     if(i==NO_SLOT) return TW_DB_INVALID_HANDLE;
     operation_slot *o=&p->operations[i];
     if(o->state!=TW_DB_RUNNING&&o->state!=TW_DB_CANCEL_REQUESTED)
         return TW_DB_WRONG_STATE;
+    if(o->discarding) {
+        if(outcome<TW_DB_SUCCESS||outcome>TW_DB_OUTCOME_UNKNOWN||native_resource||size)
+            return TW_DB_INVALID_REQUEST;
+        if(outcome==TW_DB_SUCCESS) {
+            retire_resource(p,o->produced);
+            o->produced=NO_SLOT;
+        } else if(outcome==TW_DB_OUTCOME_UNKNOWN) {
+            /* Keep the unpublished resource HELD, not discoverable by a
+               guessed guest token. Only its ancestors are quarantined. */
+            quarantine(p,p->resources[o->produced].parent);
+        }
+        o->receipt=(tw_db_receipt){outcome,0};
+        o->state=TW_DB_TERMINAL;
+        return TW_DB_OK;
+    }
     if(outcome<TW_DB_SUCCESS||outcome>TW_DB_OUTCOME_UNKNOWN||
         (size&&!bytes)||
         ((outcome==TW_DB_SUCCESS&&o->produced!=NO_SLOT)!=(native_resource!=0))||
@@ -280,6 +300,7 @@ tw_db_status tw_db_manager_cancel(tw_db_manager *manager,uint64_t operation,
     size_t i=find_operation(p,operation);
     if(i==NO_SLOT) return TW_DB_INVALID_HANDLE;
     operation_slot *o=&p->operations[i];
+    if(o->discarding) return TW_DB_WRONG_STATE;
     bool notify=false;
     switch(o->state) {
     case TW_DB_ADMITTED:
@@ -340,10 +361,36 @@ tw_db_status tw_db_manager_take(tw_db_manager *manager,uint64_t operation,
     operation_slot *o;
     tw_db_status s=held_resource(p,operation,&o);
     if(s!=TW_DB_OK) return s;
+    if(o->discarding) return TW_DB_WRONG_STATE;
     resource_slot *r=&p->resources[o->produced];
     r->state=SLOT_LIVE;
     *out_resource=r->token;
     o->produced=NO_SLOT;
+    return TW_DB_OK;
+}
+
+
+tw_db_status tw_db_manager_begin_discard(tw_db_manager *manager,uint64_t operation,
+    tw_db_work *out) {
+    manager_impl *p=manager->impl;
+    operation_slot *o;
+    tw_db_status s=held_resource(p,operation,&o);
+    if(s!=TW_DB_OK) return s;
+    if(o->discarding) return TW_DB_WRONG_STATE;
+    if(p->next_token==UINT64_MAX) return TW_DB_LIMIT;
+    size_t i=(size_t)(o-p->operations);
+    resource_slot *r=&p->resources[o->produced];
+    /* The guest explicitly relinquished the original result. Reuse its
+       reserved slot, but never its native completion identity. */
+    if(o->request_size) memset(request_bytes(p,i),0,o->request_size);
+    if(o->receipt.size) memset(result_bytes(p,i),0,o->receipt.size);
+    o->request_size=0;
+    o->receipt=(tw_db_receipt){0};
+    o->request=(tw_db_request){.opcode=TW_DB_CLOSE,.alias_index=r->alias};
+    o->dispatch_token=p->next_token++;
+    o->discarding=true;
+    o->state=TW_DB_RUNNING;
+    *out=(tw_db_work){o->dispatch_token,o->request,r->native,r->kind};
     return TW_DB_OK;
 }
 
@@ -377,4 +424,89 @@ tw_db_status tw_db_manager_drop(tw_db_manager *manager,uint64_t operation) {
     if(o->receipt.size) memset(result_bytes(p,i),0,o->receipt.size);
     *o=(operation_slot){0};
     return TW_DB_OK;
+}
+
+tw_db_status tw_db_manager_shutdown_next(tw_db_manager *manager,tw_db_shutdown_action *out) {
+    manager_impl *p=manager->impl;
+    if(!p->stopped) return TW_DB_WRONG_STATE;
+    tw_db_shutdown_action a={0};
+    /* A close initiated by shutdown is never replayed, even if it failed
+       without effect. Keep its receipt and owner available to host policy. */
+    if(p->shutdown_close) {
+        a.operation=p->shutdown_close;
+        tw_db_status s=tw_db_manager_receipt(manager,a.operation,&a.receipt);
+        if(s==TW_DB_PENDING) {a.kind=TW_DB_SHUTDOWN_WAIT;*out=a;return TW_DB_OK;}
+        if(s!=TW_DB_OK) return s;
+        if(a.receipt.outcome!=TW_DB_SUCCESS) {
+            a.kind=TW_DB_SHUTDOWN_BLOCKED;*out=a;return TW_DB_OK;
+        }
+        s=tw_db_manager_drop(manager,a.operation);
+        if(s!=TW_DB_OK) return s;
+        p->shutdown_close=0;
+        a.kind=TW_DB_SHUTDOWN_RETIRED;*out=a;return TW_DB_OK;
+    }
+
+    /* Request cancellation once for every admitted business operation.
+       Cleanup work is not cancelled. Drain all before touching resources. */
+    bool pending=false;
+    for(size_t i=0;i<p->capacity.operations;++i) {
+        operation_slot *o=&p->operations[i];
+        if(!o->token||o->state==TW_DB_TERMINAL) continue;
+        if(o->discarding||o->state==TW_DB_CANCEL_REQUESTED) {pending=true;continue;}
+        a.operation=o->token;
+        bool notify=false;
+        tw_db_status s=tw_db_manager_cancel(manager,a.operation,&notify);
+        if(s!=TW_DB_OK) return s;
+        if(notify) a.kind=TW_DB_SHUTDOWN_CANCEL;
+        else {
+            /* Admitted, not dispatched: its cancelled receipt can be retired
+               now, not silently converted into a WAIT action. */
+            s=tw_db_manager_receipt(manager,a.operation,&a.receipt);
+            if(s!=TW_DB_OK) return s;
+            s=tw_db_manager_drop(manager,a.operation);
+            if(s!=TW_DB_OK) return s;
+            a.kind=TW_DB_SHUTDOWN_RETIRED;
+        }
+        *out=a;return TW_DB_OK;
+    }
+    if(pending) {a.kind=TW_DB_SHUTDOWN_WAIT;*out=a;return TW_DB_OK;}
+
+    /* Reclaim terminal operations, including unpublished resources. These
+       retain their parent until their separate native close has drained. */
+    for(size_t i=0;i<p->capacity.operations;++i) {
+        operation_slot *o=&p->operations[i];
+        if(!o->token) continue;
+        a.operation=o->token;
+        a.receipt=o->receipt;
+        if(o->produced!=NO_SLOT) {
+            if(o->discarding) {a.kind=TW_DB_SHUTDOWN_BLOCKED;*out=a;return TW_DB_OK;}
+            tw_db_status s=tw_db_manager_begin_discard(manager,a.operation,&a.work);
+            if(s!=TW_DB_OK) return s;
+            a.kind=TW_DB_SHUTDOWN_DISPATCH;
+        } else {
+            tw_db_status s=tw_db_manager_drop(manager,a.operation);
+            if(s!=TW_DB_OK) return s;
+            a.kind=TW_DB_SHUTDOWN_RETIRED;
+        }
+        *out=a;return TW_DB_OK;
+    }
+
+    /* Only live, unpinned leaves are eligible. A child close consumes its
+       native identity before the parent can be submitted. */
+    bool remaining=false;
+    for(size_t i=0;i<p->resource_count;++i) {
+        resource_slot *r=&p->resources[i];
+        if(r->state==SLOT_FREE) continue;
+        remaining=true;
+        if((r->state!=SLOT_LIVE&&r->state!=SLOT_QUARANTINED)||r->children||r->active)
+            continue;
+        tw_db_status s=tw_db_manager_submit(manager,r->token,TW_DB_CLOSE,NULL,0,&a.operation);
+        if(s!=TW_DB_OK) return s;
+        p->shutdown_close=a.operation;
+        s=tw_db_manager_start(manager,a.operation,&a.work);
+        if(s!=TW_DB_OK) return s;
+        a.kind=TW_DB_SHUTDOWN_DISPATCH;*out=a;return TW_DB_OK;
+    }
+    if(remaining) return TW_DB_WRONG_STATE; /* impossible owner graph */
+    a.kind=TW_DB_SHUTDOWN_DONE;*out=a;return TW_DB_OK;
 }
