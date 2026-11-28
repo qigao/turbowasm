@@ -106,3 +106,17 @@ type matches the previous sequence representation. The four
 Core-compatible fixed-width time entry points share the existing
 Metallic wait paths. The guest suite covers invalid nanoseconds,
 duration overflow and mutex reacquisition after a condition timeout.
+
+## Eight-target native CI (split SDK migration)
+
+The old native job referenced removed ci-* presets and Salts.Native 2.3.0-*.
+The fixture generator still used fixtures/wasm/src after the source move; its
+source is now wasm/tests/wasi02/fixtures/src. CI uses the exact versions in
+.env.example, the shared curl-based vcpkg-cache transport, and all eight
+targets in cmake/ci/native-matrix.json. Desktop targets run CTest; Android
+cross-builds and installs (no device runner). Windows uses LLVM-MinGW;
+Windows ARM64 has no published MIR port. Intel macOS remains a required job
+but the pinned upstream releases lack x64-osx / macos-clang-x64 assets.
+Publish matching upstream releases before claiming eight-target qualification.
+The legacy monolithic artifact override and Metallic guest manual dispatch
+are removed from the native workflow; guest qualification needs separate work.

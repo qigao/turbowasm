@@ -1,250 +1,76 @@
 name: TurboWasm native build
-
 on:
   workflow_call:
     inputs:
       builds:
         type: string
         required: true
-      salts_ci_run:
-        type: string
-        default: ''
-      skip_windows:
-        type: boolean
-        default: false
-
 permissions:
   contents: read
-  packages: read
   actions: read
-
 jobs:
   build:
     name: ${{ matrix.id }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(inputs.builds) }}
-    env:
-      TURBOWASM_SDK_RID: ${{ matrix.rid }}
-      TURBOWASM_TRIPLET: ${{ matrix.triplet }}
-      TURBOWASM_HOST_TRIPLET: ${{ matrix.host_triplet }}
-      GITHUB_TOKEN: ${{ github.token }}
-      CMAKE_C_COMPILER_LAUNCHER: sccache
-      CMAKE_CXX_COMPILER_LAUNCHER: sccache
-      SCCACHE_DIR: ${{ github.workspace }}/build/sccache/${{ matrix.preset }}
-      SCCACHE_CACHE_SIZE: 1G
-      TURBOWASM_GUEST_CMETA_SOURCE_DIR: ${{ matrix.metallic && format('{0}/build/guest-salts/cmeta', github.workspace) || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-native-sdk
+        with:
+          profile: ${{ matrix.sdk }}
+          triplet: ${{ matrix.triplet }}
+          arch: ${{ matrix.arch }}
+      - name: Checkout pinned LittleFS
         if: matrix.littlefs
+        uses: actions/checkout@v4
         with:
           repository: littlefs-project/littlefs
+          ref: 6cb4e86540eca0d9ba62500a298385c9d863c8be
           path: build/littlefs
           persist-credentials: false
-      - uses: actions/checkout@v4
-        if: matrix.metallic
-        with:
-          repository: qigao/salts
-          ref: 081bdff4da141c8042faa83aff0d25eae1077d5e # Salts 2.3.0-rc.2
-          path: build/guest-salts
-          persist-credentials: false
-      - uses: actions/checkout@v4
-        with:
-          repository: qigao/vcpkg-cache
-          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
-          path: build/vcpkg-cache-contract
-          persist-credentials: false
-      # Archive one bounded local cache instead of uploading every object through
-      # sccache's GHA backend, which rejected writes in the qualified full graph.
-      - name: Restore compiler cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.SCCACHE_DIR }}
-          key: sccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.preset }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            sccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.preset }}-${{ github.sha }}-
-            sccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.preset }}-
-      - name: Prepare compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-      - name: Prepare Unix tools
-        if: runner.os != 'Windows'
+      - name: Configure and build complete graph
         shell: bash
+        env:
+          PRESET: ${{ matrix.preset }}
+          BUILD_TESTS: ${{ matrix.tests && 'ON' || 'OFF' }}
+          LITTLEFS: ${{ matrix.littlefs && 'ON' || 'OFF' }}
         run: |
           set -euo pipefail
-          if [ "$RUNNER_OS" = Linux ]; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ninja-build pkg-config curl
-            if [ '${{ matrix.metallic }}' = true ]; then
-              # SJLJ needs standard Wasm EH (LLVM >= 20), including at LTO.
-              curl --fail --location --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key -o "$RUNNER_TEMP/llvm.asc"
-              sudo install -m 644 "$RUNNER_TEMP/llvm.asc" /usr/share/keyrings/turbowasm-llvm.asc
-              echo 'deb [signed-by=/usr/share/keyrings/turbowasm-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' | sudo tee /etc/apt/sources.list.d/turbowasm-llvm.list
-              sudo apt-get update
-              sudo apt-get install -y --no-install-recommends clang-21 llvm-21 lld-21
-              echo /usr/lib/llvm-21/bin >> "$GITHUB_PATH"
-              echo TURBOWASM_GUEST_LLVM_ROOT=/usr/lib/llvm-21 >> "$GITHUB_ENV"
-            fi
-          else
-            command -v ninja >/dev/null || brew install ninja
-            # Match the published Salts SDK's AppleClang thread-local ABI.
-            if [ '${{ matrix.metallic }}' = true ]; then
-              brew install llvm@21 lld@21
-              guest_llvm_root="$(brew --prefix llvm@21)"
-              echo "$guest_llvm_root/bin" >> "$GITHUB_PATH"
-              echo "$(brew --prefix lld@21)/bin" >> "$GITHUB_PATH"
-              echo "TURBOWASM_GUEST_LLVM_ROOT=$guest_llvm_root" >> "$GITHUB_ENV"
-            fi
+          args=("-DBUILD_TESTS=$BUILD_TESTS")
+          if [[ "$LITTLEFS" == ON ]]; then
+            args+=("-DTURBOWASM_LITTLEFS_SOURCE_DIR=$GITHUB_WORKSPACE/build/littlefs")
           fi
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
-        with:
-          mode: read
-          triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.triplet }}
-          host-triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.host_triplet }}
-          # Product CMake enables the optional MIR port only for MIR profiles.
-          features: ${{ contains(matrix.preset, 'mir') && 'mir' || '' }}
-      - name: Prepare Windows toolchain
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
-          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if (-not $vsInstall) { throw 'Visual Studio x64 C++ toolchain is required' }
-          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
-          "TURBOWASM_VCPKG_ROOT=$env:VCPKG_ROOT" >> $env:GITHUB_ENV
-          if (-not $env:QIGAO_VCPKG_WINDOWS_TRIPLET) { throw 'Shared Windows triplet is required' }
-          "TURBOWASM_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
-          "TURBOWASM_HOST_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
-          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
-            choco install ninja -y --no-progress
-            if ($LASTEXITCODE -ne 0) { throw 'Ninja installation failed' }
-          }
-      - name: Restore Salts SDK (2.3.0-*)
-        shell: pwsh
-        run: ./cmake/ci/restore-salts-sdk.ps1 -SaltsRid '${{ matrix.rid }}'
-      - name: Select explicit Salts prerequisite artifact
-        if: inputs.salts_ci_run != ''
-        id: prerequisite
-        shell: pwsh
-        env:
-          SALTS_CI_RUN: ${{ inputs.salts_ci_run }}
-          SKIP_WINDOWS: ${{ inputs.skip_windows || false }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:SALTS_CI_RUN -notmatch '^[1-9][0-9]+$') { throw 'Salts CI run must be a positive run ID' }
-          $run = gh api "repos/qigao/salts/actions/runs/$env:SALTS_CI_RUN" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot read Salts prerequisite run' }
-          if ($env:SKIP_WINDOWS -ne 'true' -and ($run.status -ne 'completed' -or $run.conclusion -ne 'success')) { throw 'Salts prerequisite run must have succeeded' }
-          $profile = switch ($env:TURBOWASM_SDK_RID) {
-            'linux-x64' { 'linux-release' }
-            'windows-x64' { 'windows-release' }
-            'macos-arm64' { 'macos-release' }
-            'android-arm64-v8a' { 'android-arm64-v8a-release' }
-            default { throw 'Unsupported Salts prerequisite platform' }
-          }
-          if ($env:SKIP_WINDOWS -eq 'true' -and $profile -eq 'windows-release') { throw 'Windows cannot be selected when its qualification is omitted' }
-          $jobs = gh api "repos/qigao/salts/actions/runs/$env:SALTS_CI_RUN/jobs?filter=latest&per_page=100" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $jobs.total_count -gt 100) { throw 'Cannot enumerate Salts prerequisite jobs' }
-          $matching = @($jobs.jobs | Where-Object { $_.name -eq "native / $profile" })
-          if ($matching.Count -ne 1 -or $matching[0].status -ne 'completed' -or $matching[0].conclusion -ne 'success') { throw "Salts prerequisite platform $profile must have succeeded" }
-          $artifact = if ($env:TURBOWASM_SDK_RID -eq 'macos-arm64') { 'salts-sdk-macos' } else { "salts-sdk-$env:TURBOWASM_SDK_RID" }
-          "artifact=$artifact" >> $env:GITHUB_OUTPUT
-          "SALTS_PREREQUISITE_COMMIT=$($run.head_sha)" >> $env:GITHUB_ENV
-      - uses: actions/download-artifact@v4
-        if: inputs.salts_ci_run != ''
-        with:
-          repository: qigao/salts
-          run-id: ${{ inputs.salts_ci_run }}
-          github-token: ${{ github.token }}
-          name: ${{ steps.prerequisite.outputs.artifact }}
-          path: build/salts-prerequisite-sdk
-      - name: Select prerequisite SDK override
-        if: inputs.salts_ci_run != ''
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $sdk = Join-Path $env:GITHUB_WORKSPACE "build/salts-prerequisite-sdk/$env:TURBOWASM_SDK_RID"
-          $manifest = Join-Path $sdk 'salts-sdk-manifest.txt'
-          $config = Join-Path $sdk 'lib/cmake/Salts/SaltsConfig.cmake'
-          if (-not (Test-Path -LiteralPath $manifest) -or -not (Test-Path -LiteralPath $config)) { throw 'Incomplete Salts prerequisite SDK' }
-          if ((Get-Content -LiteralPath $manifest) -notcontains "commit=$env:SALTS_PREREQUISITE_COMMIT") { throw 'Salts SDK commit does not match its CI run' }
-          "SALTS_ROOT=$sdk" >> $env:GITHUB_ENV
-          "SALTS_VERSION=ci-$env:SALTS_PREREQUISITE_COMMIT" >> $env:GITHUB_ENV
-      - name: Configure, build and install Unix graph
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake --preset '${{ matrix.preset }}'
-          cmake --build --preset '${{ matrix.preset }}' --parallel 2
-          cmake --build --preset 'install-${{ matrix.preset }}' --parallel 2
-      - name: Configure, build and install Windows graph
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
-          if errorlevel 1 exit /b 1
-          set "VCPKG_ROOT=%TURBOWASM_VCPKG_ROOT%"
-          cmake --preset "${{ matrix.preset }}"
-          if errorlevel 1 exit /b 1
-          cmake --build --preset "${{ matrix.preset }}" --parallel 2
-          if errorlevel 1 exit /b 1
-          cmake --build --preset "install-${{ matrix.preset }}" --parallel 2
-          if errorlevel 1 exit /b 1
-      - name: Run Unix tests
-        if: matrix.tests && runner.os != 'Windows'
-        shell: bash
-        run: ctest --preset '${{ matrix.preset }}'
-      - name: Run Windows tests
-        if: matrix.tests && runner.os == 'Windows'
-        shell: cmd
-        run: |
-          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
-          if errorlevel 1 exit /b 1
-          set "VCPKG_ROOT=%TURBOWASM_VCPKG_ROOT%"
-          ctest --preset "${{ matrix.preset }}"
-          if errorlevel 1 exit /b 1
-      - name: Build existing installed-package wasm/tests on Unix
-        if: matrix.consumer && runner.os != 'Windows'
-        working-directory: wasm/tests/installed_consumer
+          cmake --preset "$PRESET" "${args[@]}"
+          cmake --build --preset "$PRESET" --parallel 2
+      - name: Run full native CTest suite
+        if: matrix.tests
         shell: bash
         env:
-          TURBOWASM_ROOT: ${{ github.workspace }}/stage/sdk/${{ matrix.rid }}
-        run: |
-          set -euo pipefail
-          cmake --preset '${{ matrix.consumer }}'
-          cmake --build --preset '${{ matrix.consumer }}' --parallel 2
-          if [ '${{ matrix.tests }}' = true ]; then
-            ctest --preset '${{ matrix.consumer }}'
-          fi
-      - name: Run existing installed-package wasm/tests on Windows
-        if: matrix.consumer && runner.os == 'Windows'
-        working-directory: wasm/tests/installed_consumer
-        shell: cmd
+          PRESET: ${{ matrix.preset }}
+        run: ctest --preset "$PRESET" --output-on-failure --no-tests=error
+      - name: Install target SDK
+        shell: bash
         env:
-          TURBOWASM_ROOT: ${{ github.workspace }}/stage/sdk/${{ matrix.rid }}
-        run: |
-          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
-          if errorlevel 1 exit /b 1
-          set "VCPKG_ROOT=%TURBOWASM_VCPKG_ROOT%"
-          cmake --preset "${{ matrix.consumer }}"
-          if errorlevel 1 exit /b 1
-          cmake --build --preset "${{ matrix.consumer }}" --parallel 2
-          if errorlevel 1 exit /b 1
-          ctest --preset "${{ matrix.consumer }}"
-          if errorlevel 1 exit /b 1
-      - name: Retain failed guest test fixtures
-        if: failure() && matrix.metallic
+          PRESET: ${{ matrix.preset }}
+        run: cmake --build --preset "install-$PRESET"
+      - name: Upload build result
         uses: actions/upload-artifact@v4
         with:
-          name: metallic-test-failure-${{ matrix.id }}-${{ github.run_id }}
+          name: turbowasm-${{ matrix.id }}
+          path: build/ci-install
+          if-no-files-found: error
+      - name: Retain failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-${{ matrix.id }}
           path: |
-            build/${{ matrix.preset }}/guest/**/*.wasm
-            build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
+            build/${{ matrix.preset }}/CMakeCache.txt
+            build/${{ matrix.preset }}/CMakeFiles/CMakeConfigureLog.yaml
+            build/${{ matrix.preset }}/Testing/Temporary/
           if-no-files-found: ignore
-          retention-days: 7

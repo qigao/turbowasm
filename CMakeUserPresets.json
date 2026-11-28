@@ -412,6 +412,22 @@
         "test-linux"
       ],
       "configurePreset": "gcc-arm64-release-user"
+    },
+    {
+      "name": "llvm-mingw-x64-release-user",
+      "inherits": [
+        "base-test",
+        "test-windows"
+      ],
+      "configurePreset": "llvm-mingw-x64-release-user"
+    },
+    {
+      "name": "llvm-mingw-arm64-release-user",
+      "inherits": [
+        "base-test",
+        "test-windows"
+      ],
+      "configurePreset": "llvm-mingw-arm64-release-user"
     }
   ]
 }
