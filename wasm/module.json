@@ -485,7 +485,9 @@
       "kind": "static",
       "sources": {
         "files": [
-          "src/database_wire.c"
+          "src/database_wire.c",
+          "src/database_policy.c",
+          "src/database_lifecycle.c"
         ]
       },
       "private": {
