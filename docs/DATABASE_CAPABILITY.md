@@ -286,3 +286,51 @@ Rollback: keep the embedding host on the preceding qualified release and omit
 the capability registration; guests importing it fail link/admission, not
 silently use another database. Do not change Runtime ABI or native database
 storage format for this adapter.
+
+## 7. M1a private wire admission slice (#441)
+
+The private implementation `wasm/src/database_wire.{h,c}` pins request opcode
+and value numbers, checks canonical little-endian requests and performs
+allocation-free admission against host policy. It is not installed; no
+production `turbodb:db` import or provider operation exists yet.
+
+| Opcode | Value | Exact payload (u32 and all lengths little-endian) |
+| --- | ---: | --- |
+| OPEN_SQL | 1 | counted name |
+| OPEN_REDIS | 2 | counted name |
+| BEGIN | 3 | u32 isolation: default=0, read-uncommitted=1, read-committed=2, repeatable-read=3, serializable=4 |
+| EXECUTE | 4 | counted template name, u32 count, typed values |
+| QUERY | 5 | same as EXECUTE |
+| FETCH | 6 | u32 nonzero row count |
+| COMMIT | 7 | empty |
+| ROLLBACK | 8 | empty |
+| REDIS_COMMAND | 9 | u32 command, u32 argument count, counted byte arguments |
+| CLOSE | 10 | empty |
+
+Counted bytes are u32 length then bytes. Names must match
+`[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*`; nonempty, exact match, no NUL.
+Value tags are null=0, bool=1, i64=2, u64=3, f64=4, text=5, blob=6;
+fixed sizes are enforced, UTF-8 is strict, NUL in counted text is not a
+terminator. Redis commands GET=1, SET=2, DEL=3, EXISTS=4, HGET=5, HSET=6
+have exact arity 1,2,1,1,2,3 respectively; first argument is a nonempty
+logical key. Host owns the namespace transformation (later M4).
+
+Status: OK=0, INVALID_REQUEST=1, DENIED=2, INVALID_HANDLE=3, LIMIT=4,
+UNSUPPORTED=5, PENDING=6, WRONG_STATE=7, BUSY=8, OUT_OF_MEMORY=9.
+Outcome: SUCCESS=1, FAILED_NO_EFFECT=2, CANCELLED_NO_EFFECT=3,
+OUTCOME_UNKNOWN=4 (terminal receipt implementation pending). The decoder
+does not allocate, invoke a provider, or publish a partial request. OOB
+guest-memory errors propagate Runtime trap status, never a fake database
+success. Limits and authorization precede external effects. Each SQL template
+has an explicit operation mask and parameter tag masks; no implicit casts.
+The guest copy boundary compares the live opaque instance identity, because
+the Runtime host call exposes a transient facade, not the original C handle.
+
+Formal tests use a checked-in 129-byte freestanding guest compiled from
+`wasm/tests/fixtures/database_admission.c`, actual import calls plus direct
+golden byte tests. The import module `fixture:db` exists only in the test;
+its resolved owner identities are fixture data, not a production handle table.
+M1b must copy and validate policy ownership, reserve resource/operation
+capacity, own staged bytes, implement generation-safe handles, actual submit,
+terminal receipts, await/cancel/drain and resource transfer. Do not connect
+native TurboDB providers or claim #441 complete before those tests pass.
