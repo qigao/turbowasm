@@ -13,7 +13,19 @@
 typedef struct sqlite_slot {
     orm_connection_t *connection;
     size_t alias;
+    bool transaction_active;
 } sqlite_slot;
+
+typedef enum sqlite_tx_state {
+    SQLITE_TX_ACTIVE=1, SQLITE_TX_COMMIT_UNKNOWN, SQLITE_TX_ENDED,
+    SQLITE_TX_CLEANUP_BLOCKED
+} sqlite_tx_state;
+
+typedef struct sqlite_tx_slot {
+    orm_transaction_t *transaction;
+    size_t connection_index;
+    sqlite_tx_state state;
+} sqlite_tx_slot;
 
 typedef struct sqlite_cursor_slot {
     tw_db_sql_result result;
@@ -26,7 +38,8 @@ typedef struct sqlite_impl {
     orm_runtime_t *runtime;
     sqlite_slot *slots;
     sqlite_cursor_slot *cursors;
-    size_t live, live_cursors;
+    sqlite_tx_slot *transactions;
+    size_t live, live_cursors, live_transactions;
     const void *lane;
     char timeout[16];
 } sqlite_impl;
@@ -59,7 +72,9 @@ tw_db_status tw_db_sqlite_init(tw_db_sqlite *sqlite,const tw_db_policy *policy,
     for(size_t i=0;i<config->alias_count;++i) {
         const tw_db_alias *a=&policy->aliases[i];
         const tw_db_sqlite_alias *n=&config->aliases[i];
-        if(a->kind!=TW_DB_SQL||a->isolation_mask||a->redis_command_mask||
+        if(a->kind!=TW_DB_SQL||a->redis_command_mask||
+            (a->isolation_mask&~TW_DB_MASK(TW_DB_ISOLATION_DEFAULT))||
+            (a->isolation_mask&&(!config->transactions||n->read_only))||
             !absolute_path(n->filename)||n->statement_count!=a->template_count||
             (n->statement_count&&(!n->statements||!a->templates)))
             return TW_DB_INVALID_REQUEST;
@@ -76,13 +91,18 @@ tw_db_status tw_db_sqlite_init(tw_db_sqlite *sqlite,const tw_db_policy *policy,
     size_t budget=config->host_bytes;
     if(!tw_db_budget_take(&budget,1,sizeof(sqlite_impl))||
         !tw_db_budget_take(&budget,config->connections,sizeof(sqlite_slot))||
-        !tw_db_budget_take(&budget,config->cursors,sizeof(sqlite_cursor_slot)))return TW_DB_LIMIT;
+        !tw_db_budget_take(&budget,config->cursors,sizeof(sqlite_cursor_slot))||
+        !tw_db_budget_take(&budget,config->transactions,sizeof(sqlite_tx_slot)))return TW_DB_LIMIT;
     sqlite_impl *p=turbowasm_rt_calloc(1,sizeof(*p));
     if(!p)return TW_DB_OUT_OF_MEMORY;
     p->slots=turbowasm_rt_calloc(config->connections,sizeof(*p->slots));
     if(config->cursors)p->cursors=turbowasm_rt_calloc(config->cursors,sizeof(*p->cursors));
-    if(!p->slots||(config->cursors&&!p->cursors)) {
-        turbowasm_rt_free(p->cursors);turbowasm_rt_free(p->slots);turbowasm_rt_free(p);
+    if(config->transactions)
+        p->transactions=turbowasm_rt_calloc(config->transactions,sizeof(*p->transactions));
+    if(!p->slots||(config->cursors&&!p->cursors)||
+        (config->transactions&&!p->transactions)) {
+        turbowasm_rt_free(p->transactions);turbowasm_rt_free(p->cursors);
+        turbowasm_rt_free(p->slots);turbowasm_rt_free(p);
         return TW_DB_OUT_OF_MEMORY;
     }
     p->config=*config;p->limits=policy->limits;
@@ -119,6 +139,7 @@ static bool create_runtime(sqlite_impl *p) {
         orm_runtime_driver_info(p->runtime,orm_view("sqlite"),&info,&error)!=ORM_STATUS_OK||
         !(info.capabilities&ORM_DRIVER_CAP_RAW_SQL)||
         (p->config.cursors&&!(info.capabilities&ORM_DRIVER_CAP_SELECT))||
+        (p->config.transactions&&!(info.capabilities&ORM_DRIVER_CAP_TRANSACTION))||
         !(info.execution_models&ORM_DRIVER_EXEC_CALLER_BLOCKING)) {
         release_runtime(p);return false;
     }
@@ -154,7 +175,7 @@ static tw_db_worker_result open_connection(sqlite_impl *p,const tw_db_worker_cal
         if(!p->live)release_runtime(p);
         return result(TW_DB_FAILED_NO_EFFECT);
     }
-    p->slots[i]=(sqlite_slot){connection,alias};++p->live;
+    p->slots[i]=(sqlite_slot){.connection=connection,.alias=alias};++p->live;
     return (tw_db_worker_result){TW_DB_SUCCESS,(uintptr_t)(i+1),0};
 }
 
@@ -185,7 +206,7 @@ static orm_value_t bind_value(tw_db_value v) {
 }
 
 static tw_db_worker_result execute_sql(sqlite_impl *p,sqlite_slot *s,
-    const tw_db_worker_call *call,uint8_t *bytes,size_t capacity) {
+    orm_transaction_t *tx,const tw_db_worker_call *call,uint8_t *bytes,size_t capacity) {
     const tw_db_request *q=&call->work.request;
     const tw_db_sqlite_alias *a=&p->config.aliases[s->alias];
     const bool query_rows=q->opcode==TW_DB_QUERY;
@@ -216,7 +237,9 @@ static tw_db_worker_result execute_sql(sqlite_impl *p,sqlite_slot *s,
        (e.g. native errors after a write). Conservatively quarantine. */
     orm_result_t *native=NULL;
     out=result(TW_DB_OUTCOME_UNKNOWN);
-    if(orm_query_execute(query,&native,&error)==ORM_STATUS_OK) {
+    orm_status_t status=tx?orm_query_execute_in_transaction(query,tx,&native,&error):
+        orm_query_execute(query,&native,&error);
+    if(status==ORM_STATUS_OK) {
         if(query_rows) {
             /* Host-granted side-effect-free SELECT; a projection/limit
                failure after successful execution produces no resource and
@@ -246,6 +269,70 @@ done:
     return out;
 }
 
+/* The guest manager already reserved a transaction resource and pinned the
+ * parent. Reserve the provider's own fixed slot before issuing native BEGIN.
+ * SQLite v0.1.4 implements ordinary BEGIN for every ORM isolation enum and
+ * advertises no named isolation flags. Expose only the default; SERIALIZABLE
+ * is the required ORM carrier, not a new guest isolation promise. */
+static tw_db_worker_result begin_transaction(sqlite_impl *p,sqlite_slot *s,
+    const tw_db_worker_call *call) {
+    if(call->work.request.isolation!=TW_DB_ISOLATION_DEFAULT||
+        p->config.aliases[s->alias].read_only||s->transaction_active)
+        return result(TW_DB_FAILED_NO_EFFECT);
+    size_t index=0;
+    while(index<p->config.transactions&&p->transactions[index].transaction)++index;
+    if(index==p->config.transactions)return result(TW_DB_FAILED_NO_EFFECT);
+    if(call->interrupted(call->interrupt_context))return result(TW_DB_CANCELLED_NO_EFFECT);
+    orm_error_t error;orm_error_init(&error);
+    orm_transaction_t *transaction=NULL;
+    if(orm_transaction_begin(s->connection,ORM_ISOLATION_SERIALIZABLE,
+        &transaction,&error)!=ORM_STATUS_OK)
+        return result(TW_DB_OUTCOME_UNKNOWN);
+    p->transactions[index]=(sqlite_tx_slot){transaction,(size_t)(s-p->slots),SQLITE_TX_ACTIVE};
+    s->transaction_active=true;
+    ++p->live_transactions;
+    return (tw_db_worker_result){TW_DB_SUCCESS,(uintptr_t)(index+1),0};
+}
+
+/* Success consumes the native transaction only after checked close/release.
+ * A failed COMMIT is never reissued. If the native API explicitly reports
+ * COMMIT_UNKNOWN, checked close is permitted without another commit or
+ * rollback; otherwise CLOSE attempts rollback of the retained active owner.
+ * A failed rollback or failed checked close is sticky: do not replay
+ * uncertain cleanup or free the native handle. */
+static tw_db_worker_result finish_transaction(sqlite_impl *p,sqlite_tx_slot *t,
+    const tw_db_worker_call *call) {
+    const tw_db_opcode op=call->work.request.opcode;
+    if(t->state==SQLITE_TX_CLEANUP_BLOCKED)return result(TW_DB_OUTCOME_UNKNOWN);
+    if(op!=TW_DB_CLOSE&&t->state!=SQLITE_TX_ACTIVE)return result(TW_DB_FAILED_NO_EFFECT);
+    orm_error_t error;orm_error_init(&error);
+    if(t->state==SQLITE_TX_ACTIVE) {
+        if(op!=TW_DB_CLOSE&&call->interrupted(call->interrupt_context))
+            return result(TW_DB_CANCELLED_NO_EFFECT);
+        orm_status_t status=op==TW_DB_COMMIT?
+            orm_transaction_commit(t->transaction,&error):
+            orm_transaction_rollback(t->transaction,&error);
+        if(status!=ORM_STATUS_OK) {
+            if(op==TW_DB_COMMIT) {
+                if(status==ORM_STATUS_COMMIT_UNKNOWN)t->state=SQLITE_TX_COMMIT_UNKNOWN;
+            } else {
+                t->state=SQLITE_TX_CLEANUP_BLOCKED;
+            }
+            return result(TW_DB_OUTCOME_UNKNOWN);
+        }
+        t->state=SQLITE_TX_ENDED;
+    }
+    if(orm_transaction_close(t->transaction,&error)!=ORM_STATUS_OK) {
+        t->state=SQLITE_TX_CLEANUP_BLOCKED;
+        return result(TW_DB_OUTCOME_UNKNOWN);
+    }
+    orm_transaction_release(t->transaction);
+    p->slots[t->connection_index].transaction_active=false;
+    *t=(sqlite_tx_slot){0};
+    --p->live_transactions;
+    return result(TW_DB_SUCCESS);
+}
+
 tw_db_worker_result tw_db_sqlite_execute(void *context,const tw_db_worker_call *call,
     uint8_t *bytes,size_t capacity) {
     tw_db_sqlite *sqlite=context;sqlite_impl *p=sqlite->impl;
@@ -273,13 +360,29 @@ tw_db_worker_result tw_db_sqlite_execute(void *context,const tw_db_worker_call *
         }
         return result(TW_DB_FAILED_NO_EFFECT);
     }
+    if(call->work.native_kind==TW_DB_TRANSACTION) {
+        if(!owner||owner>p->config.transactions)return result(TW_DB_FAILED_NO_EFFECT);
+        sqlite_tx_slot *t=&p->transactions[owner-1];
+        if(!t->transaction)return result(TW_DB_FAILED_NO_EFFECT);
+        sqlite_slot *s=&p->slots[t->connection_index];
+        if(!s->connection||!s->transaction_active||s->alias!=call->work.request.alias_index)
+            return result(TW_DB_FAILED_NO_EFFECT);
+        if(call->work.request.opcode==TW_DB_COMMIT||
+            call->work.request.opcode==TW_DB_ROLLBACK||call->work.request.opcode==TW_DB_CLOSE)
+            return finish_transaction(p,t,call);
+        if(t->state!=SQLITE_TX_ACTIVE)return result(TW_DB_FAILED_NO_EFFECT);
+        if(call->work.request.opcode==TW_DB_EXECUTE||call->work.request.opcode==TW_DB_QUERY)
+            return execute_sql(p,s,t->transaction,call,bytes,capacity);
+        return result(TW_DB_FAILED_NO_EFFECT);
+    }
     if(call->work.native_kind!=TW_DB_SQL||!owner||owner>p->config.connections)
         return result(TW_DB_FAILED_NO_EFFECT);
     sqlite_slot *s=&p->slots[owner-1];
-    if(!s->connection||s->alias!=call->work.request.alias_index)
+    if(!s->connection||s->alias!=call->work.request.alias_index||s->transaction_active)
         return result(TW_DB_FAILED_NO_EFFECT);
+    if(call->work.request.opcode==TW_DB_BEGIN)return begin_transaction(p,s,call);
     if(call->work.request.opcode==TW_DB_EXECUTE||call->work.request.opcode==TW_DB_QUERY)
-        return execute_sql(p,s,call,bytes,capacity);
+        return execute_sql(p,s,NULL,call,bytes,capacity);
     if(call->work.request.opcode==TW_DB_CLOSE) {
         orm_error_t error;orm_error_init(&error);
         if(orm_connection_close(s->connection,&error)!=ORM_STATUS_OK)
@@ -294,7 +397,7 @@ tw_db_worker_result tw_db_sqlite_execute(void *context,const tw_db_worker_call *
 tw_db_status tw_db_sqlite_destroy(tw_db_sqlite *sqlite) {
     sqlite_impl *p=sqlite->impl;
     if(!p)return TW_DB_OK;
-    if(p->live||p->runtime||p->live_cursors)return TW_DB_BUSY;
-    turbowasm_rt_free(p->cursors);turbowasm_rt_free(p->slots);turbowasm_rt_free(p);sqlite->impl=NULL;
+    if(p->live||p->runtime||p->live_cursors||p->live_transactions)return TW_DB_BUSY;
+    turbowasm_rt_free(p->transactions);turbowasm_rt_free(p->cursors);turbowasm_rt_free(p->slots);turbowasm_rt_free(p);sqlite->impl=NULL;
     return TW_DB_OK;
 }
