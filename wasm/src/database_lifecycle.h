@@ -93,6 +93,12 @@ tw_db_status tw_db_manager_untaken(tw_db_manager *manager,
     uint64_t operation, uintptr_t *out_native);
 tw_db_status tw_db_manager_disposed(tw_db_manager *manager, uint64_t operation);
 tw_db_status tw_db_manager_drop(tw_db_manager *manager, uint64_t operation);
+/* Guest drop admission. If disposal is newly admitted, out_work receives
+ * a nonzero native dispatch identity and PENDING; otherwise its identity is
+ * zero. A repeat drop observes pending cleanup or releases its terminal
+ * success. Failure is retained as a receipt, not automatically retried. */
+tw_db_status tw_db_manager_request_drop(tw_db_manager *manager,
+    uint64_t operation,tw_db_work *out_work);
 
 /* One bounded action per shutdown step, after stop and guest detach.
  * WAIT requires owner-driven provider progress; BLOCKED is sticky until
@@ -110,5 +116,9 @@ typedef struct tw_db_shutdown_action {
     tw_db_work work;
 } tw_db_shutdown_action;
 tw_db_status tw_db_manager_shutdown_next(tw_db_manager *manager,tw_db_shutdown_action *out);
+/* Trusted host only: confirms the native owner of a BLOCKED automatic CLOSE
+ * has been explicitly drained outside this manager. Never invokes a provider
+ * or retries the failed close. The failed receipt remains for retirement. */
+tw_db_status tw_db_manager_confirm_shutdown_close(tw_db_manager *manager,uint64_t operation);
 
 #endif

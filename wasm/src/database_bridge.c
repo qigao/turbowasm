@@ -133,6 +133,19 @@ tw_db_manager *tw_db_bridge_cleanup_manager(tw_db_bridge *bridge) {
     return p->detached?&p->manager:NULL;
 }
 
+tw_db_status tw_db_bridge_shutdown_step(tw_db_bridge *bridge,tw_db_shutdown_action *out) {
+    bridge_impl *p=bridge->impl;
+    if(!p->detached||p->inside_resume||p->execution_identity||p->waiting)
+        return TW_DB_WRONG_STATE;
+    tw_db_status s=tw_db_manager_shutdown_next(&p->manager,out);
+    if(s!=TW_DB_OK) return s;
+    if(out->kind==TW_DB_SHUTDOWN_CANCEL)
+        p->dispatch.cancel(p->dispatch.context,bridge,out->operation);
+    else if(out->kind==TW_DB_SHUTDOWN_DISPATCH)
+        p->dispatch.start(p->dispatch.context,bridge,&out->work);
+    return TW_DB_OK;
+}
+
 tw_db_status tw_db_bridge_destroy(tw_db_bridge *bridge) {
     bridge_impl *p=bridge->impl;
     if(!p) return TW_DB_OK;
@@ -259,8 +272,16 @@ DB_CALLBACK(cancel_operation);
 }
 DB_CALLBACK(drop_operation);
     uint64_t op=(uint64_t)args[0].as.i64;
-    tw_db_status s=!authorized(p,call)?TW_DB_DENIED:
-        p->waiting==op?TW_DB_BUSY:tw_db_manager_drop(&p->manager,op);
+    if(!authorized(p,call)) {reply(r,count,TW_DB_DENIED);return TURBOWASM_OK;}
+    if(p->waiting==op) {reply(r,count,TW_DB_BUSY);return TURBOWASM_OK;}
+    tw_db_work work;
+    tw_db_status s=tw_db_manager_request_drop(&p->manager,op,&work);
+    if(s==TW_DB_PENDING&&work.operation) {
+        p->dispatch.start(p->dispatch.context,bridge,&work);
+        /* Inline completion may already have drained the resource. Observe
+           it without dispatching a second native close. */
+        s=tw_db_manager_request_drop(&p->manager,op,&work);
+    }
     reply(r,count,s);return TURBOWASM_OK;
 }
 #undef DB_CALLBACK

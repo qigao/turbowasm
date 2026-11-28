@@ -31,7 +31,7 @@ typedef struct manager_impl {
     operation_slot *operations;
     uint8_t *requests, *results;
     size_t resource_count;
-    uint64_t next_token, shutdown_close;
+    uint64_t next_token, shutdown_close, shutdown_resource;
     bool stopped;
 } manager_impl;
 
@@ -426,6 +426,20 @@ tw_db_status tw_db_manager_drop(tw_db_manager *manager,uint64_t operation) {
     return TW_DB_OK;
 }
 
+tw_db_status tw_db_manager_request_drop(tw_db_manager *manager,
+    uint64_t operation,tw_db_work *out_work) {
+    manager_impl *p=manager->impl;
+    *out_work=(tw_db_work){0};
+    size_t i=find_operation(p,operation);
+    if(i==NO_SLOT) return TW_DB_INVALID_HANDLE;
+    operation_slot *o=&p->operations[i];
+    if(o->state!=TW_DB_TERMINAL) return o->discarding?TW_DB_PENDING:TW_DB_BUSY;
+    if(o->produced==NO_SLOT) return tw_db_manager_drop(manager,operation);
+    if(o->discarding) return TW_DB_WRONG_STATE;
+    tw_db_status s=tw_db_manager_begin_discard(manager,operation,out_work);
+    return s==TW_DB_OK?TW_DB_PENDING:s;
+}
+
 tw_db_status tw_db_manager_shutdown_next(tw_db_manager *manager,tw_db_shutdown_action *out) {
     manager_impl *p=manager->impl;
     if(!p->stopped) return TW_DB_WRONG_STATE;
@@ -443,6 +457,7 @@ tw_db_status tw_db_manager_shutdown_next(tw_db_manager *manager,tw_db_shutdown_a
         s=tw_db_manager_drop(manager,a.operation);
         if(s!=TW_DB_OK) return s;
         p->shutdown_close=0;
+        p->shutdown_resource=0;
         a.kind=TW_DB_SHUTDOWN_RETIRED;*out=a;return TW_DB_OK;
     }
 
@@ -503,10 +518,29 @@ tw_db_status tw_db_manager_shutdown_next(tw_db_manager *manager,tw_db_shutdown_a
         tw_db_status s=tw_db_manager_submit(manager,r->token,TW_DB_CLOSE,NULL,0,&a.operation);
         if(s!=TW_DB_OK) return s;
         p->shutdown_close=a.operation;
+        p->shutdown_resource=r->token;
         s=tw_db_manager_start(manager,a.operation,&a.work);
         if(s!=TW_DB_OK) return s;
         a.kind=TW_DB_SHUTDOWN_DISPATCH;*out=a;return TW_DB_OK;
     }
     if(remaining) return TW_DB_WRONG_STATE; /* impossible owner graph */
     a.kind=TW_DB_SHUTDOWN_DONE;*out=a;return TW_DB_OK;
+}
+
+tw_db_status tw_db_manager_confirm_shutdown_close(tw_db_manager *manager,uint64_t operation) {
+    manager_impl *p=manager->impl;
+    if(!p->stopped||!operation||operation!=p->shutdown_close)
+        return TW_DB_WRONG_STATE;
+    tw_db_receipt receipt;
+    tw_db_status s=tw_db_manager_receipt(manager,operation,&receipt);
+    if(s!=TW_DB_OK) return s;
+    if(receipt.outcome==TW_DB_SUCCESS) return TW_DB_WRONG_STATE;
+    size_t i=find_resource(p,p->shutdown_resource);
+    if(i==NO_SLOT||p->resources[i].active||p->resources[i].children)
+        return TW_DB_WRONG_STATE;
+    retire_resource(p,i);
+    /* Preserve the original failure for the next RETIRED audit action. */
+    p->shutdown_close=0;
+    p->shutdown_resource=0;
+    return TW_DB_OK;
 }

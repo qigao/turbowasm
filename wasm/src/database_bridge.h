@@ -49,5 +49,10 @@ tw_db_status tw_db_bridge_complete(tw_db_bridge *bridge,uint64_t operation,
 void tw_db_bridge_stop(tw_db_bridge *bridge);
 tw_db_status tw_db_bridge_detach(tw_db_bridge *bridge);
 tw_db_manager *tw_db_bridge_cleanup_manager(tw_db_bridge *bridge);
+/* After detach, issue at most one provider start/cancel per call. On WAIT,
+ * the host must drive its scheduler/worker, not spin. On BLOCKED record the
+ * receipt and retain the owner for explicit recovery or fail-fast shutdown.
+ * No retry or provider callback on DONE/RETIRED/BLOCKED. */
+tw_db_status tw_db_bridge_shutdown_step(tw_db_bridge *bridge,tw_db_shutdown_action *out);
 tw_db_status tw_db_bridge_destroy(tw_db_bridge *bridge);
 #endif
