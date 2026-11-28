@@ -334,3 +334,41 @@ M1b must copy and validate policy ownership, reserve resource/operation
 capacity, own staged bytes, implement generation-safe handles, actual submit,
 terminal receipts, await/cancel/drain and resource transfer. Do not connect
 native TurboDB providers or claim #441 complete before those tests pass.
+
+## 8. M1b1 private lifecycle core (#441)
+
+The manager preallocates resource and operation tables, copies policy names,
+templates and parameter masks, and reserves fixed request/result bytes per
+operation within one aggregate logical host-byte budget. All resource capacity
+counts include reserved, held, live and quarantined resources. The owner thread
+is the only mutator; there is no scheduler or provider invocation in this slice.
+
+- Submit accepts a host-owned snapshot, validates it, and reserves its operation
+  plus prospective resource before dispatch. Start is a one-time transition
+  from ADMITTED to RUNNING and returns a private provider work view.
+- IDs are monotonically allocated in the capability domain, not slot indexes;
+  an old completion cannot target a reused slot. Cross-instance checks belong
+  to the later import bridge, which must authenticate every operation.
+- A transaction or cursor pins its parent. A connection with a live child or
+  pending operation rejects conflicting work. Successful begin/query reserves
+  a held resource that transfers exactly once.
+- Cancellation before start is known no-effect. Cancellation after start only
+  requests provider notification once; no quota or owner is released until
+  terminal completion. An unknown outcome quarantines owner and ancestors;
+  only explicit cleanup remains admissible. Successful commit/rollback/close
+  consumes the owner only with provider drain proof.
+- A terminal result is immutable and bounded. Reads are repeatable and never
+  replay provider work. A terminal operation holding an untaken resource cannot
+  be dropped until the host drains it and confirms disposal. The guest must
+  never be able to invoke that confirmation directly.
+- Stop closes business admission but allows cleanup CLOSE; destroy returns BUSY
+  while any resource or operation remains. All hot-path allocations are made
+  during initialization. Tests inject initialization allocation faults and
+  assert that no later allocation is required.
+
+The private lifecycle test exercises deterministic provider transition inputs,
+including reservation exhaustion, copied request and policy, duplicate/stale
+completion, transaction/cursor dependency, uncertain outcome, cleanup and
+allocation failures. This does not yet qualify provider dispatch, native driver
+cancellation, actual guest submit/await/read/drop imports or owner-affine
+completion routing. Those are M1b2 and later native backend slices.
