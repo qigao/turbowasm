@@ -6,7 +6,7 @@
 #include "gc_exec.h"
 
 #include <core/clock.h>
-#include <salts/simd.h>
+#include <simd.h>
 
 #include <errno.h>
 #include <stdint.h>

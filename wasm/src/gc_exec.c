@@ -1,6 +1,6 @@
 #include "gc_exec.h"
 #include "validate_type.h"
-#include <salts/simd.h>
+#include <simd.h>
 #include <string.h>
 
 static turbowasm_status gc_trap(turbowasm_trap *trap, turbowasm_trap reason) {

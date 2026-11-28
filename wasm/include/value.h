@@ -4,7 +4,7 @@
 #include <status.h>
 
 #include <cmeta/vector.h>
-#include <salts/simd.h>
+#include <simd.h>
 
 #include <stdbool.h>
 #include <stdint.h>

@@ -1,6 +1,6 @@
 #include <value.h>
 
-#include <salts/simd.h>
+#include <simd.h>
 
 static const cmeta_type_identity turbowasm_v128_type_identity =
     CMETA_TYPE_ID_ATOM_INIT("turbowasm.value.v128");
