@@ -3,14 +3,14 @@ name: WASI02 fixture generator
 on:
   pull_request:
     paths:
-      - "wasm/tests/wasi02/fixtures/wasm/src/**"
+      - "wasm/tests/wasi02/fixtures/src/**"
       - "wasm/tests/wasi02/fixtures/generated/**"
       - ".github/workflows/wasi02-fixture-generator.yml"
   push:
     branches:
       - master
     paths:
-      - "wasm/tests/wasi02/fixtures/wasm/src/**"
+      - "wasm/tests/wasi02/fixtures/src/**"
       - "wasm/tests/wasi02/fixtures/generated/**"
       - ".github/workflows/wasi02-fixture-generator.yml"
   workflow_dispatch:
@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
           out="$RUNNER_TEMP/wasi02-fixtures"
           mkdir -p "$out"
-          for source in wasm/tests/wasi02/fixtures/wasm/src/*.wat; do
+          for source in wasm/tests/wasi02/fixtures/src/*.wat; do
             name="$(basename "$source" .wat)"
             "$WASM_TOOLS" parse "$source" -o "$out/$name.wasm"
             "$WASM_TOOLS" validate --features cm64 "$out/$name.wasm"

@@ -1,5 +1,5 @@
 # Apply the requested sanitizer once, after compiler detection.
-if(ENABLE_SANITIZER_ADDRESS)
+if(ENABLE_ASAN)
   # Instrumentation enlarges interpreter frames. Keep the Wasm call-depth
   # trap reachable before exhausting the native stack used by the test host.
   add_compile_definitions(TURBOWASM_RESUMABLE_STACK_SIZE=${TURBOWASM_SANITIZER_STACK_BYTES})
@@ -12,4 +12,13 @@ if(ENABLE_SANITIZER_ADDRESS)
   else()
     message(FATAL_ERROR "AddressSanitizer is unsupported by this compiler")
   endif()
+endif()
+
+if(ENABLE_UBSAN)
+  add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=undefined)
+endif()
+if(ENABLE_TSAN)
+  add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=thread)
 endif()
