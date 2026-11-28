@@ -124,7 +124,9 @@ else()
 endif()
 
 # SQLite provider composes the released native ORM, never Runtime internals.
-add_library(turbowasm_database_sqlite STATIC wasm/src/database_sqlite.c)
+add_library(turbowasm_database_sqlite STATIC
+  wasm/src/database_sqlite.c
+  wasm/src/database_sql_result.c)
 target_compile_features(turbowasm_database_sqlite PRIVATE c_std_11)
 target_include_directories(turbowasm_database_sqlite PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/wasm/src")
 target_link_libraries(turbowasm_database_sqlite PRIVATE turbowasm_database_worker turbowasm_database_core TurboWasm::Runtime Orm::C Salts::Core)
