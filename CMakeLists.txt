@@ -99,7 +99,8 @@ endif()
 add_library(turbowasm_database_core STATIC
   wasm/src/database_wire.c
   wasm/src/database_policy.c
-  wasm/src/database_lifecycle.c)
+  wasm/src/database_lifecycle.c
+  wasm/src/database_bridge.c)
 target_compile_features(turbowasm_database_core PRIVATE c_std_11)
 target_include_directories(turbowasm_database_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/wasm/src")
 target_link_libraries(turbowasm_database_core PRIVATE TurboWasm::Runtime)
