@@ -1,5 +1,24 @@
 {
   "targets": {
+    "turbodb_orm": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:TURBODB_ROOT}/include",
+          "${envPath:TURBODB_ROOT}/include/shared/orm"
+        ],
+        "libs": [
+          "${envPath:TURBODB_ROOT}/lib/libturbo_orm.dll.a"
+        ],
+        "deps": [
+          "saltsbase_core",
+          "cmeta_cflow"
+        ]
+      },
+      "runtimeBins": [
+        "${envPath:TURBODB_ROOT}/bin/libturbo_orm.dll"
+      ]
+    },
     "saltsbase_core": {
       "kind": "prebuilt",
       "public": {

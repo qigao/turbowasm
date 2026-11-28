@@ -30,7 +30,7 @@ deps.mkdir(parents=True, exist_ok=True)
 env = {"VCPKG_CACHE_VERSION": LOCK["cache"], "VCPKG_TARGET_TRIPLET": triplet}
 version_keys = {"salts-base": "SALTS_BASE_VERSION", "cmeta": "CMETA_VERSION",
                 "salts-utils": "SALTS_UTILS_VERSION", "salts-cnet": "SALTS_CORE_VERSION",
-                "chttp": "CHTTP_VERSION"}
+                "chttp": "CHTTP_VERSION", "turbodb": "TURBODB_VERSION"}
 
 def acquire(asset):
     path = inputs / asset["name"]

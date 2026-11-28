@@ -21,6 +21,8 @@ include(cmake/Sanitizers.cmake)
               NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
  find_package(Chttp CONFIG REQUIRED PATHS "$ENV{CHTTP_ROOT}"
               NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+ find_package(TurboDB CONFIG REQUIRED PATHS "$ENV{TURBODB_ROOT}"
+              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
 add_library(turbowasm
   wasm/src/store.c
@@ -119,6 +121,17 @@ if(MSVC)
   target_compile_options(turbowasm_database_worker PRIVATE /W4)
 else()
   target_compile_options(turbowasm_database_worker PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# SQLite provider composes the released native ORM, never Runtime internals.
+add_library(turbowasm_database_sqlite STATIC wasm/src/database_sqlite.c)
+target_compile_features(turbowasm_database_sqlite PRIVATE c_std_11)
+target_include_directories(turbowasm_database_sqlite PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/wasm/src")
+target_link_libraries(turbowasm_database_sqlite PRIVATE turbowasm_database_worker turbowasm_database_core TurboWasm::Runtime Orm::C Salts::Core)
+if(MSVC)
+  target_compile_options(turbowasm_database_sqlite PRIVATE /W4)
+else()
+  target_compile_options(turbowasm_database_sqlite PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(TURBOWASM_ENABLE_COMPONENT)

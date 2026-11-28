@@ -3,6 +3,27 @@
     "tests"
   ],
   "targets": {
+    "turbowasm_database_sqlite": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "src/database_sqlite.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "src"
+        ],
+        "deps": [
+          "turbowasm_database_worker",
+          "turbowasm_database_core",
+          "turbowasm",
+          "turbodb_orm",
+          "saltsbase_core",
+          "cmeta_cflow"
+        ]
+      }
+    },
     "turbowasm_database_worker": {
       "kind": "static",
       "sources": {
