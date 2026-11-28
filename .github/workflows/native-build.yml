@@ -94,9 +94,18 @@ jobs:
             "-DCMAKE_PREFIX_PATH=$VCPKG_INSTALLED_DIR/$CI_TRIPLET"
       - name: Build complete graph
         run: cmake --build --preset "$CI_PRESET"
+      - name: Start disposable TLS MySQL fixture
+        if: inputs.profile == 'linux-clang-x64' && inputs.tests
+        run: bash cmake/ci/mysql-live-setup.sh
       - name: Run formal native CTests
         if: inputs.tests
         run: ctest --test-dir "build/$CI_PRESET" --output-on-failure --no-tests=error --output-junit ctest.xml
+      - name: Verify committed MySQL fixture rows
+        if: inputs.profile == 'linux-clang-x64' && inputs.tests
+        run: bash cmake/ci/mysql-live-verify.sh
+      - name: Stop disposable MySQL fixture
+        if: always() && inputs.profile == 'linux-clang-x64' && inputs.tests
+        run: sudo systemctl stop mysql.service
       - name: Install SDK
         run: cmake --install "build/$CI_PRESET" --prefix "stage/$CI_PROFILE"
       - uses: actions/upload-artifact@v4

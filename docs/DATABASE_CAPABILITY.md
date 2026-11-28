@@ -651,3 +651,53 @@ file and verify only the original and committed rows survive, with exact
 binary values. No new CI profile or test project. The adapter remains
 private; MySQL/Redis, hard interruption, full fault qualification and
 installed guest/host SDK remain separate gates.
+
+## 15. M3a common native ORM provider and real MySQL TLS qualification (#443)
+
+Replace the private SQLite-only provider with database_orm.{h,c}; no legacy
+wrapper or duplicate SQL execution engine. Select exactly one driver per
+provider/instance: SQLite canonical ID sqlite or MySQL canonical ID
+drivers/mysql. Both share typed request binding, bounded materialized
+result projection, CFlow serial worker, resource slots, transaction and
+checked cleanup logic. Both use the same released Orm::C / TurboDB v0.1.4
+SDKs; MySQL's driver implements CNet/Crypto transport and binary prepared
+parameters. Runtime remains independent of the database link interface.
+
+MySQL host aliases carry host, port, user, password, database, absolute CA
+path and expected server name. Require all fields except that an explicitly
+empty password is allowed; the underlying driver always verifies TLS.
+No raw guest connection settings, plaintext downgrade or driver fallback.
+MySQL read-only aliases require a host-provisioned server account with
+SELECT-only privileges and only QUERY templates. No unsupported claim that
+client-side metadata verifies server privileges. SQLite retains its native
+read-only mode. MySQL accepts explicitly granted READ_COMMITTED,
+REPEATABLE_READ and SERIALIZABLE after checking driver capability bits;
+SQLite continues to expose only its default isolation. MySQL's ORM
+connection is a logical admitted endpoint, not a permanently connected
+socket: ordinary commands and materialized reads open dedicated authenticated
+native sessions; an active transaction owns one native session on the lane.
+There is no new MySQL wire protocol, retry or session-pooling claim.
+
+M3a intentionally selects the released synchronous prepared ORM path on the
+bounded serial worker (including transactions). CFlow asynchronous guest
+delivery remains; hard cancellation of already-entered native network I/O
+and owner-scheduler native async query progress are not yet qualified.
+Native driver timeout is configured explicitly. Failed/unknown outcomes
+retain the existing no-replay and checked cleanup contract.
+
+Real MySQL Core Wasm interpreter/MIR CTests on Linux x64 use the Ubuntu 24.04
+runner's preinstalled MySQL 8.0 service, bound to loopback with required TLS,
+a short-lived generated P-256 CA/server certificate, separate restricted
+writer and SELECT-only accounts, and isolated fixture tables for the two
+executors. No external database installer or production credentials. Tests
+require correct server identity, reject a wrong TLS identity, verify
+prepared binary insert, exact typed SELECT metadata/row bytes, read-only
+denial, transaction-local visibility, independent connection visibility,
+commit, rollback, duplicate-key quarantine, stale tokens, and abandoned
+transaction/cursor shutdown. Independently check the final committed rows
+using the local MySQL client. Missing fixture/service configuration fails
+rather than skips. Other desktop profiles run the unchanged SQLite
+qualification and compile the common native SQL provider; Android
+cross-builds it. The runner controls the installed server patch version;
+the TurboDB SDK is still digest-pinned. No cross-platform MySQL live
+qualification or lost-COMMIT fault injection is claimed by this slice.
