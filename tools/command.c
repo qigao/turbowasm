@@ -101,7 +101,16 @@ static uint32_t command_clock(void *context, uint32_t id, uint64_t precision, ui
     (void)context; (void)precision;
     struct timespec now;
     if (id != TURBOWASM_WASI_CLOCKID_REALTIME) return TURBOWASM_WASI_ERRNO_NOTSUP;
-    if (timespec_get(&now, TIME_UTC) != TIME_UTC || now.tv_sec < 0 ||
+    /* Android API 26 predates Bionic's timespec_get. Keep the same
+       realtime seconds/nanoseconds contract using its POSIX clock. */
+#if defined(__ANDROID__)
+    if (clock_gettime(CLOCK_REALTIME, &now) != 0)
+        return TURBOWASM_WASI_ERRNO_IO;
+#else
+    if (timespec_get(&now, TIME_UTC) != TIME_UTC)
+        return TURBOWASM_WASI_ERRNO_IO;
+#endif
+    if (now.tv_sec < 0 ||
         (uint64_t)now.tv_sec > (UINT64_MAX - (uint64_t)now.tv_nsec) / UINT64_C(1000000000))
         return TURBOWASM_WASI_ERRNO_IO;
     *out = (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec;

@@ -3,7 +3,7 @@
 
 #include <value.h>
 
-#include <salts/simd.h>
+#include <simd.h>
 
 #include <stddef.h>
 #include <stdint.h>

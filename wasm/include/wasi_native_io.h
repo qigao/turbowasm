@@ -1,10 +1,10 @@
 #ifndef TURBOWASM_WASI_NATIVE_IO_H
 #define TURBOWASM_WASI_NATIVE_IO_H
 
-#include "native_io.h"
+#include "turbowasm_native_io.h"
 #include <wasi.h>
 
-#include <salts/native_io.h>
+#include <native_io.h>
 
 #include <stdbool.h>
 #include <stdint.h>

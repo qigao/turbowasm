@@ -1,5 +1,5 @@
-#include "../include/simd.h"
-#include <salts/simd.h>
+#include "../include/turbowasm_simd.h"
+#include <simd.h>
 
 static turbowasm_status turbowasm_require_shape(const turbowasm_v128 *value,
                                                 turbowasm_v128_shape shape) {

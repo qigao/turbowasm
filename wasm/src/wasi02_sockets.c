@@ -1,4 +1,4 @@
-#include "wasi02_sockets.h"
+#include "wasi02_sockets_internal.h"
 
 #include "runtime_alloc.h"
 #include "wasi02_component.h"

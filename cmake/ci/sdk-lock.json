@@ -1,0 +1,363 @@
+{
+  "schema": 1,
+  "cache": "0.1.9",
+  "packages": [
+    {
+      "repo": "salts-base",
+      "version": "0.1.11",
+      "root": "SALTS_BASE_ROOT",
+      "pkg": "SaltsBase",
+      "producer": "45229930556",
+      "manifest": {
+        "name": "salts-base-0.1.11-manifest.json",
+        "url": "https://github.com/qigao/salts-base/releases/download/v0.1.11/salts-base-0.1.11-manifest.json",
+        "sha256": "88e7a6054d15a5b2c42c59dc8e60db4bb47657d791d323681687119b46f0fca3",
+        "size": 8144
+      },
+      "source": "a68d6a51314a60b99fbf3caec1812a58e5d6ef48",
+      "release_id": 455781609
+    },
+    {
+      "repo": "cmeta",
+      "version": "0.1.11",
+      "root": "CMETA_ROOT",
+      "pkg": "CMeta",
+      "producer": "45233066356",
+      "manifest": {
+        "name": "cmeta-0.1.11-manifest.json",
+        "url": "https://github.com/qigao/cmeta/releases/download/v0.1.11/cmeta-0.1.11-manifest.json",
+        "sha256": "d9b0635d2cfcf31a469a6542c2d4c8f361825d299a42963d6a1f647207c02426",
+        "size": 9689
+      },
+      "source": "d1df804d8ec929a9dc8d9db080a40e62baaffc9e",
+      "release_id": 455804892
+    },
+    {
+      "repo": "salts-utils",
+      "version": "0.1.10",
+      "root": "SALTS_UTILS_ROOT",
+      "pkg": "SaltsUtils",
+      "producer": "45233106136",
+      "manifest": {
+        "name": "salts-utils-0.1.10-manifest.json",
+        "url": "https://github.com/qigao/salts-utils/releases/download/v0.1.10/salts-utils-0.1.10-manifest.json",
+        "sha256": "ec1924cb2fbf4566e0c9778e7724c7dfd2df3720792c2cd0a186752ae1aa99a3",
+        "size": 13567
+      },
+      "source": "f93c7f24b41970739eab6b1fae485baf02269f34",
+      "release_id": 455805973
+    },
+    {
+      "repo": "salts-cnet",
+      "version": "0.1.20",
+      "root": "SALTSCORE_ROOT",
+      "pkg": "SaltsCNet",
+      "producer": "45231871026",
+      "manifest": {
+        "name": "salts-cnet-0.1.20-manifest.json",
+        "url": "https://github.com/qigao/salts-cnet/releases/download/v0.1.20/salts-cnet-0.1.20-manifest.json",
+        "sha256": "3bde78725d04e8a22ebd3204bdd9cd8729a809a37ce1bfb102dd0d4ac91e7d89",
+        "size": 9522
+      },
+      "source": "03c03df92688ac2dbef7ece1e2999ad7d119b63c",
+      "release_id": 455799561
+    },
+    {
+      "repo": "chttp",
+      "version": "0.1.6",
+      "root": "CHTTP_ROOT",
+      "pkg": "Chttp",
+      "producer": "45235863478",
+      "manifest": {
+        "name": "chttp-0.1.6-manifest.json",
+        "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-manifest.json",
+        "sha256": "702a2b560fcbb979bb81484a41d255eae9c24189c99e8088adf0b0887748a52d",
+        "size": 24785
+      },
+      "source": "0c125bd511786ea91c636866d7c4feef008b6531",
+      "release_id": 455817981
+    }
+  ],
+  "profiles": {
+    "linux-clang-x64": {
+      "triplet": "x64-linux",
+      "assets": {
+        "salts-base": {
+          "name": "salts-base-0.1.11-linux-clang-x64.tar",
+          "url": "https://github.com/qigao/salts-base/releases/download/v0.1.11/salts-base-0.1.11-linux-clang-x64.tar",
+          "sha256": "84d657b96d8cab347ee36c89e80deb203913ec8bf381b48de684d0f61a8a4c6f",
+          "size": 9107968,
+          "profile": "linux-clang-x64"
+        },
+        "cmeta": {
+          "name": "cmeta-0.1.11-linux-clang-x64.tar",
+          "url": "https://github.com/qigao/cmeta/releases/download/v0.1.11/cmeta-0.1.11-linux-clang-x64.tar",
+          "sha256": "9eaad8694313a0758a5b13d229ebf909c940b3f8b287f4c663327908774e3973",
+          "size": 2590720,
+          "profile": "linux-clang-x64"
+        },
+        "salts-utils": {
+          "name": "salts-utils-0.1.10-linux-clang-x64.tar",
+          "url": "https://github.com/qigao/salts-utils/releases/download/v0.1.10/salts-utils-0.1.10-linux-clang-x64.tar",
+          "sha256": "f01a12c992078eb09be1e9631a9c429abe93f4cc0b35d4fb3e01f05676304002",
+          "size": 7751680,
+          "profile": "linux-clang-x64"
+        },
+        "salts-cnet": {
+          "name": "salts-cnet-0.1.20-linux-x64.tar",
+          "url": "https://github.com/qigao/salts-cnet/releases/download/v0.1.20/salts-cnet-0.1.20-linux-x64.tar",
+          "sha256": "73f405aa1db5e8e74954f067353998771b2be7c82d25af247f107f812790f1a3",
+          "size": 3594240,
+          "profile": "linux-x64"
+        },
+        "chttp": {
+          "name": "chttp-0.1.6-linux-clang-x64.tar",
+          "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-linux-clang-x64.tar",
+          "sha256": "770b479b0853d2e76b23759c17cf52cb93165252136efc147f688a6ca273e921",
+          "size": 2764800,
+          "profile": "linux-clang-x64"
+        }
+      }
+    },
+    "linux-clang-arm64": {
+      "triplet": "arm64-linux",
+      "assets": {
+        "salts-base": {
+          "name": "salts-base-0.1.11-linux-clang-arm64.tar",
+          "url": "https://github.com/qigao/salts-base/releases/download/v0.1.11/salts-base-0.1.11-linux-clang-arm64.tar",
+          "sha256": "ddb8f8bcd0b7f78a1d52c6532a24e183c0afc8f0f5a5363a6f24257ed873f7ff",
+          "size": 8604160,
+          "profile": "linux-clang-arm64"
+        },
+        "cmeta": {
+          "name": "cmeta-0.1.11-linux-clang-arm64.tar",
+          "url": "https://github.com/qigao/cmeta/releases/download/v0.1.11/cmeta-0.1.11-linux-clang-arm64.tar",
+          "sha256": "923712faa78d84777c58e0ce69b3954af99bc05edf44355dc487d00c1a5c3fd7",
+          "size": 2600960,
+          "profile": "linux-clang-arm64"
+        },
+        "salts-utils": {
+          "name": "salts-utils-0.1.10-linux-clang-arm64.tar",
+          "url": "https://github.com/qigao/salts-utils/releases/download/v0.1.10/salts-utils-0.1.10-linux-clang-arm64.tar",
+          "sha256": "4ed79d5487777a4121dcf41da75abb250bde14f666a04c018576b3204cb7fed3",
+          "size": 7608320,
+          "profile": "linux-clang-arm64"
+        },
+        "salts-cnet": {
+          "name": "salts-cnet-0.1.20-linux-arm64.tar",
+          "url": "https://github.com/qigao/salts-cnet/releases/download/v0.1.20/salts-cnet-0.1.20-linux-arm64.tar",
+          "sha256": "9cc02b76a71b7a9247ed65d00a5ed7bc963824963f17b32c687a78ccb4d3c829",
+          "size": 3543040,
+          "profile": "linux-arm64"
+        },
+        "chttp": {
+          "name": "chttp-0.1.6-linux-clang-arm64.tar",
+          "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-linux-clang-arm64.tar",
+          "sha256": "1f7553fa909dff703315b61189119f2d8b7daa14be0c99fee397f03225972c37",
+          "size": 2887680,
+          "profile": "linux-clang-arm64"
+        }
+      }
+    },
+    "macos-clang-arm64": {
+      "triplet": "arm64-osx",
+      "assets": {
+        "salts-base": {
+          "name": "salts-base-0.1.11-macos-clang-arm64.tar",
+          "url": "https://github.com/qigao/salts-base/releases/download/v0.1.11/salts-base-0.1.11-macos-clang-arm64.tar",
+          "sha256": "28a8ba030844dec6ec7af2d27162fe32bdbd8722133a8c37baaf425e5d421784",
+          "size": 8486400,
+          "profile": "macos-clang-arm64"
+        },
+        "cmeta": {
+          "name": "cmeta-0.1.11-macos-clang-arm64.tar",
+          "url": "https://github.com/qigao/cmeta/releases/download/v0.1.11/cmeta-0.1.11-macos-clang-arm64.tar",
+          "sha256": "c78887395c05f74b5bc9ad10692aa7a1551906fc6fad5c8530eefe2b52327e99",
+          "size": 2308608,
+          "profile": "macos-clang-arm64"
+        },
+        "salts-utils": {
+          "name": "salts-utils-0.1.10-macos-clang-arm64.tar",
+          "url": "https://github.com/qigao/salts-utils/releases/download/v0.1.10/salts-utils-0.1.10-macos-clang-arm64.tar",
+          "sha256": "87717c6bba6708c8d9482fa8d3eea73ad7b3f57967cfe2baaff31e89786d4f4d",
+          "size": 5918720,
+          "profile": "macos-clang-arm64"
+        },
+        "salts-cnet": {
+          "name": "salts-cnet-0.1.20-macos-arm64.tar",
+          "url": "https://github.com/qigao/salts-cnet/releases/download/v0.1.20/salts-cnet-0.1.20-macos-arm64.tar",
+          "sha256": "43106c7f034150db8e6a70306ceb5eb4eef267d39d03c236e0fdf69f2d1da4fe",
+          "size": 3103744,
+          "profile": "macos-arm64"
+        },
+        "chttp": {
+          "name": "chttp-0.1.6-macos-clang-arm64.tar",
+          "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-macos-clang-arm64.tar",
+          "sha256": "358123cd51db34c614ee9c2f07d5767ff1363cd35d20403316097cfc4f4487f1",
+          "size": 2338304,
+          "profile": "macos-clang-arm64"
+        }
+      }
+    },
+    "windows-llvm-mingw-x64": {
+      "triplet": "qigao-x64-windows-llvm-mingw",
+      "assets": {
+        "salts-base": {
+          "name": "salts-base-0.1.11-windows-llvm-mingw-x64.tar",
+          "url": "https://github.com/qigao/salts-base/releases/download/v0.1.11/salts-base-0.1.11-windows-llvm-mingw-x64.tar",
+          "sha256": "ec61a1d3e2fef150c7abc8191a41d86cc3ff2b2a10a882098fc36dcbf6fefd2e",
+          "size": 8005120,
+          "profile": "windows-llvm-mingw-x64"
+        },
+        "cmeta": {
+          "name": "cmeta-0.1.11-windows-llvm-mingw-x64.tar",
+          "url": "https://github.com/qigao/cmeta/releases/download/v0.1.11/cmeta-0.1.11-windows-llvm-mingw-x64.tar",
+          "sha256": "f83723c7a08a43a8e203598e5836486ae817aa07b806c6d8f3429f07601f8dec",
+          "size": 2411520,
+          "profile": "windows-llvm-mingw-x64"
+        },
+        "salts-utils": {
+          "name": "salts-utils-0.1.10-windows-llvm-mingw-x64.tar",
+          "url": "https://github.com/qigao/salts-utils/releases/download/v0.1.10/salts-utils-0.1.10-windows-llvm-mingw-x64.tar",
+          "sha256": "c2cac0b820ff64bb7f5d774c914cc3ba03375dd38508ce376f73091e1ee2f039",
+          "size": 6533120,
+          "profile": "windows-llvm-mingw-x64"
+        },
+        "salts-cnet": {
+          "name": "salts-cnet-0.1.20-windows-x64.tar",
+          "url": "https://github.com/qigao/salts-cnet/releases/download/v0.1.20/salts-cnet-0.1.20-windows-x64.tar",
+          "sha256": "23022655de29abdcaed14f4397f078c2adc946ec88ba7123a3d17baa3f51b875",
+          "size": 3652608,
+          "profile": "windows-x64"
+        },
+        "chttp": {
+          "name": "chttp-0.1.6-windows-llvm-mingw-x64.tar",
+          "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-windows-llvm-mingw-x64.tar",
+          "sha256": "d2b9d8051ff9fff3734a47ec8163f0545d3ae7ee638134f998ec5c3907b4024c",
+          "size": 2947584,
+          "profile": "windows-llvm-mingw-x64"
+        }
+      }
+    },
+    "windows-llvm-mingw-arm64": {
+      "triplet": "qigao-arm64-windows-llvm-mingw",
+      "assets": {
+        "salts-base": {
+          "name": "salts-base-0.1.11-windows-llvm-mingw-arm64.tar",
+          "url": "https://github.com/qigao/salts-base/releases/download/v0.1.11/salts-base-0.1.11-windows-llvm-mingw-arm64.tar",
+          "sha256": "6f769bfabdd5936b20e69a280373dffdf1b2ebf8939a96a09e10a88e93b246ce",
+          "size": 7434752,
+          "profile": "windows-llvm-mingw-arm64"
+        },
+        "cmeta": {
+          "name": "cmeta-0.1.11-windows-llvm-mingw-arm64.tar",
+          "url": "https://github.com/qigao/cmeta/releases/download/v0.1.11/cmeta-0.1.11-windows-llvm-mingw-arm64.tar",
+          "sha256": "82d38eb2f5f233da7d7542f83ae3aa8237e774f0b5fad1ff449b052c7beaacf9",
+          "size": 2349568,
+          "profile": "windows-llvm-mingw-arm64"
+        },
+        "salts-utils": {
+          "name": "salts-utils-0.1.10-windows-llvm-mingw-arm64.tar",
+          "url": "https://github.com/qigao/salts-utils/releases/download/v0.1.10/salts-utils-0.1.10-windows-llvm-mingw-arm64.tar",
+          "sha256": "039bfd40a327baa3d4be46c8fdca6e7eeb395fe372fb280175ca7e797794af3d",
+          "size": 6112256,
+          "profile": "windows-llvm-mingw-arm64"
+        },
+        "salts-cnet": {
+          "name": "salts-cnet-0.1.20-windows-arm64.tar",
+          "url": "https://github.com/qigao/salts-cnet/releases/download/v0.1.20/salts-cnet-0.1.20-windows-arm64.tar",
+          "sha256": "751919ac04fc70231842fd86f3584d9fa1f33dcc6d30a1645bbba1ee608c75e5",
+          "size": 3331072,
+          "profile": "windows-arm64"
+        },
+        "chttp": {
+          "name": "chttp-0.1.6-windows-llvm-mingw-arm64.tar",
+          "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-windows-llvm-mingw-arm64.tar",
+          "sha256": "2181375404bcfdff181b13ef816cf64b89fdfa52758cf4a2bb9598b6cdf6ac1b",
+          "size": 2784768,
+          "profile": "windows-llvm-mingw-arm64"
+        }
+      }
+    },
+    "android-x64": {
+      "triplet": "x64-android",
+      "assets": {
+        "salts-base": {
+          "name": "salts-base-0.1.11-android-x64.tar",
+          "url": "https://github.com/qigao/salts-base/releases/download/v0.1.11/salts-base-0.1.11-android-x64.tar",
+          "sha256": "829f4b2620d7c3bb37ee0fe6a1d3bbacd965508a9486fe536765d37483b95a23",
+          "size": 13472256,
+          "profile": "android-x64"
+        },
+        "cmeta": {
+          "name": "cmeta-0.1.11-android-x64.tar",
+          "url": "https://github.com/qigao/cmeta/releases/download/v0.1.11/cmeta-0.1.11-android-x64.tar",
+          "sha256": "973b54d6840cde7bdd2c6fa38ac2725978fd7eb98f54fa27c5d3836b0dac6f74",
+          "size": 2621440,
+          "profile": "android-x64"
+        },
+        "salts-utils": {
+          "name": "salts-utils-0.1.10-android-x64.tar",
+          "url": "https://github.com/qigao/salts-utils/releases/download/v0.1.10/salts-utils-0.1.10-android-x64.tar",
+          "sha256": "43fe511a55ea10c42acc2a0631aca640a7e2998fd84aa3afebed5a9bf502dee7",
+          "size": 7833600,
+          "profile": "android-x64"
+        },
+        "salts-cnet": {
+          "name": "salts-cnet-0.1.20-android-x64.tar",
+          "url": "https://github.com/qigao/salts-cnet/releases/download/v0.1.20/salts-cnet-0.1.20-android-x64.tar",
+          "sha256": "900b39f4ff08c6be9af7f14f31bb4841421786badba0b2e9b898e978a0b7f334",
+          "size": 8038400,
+          "profile": "android-x64"
+        },
+        "chttp": {
+          "name": "chttp-0.1.6-android-x64.tar",
+          "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-android-x64.tar",
+          "sha256": "bc2557c362fec471da86e078ab19eab72acfdcfee0fc1495651f39568754e2d5",
+          "size": 3123200,
+          "profile": "android-x64"
+        }
+      }
+    },
+    "android-arm64": {
+      "triplet": "arm64-android",
+      "assets": {
+        "salts-base": {
+          "name": "salts-base-0.1.11-android-arm64.tar",
+          "url": "https://github.com/qigao/salts-base/releases/download/v0.1.11/salts-base-0.1.11-android-arm64.tar",
+          "sha256": "515028acac260de2ffca8dbbcbd643c7ade08d94cbbc56c5b56b5459ba30b513",
+          "size": 12703232,
+          "profile": "android-arm64"
+        },
+        "cmeta": {
+          "name": "cmeta-0.1.11-android-arm64.tar",
+          "url": "https://github.com/qigao/cmeta/releases/download/v0.1.11/cmeta-0.1.11-android-arm64.tar",
+          "sha256": "13f667fba8bc90244cee057203617f85e4efa2f95be497390407a1e078b1989e",
+          "size": 2631680,
+          "profile": "android-arm64"
+        },
+        "salts-utils": {
+          "name": "salts-utils-0.1.10-android-arm64.tar",
+          "url": "https://github.com/qigao/salts-utils/releases/download/v0.1.10/salts-utils-0.1.10-android-arm64.tar",
+          "sha256": "ae74d142f84f37506abfa5607d554991a147e37d80578d2696f27c65281ee666",
+          "size": 7628800,
+          "profile": "android-arm64"
+        },
+        "salts-cnet": {
+          "name": "salts-cnet-0.1.20-android-arm64.tar",
+          "url": "https://github.com/qigao/salts-cnet/releases/download/v0.1.20/salts-cnet-0.1.20-android-arm64.tar",
+          "sha256": "0133280eb54abcaf8d90f5e656542df0c918b3f9fc6c36951c0241f74b45c6af",
+          "size": 8110080,
+          "profile": "android-arm64"
+        },
+        "chttp": {
+          "name": "chttp-0.1.6-android-arm64.tar",
+          "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-android-arm64.tar",
+          "sha256": "867b3f4a230e19a1c367b16c6d735f43204afafaab65ef590043e38fa168966d",
+          "size": 3256320,
+          "profile": "android-arm64"
+        }
+      }
+    }
+  }
+}

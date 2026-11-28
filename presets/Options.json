@@ -6,9 +6,9 @@
       "hidden": true,
       "cacheVariables": {
         "BUILD_TESTS": "OFF",
-        "SALTSCORE_ENABLE_ASAN": "OFF",
-        "SALTSCORE_ENABLE_UBSAN": "OFF",
-        "SALTSCORE_ENABLE_TSAN": "OFF"
+        "ENABLE_ASAN": "OFF",
+        "ENABLE_UBSAN": "OFF",
+        "ENABLE_TSAN": "OFF"
       }
     },
     {
@@ -39,8 +39,8 @@
       "hidden": true,
       "inherits": "developer-mode",
       "cacheVariables": {
-        "SALTSCORE_ENABLE_ASAN": "ON",
-        "SALTSCORE_ENABLE_UBSAN": "ON"
+        "ENABLE_ASAN": "ON",
+        "ENABLE_UBSAN": "ON"
       }
     },
     {
@@ -48,7 +48,7 @@
       "hidden": true,
       "inherits": "developer-mode",
       "cacheVariables": {
-        "SALTSCORE_ENABLE_TSAN": "ON"
+        "ENABLE_TSAN": "ON"
       }
     }
   ]

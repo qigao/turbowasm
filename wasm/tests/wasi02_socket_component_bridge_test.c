@@ -1,4 +1,4 @@
-#include "../src/wasi02_sockets.h"
+#include "../src/wasi02_sockets_internal.h"
 #include "../src/component_type_graph.h"
 
 #ifdef NDEBUG

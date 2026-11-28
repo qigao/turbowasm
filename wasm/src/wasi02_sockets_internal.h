@@ -1,11 +1,11 @@
-#ifndef TURBOWASM_WASI02_SOCKETS_H
-#define TURBOWASM_WASI02_SOCKETS_H
+#ifndef TURBOWASM_WASI02_SOCKETS_INTERNAL_H
+#define TURBOWASM_WASI02_SOCKETS_INTERNAL_H
 
 #include "component_resource.h"
 #include "wasi02_poll.h"
 #include "wasi02_provider.h"
 #include "wasi02_streams.h"
-#include "wasi02_network.h"
+#include "wasi02_network_internal.h"
 
 #include <wasi02_sockets.h>
 
@@ -108,4 +108,4 @@ turbowasm_status turbowasm_wasi02_sockets_imports(
     turbowasm_wasi02_sockets *sockets,
     turbowasm_component_exec_imports *out_imports);
 
-#endif /* TURBOWASM_WASI02_SOCKETS_H */
+#endif /* TURBOWASM_WASI02_SOCKETS_INTERNAL_H */

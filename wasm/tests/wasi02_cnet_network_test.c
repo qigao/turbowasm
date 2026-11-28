@@ -2,7 +2,7 @@
 #include <core/error_codes.h>
 #include <tinytest.h>
 #if !defined(TW_NETWORK_PUBLIC_ONLY)
-#include "../src/wasi02_sockets.h"
+#include "../src/wasi02_sockets_internal.h"
 #endif
 #include "wasi02/fixtures/generated/wasi02_toolchain_fixtures.h"
 #include <string.h>

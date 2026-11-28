@@ -1,14 +1,72 @@
-set(CMAKE_COLOR_DIAGNOSTICS ON)
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-
-# building the tests
-option(ENABLE_TESTS "Enable the tests" OFF)
-
-option(ENABLE_GIT_INFO "List git status" OFF)
-option(ENABLE_SAMPLES "Enable sample projects" ON)
-set_property(GLOBAL PROPERTY USE_FOLDERS ON)
-
+option(TURBOWASM_BUILD_TOOLS "Build TurboWasm command-line tools" ON)
+option(TURBOWASM_BUILD_METALLIC_GUESTS "Build the local Metallic wasm32 guest SDK and C11 guests" OFF)
+option(TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE "Build the optional Chttp-backed guest HTTP example and tests" OFF)
+if(TURBOWASM_BUILD_CHTTP_GUEST_EXAMPLE AND NOT TURBOWASM_BUILD_METALLIC_GUESTS)
+  message(FATAL_ERROR "The Chttp guest example requires the Metallic guest SDK")
+endif()
+option(TURBOWASM_BUILD_METALLIC_THREADS "Build and install the opt-in Metallic C11 threads profile" OFF)
+set(TURBOWASM_METALLIC_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/guest/metallic" CACHE PATH
+  "Absolute path to the local Metallic sources")
+set(TURBOWASM_GUEST_CMETA_SOURCE_DIR "" CACHE PATH
+  "Optional local Salts cmeta source directory to cross-compile and qualify with Metallic")
+option(BUILD_TESTS "Build TurboWasm tests" ON)
+option(TURBOWASM_BUILD_CONFORMANCE_RUNNER
+  "Build the non-installed WebAssembly spec conformance runner" OFF)
+option(TURBOWASM_ENABLE_MIR_JIT "Enable optional MIR JIT backend" OFF)
+option(TURBOWASM_ENABLE_COMPONENT
+  "Build installed synchronous Component Model façade" ON)
+option(TURBOWASM_ENABLE_WASI02_ADAPTER
+  "Build experimental WASI 0.2 typed Component capability layer" ON)
+option(TURBOWASM_ENABLE_WASI02_CNET_ADAPTER
+  "Build optional released-Salts CNet WASI 0.2 TCP control-plane provider" ON)
+option(TURBOWASM_ENABLE_WASI02_SOCKET_BACKEND
+  "Build installed WASI 0.2 native TCP backend (requires directional CNet EOF)" OFF)
+option(TURBOWASM_ENABLE_CFLOW_ADAPTER "Build optional CFlow execution adapter" ON)
+option(TURBOWASM_ENABLE_NATIVE_IO_ADAPTER
+  "Build optional Salts NativeIO host-wait adapter" ON)
+option(TURBOWASM_ENABLE_WASI_ADAPTER
+  "Build optional WASI Preview1 capability adapter" ON)
+option(TURBOWASM_ENABLE_WASI_THREADS_ADAPTER
+  "Build optional legacy WASI Preview1 threads adapter" ON)
+if(TURBOWASM_BUILD_METALLIC_THREADS AND
+   (NOT TURBOWASM_BUILD_METALLIC_GUESTS OR NOT TURBOWASM_ENABLE_WASI_THREADS_ADAPTER))
+  message(FATAL_ERROR "Metallic threads require the Metallic guest SDK and WASIThreads adapter")
+endif()
+option(TURBOWASM_ENABLE_WASI_NATIVE_IO_ADAPTER
+  "Build optional WASI Preview1 NativeIO fd adapter" ON)
+option(TURBOWASM_ENABLE_WASI_HOST_FS_ADAPTER
+  "Build optional Salts-backed WASI filesystem provider" ON)
+option(TURBOWASM_ENABLE_WASI_LITTLEFS_ADAPTER
+  "Build optional littlefs-backed WASI filesystem provider" OFF)
+set(TURBOWASM_LITTLEFS_SOURCE_DIR "" CACHE PATH
+  "Path to an externally acquired littlefs source checkout")
 
 option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+set(TURBOWASM_SANITIZER_STACK_BYTES "8388608" CACHE STRING
+  "Native executable/coroutine stack budget for instrumented builds")
+if(NOT TURBOWASM_SANITIZER_STACK_BYTES MATCHES "^[1-9][0-9]*$" OR
+   TURBOWASM_SANITIZER_STACK_BYTES LESS 524288 OR
+   TURBOWASM_SANITIZER_STACK_BYTES GREATER 1073741824)
+  message(FATAL_ERROR "TURBOWASM_SANITIZER_STACK_BYTES must be between 524288 and 1073741824")
+endif()
+set(TURBOWASM_TYPE_DEPENDENCY_LIMIT "256" CACHE STRING
+  "Maximum recursive type-group dependency depth")
+if(NOT TURBOWASM_TYPE_DEPENDENCY_LIMIT MATCHES "^[1-9][0-9]*$" OR
+   TURBOWASM_TYPE_DEPENDENCY_LIMIT GREATER 1024)
+  message(FATAL_ERROR "TURBOWASM_TYPE_DEPENDENCY_LIMIT must be between 1 and 1024")
+endif()
+set(TURBOWASM_SPEC_ROOT "" CACHE PATH "Pinned WebAssembly spec checkout for conformance tests")
+set(TURBOWASM_CORE3_TOOLS "" CACHE FILEPATH "wasm-tools executable for the full Core 3.0 test suite")
+
+# Dependencies are restored before configure; no vcpkg port builds here.
+# Non-Core3 conformance requires an explicitly pinned standalone WABT binary.
+# WABT is a host test tool; it is not a third-party native library dependency.
+set(TURBOWASM_WABT_ROOT "$ENV{TURBOWASM_WABT_ROOT}" CACHE PATH
+  "Root of the SHA256-verified WABT host binary Release archive")
+if(TURBOWASM_BUILD_CONFORMANCE_RUNNER AND
+   NOT TURBOWASM_CORE3_TOOLS AND NOT TURBOWASM_WABT_ROOT)
+  message(FATAL_ERROR
+    "Conformance requires explicit SHA256-verified TURBOWASM_WABT_ROOT")
+endif()

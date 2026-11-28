@@ -73,8 +73,11 @@
       "inherits": [
         "llvm-mingw-x64-environment",
         "target-llvm-mingw-x64",
-        "release-mode"
-      ]
+        "full-native"
+      ],
+      "cacheVariables": {
+        "BUILD_TESTS": "ON"
+      }
     },
     {
       "name": "llvm-mingw-arm64-release-user",
@@ -82,11 +85,10 @@
       "inherits": [
         "target-llvm-mingw-arm64",
         "llvm-mingw-arm64-environment",
-        "release-mode"
+        "full-native"
       ],
-      "environment": {
-        "SALTS_BASE_ROOT": "$penv{LLVM_MINGW_ARM64_SALTS_BASE_ROOT}",
-        "VCPKG_INSTALLED_DIR": "$penv{LLVM_MINGW_ARM64_VCPKG_INSTALLED_DIR}"
+      "cacheVariables": {
+        "BUILD_TESTS": "ON"
       }
     },
     {
@@ -412,6 +414,22 @@
         "test-linux"
       ],
       "configurePreset": "gcc-arm64-release-user"
+    },
+    {
+      "name": "llvm-mingw-x64-release-user",
+      "configurePreset": "llvm-mingw-x64-release-user",
+      "inherits": [
+        "base-test",
+        "test-windows"
+      ]
+    },
+    {
+      "name": "llvm-mingw-arm64-release-user",
+      "configurePreset": "llvm-mingw-arm64-release-user",
+      "inherits": [
+        "base-test",
+        "test-windows"
+      ]
     }
   ]
 }

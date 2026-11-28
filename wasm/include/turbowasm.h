@@ -9,6 +9,6 @@
 #include <link.h>
 #include <instance.h>
 #include <execution.h>
-#include "simd.h"
+#include "turbowasm_simd.h"
 
 #endif /* TURBOWASM_H */

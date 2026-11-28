@@ -1,7 +1,7 @@
 #ifndef TURBOWASM_RELAXED_SIMD_H
 #define TURBOWASM_RELAXED_SIMD_H
 
-#include <salts/simd.h>
+#include <simd.h>
 
 #include <stdbool.h>
 #include <stdint.h>
