@@ -159,10 +159,6 @@
         }
       }
     },
-    "macos-clang-x64": {
-      "triplet": "x64-osx",
-      "assets": {}
-    },
     "macos-clang-arm64": {
       "triplet": "arm64-osx",
       "assets": {

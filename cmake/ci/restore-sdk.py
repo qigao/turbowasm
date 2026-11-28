@@ -17,7 +17,7 @@ if triplet != selected["triplet"]:
     raise ValueError("Profile/triplet mismatch")
 missing = [p["repo"] for p in LOCK["packages"] if p["repo"] not in selected["assets"]]
 if missing:
-    raise RuntimeError(f"{profile}: no published architecture-matched SDKs for {', '.join(missing)}; {triplet} cache is also not published. Publish matching upstream inputs and update sdk-lock.json.")
+    raise RuntimeError(f"{profile}: SDK lock lacks required architecture-matched archives for {', '.join(missing)}")
 infra = ROOT / "build/ci-infrastructure/vcpkg-cache"
 reader = infra / "scripts/restore-native-dependency.py"
 spec = importlib.util.spec_from_file_location("transport", infra / "scripts/setup-compiler-toolchain.py")

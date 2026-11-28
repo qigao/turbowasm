@@ -16,10 +16,10 @@ asset metadata, release target commit and successful producer run; the
 consumer does not impose a common JSON schema on different SDK publishers.
 Native toolchain selection is architecture-specific. No Mono or floating Salts packages.
 
-macOS Intel has a real x64 matrix row, but the current release family lacks its
-five matching SDKs and installed-x64-osx archive. The row fails explicitly at
-dependency restoration until the upstream projects publish those assets and
-the SDK lock is updated. No ARM64 SDK substitution, no continue-on-error.
+The required CI matrix is Linux x64/ARM64, Windows LLVM-MinGW x64/ARM64,
+macOS ARM64, and Android x64/ARM64 (seven profiles). Intel macOS is outside
+the required CI and release qualification scope; no Intel support is claimed.
+No ARM64 SDK substitution or continue-on-error.
 Android device tests and the previously optional Metallic guest qualification
 are separate work; this native CI does not claim their execution.
 

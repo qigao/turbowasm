@@ -34,13 +34,6 @@ jobs:
             test: true
             mir: true
             littlefs: true
-          - sdk: macos-clang-x64
-            runner: macos-15-intel
-            triplet: x64-osx
-            preset: llvm-native-release-user
-            test: true
-            mir: true
-            littlefs: false
           - sdk: macos-clang-arm64
             runner: macos-15
             triplet: arm64-osx
