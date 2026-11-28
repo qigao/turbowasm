@@ -1,0 +1,55 @@
+name: Restore pinned split native SDK
+description: Restore exact SDK releases and matching preinstalled vcpkg ABI
+inputs:
+  profile:
+    description: Published split SDK profile
+    required: true
+  triplet:
+    description: Published vcpkg target triplet
+    required: true
+  arch:
+    description: Target CPU architecture
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        architecture: ${{ runner.os == 'Windows' && 'x64' || runner.arch == 'ARM64' && 'arm64' || 'x64' }}
+    - name: Select repository SDK pins
+      id: pins
+      shell: bash
+      run: python cmake/ci/restore-split-sdk.py pins
+    - uses: actions/checkout@v4
+      with:
+        repository: qigao/vcpkg-cache
+        ref: v${{ steps.pins.outputs.cache_version }}
+        path: build/vcpkg-cache-contract
+        persist-credentials: false
+    - name: Install Linux host prerequisites
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends ninja-build pkg-config curl
+    - name: Restore verified SDKs and cache
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SDK_PROFILE: ${{ inputs.profile }}
+        SDK_TRIPLET: ${{ inputs.triplet }}
+        SDK_ARCH: ${{ inputs.arch }}
+      run: python cmake/ci/restore-split-sdk.py restore
+    - name: Restore exact LLVM-MinGW compiler
+      if: runner.os == 'Windows'
+      shell: bash
+      env:
+        TARGET_ARCH: ${{ inputs.arch }}
+      run: |
+        set -euo pipefail
+        python build/vcpkg-cache-contract/scripts/setup-compiler-toolchain.py \
+          --compiler llvm-mingw --target "$TARGET_ARCH" \
+          --runner-os "$RUNNER_OS" --runner-arch "$RUNNER_ARCH" \
+          --destination build/ci-llvm-mingw --github-env "$GITHUB_ENV" --github-path "$GITHUB_PATH"

@@ -21,34 +21,17 @@ if (-not $selected) {
     }
     if ($LASTEXITCODE -ne 0) { throw "Cannot determine changed files for $EventName" }
     # Runtime, Component and their wasm/tests share implementation across all hosts.
-    # Only prose changes can omit the native graph; other changes qualify all five.
+    # Only prose changes can omit the native graph; other changes qualify all eight.
     $selected = @($changed | Where-Object { $_ -notmatch '\.(md|rst)$' }).Count -gt 0
 }
 
 # The platform and toolchain contract for native CI.
-$profiles = @(
-    @{ id = 'linux-release'; family = 'linux'; runner = 'ubuntu-24.04'; rid = 'linux-x64'; triplet = 'x64-linux'; host_triplet = 'x64-linux'; preset = 'ci-linux-user'; consumer = 'ci-user'; tests = $true; littlefs = $true },
-    @{ id = 'windows-release'; family = 'windows'; runner = 'windows-2025'; rid = 'windows-x64'; triplet = 'x64-windows'; host_triplet = 'x64-windows'; preset = 'ci-win-user'; consumer = 'ci-win-user'; tests = $true },
-    @{ id = 'android-arm64-v8a-release'; family = 'android'; runner = 'ubuntu-24.04'; rid = 'android-arm64-v8a'; triplet = 'arm64-android'; host_triplet = 'x64-linux'; preset = 'ci-android-user'; consumer = 'ci-android-user' },
-    @{ id = 'linux-mir-release'; family = 'linux'; runner = 'ubuntu-24.04'; rid = 'linux-x64'; triplet = 'x64-linux'; host_triplet = 'x64-linux'; preset = 'ci-mir-user'; tests = $true },
-    @{ id = 'macos-mir-release'; family = 'mac'; runner = 'macos-15'; rid = 'macos-arm64'; triplet = 'arm64-osx'; host_triplet = 'arm64-osx'; preset = 'ci-macos-mir-user'; tests = $true }
-)
+$profiles = @(Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'native-matrix.json') | ConvertFrom-Json -AsHashtable)
 $builds = @()
 if ($selected) {
     foreach ($profileEntry in $profiles) {
         if ($SkipWindows -and $profileEntry.family -eq 'windows') { continue }
-        $entry = $profileEntry.Clone()
-        if ($env:CI_METALLIC_GUESTS -eq 'true') {
-            if ($entry.id -eq 'linux-release') {
-                $entry.preset = 'ci-metallic-user'
-                $entry.metallic = $true
-            } elseif ($entry.id -eq 'macos-mir-release') {
-                $entry.preset = 'ci-macos-metallic-user'
-                $entry.consumer = 'ci-macos-user'
-                $entry.metallic = $true
-            }
-        }
-        $builds += $entry
+        $builds += $profileEntry
     }
 }
 $matrix = ConvertTo-Json -InputObject @{ include = $builds } -Depth 5 -Compress
@@ -63,7 +46,7 @@ if ($env:GITHUB_STEP_SUMMARY) {
     }
     Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "| Profile | Preset | SDK |`n|---|---|---|"
     foreach ($entry in $builds) {
-        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "| $($entry.id) | $($entry.preset) | $($entry.rid) |"
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "| $($entry.id) | $($entry.preset) | $($entry.sdk) |"
     }
     if ($builds.Count -eq 0) {
         Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value 'Prose-only change: no native build selected.'

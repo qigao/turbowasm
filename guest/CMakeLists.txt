@@ -128,7 +128,7 @@ add_executable(turbowasm_clock_example
   "${PROJECT_SOURCE_DIR}/examples/guest/clock_main.c"
   "${PROJECT_SOURCE_DIR}/examples/guest/clock_host.c"
   "${PROJECT_SOURCE_DIR}/examples/guest/reactor_session.c")
-target_link_libraries(turbowasm_clock_example PRIVATE TurboWasm::Runtime Salts::Core Salts::Platform)
+target_link_libraries(turbowasm_clock_example PRIVATE TurboWasm::Runtime Salts::Core Salts::Core)
 target_compile_features(turbowasm_clock_example PRIVATE c_std_11)
 target_compile_options(turbowasm_clock_example PRIVATE $<$<COMPILE_LANG_AND_ID:C,MSVC>:-experimental:c11atomics>)
 set_target_properties(turbowasm_clock_example PROPERTIES FOLDER "examples/guest")

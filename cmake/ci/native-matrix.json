@@ -1,0 +1,90 @@
+[
+  {
+    "id": "linux-x64",
+    "family": "linux",
+    "runner": "ubuntu-24.04",
+    "sdk": "linux-clang-x64",
+    "triplet": "x64-linux",
+    "arch": "x64",
+    "preset": "llvm-native-release-user",
+    "tests": true,
+    "littlefs": true
+  },
+  {
+    "id": "linux-arm64",
+    "family": "linux",
+    "runner": "ubuntu-24.04-arm",
+    "sdk": "linux-clang-arm64",
+    "triplet": "arm64-linux",
+    "arch": "arm64",
+    "preset": "llvm-native-release-user",
+    "tests": true,
+    "littlefs": false
+  },
+  {
+    "id": "macos-x64",
+    "family": "mac",
+    "runner": "macos-15-intel",
+    "sdk": "macos-clang-x64",
+    "triplet": "x64-osx",
+    "arch": "x64",
+    "preset": "llvm-native-release-user",
+    "tests": true,
+    "littlefs": false
+  },
+  {
+    "id": "macos-arm64",
+    "family": "mac",
+    "runner": "macos-15",
+    "sdk": "macos-clang-arm64",
+    "triplet": "arm64-osx",
+    "arch": "arm64",
+    "preset": "llvm-native-release-user",
+    "tests": true,
+    "littlefs": false
+  },
+  {
+    "id": "windows-x64",
+    "family": "windows",
+    "runner": "windows-2025",
+    "sdk": "windows-llvm-mingw-x64",
+    "triplet": "qigao-x64-windows-llvm-mingw",
+    "arch": "x64",
+    "preset": "llvm-mingw-x64-release-user",
+    "tests": true,
+    "littlefs": false
+  },
+  {
+    "id": "windows-arm64",
+    "family": "windows",
+    "runner": "windows-11-arm",
+    "sdk": "windows-llvm-mingw-arm64",
+    "triplet": "qigao-arm64-windows-llvm-mingw",
+    "arch": "arm64",
+    "preset": "llvm-mingw-arm64-release-user",
+    "tests": true,
+    "littlefs": false
+  },
+  {
+    "id": "android-x64",
+    "family": "android",
+    "runner": "ubuntu-24.04",
+    "sdk": "android-x64",
+    "triplet": "x64-android",
+    "arch": "x64",
+    "preset": "android-x64-release-user",
+    "tests": false,
+    "littlefs": false
+  },
+  {
+    "id": "android-arm64",
+    "family": "android",
+    "runner": "ubuntu-24.04",
+    "sdk": "android-arm64",
+    "triplet": "arm64-android",
+    "arch": "arm64",
+    "preset": "android-arm64-release-user",
+    "tests": false,
+    "littlefs": false
+  }
+]
