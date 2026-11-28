@@ -123,17 +123,17 @@ else()
   target_compile_options(turbowasm_database_worker PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-# SQLite provider composes the released native ORM, never Runtime internals.
-add_library(turbowasm_database_sqlite STATIC
-  wasm/src/database_sqlite.c
+# SQL provider composes the released native ORM, never Runtime internals.
+add_library(turbowasm_database_orm STATIC
+  wasm/src/database_orm.c
   wasm/src/database_sql_result.c)
-target_compile_features(turbowasm_database_sqlite PRIVATE c_std_11)
-target_include_directories(turbowasm_database_sqlite PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/wasm/src")
-target_link_libraries(turbowasm_database_sqlite PRIVATE turbowasm_database_worker turbowasm_database_core TurboWasm::Runtime Orm::C Salts::Core)
+target_compile_features(turbowasm_database_orm PRIVATE c_std_11)
+target_include_directories(turbowasm_database_orm PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/wasm/src")
+target_link_libraries(turbowasm_database_orm PRIVATE turbowasm_database_worker turbowasm_database_core TurboWasm::Runtime Orm::C Salts::Core)
 if(MSVC)
-  target_compile_options(turbowasm_database_sqlite PRIVATE /W4)
+  target_compile_options(turbowasm_database_orm PRIVATE /W4)
 else()
-  target_compile_options(turbowasm_database_sqlite PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(turbowasm_database_orm PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(TURBOWASM_ENABLE_COMPONENT)

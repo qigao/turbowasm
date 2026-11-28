@@ -1,5 +1,4 @@
-#include "database_sqlite.h"
-#include "fixtures/database_bridge.h"
+#include "database_guest_test.h"
 #include <orm.h>
 #include <orm_runtime.h>
 #include <core/clock.h>
@@ -23,7 +22,6 @@
 #include <unistd.h>
 #endif
 
-enum { SUBMIT=8,POLL,AWAIT,RECEIPT,READ,TAKE,CANCEL,DROP,PUT,GET };
 static const uint32_t masks[]={TW_DB_MASK(TW_DB_I64),TW_DB_MASK(TW_DB_BLOB),TW_DB_MASK(TW_DB_I64)};
 static const tw_db_template templates[]={
     {"item.put",TW_DB_MASK(TW_DB_EXECUTE),masks,2},
@@ -71,111 +69,6 @@ static const uint8_t first_page[]={
     TW_DB_F64,8,0,0,0,0,0,0,0,0,0,0xf8,0x3f,
     TW_DB_TEXT,3,0,0,0,0xe4,0xb8,0xad
 };
-
-typedef struct wake_signal {sync_mutex_t mutex;sync_cond_t cond;bool ready;} wake_signal;
-static void notify(void *context) {
-    wake_signal *s=context;
-    sync_mutex_lock(&s->mutex);
-    s->ready=true;
-    sync_cond_signal(&s->cond);
-    sync_mutex_unlock(&s->mutex);
-}
-static void deliver(tw_db_worker *worker,wake_signal *s) {
-    cflow_waitable wait=tw_db_worker_waitable(worker);
-    assert(cflow_waitable_arm(&wait,(cflow_waker){notify,s}));
-    const uint64_t deadline=hrtime()+UINT64_C(10000000000);
-    sync_mutex_lock(&s->mutex);
-    while(!s->ready) {
-        uint64_t now=hrtime();
-        assert(now<deadline);
-        assert(sync_cond_timedwait(&s->cond,&s->mutex,deadline-now)==SALTS_OK);
-    }
-    s->ready=false;
-    sync_mutex_unlock(&s->mutex);
-    assert(tw_db_worker_progress(worker)==TW_DB_OK);
-}
-
-static turbowasm_value i32(uint32_t n) {
-    return (turbowasm_value){.kind=TURBOWASM_VALUE_I32,.as.i32=(int32_t)n};
-}
-static turbowasm_value i64(uint64_t n) {
-    int64_t bits;memcpy(&bits,&n,sizeof bits);
-    return (turbowasm_value){.kind=TURBOWASM_VALUE_I64,.as.i64=bits};
-}
-static void call(turbowasm_instance *i,uint32_t fn,const turbowasm_value *args,
-    size_t n,turbowasm_value *result,size_t count) {
-    size_t actual=0;turbowasm_trap trap=TURBOWASM_TRAP_NONE;
-    assert(turbowasm_instance_invoke(i,fn,args,n,result,count,&actual,&trap)==TURBOWASM_OK);
-    assert(actual==count&&trap==TURBOWASM_TRAP_NONE);
-}
-static uint64_t submit(turbowasm_instance *i,uint32_t op,uint64_t owner,
-    const uint8_t *bytes,size_t size,tw_db_status expected) {
-    for(size_t j=0;j<size;++j) {
-        turbowasm_value a[]={i32(8192+(uint32_t)j),i32(bytes[j])};
-        call(i,PUT,a,2,NULL,0);
-    }
-    turbowasm_value a[]={i32(op),i64(owner),i64(8192),i64(size)},r[2];
-    call(i,SUBMIT,a,4,r,2);
-    assert(r[0].as.i32==(int32_t)expected);
-    assert((r[1].as.i64!=0)==(expected==TW_DB_OK));
-    return (uint64_t)r[1].as.i64;
-}
-static void single(turbowasm_instance *i,uint32_t fn,uint64_t op,tw_db_status expected) {
-    turbowasm_value a=i64(op),r;
-    call(i,fn,&a,1,&r,1);
-    assert(r.as.i32==(int32_t)expected);
-}
-static void receipt(turbowasm_instance *i,uint64_t op,tw_db_outcome outcome,size_t size) {
-    turbowasm_value a=i64(op),r[3];
-    call(i,RECEIPT,&a,1,r,3);
-    assert(r[0].as.i32==TW_DB_OK&&r[1].as.i32==(int32_t)outcome&&
-        (uint64_t)r[2].as.i64==size);
-}
-static void check_bytes(turbowasm_instance *i,uint64_t op,
-    const uint8_t *expected,size_t size) {
-    receipt(i,op,TW_DB_SUCCESS,size);
-    /* Read the same immutable operation result in two passes, including
-       a nonzero offset. This never advances the provider cursor. */
-    size_t split=size/2;
-    for(unsigned pass=0;pass<2;++pass) {
-        size_t offset=pass?split:0,n=pass?size-split:split;
-        turbowasm_value args[]={i64(op),i64(offset),i64(1000+offset),i64(n)},r[2];
-        call(i,READ,args,4,r,2);
-        assert(r[0].as.i32==TW_DB_OK&&(uint64_t)r[1].as.i64==n);
-    }
-    for(size_t j=0;j<size;++j) {
-        turbowasm_value a=i32(1000+(uint32_t)j),v;
-        call(i,GET,&a,1,&v,1);assert(v.as.i32==expected[j]);
-    }
-}
-static void trap_read(turbowasm_instance *i,uint64_t op,size_t size) {
-    turbowasm_value a[]={i64(op),i64(0),i64(65535),i64(size)},r[2];
-    size_t count=0;turbowasm_trap trap=TURBOWASM_TRAP_NONE;
-    assert(turbowasm_instance_invoke(i,READ,a,4,r,2,&count,&trap)==TURBOWASM_TRAPPED);
-    assert(trap==TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS);
-}
-static uint64_t take(turbowasm_instance *i,uint64_t op) {
-    turbowasm_value a=i64(op),r[2];call(i,TAKE,&a,1,r,2);
-    assert(r[0].as.i32==TW_DB_OK&&r[1].as.i64);
-    single(i,DROP,op,TW_DB_OK);
-    return (uint64_t)r[1].as.i64;
-}
-static void settle(tw_db_bridge *bridge,tw_db_worker *worker,wake_signal *wake,
-    turbowasm_instance *instance,uint64_t op) {
-    turbowasm_execution execution={0};
-    turbowasm_value a=i64(op);
-    assert(turbowasm_execution_create(&execution,instance,AWAIT,&a,1)==TURBOWASM_OK);
-    /* A native result is never published before owner-side mailbox progress. */
-    assert(tw_db_bridge_resume(bridge,&execution,NULL)==TURBOWASM_YIELDED);
-    assert(turbowasm_execution_yield_reason_get(&execution)==TURBOWASM_YIELD_HOST_WAIT);
-    deliver(worker,wake);
-    assert(tw_db_bridge_wake(bridge,&execution)==TW_DB_OK);
-    assert(tw_db_bridge_resume(bridge,&execution,NULL)==TURBOWASM_OK);
-    assert(turbowasm_execution_result_count(&execution)==2);
-    assert(turbowasm_execution_result_at(&execution,0)->as.i32==TW_DB_OK);
-    assert(turbowasm_execution_result_at(&execution,1)->as.i32==TW_DB_TERMINAL);
-    assert(tw_db_bridge_destroy_execution(bridge,&execution)==TW_DB_OK);
-}
 
 #ifdef _WIN32
 /* The CMeta explicit-path loader uses DLL_LOAD_DIR | DEFAULT_DIRS. PATH
@@ -274,13 +167,6 @@ static uint64_t select_id(tw_db_bridge *bridge,tw_db_worker *worker,wake_signal 
         exists?sizeof metadata:sizeof empty_metadata);
     return take(instance,op);
 }
-static void finish_ok(tw_db_bridge *bridge,tw_db_worker *worker,wake_signal *wake,
-    turbowasm_instance *instance,uint64_t owner,tw_db_opcode code) {
-    uint64_t op=submit(instance,code,owner,NULL,0,TW_DB_OK);
-    settle(bridge,worker,wake,instance,op);
-    receipt(instance,op,TW_DB_SUCCESS,0);single(instance,DROP,op,TW_DB_OK);
-}
-
 int main(void) {
     const char *root=getenv("TURBODB_ROOT");assert(root&&*root);
     char driver[4096],cwd[4096],filename[4096];
@@ -322,23 +208,24 @@ int main(void) {
         "INSERT INTO items(id,payload,parent_id) VALUES(?1,?2,?3)"
     };
     const char *const read_statements[]={select_sql,"SELECT zeroblob(65) AS large_value"};
-    const tw_db_sqlite_alias native_aliases[]={
-        {filename,false,statements,3},{filename,true,read_statements,2}
+    const tw_db_orm_alias native_aliases[]={
+        {.read_only=false,.statements=statements,.statement_count=3,.source.filename=filename},
+        {.read_only=true,.statements=read_statements,.statement_count=2,.source.filename=filename}
     };
-    const tw_db_sqlite_config native_config={driver,native_aliases,2,2,1,1,16384,
+    const tw_db_orm_config native_config={TW_DB_ORM_SQLITE,driver,native_aliases,2,2,1,1,16384,
         1000,8,4096,4096,65536};
-    tw_db_sqlite sqlite={0};
+    tw_db_orm sqlite={0};
     tw_db_alias invalid_aliases[2]={aliases[0],aliases[1]};
     tw_db_policy invalid_policy={policy.limits,invalid_aliases,2};
     invalid_aliases[0].isolation_mask=TW_DB_MASK(TW_DB_ISOLATION_SERIALIZABLE);
-    assert(tw_db_sqlite_init(&sqlite,&invalid_policy,&native_config)==TW_DB_INVALID_REQUEST);
+    assert(tw_db_orm_init(&sqlite,&invalid_policy,&native_config)==TW_DB_INVALID_REQUEST);
     invalid_aliases[0]=aliases[0];
     invalid_aliases[1].isolation_mask=TW_DB_MASK(TW_DB_ISOLATION_DEFAULT);
-    assert(tw_db_sqlite_init(&sqlite,&invalid_policy,&native_config)==TW_DB_INVALID_REQUEST);
-    assert(tw_db_sqlite_init(&sqlite,&policy,&native_config)==TW_DB_OK);
+    assert(tw_db_orm_init(&sqlite,&invalid_policy,&native_config)==TW_DB_INVALID_REQUEST);
+    assert(tw_db_orm_init(&sqlite,&policy,&native_config)==TW_DB_OK);
     tw_db_worker worker={0};tw_db_bridge bridge={0};tw_db_dispatch dispatch={0};
     const tw_db_worker_config wc={4,PAGE_BYTES,16384,UINT64_C(30000000000),
-        tw_db_sqlite_execute,&sqlite};
+        tw_db_orm_execute,&sqlite};
     assert(tw_db_worker_init(&worker,&bridge,&wc,&dispatch)==TW_DB_OK);
     assert(tw_db_bridge_init(&bridge,&policy,&cap,&dispatch)==TW_DB_OK);
     turbowasm_module module={0};turbowasm_linker linker={0};turbowasm_instance instance={0};
@@ -537,7 +424,7 @@ int main(void) {
     cflow_waitable wait=tw_db_worker_waitable(&worker);cflow_waitable_cancel(&wait);
     assert(tw_db_worker_destroy(&worker)==TW_DB_OK);
     assert(tw_db_bridge_destroy(&bridge)==TW_DB_OK);
-    assert(tw_db_sqlite_destroy(&sqlite)==TW_DB_OK);
+    assert(tw_db_orm_destroy(&sqlite)==TW_DB_OK);
     sync_cond_destroy(&wake.cond);sync_mutex_destroy(&wake.mutex);
     host_database(driver,filename,false);
     assert(remove(filename)==0);

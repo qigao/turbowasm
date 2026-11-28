@@ -96,7 +96,19 @@ jobs:
         run: cmake --build --preset "$CI_PRESET"
       - name: Run formal native CTests
         if: inputs.tests
-        run: ctest --test-dir "build/$CI_PRESET" --output-on-failure --no-tests=error --output-junit ctest.xml
+        run: ctest --test-dir "build/$CI_PRESET" -LE mysql-live --output-on-failure --no-tests=error --output-junit ctest.xml
+      - name: Start disposable TLS MySQL fixture
+        if: inputs.profile == 'linux-clang-x64' && inputs.tests
+        run: bash cmake/ci/mysql-live-setup.sh
+      - name: Run real MySQL interpreter and MIR CTests
+        if: inputs.profile == 'linux-clang-x64' && inputs.tests
+        run: ctest --test-dir "build/$CI_PRESET" -L mysql-live --output-on-failure --no-tests=error --output-junit mysql-ctest.xml
+      - name: Verify committed MySQL fixture rows
+        if: inputs.profile == 'linux-clang-x64' && inputs.tests
+        run: bash cmake/ci/mysql-live-verify.sh
+      - name: Stop disposable MySQL fixture
+        if: always() && inputs.profile == 'linux-clang-x64' && inputs.tests
+        run: sudo systemctl stop mysql.service
       - name: Install SDK
         run: cmake --install "build/$CI_PRESET" --prefix "stage/$CI_PROFILE"
       - uses: actions/upload-artifact@v4
@@ -113,4 +125,5 @@ jobs:
             build/${{ inputs.preset }}/CMakeFiles/CMakeConfigureLog.yaml
             build/${{ inputs.preset }}/Testing/Temporary
             build/${{ inputs.preset }}/ctest.xml
+            build/${{ inputs.preset }}/mysql-ctest.xml
           if-no-files-found: warn
