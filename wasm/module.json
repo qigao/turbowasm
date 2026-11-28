@@ -3,6 +3,25 @@
     "tests"
   ],
   "targets": {
+    "turbowasm_database_worker": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "src/database_worker.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "src"
+        ],
+        "deps": [
+          "turbowasm_database_core",
+          "turbowasm",
+          "cmeta_cflow",
+          "saltsbase_core"
+        ]
+      }
+    },
     "turbowasm": {
       "kind": "static",
       "sources": {

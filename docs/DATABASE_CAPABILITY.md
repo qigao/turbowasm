@@ -451,3 +451,47 @@ host drain proof and late completion. Interpreter/MIR tests use the same
 formal CTest graph. Native providers must still supply actual cancellation,
 rollback, deadline and drain guarantees; CFlow integration and the released
 database SDK are later gates.
+
+## 11. M1c1 native serial worker and owner completion mailbox (#441)
+
+`database_worker.{h,c}` is the private dispatch adapter for synchronous,
+thread-affine native database operations. It uses the released CMeta CFlow
+serial Executor and its bounded typed event Mailbox; it introduces no custom
+thread pool or scheduler. One dedicated lane per adapter retains native
+connection/transaction/cursor affinity. This is the blocking-native backend
+path (e.g. SQLite and synchronous transaction control), not a replacement
+for the existing asynchronous MySQL/Redis progress APIs.
+
+The worker has fixed operation slots and result reservations; its own
+logical byte budget and CFlow fixed queue/mailbox capacities are charged
+separately from the bridge/manager budget. Each slot owns one completion
+mailbox position. Submit copies the work descriptor, not guest memory:
+the manager pins its request snapshot through terminal receipt. Executor
+admission failure means the provider was never entered and becomes
+FAILED_NO_EFFECT, not a retry. The serial callback returns an outcome,
+native resource and byte count into its reserved storage. Finalize publishes
+the slot index through the CFlow mailbox and makes no further slot accesses.
+The owner receives the synchronized record and completes the manager;
+the worker never touches the bridge or guest execution during native work.
+A malformed provider receipt stops progress and preserves the occupied slot
+and native ownership instead of fabricating success. An impossible mailbox
+publication failure is fail-fast.
+
+A borrowed single-consumer CFlow waitable signals completion; the host may
+arm its existing nonblocking wake and call progress on the owner, one record
+per step. It separately calls bridge wake/resume for the exact execution.
+Cancellation is an atomic cooperative signal. A queued call interrupted
+before entering the provider is known no-effect; an entered call must
+classify its own outcome, even after cancellation. The monotonic deadline
+includes queue delay and is exposed to the provider. It is not a guarantee
+that an uninterruptible native call has stopped. Worker storage survives
+guest teardown until terminal drain. Destroy requires all slots retired,
+waker disarmed, and joins the executor before freeing the mailbox or
+provider callback state.
+
+Formal real-WASM interpreter/MIR tests use a deterministic native callback
+on an actual CFlow worker, with owner-thread completion, thread affinity,
+bounded result copy, blocked running cancellation with unknown outcome,
+queued cancellation before native dispatch, and ordered shutdown/drain.
+Native SQLite durability and driver lifecycle are still M2 (#442);
+nonblocking MySQL/Redis integration is separately tracked in #443/#444.
