@@ -72,12 +72,9 @@ static bool name_equal(tw_db_bytes b, const char *name) {
     return b.size == n && memcmp(b.data, name, n) == 0;
 }
 
-bool tw_db_read_value(tw_db_reader *reader, uint32_t max_bytes, tw_db_value *out) {
-    tw_db_reader r = *reader;
-    tw_db_bytes tag, b;
-    if (!take(&r, 1, &tag) || !tw_db_read_bytes(&r, max_bytes, &b))
-        return false;
-    switch (tag.data[0]) {
+static bool valid_value(tw_db_value_kind kind,tw_db_bytes b) {
+    if(b.size&&!b.data)return false;
+    switch (kind) {
     case TW_DB_NULL: if (b.size != 0) return false; break;
     case TW_DB_BOOL: if (b.size != 1 || b.data[0] > 1) return false; break;
     case TW_DB_I64: case TW_DB_U64: case TW_DB_F64:
@@ -87,9 +84,62 @@ bool tw_db_read_value(tw_db_reader *reader, uint32_t max_bytes, tw_db_value *out
     case TW_DB_BLOB: break;
     default: return false;
     }
-    *reader = r;
-    *out = (tw_db_value){(tw_db_value_kind)tag.data[0], b};
     return true;
+}
+
+bool tw_db_read_value(tw_db_reader *reader,uint32_t max_bytes,tw_db_value *out) {
+    tw_db_reader r=*reader;
+    tw_db_bytes tag,b;
+    if(!take(&r,1,&tag)||!tw_db_read_bytes(&r,max_bytes,&b)||
+        !valid_value((tw_db_value_kind)tag.data[0],b))return false;
+    *reader=r;
+    *out=(tw_db_value){(tw_db_value_kind)tag.data[0],b};
+    return true;
+}
+
+static bool room(const tw_db_writer *w,size_t n) {
+    return w->size<=w->capacity&&n<=w->capacity-w->size;
+}
+
+static void write_raw(tw_db_writer *w,const void *bytes,size_t n) {
+    if(n)memmove(w->data+w->size,bytes,n);
+    w->size+=n;
+}
+
+bool tw_db_write_u32(tw_db_writer *w,uint32_t value) {
+    if(!room(w,4))return false;
+    uint8_t b[4];
+    for(unsigned i=0;i<4;++i)b[i]=(uint8_t)(value>>(8u*i));
+    write_raw(w,b,4);
+    return true;
+}
+
+bool tw_db_write_u64(tw_db_writer *w,uint64_t value) {
+    if(!room(w,8))return false;
+    uint8_t b[8];
+    for(unsigned i=0;i<8;++i)b[i]=(uint8_t)(value>>(8u*i));
+    write_raw(w,b,8);
+    return true;
+}
+
+bool tw_db_write_bytes(tw_db_writer *w,tw_db_bytes b) {
+    if(b.size>UINT32_MAX||(b.size&&!b.data)||!room(w,4)||
+        b.size>w->capacity-w->size-4)return false;
+    (void)tw_db_write_u32(w,(uint32_t)b.size);
+    write_raw(w,b.data,b.size);
+    return true;
+}
+
+bool tw_db_write_text(tw_db_writer *w,tw_db_bytes b) {
+    return (!b.size||b.data)&&utf8(b)&&tw_db_write_bytes(w,b);
+}
+
+bool tw_db_write_value(tw_db_writer *w,uint32_t max_bytes,tw_db_value v) {
+    if(v.payload.size>max_bytes||!valid_value(v.kind,v.payload)||
+        !room(w,5)||v.payload.size>w->capacity-w->size-5)return false;
+    uint8_t tag=(uint8_t)v.kind;
+    write_raw(w,&tag,1);
+    return tw_db_write_bytes(w,v.payload);
 }
 
 static tw_db_status sql_request(const tw_db_limits *limits,
