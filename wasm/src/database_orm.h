@@ -3,8 +3,8 @@
 
 #include "database_worker.h"
 
-/* Private native SQL provider, one explicitly selected driver per instance. The host supplies immutable paths and
- * trusted single-statement DML or side-effect-free SELECT templates in the
+/* Private native SQL provider, one explicitly selected driver per instance.
+ * The host supplies immutable paths and trusted single-statement DML or side-effect-free SELECT templates in the
  * same order as its policy. QUERY grants must not contain mutating functions,
  * RETURNING commands, or other state-changing statements.
  * There is no guest SQL string, native path or credential. Configuration
