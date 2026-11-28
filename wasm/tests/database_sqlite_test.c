@@ -25,17 +25,49 @@
 
 enum { SUBMIT=8,POLL,AWAIT,RECEIPT,READ,TAKE,CANCEL,DROP,PUT,GET };
 static const uint32_t masks[]={TW_DB_MASK(TW_DB_I64),TW_DB_MASK(TW_DB_BLOB)};
-static const tw_db_template templates[]={{"item.put",TW_DB_MASK(TW_DB_EXECUTE),masks,2}};
+static const tw_db_template templates[]={
+    {"item.put",TW_DB_MASK(TW_DB_EXECUTE),masks,2},
+    {"item.get",TW_DB_MASK(TW_DB_QUERY),masks,1}
+};
+static const tw_db_template read_templates[]={
+    {"item.get",TW_DB_MASK(TW_DB_QUERY),masks,1},
+    {"item.large",TW_DB_MASK(TW_DB_QUERY),NULL,0}
+};
 static const tw_db_alias aliases[]={
-    {"local",TW_DB_SQL,0,0,templates,1},{"readonly",TW_DB_SQL,0,0,NULL,0}
+    {"local",TW_DB_SQL,0,0,templates,2},{"readonly",TW_DB_SQL,0,0,read_templates,2}
 };
 static const tw_db_policy policy={{128,24,64,4,3,16},aliases,2};
-static const tw_db_capacity cap={2,0,0,4,64,32768};
+enum { PAGE_BYTES=112 };
+static const tw_db_capacity cap={2,0,1,4,PAGE_BYTES,32768};
 static const uint8_t local[]={5,0,0,0,'l','o','c','a','l'};
 static const uint8_t readonly[]={8,0,0,0,'r','e','a','d','o','n','l','y'};
 static const uint8_t put[]={8,0,0,0,'i','t','e','m','.','p','u','t',2,0,0,0,
     TW_DB_I64,8,0,0,0,7,0,0,0,0,0,0,0,TW_DB_BLOB,4,0,0,0,0,0xff,0x61,0};
 static const uint8_t payload[]={0,0xff,0x61,0};
+static const uint8_t get_query[]={8,0,0,0,'i','t','e','m','.','g','e','t',1,0,0,0,
+    TW_DB_I64,8,0,0,0,7,0,0,0,0,0,0,0};
+static const uint8_t large_query[]={10,0,0,0,'i','t','e','m','.','l','a','r','g','e',0,0,0,0};
+static const uint8_t two_rows[]={2,0,0,0};
+/* Golden metadata: count, name-presence flag, total rows, counted names. */
+static const uint8_t metadata[]={
+    7,0,0,0,1,0,0,0,2,0,0,0,0,0,0,0,
+    2,0,0,0,'i','d',
+    7,0,0,0,'p','a','y','l','o','a','d',
+    1,0,0,0,'n',
+    10,0,0,0,'e','m','p','t','y','_','b','l','o','b',
+    10,0,0,0,'e','m','p','t','y','_','t','e','x','t',
+    1,0,0,0,'f',3,0,0,0,'t','x','t'
+};
+static const uint8_t empty_metadata[]={7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+static const uint8_t eof_page[]={0,0,0,0,1,0,0,0};
+static const uint8_t first_page[]={
+    1,0,0,0,0,0,0,0,7,0,0,0,
+    TW_DB_I64,8,0,0,0,7,0,0,0,0,0,0,0,
+    TW_DB_BLOB,4,0,0,0,0,0xff,0x61,0,
+    TW_DB_NULL,0,0,0,0,TW_DB_BLOB,0,0,0,0,TW_DB_TEXT,0,0,0,0,
+    TW_DB_F64,8,0,0,0,0,0,0,0,0,0,0xf8,0x3f,
+    TW_DB_TEXT,3,0,0,0,0xe4,0xb8,0xad
+};
 
 typedef struct wake_signal {sync_mutex_t mutex;sync_cond_t cond;bool ready;} wake_signal;
 static void notify(void *context) {
@@ -95,6 +127,29 @@ static void receipt(turbowasm_instance *i,uint64_t op,tw_db_outcome outcome,size
     call(i,RECEIPT,&a,1,r,3);
     assert(r[0].as.i32==TW_DB_OK&&r[1].as.i32==(int32_t)outcome&&
         (uint64_t)r[2].as.i64==size);
+}
+static void check_bytes(turbowasm_instance *i,uint64_t op,
+    const uint8_t *expected,size_t size) {
+    receipt(i,op,TW_DB_SUCCESS,size);
+    /* Read the same immutable operation result in two passes, including
+       a nonzero offset. This never advances the provider cursor. */
+    size_t split=size/2;
+    for(unsigned pass=0;pass<2;++pass) {
+        size_t offset=pass?split:0,n=pass?size-split:split;
+        turbowasm_value args[]={i64(op),i64(offset),i64(1000+offset),i64(n)},r[2];
+        call(i,READ,args,4,r,2);
+        assert(r[0].as.i32==TW_DB_OK&&(uint64_t)r[1].as.i64==n);
+    }
+    for(size_t j=0;j<size;++j) {
+        turbowasm_value a=i32(1000+(uint32_t)j),v;
+        call(i,GET,&a,1,&v,1);assert(v.as.i32==expected[j]);
+    }
+}
+static void trap_read(turbowasm_instance *i,uint64_t op,size_t size) {
+    turbowasm_value a[]={i64(op),i64(0),i64(65535),i64(size)},r[2];
+    size_t count=0;turbowasm_trap trap=TURBOWASM_TRAP_NONE;
+    assert(turbowasm_instance_invoke(i,READ,a,4,r,2,&count,&trap)==TURBOWASM_TRAPPED);
+    assert(trap==TURBOWASM_TRAP_MEMORY_OUT_OF_BOUNDS);
 }
 static uint64_t take(turbowasm_instance *i,uint64_t op) {
     turbowasm_value a=i64(op),r[2];call(i,TAKE,&a,1,r,2);
@@ -216,16 +271,24 @@ int main(void) {
 #endif
     host_database(driver,filename,true);
 
-    const char *const statements[]={"INSERT INTO items(id,payload) VALUES(?1,?2)"};
-    const tw_db_sqlite_alias native_aliases[]={
-        {filename,false,statements,1},{filename,true,NULL,0}
+    const char *select_sql=
+        "SELECT items.id+offsets.n AS id,payload,NULL AS n,X'' AS empty_blob,"
+        "'' AS empty_text,1.5 AS f,CAST(X'E4B8AD' AS TEXT) AS txt FROM items "
+        "CROSS JOIN (SELECT 0 AS n UNION ALL SELECT 1) AS offsets "
+        "WHERE items.id=?1 ORDER BY offsets.n";
+    const char *const statements[]={
+        "INSERT INTO items(id,payload) VALUES(?1,?2)",select_sql
     };
-    const tw_db_sqlite_config native_config={driver,native_aliases,2,2,16384,
+    const char *const read_statements[]={select_sql,"SELECT zeroblob(65) AS large_value"};
+    const tw_db_sqlite_alias native_aliases[]={
+        {filename,false,statements,2},{filename,true,read_statements,2}
+    };
+    const tw_db_sqlite_config native_config={driver,native_aliases,2,2,1,16384,
         1000,8,4096,4096,65536};
     tw_db_sqlite sqlite={0};
     assert(tw_db_sqlite_init(&sqlite,&policy,&native_config)==TW_DB_OK);
     tw_db_worker worker={0};tw_db_bridge bridge={0};tw_db_dispatch dispatch={0};
-    const tw_db_worker_config wc={4,64,16384,UINT64_C(30000000000),
+    const tw_db_worker_config wc={4,PAGE_BYTES,16384,UINT64_C(30000000000),
         tw_db_sqlite_execute,&sqlite};
     assert(tw_db_worker_init(&worker,&bridge,&wc,&dispatch)==TW_DB_OK);
     assert(tw_db_bridge_init(&bridge,&policy,&cap,&dispatch)==TW_DB_OK);
@@ -261,6 +324,63 @@ int main(void) {
     settle(&bridge,&worker,&wake,&instance,op);receipt(&instance,op,TW_DB_SUCCESS,0);
     uint64_t ro=take(&instance,op);
     assert(submit(&instance,TW_DB_EXECUTE,ro,put,sizeof put,TW_DB_DENIED)==0);
+    op=submit(&instance,TW_DB_QUERY,ro,get_query,sizeof get_query,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);
+    check_bytes(&instance,op,metadata,sizeof metadata);
+    uint64_t cursor=take(&instance,op);
+    assert(submit(&instance,TW_DB_CLOSE,ro,NULL,0,TW_DB_BUSY)==0);
+    assert(submit(&instance,TW_DB_QUERY,db,get_query,sizeof get_query,TW_DB_LIMIT)==0);
+
+    op=submit(&instance,TW_DB_FETCH,cursor,two_rows,sizeof two_rows,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);
+    trap_read(&instance,op,sizeof first_page);
+    check_bytes(&instance,op,first_page,sizeof first_page);
+    single(&instance,DROP,op,TW_DB_OK);
+    uint8_t second_page[sizeof first_page];
+    memcpy(second_page,first_page,sizeof second_page);
+    second_page[4]=1; /* EOF */
+    second_page[17]=8; /* second row's integer id */
+    op=submit(&instance,TW_DB_FETCH,cursor,two_rows,sizeof two_rows,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);
+    check_bytes(&instance,op,second_page,sizeof second_page);
+    single(&instance,DROP,op,TW_DB_OK);
+    op=submit(&instance,TW_DB_FETCH,cursor,two_rows,sizeof two_rows,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);
+    check_bytes(&instance,op,eof_page,sizeof eof_page);
+    single(&instance,DROP,op,TW_DB_OK);
+    op=submit(&instance,TW_DB_CLOSE,cursor,NULL,0,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);
+    receipt(&instance,op,TW_DB_SUCCESS,0);single(&instance,DROP,op,TW_DB_OK);
+    assert(submit(&instance,TW_DB_FETCH,cursor,two_rows,sizeof two_rows,TW_DB_INVALID_HANDLE)==0);
+
+    /* Empty SELECT preserves native column count, not invented metadata. */
+    uint8_t empty_query[sizeof get_query];
+    memcpy(empty_query,get_query,sizeof empty_query);empty_query[21]=99;
+    op=submit(&instance,TW_DB_QUERY,ro,empty_query,sizeof empty_query,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);
+    check_bytes(&instance,op,empty_metadata,sizeof empty_metadata);
+    cursor=take(&instance,op);
+    op=submit(&instance,TW_DB_FETCH,cursor,two_rows,sizeof two_rows,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);
+    check_bytes(&instance,op,eof_page,sizeof eof_page);single(&instance,DROP,op,TW_DB_OK);
+    op=submit(&instance,TW_DB_CLOSE,cursor,NULL,0,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);
+    receipt(&instance,op,TW_DB_SUCCESS,0);single(&instance,DROP,op,TW_DB_OK);
+
+    /* Oversize value cannot publish a cursor that would never fit a page. */
+    op=submit(&instance,TW_DB_QUERY,ro,large_query,sizeof large_query,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);
+    receipt(&instance,op,TW_DB_FAILED_NO_EFFECT,0);
+    single(&instance,DROP,op,TW_DB_OK);
+
+    /* Real native held result disposal uses the existing same-slot CLOSE. */
+    op=submit(&instance,TW_DB_QUERY,ro,get_query,sizeof get_query,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);
+    check_bytes(&instance,op,metadata,sizeof metadata);
+    single(&instance,DROP,op,TW_DB_PENDING);
+    settle(&bridge,&worker,&wake,&instance,op);
+    receipt(&instance,op,TW_DB_SUCCESS,0);
+    single(&instance,DROP,op,TW_DB_OK);
     op=submit(&instance,TW_DB_CLOSE,ro,NULL,0,TW_DB_OK);
     settle(&bridge,&worker,&wake,&instance,op);receipt(&instance,op,TW_DB_SUCCESS,0);
     single(&instance,DROP,op,TW_DB_OK);

@@ -111,6 +111,18 @@ typedef struct tw_db_request {
 bool tw_db_read_value(tw_db_reader *reader, uint32_t max_bytes, tw_db_value *out);
 bool tw_db_read_bytes(tw_db_reader *reader, uint32_t max_bytes, tw_db_bytes *out);
 
+/* Canonical result writer. Each write checks full bounds and leaves the
+ * logical writer position unchanged on failure. No allocation. */
+typedef struct tw_db_writer {
+    uint8_t *data;
+    size_t capacity, size;
+} tw_db_writer;
+bool tw_db_write_u32(tw_db_writer *writer,uint32_t value);
+bool tw_db_write_u64(tw_db_writer *writer,uint64_t value);
+bool tw_db_write_bytes(tw_db_writer *writer,tw_db_bytes bytes);
+bool tw_db_write_text(tw_db_writer *writer,tw_db_bytes bytes);
+bool tw_db_write_value(tw_db_writer *writer,uint32_t max_bytes,tw_db_value value);
+
 /* Decode and authorize a fully copied request. On error out is unchanged.
  * No provider invocation, allocation, or external effect occurs here. */
 tw_db_status tw_db_admit(const tw_db_policy *policy, tw_db_owner owner,
