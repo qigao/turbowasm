@@ -390,6 +390,60 @@
     }
   ],
   "targets": {
+    "turbowasm_database_bridge_test": {
+      "kind": "executable",
+      "extends": [
+        "assertions"
+      ],
+      "private": {
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_database_core",
+          "turbowasm"
+        ]
+      },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
+      "sources": {
+        "files": [
+          "database_bridge_test.c"
+        ]
+      }
+    },
+    "turbowasm_database_bridge_mir_test": {
+      "kind": "executable",
+      "extends": [
+        "assertions"
+      ],
+      "private": {
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_database_core",
+          "turbowasm_mir_backend",
+          "turbowasm"
+        ],
+        "defines": {
+          "TW_DB_TEST_MIR": "1"
+        }
+      },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
+      "sources": {
+        "files": [
+          "database_bridge_test.c"
+        ]
+      }
+    },
     "turbowasm_database_lifecycle_test": {
       "kind": "executable",
       "extends": [

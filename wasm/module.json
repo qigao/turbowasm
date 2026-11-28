@@ -487,7 +487,8 @@
         "files": [
           "src/database_wire.c",
           "src/database_policy.c",
-          "src/database_lifecycle.c"
+          "src/database_lifecycle.c",
+          "src/database_bridge.c"
         ]
       },
       "private": {

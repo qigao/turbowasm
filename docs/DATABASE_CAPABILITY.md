@@ -372,3 +372,45 @@ completion, transaction/cursor dependency, uncertain outcome, cleanup and
 allocation failures. This does not yet qualify provider dispatch, native driver
 cancellation, actual guest submit/await/read/drop imports or owner-affine
 completion routing. Those are M1b2 and later native backend slices.
+
+## 9. M1b2 private Core import bridge (#441)
+
+`database_bridge.{h,c}` composes the existing admission and lifecycle core
+with the eight proposed Core imports. The adapter is internal, not installed.
+An owner initializes it with immutable copied policy and nonblocking
+provider start/cancel callbacks. Registration precedes instantiation; the
+owner explicitly binds the resulting live instance. Before binding (including
+module start) and after stop, all imports deny access. Every import checks the
+live opaque instance identity before reading memory, looking up handles or
+dispatching. The embedding host must preserve the bridge, provider and instance
+lifetime contract; a new instance requires a new bridge.
+
+Submit copies protected guest memory into precharged scratch, then transfers
+a snapshot into reserved manager storage. It dispatches exactly once. The
+provider may complete inline or post a terminal receipt to the same owner.
+No provider callback may block the Wasm owner, reenter guest code or retain
+a guest pointer. The bridge charges its scratch and metadata against the same
+host budget. Read copies immutable result data through the protected runtime
+memory API; a trap cannot replay or consume a result.
+
+Pending await is allowed only in an execution resumed through the bridge
+owner entry point. The exact execution identity and Runtime generation-tagged
+wait are retained until resume/unwind. Owner completion records a receipt;
+wake verifies the matching execution/wait and records the Runtime completion
+without running guest instructions. A completion before await returns
+immediately. Destroying a suspended execution sends one cancellation
+notification and unwinds its callback; native operation storage remains
+owned until terminal drain. Stop denies guest work; after executions,
+instances and linkers are destroyed, detach gives trusted host cleanup access
+to the manager. Destroy remains BUSY until resources are drained. A complete
+automatic shutdown enumerator, scheduler integration, native providers and
+installed guest SDK are follow-up gates.
+
+A Core Wasm fixture implements all eight exact multi-result signatures plus
+memory read/write instructions. The deterministic provider test covers
+unbound and wrong-instance denial, copied requests, missing imports,
+completion before and after await, exact wake, repeat/invalid completions,
+cancellation, guest output OOB followed by successful retry, quarantine
+and explicit close, suspended execution destruction and late terminal drain.
+Register interpreter and actual MIR variants in the normal formal CTest graph.
+Native driver effects remain outside this slice.
