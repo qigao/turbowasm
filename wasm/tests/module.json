@@ -390,6 +390,70 @@
     }
   ],
   "targets": {
+    "turbowasm_database_sqlite_test": {
+      "kind": "executable",
+      "extends": [
+        "assertions"
+      ],
+      "private": {
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_database_sqlite",
+          "turbowasm_database_worker",
+          "turbowasm_database_core",
+          "turbowasm",
+          "turbodb_orm",
+          "saltsbase_core",
+          "cmeta_cflow"
+        ]
+      },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
+      "sources": {
+        "files": [
+          "database_sqlite_test.c"
+        ]
+      }
+    },
+    "turbowasm_database_sqlite_mir_test": {
+      "kind": "executable",
+      "extends": [
+        "assertions"
+      ],
+      "private": {
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_database_sqlite",
+          "turbowasm_database_worker",
+          "turbowasm_database_core",
+          "turbowasm",
+          "turbodb_orm",
+          "saltsbase_core",
+          "cmeta_cflow",
+          "turbowasm_mir_backend"
+        ],
+        "defines": {
+          "TW_DB_TEST_MIR": "1"
+        }
+      },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
+      "sources": {
+        "files": [
+          "database_sqlite_test.c"
+        ]
+      }
+    },
     "turbowasm_database_worker_test": {
       "kind": "executable",
       "extends": [

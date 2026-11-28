@@ -76,6 +76,21 @@
       },
       "source": "0c125bd511786ea91c636866d7c4feef008b6531",
       "release_id": 455817981
+    },
+    {
+      "repo": "turbodb",
+      "version": "0.1.4",
+      "root": "TURBODB_ROOT",
+      "pkg": "TurboDB",
+      "producer": "45235859548",
+      "manifest": {
+        "name": "turbodb-0.1.4-manifest.json",
+        "url": "https://github.com/qigao/turbodb/releases/download/v0.1.4/turbodb-0.1.4-manifest.json",
+        "sha256": "06187558de9a1045b3f0084df41f6c0d7857ab94a18823bc52f484e53ab9d61f",
+        "size": 36195
+      },
+      "source": "42f052a958ffac29e93b47cf63956fcb255762e3",
+      "release_id": 455819751
     }
   ],
   "profiles": {
@@ -115,6 +130,13 @@
           "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-linux-clang-x64.tar",
           "sha256": "770b479b0853d2e76b23759c17cf52cb93165252136efc147f688a6ca273e921",
           "size": 2764800,
+          "profile": "linux-clang-x64"
+        },
+        "turbodb": {
+          "name": "turbodb-0.1.4-linux-clang-x64.tar",
+          "url": "https://github.com/qigao/turbodb/releases/download/v0.1.4/turbodb-0.1.4-linux-clang-x64.tar",
+          "sha256": "eb32d3bab5ba43dbae32200fa43e700aa6a7abe7d5bc7c54ce335781b121ebb8",
+          "size": 5345280,
           "profile": "linux-clang-x64"
         }
       }
@@ -156,6 +178,13 @@
           "sha256": "1f7553fa909dff703315b61189119f2d8b7daa14be0c99fee397f03225972c37",
           "size": 2887680,
           "profile": "linux-clang-arm64"
+        },
+        "turbodb": {
+          "name": "turbodb-0.1.4-linux-clang-arm64.tar",
+          "url": "https://github.com/qigao/turbodb/releases/download/v0.1.4/turbodb-0.1.4-linux-clang-arm64.tar",
+          "sha256": "292ce5556ed1e999d25f6c44fda172846852d92970b8b8308956c80cdbf60a1c",
+          "size": 4587520,
+          "profile": "linux-clang-arm64"
         }
       }
     },
@@ -195,6 +224,13 @@
           "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-macos-clang-arm64.tar",
           "sha256": "358123cd51db34c614ee9c2f07d5767ff1363cd35d20403316097cfc4f4487f1",
           "size": 2338304,
+          "profile": "macos-clang-arm64"
+        },
+        "turbodb": {
+          "name": "turbodb-0.1.4-macos-clang-arm64.tar",
+          "url": "https://github.com/qigao/turbodb/releases/download/v0.1.4/turbodb-0.1.4-macos-clang-arm64.tar",
+          "sha256": "7cda2e45abce6f458154c840c9d037108f01586f09525a26f762380356776014",
+          "size": 3763712,
           "profile": "macos-clang-arm64"
         }
       }
@@ -236,6 +272,13 @@
           "sha256": "d2b9d8051ff9fff3734a47ec8163f0545d3ae7ee638134f998ec5c3907b4024c",
           "size": 2947584,
           "profile": "windows-llvm-mingw-x64"
+        },
+        "turbodb": {
+          "name": "turbodb-0.1.4-windows-llvm-mingw-x64.tar",
+          "url": "https://github.com/qigao/turbodb/releases/download/v0.1.4/turbodb-0.1.4-windows-llvm-mingw-x64.tar",
+          "sha256": "5de7413cf0c55253b7fdb3999f9bcc359d45342effa8f424fe2eca97efd9bc34",
+          "size": 2995200,
+          "profile": "windows-llvm-mingw-x64"
         }
       }
     },
@@ -275,6 +318,13 @@
           "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-windows-llvm-mingw-arm64.tar",
           "sha256": "2181375404bcfdff181b13ef816cf64b89fdfa52758cf4a2bb9598b6cdf6ac1b",
           "size": 2784768,
+          "profile": "windows-llvm-mingw-arm64"
+        },
+        "turbodb": {
+          "name": "turbodb-0.1.4-windows-llvm-mingw-arm64.tar",
+          "url": "https://github.com/qigao/turbodb/releases/download/v0.1.4/turbodb-0.1.4-windows-llvm-mingw-arm64.tar",
+          "sha256": "d431b8e796a6e857c87d02826589a86f502c57371c8059562d76d8e9e7f7169e",
+          "size": 2384384,
           "profile": "windows-llvm-mingw-arm64"
         }
       }
@@ -316,6 +366,13 @@
           "sha256": "bc2557c362fec471da86e078ab19eab72acfdcfee0fc1495651f39568754e2d5",
           "size": 3123200,
           "profile": "android-x64"
+        },
+        "turbodb": {
+          "name": "turbodb-0.1.4-android-x64.tar",
+          "url": "https://github.com/qigao/turbodb/releases/download/v0.1.4/turbodb-0.1.4-android-x64.tar",
+          "sha256": "d951f9cc3a0a256b3b690e8eba643875199d074df899f2d0f6661060048968ad",
+          "size": 11089920,
+          "profile": "android-x64"
         }
       }
     },
@@ -355,6 +412,13 @@
           "url": "https://github.com/qigao/chttp/releases/download/v0.1.6/chttp-0.1.6-android-arm64.tar",
           "sha256": "867b3f4a230e19a1c367b16c6d735f43204afafaab65ef590043e38fa168966d",
           "size": 3256320,
+          "profile": "android-arm64"
+        },
+        "turbodb": {
+          "name": "turbodb-0.1.4-android-arm64.tar",
+          "url": "https://github.com/qigao/turbodb/releases/download/v0.1.4/turbodb-0.1.4-android-arm64.tar",
+          "sha256": "1b75b15466c028ed99402cc09c3bb57e74b17afc4561b316508fc13037c55c9d",
+          "size": 10649600,
           "profile": "android-arm64"
         }
       }

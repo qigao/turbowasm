@@ -495,3 +495,70 @@ bounded result copy, blocked running cancellation with unknown outcome,
 queued cancellation before native dispatch, and ordered shutdown/drain.
 Native SQLite durability and driver lifecycle are still M2 (#442);
 nonblocking MySQL/Redis integration is separately tracked in #443/#444.
+
+## 12. M2a native SQLite command slice (#442)
+
+Pin TurboDB v0.1.4 (source 42f052a958ffac29e93b47cf63956fcb255762e3,
+producer 45235859548) in the existing SDK lock and curl restoration path.
+The producer's CI records the exact same cache 0.1.9, Base 0.1.11,
+CMeta 0.1.11, Utils 0.1.10 and CNet 0.1.20 inputs; all seven target archives
+and manifest are bound by their published sizes and SHA-256 digests.
+The new private target links Orm::C; TurboWasm::Runtime does not link it.
+The driver module is explicitly loaded from the host's absolute path, using
+canonical driver ID sqlite. No new download mechanism or consumer probe.
+
+This initial provider admits only OPEN_SQL, EXECUTE and CLOSE with host
+immutable configuration: absolute pre-existing database file, read-only or
+read-write mode, and one-to-one trusted single-statement DML templates
+matching the copied policy ordinals. Paths and SQL templates are borrowed
+host configuration through worker join; no guest path or SQL crosses the
+boundary. Initialization rejects grants for Redis, queries or transactions,
+rather than advertising incomplete operations. Host prepares its schema;
+SQLite open does not create files implicitly. Read-only aliases admit no
+write templates and use native open_mode=read_only. The serial worker owns
+the ORM runtime and fixed native connection slots, loads the driver explicitly,
+binds typed counted values through orm_raw/orm_query_bind, and closes/releases
+leases and runtime on that same lane. Successful EXECUTE returns an unsigned
+little-endian 64-bit affected-row count. Failure before entering query execution
+is known no-effect; any failure after entry is conservatively unknown and
+quarantines the owner. The synchronous ORM API cannot guarantee hard
+interruption once entered; no fake cancellation or rollback claim.
+
+Formal interpreter/MIR tests use the real Core Wasm imports, CFlow worker,
+released SQLite plugin and a native file. Host-only schema setup precedes
+guest work; the guest inserts a parameterized binary value including NUL,
+reads the affected-row receipt, opens a read-only alias and observes policy
+denial, then tests a duplicate-key failure and owner quarantine. Shutdown
+closes the remaining native connection. A new host ORM connection after
+worker join verifies the persisted row and exact blob; it is not an installed
+consumer test or guest query. Query/FETCH result codec and transaction
+commit/rollback are subsequent M2 slices; no native query-from-WASM or
+transaction support claimed here. Android remains cross-build only.
+
+### Windows explicit-path plugin loading (M2a CI #930)
+
+CMeta v0.1.11 loads absolute plugin paths with
+`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`.
+The ordinary Windows PATH used to start the test executable is not sufficient
+to admit dependencies of a separately installed plugin. The Windows embedding
+host must explicitly register its trusted SDK DLL directories before loading
+the driver. The native SQLite test registers the selected TurboDB, SaltsBase, SaltsUtils,
+SaltsCNet and exact vcpkg target triplet bin directories with AddDllDirectory,
+retains their cookies across setup, worker execution and final reopen, and
+removes the directories only after all runtime/plugin leases are unloaded. No global
+loader-policy change, implicit discovery, DLL copying or fallback loader.
+Print the ORM error category/detail if driver admission fails; do not treat
+an OS loader failure as a database query failure. This fix targets the
+Windows-only driver-load failure observed before SQL execution in CI #930.
+
+CI #931 confirmed ORM_STATUS_DRIVER_LOAD_ERROR (21, load driver Plugin:
+load_failed) on both Windows architectures after the initial three SDK bin
+directories were admitted. The producer CI 45235859548 deploys runtime DLLs
+from the selected vcpkg triplet/bin and Salts SDKs before running formal
+plugin tests. Both locked LLVM-MinGW triplets in vcpkg-cache v0.1.9 declare
+VCPKG_LIBRARY_LINKAGE dynamic. The first fix omitted this runtime closure.
+Extend the explicit test host registration to the matching vcpkg triplet/bin
+and SaltsCNet/bin (CMeta's static SDK has no bin requirement). This does not
+alter the loader, use PATH as a plugin search policy, copy DLLs or disable
+tests. The exact missing PE import is not reported by the released loader;
+the corrected closure still requires the actual Windows CTest result.
