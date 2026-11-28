@@ -542,11 +542,23 @@ CMeta v0.1.11 loads absolute plugin paths with
 The ordinary Windows PATH used to start the test executable is not sufficient
 to admit dependencies of a separately installed plugin. The Windows embedding
 host must explicitly register its trusted SDK DLL directories before loading
-the driver. The native SQLite test registers only the selected TurboDB,
-SaltsBase and SaltsUtils bin directories with AddDllDirectory, retains their
-cookies across setup, worker execution and final reopen, and removes the
-directories only after all runtime/plugin leases are unloaded. No global
+the driver. The native SQLite test registers the selected TurboDB, SaltsBase, SaltsUtils,
+SaltsCNet and exact vcpkg target triplet bin directories with AddDllDirectory,
+retains their cookies across setup, worker execution and final reopen, and
+removes the directories only after all runtime/plugin leases are unloaded. No global
 loader-policy change, implicit discovery, DLL copying or fallback loader.
 Print the ORM error category/detail if driver admission fails; do not treat
 an OS loader failure as a database query failure. This fix targets the
 Windows-only driver-load failure observed before SQL execution in CI #930.
+
+CI #931 confirmed ORM_STATUS_DRIVER_LOAD_ERROR (21, load driver Plugin:
+load_failed) on both Windows architectures after the initial three SDK bin
+directories were admitted. The producer CI 45235859548 deploys runtime DLLs
+from the selected vcpkg triplet/bin and Salts SDKs before running formal
+plugin tests. Both locked LLVM-MinGW triplets in vcpkg-cache v0.1.9 declare
+VCPKG_LIBRARY_LINKAGE dynamic. The first fix omitted this runtime closure.
+Extend the explicit test host registration to the matching vcpkg triplet/bin
+and SaltsCNet/bin (CMeta's static SDK has no bin requirement). This does not
+alter the loader, use PATH as a plugin search policy, copy DLLs or disable
+tests. The exact missing PE import is not reported by the released loader;
+the corrected closure still requires the actual Windows CTest result.

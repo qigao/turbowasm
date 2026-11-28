@@ -122,13 +122,15 @@ static void settle(tw_db_bridge *bridge,tw_db_worker *worker,wake_signal *wake,
 #ifdef _WIN32
 /* The CMeta explicit-path loader uses DLL_LOAD_DIR | DEFAULT_DIRS. PATH
  * permits the test executable's initial imports, but is not a trusted
- * plugin dependency directory. Admit only the selected SDKs' bin roots.
+ * plugin dependency directory. Admit the selected SDK and dynamic vcpkg
+ * triplet bin roots, including the SQLite driver dependency closure.
  * Keep these cookies alive through the final ORM runtime/plugin unload. */
-static DLL_DIRECTORY_COOKIE add_sdk_bin(const char *variable) {
+static DLL_DIRECTORY_COOKIE add_runtime_bin(const char *variable,const char *target) {
     const char *root=getenv(variable);
     assert(root&&*root);
     char path[4096];
-    int n=snprintf(path,sizeof path,"%s/bin",root);
+    int n=target?snprintf(path,sizeof path,"%s/%s/bin",root,target):
+        snprintf(path,sizeof path,"%s/bin",root);
     assert(n>0&&(size_t)n<sizeof path);
     wchar_t wide[4096];
     int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,path,-1,wide,
@@ -138,7 +140,7 @@ static DLL_DIRECTORY_COOKIE add_sdk_bin(const char *variable) {
     DLL_DIRECTORY_COOKIE cookie=AddDllDirectory(wide);
     if(!cookie)
         fprintf(stderr,"AddDllDirectory failed for %s (Win32 error %lu)\n",
-            variable,(unsigned long)GetLastError());
+            path,(unsigned long)GetLastError());
     assert(cookie);
     return cookie;
 }
@@ -198,10 +200,18 @@ int main(void) {
     n=snprintf(filename,sizeof filename,"%s/turbowasm-db-%d.sqlite",cwd,process_id());
     assert(n>0&&(size_t)n<sizeof filename);
 #ifdef _WIN32
+    const char *triplet=getenv("VCPKG_TARGET_TRIPLET");
+    assert(triplet&&*triplet);
+    /* Match the release producer's selected runtime closure. Its Windows
+       LLVM-MinGW triplets are dynamic: sqlite3 and its dependencies live in
+       the vcpkg triplet bin, not in the TurboDB SDK. Do not search PATH or
+       the other architecture's installed tree. */
     const DLL_DIRECTORY_COOKIE sdk_dirs[]={
-        add_sdk_bin("TURBODB_ROOT"),
-        add_sdk_bin("SALTS_BASE_ROOT"),
-        add_sdk_bin("SALTS_UTILS_ROOT")
+        add_runtime_bin("TURBODB_ROOT",NULL),
+        add_runtime_bin("SALTS_BASE_ROOT",NULL),
+        add_runtime_bin("SALTS_UTILS_ROOT",NULL),
+        add_runtime_bin("SALTSCORE_ROOT",NULL),
+        add_runtime_bin("VCPKG_INSTALLED_DIR",triplet)
     };
 #endif
     host_database(driver,filename,true);
