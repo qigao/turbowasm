@@ -3,7 +3,7 @@
 #include <wasi_native_io.h>
 
 #include <core/error_codes.h>
-#include <salts/native_io.h>
+#include <native_io.h>
 
 #ifdef NDEBUG
 #undef NDEBUG

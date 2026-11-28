@@ -1,6 +1,6 @@
-#include <native_io.h>
+#include <turbowasm_native_io.h>
 
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 int main(void) {
     native_io_backend backend = {0};

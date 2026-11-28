@@ -1,4 +1,4 @@
-#include "../include/native_io.h"
+#include "../include/turbowasm_native_io.h"
 #include <turbowasm.h>
 
 #include <core/error_codes.h>

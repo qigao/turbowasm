@@ -4,7 +4,7 @@
 #include <execution.h>
 #include <link.h>
 
-#include <salts/native_io.h>
+#include <native_io.h>
 
 #include <stdbool.h>
 #include <stddef.h>

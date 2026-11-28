@@ -3,7 +3,7 @@
 
 #include "wasi02_poll.h"
 
-#include <salts/native_io.h>
+#include <native_io.h>
 
 #include <stddef.h>
 #include <stdint.h>
