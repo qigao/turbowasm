@@ -1,4 +1,4 @@
-#include "../src/wasi02_cnet.h"
+#include "../src/wasi02_cnet_internal.h"
 
 #include <wasi02_sockets.h>
 

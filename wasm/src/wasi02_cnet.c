@@ -1,4 +1,4 @@
-#include "wasi02_cnet.h"
+#include "wasi02_cnet_internal.h"
 #include "runtime_alloc.h"
 #include <wasi_cnet.h>
 

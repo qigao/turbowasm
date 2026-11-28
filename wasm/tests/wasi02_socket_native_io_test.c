@@ -1,5 +1,5 @@
 #include "../src/wasi02_poll_native_io.h"
-#include "../src/wasi02_sockets.h"
+#include "../src/wasi02_sockets_internal.h"
 
 #include <turbowasm.h>
 

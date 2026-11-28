@@ -5,7 +5,7 @@
 #include "wasi02_filesystem.h"
 #include "wasi02_poll.h"
 #include "wasi02_streams.h"
-#include "wasi02_sockets.h"
+#include "wasi02_sockets_internal.h"
 
 typedef struct turbowasm_wasi02_exec_capabilities {
     turbowasm_wasi02_provider *provider;
