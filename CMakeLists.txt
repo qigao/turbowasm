@@ -110,6 +110,17 @@ else()
   target_compile_options(turbowasm_database_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Native database dispatch stays private and outside Runtime.
+add_library(turbowasm_database_worker STATIC wasm/src/database_worker.c)
+target_compile_features(turbowasm_database_worker PRIVATE c_std_11)
+target_include_directories(turbowasm_database_worker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/wasm/src")
+target_link_libraries(turbowasm_database_worker PRIVATE turbowasm_database_core TurboWasm::Runtime CMeta::CFlow Salts::Core)
+if(MSVC)
+  target_compile_options(turbowasm_database_worker PRIVATE /W4)
+else()
+  target_compile_options(turbowasm_database_worker PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(TURBOWASM_ENABLE_COMPONENT)
   add_library(turbowasm_component
     wasm/src/component_api.c
