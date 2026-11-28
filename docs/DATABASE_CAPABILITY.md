@@ -607,3 +607,47 @@ BLOB, empty TEXT, float, UTF-8), exact metadata, byte-bounded pagination,
 repeat EOF, output trap/re-read, parent/limit admission, stale cursor tokens,
 empty result metadata, oversize row rejection, and real untaken cursor
 disposal. Transaction execution is still M2c; the adapter is still private.
+
+## 14. M2c worker-owned native SQLite transactions (#442)
+
+The provider adds a bounded transaction slot table. The guest's resource
+manager reserves a transaction and pins the connection before dispatch.
+The worker reserves the native slot before BEGIN and retains the actual
+ORM transaction and its parent connection index on the same CFlow serial
+lane. Named EXECUTE and QUERY route through orm_query_execute_in_transaction;
+the same canonical result cursor can be parented by a transaction. A live
+cursor prevents terminal transaction control until it is closed.
+
+SQLite v0.1.4 advertises ORM_DRIVER_CAP_TRANSACTION but no named isolation
+flags. Its implementation issues ordinary BEGIN for every valid ORM
+isolation enum. Admit only TW_DB_ISOLATION_DEFAULT on a writable alias;
+ORM_ISOLATION_SERIALIZABLE is the API carrier for native BEGIN, not a
+separate guest promise of a selectable isolation level. Reject explicit
+isolation and read-only transaction grants at initialization, and deny
+ungranted BEGIN before dispatch. Savepoints are not exposed.
+
+Successful COMMIT or ROLLBACK consumes the transaction only after checked
+orm_transaction_close and release. CLOSE of a known-active transaction
+rolls it back; this includes automatic untaken-result disposal and
+detached shutdown. A failed COMMIT returns OUTCOME_UNKNOWN conservatively,
+retaining the transaction and quarantining its parent. Do not retry COMMIT.
+If ORM specifically reports COMMIT_UNKNOWN, its checked close contract
+allows release without another commit or rollback. Otherwise CLOSE
+attempts rollback on the retained active transaction. Failed rollback or
+checked close is sticky, preserves native ownership and requires explicit
+host recovery or fail-fast shutdown; no legacy destroy/implicit retry.
+The host's monotonic operation deadline and cooperative cancellation do
+not guarantee interruption of an already entered synchronous SQLite call.
+A hard transaction-duration watchdog is not supplied by this slice.
+
+Extend real WASM/ORM interpreter and MIR CTests with default isolation,
+read-only and unsupported isolation denial; in-transaction write/read and
+cursor pin; visibility on a second native connection before/after commit;
+explicit rollback; stale transaction rejection; untaken BEGIN rollback;
+actual deferred foreign-key constraint failure at COMMIT, no replay,
+checked rollback/close; and detached shutdown of an active transaction
+with a live cursor. After all leases and workers drain, reopen the native
+file and verify only the original and committed rows survive, with exact
+binary values. No new CI profile or test project. The adapter remains
+private; MySQL/Redis, hard interruption, full fault qualification and
+installed guest/host SDK remain separate gates.

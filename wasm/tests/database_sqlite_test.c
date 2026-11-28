@@ -24,21 +24,22 @@
 #endif
 
 enum { SUBMIT=8,POLL,AWAIT,RECEIPT,READ,TAKE,CANCEL,DROP,PUT,GET };
-static const uint32_t masks[]={TW_DB_MASK(TW_DB_I64),TW_DB_MASK(TW_DB_BLOB)};
+static const uint32_t masks[]={TW_DB_MASK(TW_DB_I64),TW_DB_MASK(TW_DB_BLOB),TW_DB_MASK(TW_DB_I64)};
 static const tw_db_template templates[]={
     {"item.put",TW_DB_MASK(TW_DB_EXECUTE),masks,2},
-    {"item.get",TW_DB_MASK(TW_DB_QUERY),masks,1}
+    {"item.get",TW_DB_MASK(TW_DB_QUERY),masks,1},
+    {"item.ref",TW_DB_MASK(TW_DB_EXECUTE),masks,3}
 };
 static const tw_db_template read_templates[]={
     {"item.get",TW_DB_MASK(TW_DB_QUERY),masks,1},
     {"item.large",TW_DB_MASK(TW_DB_QUERY),NULL,0}
 };
 static const tw_db_alias aliases[]={
-    {"local",TW_DB_SQL,0,0,templates,2},{"readonly",TW_DB_SQL,0,0,read_templates,2}
+    {"local",TW_DB_SQL,TW_DB_MASK(TW_DB_ISOLATION_DEFAULT),0,templates,3},{"readonly",TW_DB_SQL,0,0,read_templates,2}
 };
 static const tw_db_policy policy={{128,24,64,4,3,16},aliases,2};
 enum { PAGE_BYTES=112 };
-static const tw_db_capacity cap={2,0,1,4,PAGE_BYTES,32768};
+static const tw_db_capacity cap={2,1,1,4,PAGE_BYTES,32768};
 static const uint8_t local[]={5,0,0,0,'l','o','c','a','l'};
 static const uint8_t readonly[]={8,0,0,0,'r','e','a','d','o','n','l','y'};
 static const uint8_t put[]={8,0,0,0,'i','t','e','m','.','p','u','t',2,0,0,0,
@@ -48,6 +49,8 @@ static const uint8_t get_query[]={8,0,0,0,'i','t','e','m','.','g','e','t',1,0,0,
     TW_DB_I64,8,0,0,0,7,0,0,0,0,0,0,0};
 static const uint8_t large_query[]={10,0,0,0,'i','t','e','m','.','l','a','r','g','e',0,0,0,0};
 static const uint8_t two_rows[]={2,0,0,0};
+static const uint8_t default_isolation[]={0,0,0,0};
+static const uint8_t serializable[]={TW_DB_ISOLATION_SERIALIZABLE,0,0,0};
 /* Golden metadata: count, name-presence flag, total rows, counted names. */
 static const uint8_t metadata[]={
     7,0,0,0,1,0,0,0,2,0,0,0,0,0,0,0,
@@ -223,21 +226,59 @@ static void host_database(const char *driver,const char *filename,bool setup) {
     orm_connection_t *db=NULL;
     assert(orm_runtime_connect(rt,&connect,&db,&error)==ORM_STATUS_OK);
     orm_query_t *q=NULL;orm_result_t *result=NULL;
-    const char *sql=setup?"CREATE TABLE items(id INTEGER PRIMARY KEY,payload BLOB NOT NULL)":
+    const char *sql=setup?"CREATE TABLE items(id INTEGER PRIMARY KEY,payload BLOB NOT NULL,"
+        "parent_id INTEGER REFERENCES items(id) DEFERRABLE INITIALLY DEFERRED)":
         "SELECT id,payload FROM items ORDER BY id";
     assert(orm_raw(db,orm_view(sql),&q,&error)==ORM_STATUS_OK);
     assert(orm_query_execute(q,&result,&error)==ORM_STATUS_OK);
     if(!setup) {
         uint64_t rows=0;int64_t id=0;orm_blob_t blob={0};
-        assert(orm_result_row_count(result,&rows,&error)==ORM_STATUS_OK&&rows==1);
-        assert(orm_result_get_int64(result,0,0,&id,&error)==ORM_STATUS_OK&&id==7);
-        assert(orm_result_get_blob(result,0,1,&blob,&error)==ORM_STATUS_OK&&
-            blob.size==sizeof payload&&memcmp(blob.data,payload,sizeof payload)==0);
+        assert(orm_result_row_count(result,&rows,&error)==ORM_STATUS_OK&&rows==2);
+        const int64_t ids[]={7,11};
+        for(uint64_t row=0;row<rows;++row) {
+            assert(orm_result_get_int64(result,row,0,&id,&error)==ORM_STATUS_OK&&id==ids[row]);
+            assert(orm_result_get_blob(result,row,1,&blob,&error)==ORM_STATUS_OK&&
+                blob.size==sizeof payload&&memcmp(blob.data,payload,sizeof payload)==0);
+        }
     }
     orm_result_destroy(result);
     assert(orm_query_close(q,&error)==ORM_STATUS_OK);orm_query_release(q);
     assert(orm_connection_close(db,&error)==ORM_STATUS_OK);orm_connection_release(db);
     assert(orm_runtime_close(rt,&error)==ORM_STATUS_OK);orm_runtime_release(rt);
+}
+
+
+/* Exercise normal transaction paths through actual guest imports. Every
+ * terminal operation releases its receipt independently from its resource. */
+static uint64_t begin_tx(tw_db_bridge *bridge,tw_db_worker *worker,wake_signal *wake,
+    turbowasm_instance *instance,uint64_t db) {
+    uint64_t op=submit(instance,TW_DB_BEGIN,db,default_isolation,sizeof default_isolation,TW_DB_OK);
+    settle(bridge,worker,wake,instance,op);
+    receipt(instance,op,TW_DB_SUCCESS,0);
+    return take(instance,op);
+}
+static void write_id(tw_db_bridge *bridge,tw_db_worker *worker,wake_signal *wake,
+    turbowasm_instance *instance,uint64_t owner,uint8_t id) {
+    uint8_t request[sizeof put];memcpy(request,put,sizeof put);request[21]=id;
+    const uint8_t affected[]={1,0,0,0,0,0,0,0};
+    uint64_t op=submit(instance,TW_DB_EXECUTE,owner,request,sizeof request,TW_DB_OK);
+    settle(bridge,worker,wake,instance,op);check_bytes(instance,op,affected,sizeof affected);
+    single(instance,DROP,op,TW_DB_OK);
+}
+static uint64_t select_id(tw_db_bridge *bridge,tw_db_worker *worker,wake_signal *wake,
+    turbowasm_instance *instance,uint64_t owner,uint8_t id,bool exists) {
+    uint8_t request[sizeof get_query];memcpy(request,get_query,sizeof get_query);request[21]=id;
+    uint64_t op=submit(instance,TW_DB_QUERY,owner,request,sizeof request,TW_DB_OK);
+    settle(bridge,worker,wake,instance,op);
+    check_bytes(instance,op,exists?metadata:empty_metadata,
+        exists?sizeof metadata:sizeof empty_metadata);
+    return take(instance,op);
+}
+static void finish_ok(tw_db_bridge *bridge,tw_db_worker *worker,wake_signal *wake,
+    turbowasm_instance *instance,uint64_t owner,tw_db_opcode code) {
+    uint64_t op=submit(instance,code,owner,NULL,0,TW_DB_OK);
+    settle(bridge,worker,wake,instance,op);
+    receipt(instance,op,TW_DB_SUCCESS,0);single(instance,DROP,op,TW_DB_OK);
 }
 
 int main(void) {
@@ -277,15 +318,23 @@ int main(void) {
         "CROSS JOIN (SELECT 0 AS n UNION ALL SELECT 1) AS offsets "
         "WHERE items.id=?1 ORDER BY offsets.n";
     const char *const statements[]={
-        "INSERT INTO items(id,payload) VALUES(?1,?2)",select_sql
+        "INSERT INTO items(id,payload) VALUES(?1,?2)",select_sql,
+        "INSERT INTO items(id,payload,parent_id) VALUES(?1,?2,?3)"
     };
     const char *const read_statements[]={select_sql,"SELECT zeroblob(65) AS large_value"};
     const tw_db_sqlite_alias native_aliases[]={
-        {filename,false,statements,2},{filename,true,read_statements,2}
+        {filename,false,statements,3},{filename,true,read_statements,2}
     };
-    const tw_db_sqlite_config native_config={driver,native_aliases,2,2,1,16384,
+    const tw_db_sqlite_config native_config={driver,native_aliases,2,2,1,1,16384,
         1000,8,4096,4096,65536};
     tw_db_sqlite sqlite={0};
+    tw_db_alias invalid_aliases[2]={aliases[0],aliases[1]};
+    tw_db_policy invalid_policy={policy.limits,invalid_aliases,2};
+    invalid_aliases[0].isolation_mask=TW_DB_MASK(TW_DB_ISOLATION_SERIALIZABLE);
+    assert(tw_db_sqlite_init(&sqlite,&invalid_policy,&native_config)==TW_DB_INVALID_REQUEST);
+    invalid_aliases[0]=aliases[0];
+    invalid_aliases[1].isolation_mask=TW_DB_MASK(TW_DB_ISOLATION_DEFAULT);
+    assert(tw_db_sqlite_init(&sqlite,&invalid_policy,&native_config)==TW_DB_INVALID_REQUEST);
     assert(tw_db_sqlite_init(&sqlite,&policy,&native_config)==TW_DB_OK);
     tw_db_worker worker={0};tw_db_bridge bridge={0};tw_db_dispatch dispatch={0};
     const tw_db_worker_config wc={4,PAGE_BYTES,16384,UINT64_C(30000000000),
@@ -381,9 +430,47 @@ int main(void) {
     settle(&bridge,&worker,&wake,&instance,op);
     receipt(&instance,op,TW_DB_SUCCESS,0);
     single(&instance,DROP,op,TW_DB_OK);
-    op=submit(&instance,TW_DB_CLOSE,ro,NULL,0,TW_DB_OK);
+    assert(submit(&instance,TW_DB_BEGIN,ro,default_isolation,sizeof default_isolation,TW_DB_DENIED)==0);
+    assert(submit(&instance,TW_DB_BEGIN,db,serializable,sizeof serializable,TW_DB_DENIED)==0);
+    uint64_t tx=begin_tx(&bridge,&worker,&wake,&instance,db);
+    assert(submit(&instance,TW_DB_BEGIN,db,default_isolation,sizeof default_isolation,TW_DB_BUSY)==0);
+    assert(submit(&instance,TW_DB_EXECUTE,db,put,sizeof put,TW_DB_BUSY)==0);
+    assert(submit(&instance,TW_DB_CLOSE,db,NULL,0,TW_DB_BUSY)==0);
+    write_id(&bridge,&worker,&wake,&instance,tx,11);
+    cursor=select_id(&bridge,&worker,&wake,&instance,tx,11,true);
+    assert(submit(&instance,TW_DB_COMMIT,tx,NULL,0,TW_DB_BUSY)==0);
+    assert(submit(&instance,TW_DB_ROLLBACK,tx,NULL,0,TW_DB_BUSY)==0);
+    uint8_t tx_page[sizeof first_page];
+    memcpy(tx_page,first_page,sizeof tx_page);tx_page[17]=11;
+    op=submit(&instance,TW_DB_FETCH,cursor,two_rows,sizeof two_rows,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);
+    check_bytes(&instance,op,tx_page,sizeof tx_page);single(&instance,DROP,op,TW_DB_OK);
+    finish_ok(&bridge,&worker,&wake,&instance,cursor,TW_DB_CLOSE);
+
+    /* A second native read-only connection cannot see the uncommitted row. */
+    cursor=select_id(&bridge,&worker,&wake,&instance,ro,11,false);
+    finish_ok(&bridge,&worker,&wake,&instance,cursor,TW_DB_CLOSE);
+    finish_ok(&bridge,&worker,&wake,&instance,tx,TW_DB_COMMIT);
+    assert(submit(&instance,TW_DB_COMMIT,tx,NULL,0,TW_DB_INVALID_HANDLE)==0);
+    cursor=select_id(&bridge,&worker,&wake,&instance,ro,11,true);
+    finish_ok(&bridge,&worker,&wake,&instance,cursor,TW_DB_CLOSE);
+
+    tx=begin_tx(&bridge,&worker,&wake,&instance,db);
+    write_id(&bridge,&worker,&wake,&instance,tx,12);
+    finish_ok(&bridge,&worker,&wake,&instance,tx,TW_DB_ROLLBACK);
+    assert(submit(&instance,TW_DB_ROLLBACK,tx,NULL,0,TW_DB_INVALID_HANDLE)==0);
+    cursor=select_id(&bridge,&worker,&wake,&instance,ro,12,false);
+    finish_ok(&bridge,&worker,&wake,&instance,cursor,TW_DB_CLOSE);
+
+    /* Untaken BEGIN is a real active transaction. DROP must issue rollback
+       and drain it before returning capacity and unpinning its connection. */
+    op=submit(&instance,TW_DB_BEGIN,db,default_isolation,sizeof default_isolation,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);receipt(&instance,op,TW_DB_SUCCESS,0);
+    single(&instance,DROP,op,TW_DB_PENDING);
     settle(&bridge,&worker,&wake,&instance,op);receipt(&instance,op,TW_DB_SUCCESS,0);
     single(&instance,DROP,op,TW_DB_OK);
+    finish_ok(&bridge,&worker,&wake,&instance,ro,TW_DB_CLOSE);
+
     /* Duplicate primary key fails after entering native execution. Preserve
        uncertainty instead of claiming no effect or replaying the command. */
     op=submit(&instance,TW_DB_EXECUTE,db,put,sizeof put,TW_DB_OK);
@@ -391,6 +478,40 @@ int main(void) {
     receipt(&instance,op,TW_DB_OUTCOME_UNKNOWN,0);
     single(&instance,DROP,op,TW_DB_OK);
     assert(submit(&instance,TW_DB_EXECUTE,db,put,sizeof put,TW_DB_WRONG_STATE)==0);
+    finish_ok(&bridge,&worker,&wake,&instance,db,TW_DB_CLOSE);
+    op=submit(&instance,TW_DB_OPEN_SQL,0,local,sizeof local,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);receipt(&instance,op,TW_DB_SUCCESS,0);
+    db=take(&instance,op);
+
+    /* Deferred FK failure occurs at actual SQLite COMMIT, not at INSERT.
+       Keep the uncertain receipt and owner; prohibit commit replay. CLOSE
+       rolls back the still-active native transaction and drains its lease. */
+    tx=begin_tx(&bridge,&worker,&wake,&instance,db);
+    uint8_t ref_request[sizeof put+13];
+    memcpy(ref_request,put,sizeof put);
+    memcpy(ref_request+4,"item.ref",8);ref_request[12]=3;ref_request[21]=14;
+    const uint8_t missing_parent[]={TW_DB_I64,8,0,0,0,99,0,0,0,0,0,0,0};
+    memcpy(ref_request+sizeof put,missing_parent,sizeof missing_parent);
+    op=submit(&instance,TW_DB_EXECUTE,tx,ref_request,sizeof ref_request,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);receipt(&instance,op,TW_DB_SUCCESS,8);
+    single(&instance,DROP,op,TW_DB_OK);
+    op=submit(&instance,TW_DB_COMMIT,tx,NULL,0,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);receipt(&instance,op,TW_DB_OUTCOME_UNKNOWN,0);
+    single(&instance,DROP,op,TW_DB_OK);
+    assert(submit(&instance,TW_DB_COMMIT,tx,NULL,0,TW_DB_WRONG_STATE)==0);
+    finish_ok(&bridge,&worker,&wake,&instance,tx,TW_DB_CLOSE);
+    assert(submit(&instance,TW_DB_EXECUTE,db,put,sizeof put,TW_DB_WRONG_STATE)==0);
+    finish_ok(&bridge,&worker,&wake,&instance,db,TW_DB_CLOSE);
+    op=submit(&instance,TW_DB_OPEN_SQL,0,local,sizeof local,TW_DB_OK);
+    settle(&bridge,&worker,&wake,&instance,op);receipt(&instance,op,TW_DB_SUCCESS,0);
+    db=take(&instance,op);
+
+    /* Abandoned transaction with a live child cursor: detached shutdown
+       must close snapshot -> rollback transaction -> close connection. */
+    tx=begin_tx(&bridge,&worker,&wake,&instance,db);
+    write_id(&bridge,&worker,&wake,&instance,tx,13);
+    cursor=select_id(&bridge,&worker,&wake,&instance,tx,13,true);
+    assert(cursor);
 #ifdef TW_DB_TEST_MIR
     turbowasm_instance_impl *p=instance.impl;
     assert(p->jit_functions[SUBMIT].state==TURBOWASM_JIT_COMPILED);
@@ -401,13 +522,17 @@ int main(void) {
     turbowasm_instance_destroy(&instance);turbowasm_linker_destroy(&linker);
     turbowasm_module_destroy(&module);assert(tw_db_bridge_detach(&bridge)==TW_DB_OK);
     tw_db_shutdown_action action={0};
-    assert(tw_db_bridge_shutdown_step(&bridge,&action)==TW_DB_OK&&
-        action.kind==TW_DB_SHUTDOWN_DISPATCH);
-    assert(tw_db_bridge_shutdown_step(&bridge,&action)==TW_DB_OK&&
-        action.kind==TW_DB_SHUTDOWN_WAIT);
-    deliver(&worker,&wake);
-    assert(tw_db_bridge_shutdown_step(&bridge,&action)==TW_DB_OK&&
-        action.kind==TW_DB_SHUTDOWN_RETIRED&&action.receipt.outcome==TW_DB_SUCCESS);
+    const tw_db_kind shutdown_order[]={TW_DB_CURSOR,TW_DB_TRANSACTION,TW_DB_SQL};
+    for(size_t j=0;j<sizeof shutdown_order/sizeof shutdown_order[0];++j) {
+        assert(tw_db_bridge_shutdown_step(&bridge,&action)==TW_DB_OK&&
+            action.kind==TW_DB_SHUTDOWN_DISPATCH);
+        assert(action.work.request.opcode==TW_DB_CLOSE&&action.work.native_kind==shutdown_order[j]);
+        assert(tw_db_bridge_shutdown_step(&bridge,&action)==TW_DB_OK&&
+            action.kind==TW_DB_SHUTDOWN_WAIT);
+        deliver(&worker,&wake);
+        assert(tw_db_bridge_shutdown_step(&bridge,&action)==TW_DB_OK&&
+            action.kind==TW_DB_SHUTDOWN_RETIRED&&action.receipt.outcome==TW_DB_SUCCESS);
+    }
     assert(tw_db_bridge_shutdown_step(&bridge,&action)==TW_DB_OK&&action.kind==TW_DB_SHUTDOWN_DONE);
     cflow_waitable wait=tw_db_worker_waitable(&worker);cflow_waitable_cancel(&wait);
     assert(tw_db_worker_destroy(&worker)==TW_DB_OK);
