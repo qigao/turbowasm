@@ -293,9 +293,8 @@ if(TURBOWASM_ENABLE_WASI02_CNET_ADAPTER AND
       ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src
       ${CMAKE_CURRENT_SOURCE_DIR}/wasm/include)
   target_link_libraries(turbowasm_wasi02_cnet_core
-    PRIVATE
-      turbowasm_wasi02_sockets_core
-      Salts::CNet)
+    PUBLIC TurboWasm::Runtime Salts::CNet
+    PRIVATE turbowasm_wasi02_sockets_core)
   if(MSVC)
     target_compile_options(turbowasm_wasi02_cnet_core PRIVATE /W4)
   else()
@@ -636,7 +635,7 @@ if(TURBOWASM_ENABLE_MIR_JIT)
       ${CMAKE_CURRENT_SOURCE_DIR}/wasm/src)
   target_link_libraries(turbowasm_mir_backend
     PRIVATE
-      Salts::SIMD
+      TurboWasm::Runtime
       MIR::MIR)
   target_compile_definitions(turbowasm_mir_backend PRIVATE
     TURBOWASM_ENABLE_MIR_JIT=1)

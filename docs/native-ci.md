@@ -14,8 +14,7 @@ verifies the exact archive and producer manifest bytes against the lock's
 SHA-256 and size. Lock creation independently verifies the published release
 asset metadata, release target commit and successful producer run; the
 consumer does not impose a common JSON schema on different SDK publishers.
-Native
-toolchain selection is architecture-specific. No Mono or floating Salts packages.
+Native toolchain selection is architecture-specific. No Mono or floating Salts packages.
 
 macOS Intel has a real x64 matrix row, but the current release family lacks its
 five matching SDKs and installed-x64-osx archive. The row fails explicitly at
@@ -27,3 +26,7 @@ are separate work; this native CI does not claim their execution.
 WASI02 fixture generation and Core 3.0/spec conformance remain separate
 workflows. The source relocation changed the fixture input to
 `wasm/tests/wasi02/fixtures/src`.
+
+The Android command runner uses `clock_gettime(CLOCK_REALTIME)` at API 26;
+other hosts retain `timespec_get(TIME_UTC)`. Both preserve the existing WASI
+realtime nanosecond conversion and error contract.

@@ -413,7 +413,7 @@ if(TARGET turbowasm_wasi02_core)
   target_include_directories(turbowasm_wasi02_socket_u16_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_socket_u16_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -430,7 +430,7 @@ if(TARGET turbowasm_wasi02_core)
   target_include_directories(turbowasm_wasi02_provider_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_provider_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -447,7 +447,7 @@ if(TARGET turbowasm_wasi02_core)
   target_include_directories(turbowasm_wasi02_component_exec_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_component_exec_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -470,7 +470,7 @@ if(TARGET turbowasm_wasi02_sockets_core)
   target_include_directories(turbowasm_wasi02_socket_component_bridge_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(
     turbowasm_wasi02_socket_component_bridge_test PROPERTIES
     C_STANDARD 11
@@ -490,7 +490,7 @@ if(TARGET turbowasm_wasi02_sockets_core)
   target_include_directories(turbowasm_wasi02_tcp_state_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_tcp_state_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -534,7 +534,7 @@ if(TARGET turbowasm_wasi02_cnet_core)
   target_include_directories(turbowasm_wasi02_cnet_control_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_cnet_control_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -559,7 +559,7 @@ if(TARGET turbowasm_wasi02_cnet_core)
   endif()
   set_tests_properties(${_turbowasm_cnet_tests} PROPERTIES
     ENVIRONMENT_MODIFICATION
-      "${_turbowasm_cnet_runtime_path}=path_list_prepend:${SALTS_ROOT_PATH}/lib;${_turbowasm_cnet_runtime_path}=path_list_prepend:${SALTS_ROOT_PATH}/bin;${_turbowasm_cnet_runtime_path}=path_list_prepend:$<TARGET_FILE_DIR:Salts::CNet>")
+      "${_turbowasm_cnet_runtime_path}=path_list_prepend:$<TARGET_FILE_DIR:Salts::Core>;${_turbowasm_cnet_runtime_path}=path_list_prepend:$<TARGET_FILE_DIR:Salts::CNet>")
   unset(_turbowasm_cnet_runtime_path)
   unset(_turbowasm_cnet_tests)
 endif()
@@ -630,7 +630,7 @@ if(TARGET turbowasm_wasi02_exec_core)
   target_include_directories(turbowasm_wasi02_exec_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_exec_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -651,7 +651,7 @@ if(TARGET turbowasm_wasi02_streams_core)
   target_include_directories(turbowasm_wasi02_stdio_stream_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_stdio_stream_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -670,7 +670,7 @@ if(TARGET turbowasm_wasi02_streams_core)
   target_include_directories(turbowasm_wasi02_stream_component_bridge_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(
     turbowasm_wasi02_stream_component_bridge_test PROPERTIES
     C_STANDARD 11
@@ -693,7 +693,7 @@ if(TARGET turbowasm_wasi02_streams_core)
   target_include_directories(turbowasm_wasi02_streams_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_streams_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -712,7 +712,7 @@ if(TARGET turbowasm_wasi02_streams_core)
   target_include_directories(turbowasm_wasi02_stream_blocking_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_stream_blocking_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -731,7 +731,7 @@ if(TARGET turbowasm_wasi02_streams_core)
   target_include_directories(turbowasm_wasi02_stream_output_blocking_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_stream_output_blocking_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -750,7 +750,7 @@ if(TARGET turbowasm_wasi02_streams_core)
   target_include_directories(turbowasm_wasi02_stream_splice_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_stream_splice_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -769,7 +769,7 @@ if(TARGET turbowasm_wasi02_poll_core)
   target_include_directories(turbowasm_wasi02_poll_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_poll_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -787,7 +787,7 @@ if(TARGET turbowasm_wasi02_poll_core)
   target_include_directories(turbowasm_wasi02_poll_wait_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_poll_wait_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -808,7 +808,7 @@ if(TARGET turbowasm_wasi02_poll_native_io_core)
   target_include_directories(turbowasm_wasi02_poll_native_io_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_poll_native_io_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -834,7 +834,7 @@ if(TARGET turbowasm_wasi02_poll_native_io_core AND
   target_include_directories(turbowasm_wasi02_socket_native_io_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_socket_native_io_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -854,7 +854,7 @@ if(TARGET turbowasm_wasi02_fs_core)
   target_include_directories(turbowasm_wasi02_filesystem_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_filesystem_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -872,7 +872,7 @@ if(TARGET turbowasm_wasi02_fs_core)
   target_include_directories(turbowasm_wasi02_filesystem_ops_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_filesystem_ops_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -890,7 +890,7 @@ if(TARGET turbowasm_wasi02_fs_core)
   target_include_directories(turbowasm_wasi02_filesystem_component_exec_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(turbowasm_wasi02_filesystem_component_exec_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
@@ -908,7 +908,7 @@ if(TARGET turbowasm_wasi02_fs_core)
   target_include_directories(turbowasm_wasi02_filesystem_method_exec_test
     PRIVATE
       "${PROJECT_SOURCE_DIR}/wasm/src"
-      "${PROJECT_SOURCE_DIR}/include")
+      "${PROJECT_SOURCE_DIR}/wasm/include")
   set_target_properties(
     turbowasm_wasi02_filesystem_method_exec_test PROPERTIES
     C_STANDARD 11
