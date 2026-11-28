@@ -11,14 +11,20 @@
 #include <string.h>
 
 static const uint32_t masks[]={TW_DB_MASK(TW_DB_I64)};
-static const tw_db_template templates[]={{"item.put",TW_DB_MASK(TW_DB_EXECUTE),masks,1}};
-static const tw_db_alias aliases[]={{"local",TW_DB_SQL,TW_DB_MASK(TW_DB_ISOLATION_DEFAULT),0,templates,1}};
+static const tw_db_template templates[]={
+    {"item.put",TW_DB_MASK(TW_DB_EXECUTE),masks,1},
+    {"item.get",TW_DB_MASK(TW_DB_QUERY),masks,1}
+};
+static const tw_db_alias aliases[]={{"local",TW_DB_SQL,TW_DB_MASK(TW_DB_ISOLATION_DEFAULT),0,templates,2}};
 static const tw_db_policy policy={{128,24,64,4,3,16},aliases,1};
 static const tw_db_capacity capacity={2,1,1,4,64,32768};
 static const uint8_t open_local[]={5,0,0,0,'l','o','c','a','l'};
 static const uint8_t open_denied[]={6,0,0,0,'s','e','c','r','e','t'};
 static const uint8_t put[]={8,0,0,0,'i','t','e','m','.','p','u','t',1,0,0,0,
     TW_DB_I64,8,0,0,0,7,0,0,0,0,0,0,0};
+static const uint8_t get[]={8,0,0,0,'i','t','e','m','.','g','e','t',1,0,0,0,
+    TW_DB_I64,8,0,0,0,7,0,0,0,0,0,0,0};
+static const uint8_t zero[]={0,0,0,0},one[]={1,0,0,0};
 static const uint8_t binary[]={0,0xff,0x61,0};
 enum { SUBMIT=8,POLL,AWAIT,RECEIPT,READ,TAKE,CANCEL,DROP,PUT,GET };
 
@@ -26,15 +32,24 @@ typedef struct probe {
     unsigned starts,cancels;
     bool defer;
     tw_db_work work;
-    uintptr_t next_native;
+    uintptr_t next_native,closed[16];
+    tw_db_kind closed_kind[16];
+    unsigned closes;
 } probe;
 
 static void dispatch_start(void *context,tw_db_bridge *bridge,const tw_db_work *work) {
     probe *p=context;
     ++p->starts;
     assert(!p->work.operation);
+    if(work->request.opcode==TW_DB_CLOSE) {
+        assert(p->closes<16&&work->native_owner&&work->native_kind!=TW_DB_NONE);
+        p->closed[p->closes]=work->native_owner;
+        p->closed_kind[p->closes++]=work->native_kind;
+    }
     if(p->defer) { p->work=*work;return; }
-    uintptr_t native=work->request.opcode==TW_DB_OPEN_SQL?++p->next_native:0;
+    bool creates=work->request.opcode==TW_DB_OPEN_SQL||work->request.opcode==TW_DB_OPEN_REDIS||
+        work->request.opcode==TW_DB_BEGIN||work->request.opcode==TW_DB_QUERY;
+    uintptr_t native=creates?++p->next_native:0;
     assert(tw_db_bridge_complete(bridge,work->operation,TW_DB_SUCCESS,native,NULL,0)==TW_DB_OK);
 }
 
@@ -176,7 +191,6 @@ static void test_bridge(void) {
     assert(p.starts==1);
     state(&first,AWAIT,op,TW_DB_OK,TW_DB_TERMINAL); /* completion before await */
     receipt(&first,op,TW_DB_OK,TW_DB_SUCCESS,0);
-    single(&first,DROP,op,TW_DB_BUSY);
     submit(&peer,TW_DB_OPEN_SQL,0,open_local,sizeof open_local,TW_DB_DENIED);
     state(&peer,POLL,op,TW_DB_DENIED,0);
     state(&peer,AWAIT,op,TW_DB_DENIED,0);
@@ -256,10 +270,190 @@ static void test_bridge(void) {
     turbowasm_linker_destroy(&linker);turbowasm_module_destroy(&module);
     assert(tw_db_bridge_detach(&bridge)==TW_DB_OK);
     assert(tw_db_bridge_destroy(&bridge)==TW_DB_BUSY);
+    tw_db_shutdown_action action;
+    assert(tw_db_bridge_shutdown_step(&bridge,&action)==TW_DB_OK&&action.kind==TW_DB_SHUTDOWN_WAIT);
     finish(&p,&bridge,TW_DB_CANCELLED_NO_EFFECT,0,NULL,0);
-    tw_db_manager *manager=tw_db_bridge_cleanup_manager(&bridge);
-    assert(manager&&tw_db_manager_drop(manager,op)==TW_DB_OK);
+    assert(tw_db_bridge_shutdown_step(&bridge,&action)==TW_DB_OK&&
+        action.kind==TW_DB_SHUTDOWN_RETIRED&&action.operation==op&&
+        action.receipt.outcome==TW_DB_CANCELLED_NO_EFFECT);
+    assert(tw_db_bridge_shutdown_step(&bridge,&action)==TW_DB_OK&&action.kind==TW_DB_SHUTDOWN_DONE);
     assert(tw_db_bridge_destroy(&bridge)==TW_DB_OK&&!bridge.impl);
     assert(p.starts==5&&p.cancels==2);
 }
-int main(void) { test_bridge();return 0; }
+
+typedef struct cleanup_fixture {
+    turbowasm_module module;
+    turbowasm_instance instance;
+    turbowasm_linker linker;
+    tw_db_bridge bridge;
+    probe provider;
+} cleanup_fixture;
+
+static void cleanup_init(cleanup_fixture *f,uint32_t operations) {
+    tw_db_capacity cap=capacity;cap.operations=operations;
+    f->provider.next_native=100;
+    const tw_db_dispatch dispatch={&f->provider,dispatch_start,dispatch_cancel};
+    assert(tw_db_bridge_init(&f->bridge,&policy,&cap,&dispatch)==TW_DB_OK);
+    assert(turbowasm_module_load_borrowed(&f->module,database_bridge_bytes,
+        sizeof database_bridge_bytes)==TURBOWASM_OK);
+    assert(turbowasm_linker_init(&f->linker)==TURBOWASM_OK);
+    assert(tw_db_bridge_define(&f->bridge,&f->linker)==TURBOWASM_OK);
+    assert(turbowasm_instance_create_linked(&f->instance,&f->module,&f->linker)==TURBOWASM_OK);
+    attach(&f->instance);
+    assert(tw_db_bridge_bind(&f->bridge,&f->instance)==TW_DB_OK);
+    assert(tw_db_bridge_shutdown_step(&f->bridge,&(tw_db_shutdown_action){0})==TW_DB_WRONG_STATE);
+}
+
+static void cleanup_detach(cleanup_fixture *f) {
+    tw_db_bridge_stop(&f->bridge);
+    turbowasm_instance_destroy(&f->instance);
+    turbowasm_linker_destroy(&f->linker);
+    turbowasm_module_destroy(&f->module);
+    assert(tw_db_bridge_detach(&f->bridge)==TW_DB_OK);
+}
+
+static tw_db_shutdown_action step(cleanup_fixture *f,tw_db_shutdown_kind expected) {
+    tw_db_shutdown_action a={0};
+    unsigned starts=f->provider.starts,cancels=f->provider.cancels;
+    assert(tw_db_bridge_shutdown_step(&f->bridge,&a)==TW_DB_OK);
+    assert(a.kind==expected);
+    assert(f->provider.starts==starts+(expected==TW_DB_SHUTDOWN_DISPATCH));
+    assert(f->provider.cancels==cancels+(expected==TW_DB_SHUTDOWN_CANCEL));
+    return a;
+}
+static uint64_t take_open(cleanup_fixture *f,uint32_t code,uint64_t owner,
+    const uint8_t *bytes,size_t size) {
+    uint64_t op=submit(&f->instance,code,owner,bytes,size,TW_DB_OK);
+    uint64_t resource=take(&f->instance,op,TW_DB_OK);
+    single(&f->instance,DROP,op,TW_DB_OK);
+    return resource;
+}
+
+/* All operation slots are occupied by the original open result. Its cleanup
+ * still progresses using the same slot and a fresh provider completion ID. */
+static void test_guest_discard(void) {
+    cleanup_fixture f={0};cleanup_init(&f,1);
+    probe *p=&f.provider;
+    uint64_t op=submit(&f.instance,TW_DB_OPEN_SQL,0,open_local,sizeof open_local,TW_DB_OK);
+    p->defer=true;
+    single(&f.instance,DROP,op,TW_DB_PENDING);
+    assert(p->starts==2&&p->closes==1&&p->closed[0]==101&&
+        p->closed_kind[0]==TW_DB_SQL&&p->work.operation!=op);
+    state(&f.instance,POLL,op,TW_DB_OK,TW_DB_RUNNING);
+    receipt(&f.instance,op,TW_DB_PENDING,0,0);
+    take(&f.instance,op,TW_DB_PENDING);
+    single(&f.instance,CANCEL,op,TW_DB_WRONG_STATE);
+    single(&f.instance,DROP,op,TW_DB_PENDING);
+    submit(&f.instance,TW_DB_OPEN_SQL,0,open_local,sizeof open_local,TW_DB_LIMIT);
+    assert(p->starts==2&&p->cancels==0);
+    assert(tw_db_bridge_complete(&f.bridge,op,TW_DB_SUCCESS,101,NULL,0)==TW_DB_INVALID_HANDLE);
+    finish(p,&f.bridge,TW_DB_SUCCESS,0,NULL,0);
+    state(&f.instance,POLL,op,TW_DB_OK,TW_DB_TERMINAL);
+    receipt(&f.instance,op,TW_DB_OK,TW_DB_SUCCESS,0);
+    take(&f.instance,op,TW_DB_WRONG_STATE);
+    single(&f.instance,DROP,op,TW_DB_OK);
+    single(&f.instance,DROP,op,TW_DB_INVALID_HANDLE);
+    p->defer=false;
+    op=submit(&f.instance,TW_DB_OPEN_SQL,0,open_local,sizeof open_local,TW_DB_OK);
+    single(&f.instance,DROP,op,TW_DB_OK); /* inline close */
+    assert(p->starts==4&&p->closes==2&&p->closed[1]==102);
+
+    /* Uncertain disposal of a held child retains the lease, never publishes
+       the cursor handle, and quarantines its connection. No retry on drop. */
+    uint64_t sql=take_open(&f,TW_DB_OPEN_SQL,0,open_local,sizeof open_local);
+    op=submit(&f.instance,TW_DB_QUERY,sql,get,sizeof get,TW_DB_OK);
+    p->defer=true;
+    single(&f.instance,DROP,op,TW_DB_PENDING);
+    assert(p->closed_kind[2]==TW_DB_CURSOR&&p->closed[2]==104);
+    finish(p,&f.bridge,TW_DB_OUTCOME_UNKNOWN,0,NULL,0);
+    receipt(&f.instance,op,TW_DB_OK,TW_DB_OUTCOME_UNKNOWN,0);
+    take(&f.instance,op,TW_DB_WRONG_STATE);
+    single(&f.instance,DROP,op,TW_DB_WRONG_STATE);
+    assert(p->closes==3);
+    cleanup_detach(&f);
+    tw_db_shutdown_action blocked=step(&f,TW_DB_SHUTDOWN_BLOCKED);
+    assert(blocked.operation==op&&blocked.receipt.outcome==TW_DB_OUTCOME_UNKNOWN);
+    step(&f,TW_DB_SHUTDOWN_BLOCKED);
+    assert(tw_db_bridge_destroy(&f.bridge)==TW_DB_BUSY);
+    /* This deterministic host now proves the unpublished native cursor
+       is drained; no guest can supply this proof. */
+    tw_db_manager *m=tw_db_bridge_cleanup_manager(&f.bridge);
+    uintptr_t native=0;
+    assert(m&&tw_db_manager_untaken(m,op,&native)==TW_DB_OK&&native==104);
+    assert(tw_db_manager_disposed(m,op)==TW_DB_OK);
+    assert(step(&f,TW_DB_SHUTDOWN_RETIRED).receipt.outcome==TW_DB_OUTCOME_UNKNOWN);
+    p->defer=false;
+    step(&f,TW_DB_SHUTDOWN_DISPATCH);
+    assert(p->closed_kind[3]==TW_DB_SQL&&p->closed[3]==103);
+    step(&f,TW_DB_SHUTDOWN_RETIRED);
+    step(&f,TW_DB_SHUTDOWN_DONE);
+    assert(tw_db_bridge_destroy(&f.bridge)==TW_DB_OK);
+}
+
+/* Kill a guest with a live transaction/cursor hierarchy, a terminal but
+ * untaken second connection, and an in-flight business request. */
+static void test_shutdown_order(void) {
+    cleanup_fixture f={0};cleanup_init(&f,4);
+    probe *p=&f.provider;
+    uint64_t sql=take_open(&f,TW_DB_OPEN_SQL,0,open_local,sizeof open_local);
+    uint64_t tx=take_open(&f,TW_DB_BEGIN,sql,zero,4);
+    uint64_t cursor=take_open(&f,TW_DB_QUERY,tx,get,sizeof get);
+    uint64_t held=submit(&f.instance,TW_DB_OPEN_SQL,0,open_local,sizeof open_local,TW_DB_OK);
+    p->defer=true;
+    uint64_t fetch=submit(&f.instance,TW_DB_FETCH,cursor,one,4,TW_DB_OK);
+    cleanup_detach(&f);
+    assert(step(&f,TW_DB_SHUTDOWN_CANCEL).operation==fetch);
+    step(&f,TW_DB_SHUTDOWN_WAIT);
+    step(&f,TW_DB_SHUTDOWN_WAIT);
+    assert(p->cancels==1&&p->closes==0);
+    finish(p,&f.bridge,TW_DB_OUTCOME_UNKNOWN,0,NULL,0);
+    /* All pending business has drained. Close held resources first, then
+       retire business receipts and close child->parent in dependency order. */
+    tw_db_shutdown_action a=step(&f,TW_DB_SHUTDOWN_DISPATCH);
+    assert(a.operation==held&&a.work.operation!=held&&a.work.native_owner==104);
+    step(&f,TW_DB_SHUTDOWN_WAIT);
+    finish(p,&f.bridge,TW_DB_SUCCESS,0,NULL,0);
+    assert(step(&f,TW_DB_SHUTDOWN_RETIRED).operation==held);
+    a=step(&f,TW_DB_SHUTDOWN_RETIRED);
+    assert(a.operation==fetch&&a.receipt.outcome==TW_DB_OUTCOME_UNKNOWN);
+    const uintptr_t expected[]={103,102,101};
+    const tw_db_kind kinds[]={TW_DB_CURSOR,TW_DB_TRANSACTION,TW_DB_SQL};
+    for(size_t i=0;i<3;++i) {
+        a=step(&f,TW_DB_SHUTDOWN_DISPATCH);
+        assert(a.work.native_owner==expected[i]&&a.work.native_kind==kinds[i]&&
+            a.work.request.opcode==TW_DB_CLOSE);
+        step(&f,TW_DB_SHUTDOWN_WAIT);
+        finish(p,&f.bridge,TW_DB_SUCCESS,0,NULL,0);
+        assert(step(&f,TW_DB_SHUTDOWN_RETIRED).receipt.outcome==TW_DB_SUCCESS);
+    }
+    step(&f,TW_DB_SHUTDOWN_DONE);
+    assert(p->closes==4&&p->cancels==1);
+    assert(tw_db_bridge_destroy(&f.bridge)==TW_DB_OK);
+}
+
+static void test_shutdown_close_failure(void) {
+    cleanup_fixture f={0};cleanup_init(&f,1);
+    (void)take_open(&f,TW_DB_OPEN_SQL,0,open_local,sizeof open_local);
+    cleanup_detach(&f);f.provider.defer=true;
+    tw_db_shutdown_action a=step(&f,TW_DB_SHUTDOWN_DISPATCH);
+    tw_db_manager *m=tw_db_bridge_cleanup_manager(&f.bridge);
+    assert(m&&tw_db_manager_confirm_shutdown_close(m,a.operation)==TW_DB_PENDING);
+    finish(&f.provider,&f.bridge,TW_DB_FAILED_NO_EFFECT,0,NULL,0);
+    assert(step(&f,TW_DB_SHUTDOWN_BLOCKED).operation==a.operation);
+    assert(step(&f,TW_DB_SHUTDOWN_BLOCKED).receipt.outcome==TW_DB_FAILED_NO_EFFECT);
+    assert(f.provider.closes==1&&tw_db_bridge_destroy(&f.bridge)==TW_DB_BUSY);
+    assert(tw_db_manager_confirm_shutdown_close(m,a.operation+1)==TW_DB_WRONG_STATE);
+    /* A trusted host explicitly establishes native drain, not a replay. */
+    assert(tw_db_manager_confirm_shutdown_close(m,a.operation)==TW_DB_OK);
+    assert(step(&f,TW_DB_SHUTDOWN_RETIRED).receipt.outcome==TW_DB_FAILED_NO_EFFECT);
+    step(&f,TW_DB_SHUTDOWN_DONE);
+    assert(f.provider.closes==1&&tw_db_bridge_destroy(&f.bridge)==TW_DB_OK);
+}
+
+int main(void) {
+    test_bridge();
+    test_guest_discard();
+    test_shutdown_order();
+    test_shutdown_close_failure();
+    return 0;
+}

@@ -23,6 +23,7 @@ typedef struct tw_db_work {
     tw_db_request request;
     /* Private provider identity, never serialized to the guest. */
     uintptr_t native_owner;
+    tw_db_kind native_kind;
 } tw_db_work;
 
 typedef struct tw_db_receipt {
@@ -52,6 +53,10 @@ tw_db_status tw_db_manager_poll(tw_db_manager *manager,
     uint64_t operation, tw_db_operation_state *out);
 
 /* The returned work borrows operation storage until terminal completion.
+ * work.operation is the native dispatch identity (normally the guest token;
+ * discard uses a distinct one). CLOSE consumes an owner only after drain;
+ * closing a transaction rolls back known-active work, never replays commit.
+ * On a failed close the provider must retain a valid cleanup identity.
  * A valid terminal completion proves the provider no longer borrows input or
  * result buffers. Successful OPEN/BEGIN/QUERY transfer exactly one new native
  * resource; successful COMMIT/ROLLBACK/CLOSE consume their native owner.
@@ -74,12 +79,46 @@ tw_db_status tw_db_manager_read(tw_db_manager *manager,
     size_t *out_copied);
 tw_db_status tw_db_manager_take(tw_db_manager *manager,
     uint64_t operation, uint64_t *out_resource);
-/* Drop cannot silently destroy a native result. The host can inspect and drain
- * an untaken resource on its native owner, then confirm its disposal. Until
- * that proof, drop/destroy return BUSY. No guest call may confirm disposal. */
+/* Discard a terminal operation's untaken resource by dispatching a separate
+ * CLOSE with a fresh native identity in the same reserved operation slot.
+ * Once begun, the original result is relinquished and take is forbidden.
+ * Receipt/poll describe cleanup. Pending discard cannot be cancelled;
+ * failed/unknown discard retains the native identity for explicit host recovery.
+ * No native operation is issued here: the owner dispatches the returned work. */
+tw_db_status tw_db_manager_begin_discard(tw_db_manager *manager,
+    uint64_t operation, tw_db_work *out);
+/* Host-only drain proof for an untaken resource, never accessible to the
+ * guest. In-flight discard cannot be disposed. */
 tw_db_status tw_db_manager_untaken(tw_db_manager *manager,
     uint64_t operation, uintptr_t *out_native);
 tw_db_status tw_db_manager_disposed(tw_db_manager *manager, uint64_t operation);
 tw_db_status tw_db_manager_drop(tw_db_manager *manager, uint64_t operation);
+/* Guest drop admission. If disposal is newly admitted, out_work receives
+ * a nonzero native dispatch identity and PENDING; otherwise its identity is
+ * zero. A repeat drop observes pending cleanup or releases its terminal
+ * success. Failure is retained as a receipt, not automatically retried. */
+tw_db_status tw_db_manager_request_drop(tw_db_manager *manager,
+    uint64_t operation,tw_db_work *out_work);
+
+/* One bounded action per shutdown step, after stop and guest detach.
+ * WAIT requires owner-driven provider progress; BLOCKED is sticky until
+ * explicit host recovery/teardown, never an automatic retry. RETIRED reports
+ * the receipt that is discarded; callers must record uncertain outcomes.
+ * DISPATCH and CANCEL are delivered once on the owner. */
+typedef enum tw_db_shutdown_kind {
+    TW_DB_SHUTDOWN_DONE=1, TW_DB_SHUTDOWN_WAIT, TW_DB_SHUTDOWN_RETIRED,
+    TW_DB_SHUTDOWN_CANCEL, TW_DB_SHUTDOWN_DISPATCH, TW_DB_SHUTDOWN_BLOCKED
+} tw_db_shutdown_kind;
+typedef struct tw_db_shutdown_action {
+    tw_db_shutdown_kind kind;
+    uint64_t operation;
+    tw_db_receipt receipt;
+    tw_db_work work;
+} tw_db_shutdown_action;
+tw_db_status tw_db_manager_shutdown_next(tw_db_manager *manager,tw_db_shutdown_action *out);
+/* Trusted host only: confirms the native owner of a BLOCKED automatic CLOSE
+ * has been explicitly drained outside this manager. Never invokes a provider
+ * or retries the failed close. The failed receipt remains for retirement. */
+tw_db_status tw_db_manager_confirm_shutdown_close(tw_db_manager *manager,uint64_t operation);
 
 #endif

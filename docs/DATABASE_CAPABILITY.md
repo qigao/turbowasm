@@ -414,3 +414,40 @@ cancellation, guest output OOB followed by successful retry, quarantine
 and explicit close, suspended execution destruction and late terminal drain.
 Register interpreter and actual MIR variants in the normal formal CTest graph.
 Native driver effects remain outside this slice.
+
+## 10. M1b3 checked discard and owner-driven shutdown (#441)
+
+Guest drop of a terminal operation with an untaken resource now relinquishes
+the original result and starts a separate asynchronous native CLOSE in the
+same preallocated operation slot. It never requires spare operation capacity.
+The guest keeps its operation token; the provider receives a fresh dispatch
+token. A late business completion cannot finish disposal. Poll/receipt now
+refer to cleanup; repeat drop returns PENDING until a terminal receipt, then
+OK consumes a successful cleanup. Failed/unknown cleanup returns WRONG_STATE
+and retains its receipt and unpublished resource. Take and cancellation of
+discard are forbidden; interruption may unwind await but cannot cancel cleanup.
+Uncertain disposal quarantines ancestors without publishing the held resource.
+
+The host stops admission, destroys any retained execution and guest instance
+and linker, then detaches. One call to shutdown_step makes at most one
+provider start/cancel action. CANCEL requests cancellation once; WAIT means
+drive the existing provider/scheduler and deliver terminal completion on the
+owner, not spin. After all admitted business drains, terminal receipts are
+retired with their outcome (the host records uncertainty), held results are
+disposed, and native resources close leaf-first. A transaction CLOSE must
+roll back known-active work and drain its native identity; never retry an
+unknown COMMIT. CLOSE failure preserves its cleanup identity and receipt.
+BLOCKED stops automatic cleanup, including repeated steps; explicit trusted
+host recovery may confirm an independently drained held resource or failed
+shutdown close. It cannot forge success or retry business work. Checked
+destroy remains BUSY until every operation and resource is retired.
+
+No new scheduler, public header, driver API, or host-path allocation is
+introduced. The existing Core WASM fixture tests one-slot discard, inline and
+deferred disposal, stale business completion, forbidden take/cancel, unknown
+disposal, shutdown with live connection/transaction/cursor and held result,
+one-shot cancellation, child-before-parent close, sticky failed close, explicit
+host drain proof and late completion. Interpreter/MIR tests use the same
+formal CTest graph. Native providers must still supply actual cancellation,
+rollback, deadline and drain guarantees; CFlow integration and the released
+database SDK are later gates.
