@@ -260,4 +260,33 @@ static void guest(void) {
     turbowasm_module_destroy(&module);
 }
 
-int main(void) { wire(); guest(); return 0; }
+
+static void result_writer(void) {
+    uint8_t bytes[32];
+    memset(bytes,0xaa,sizeof bytes);
+    tw_db_writer w={bytes,sizeof bytes,0};
+    assert(tw_db_write_u32(&w,UINT32_C(0x12345678)));
+    assert(w.size==4&&bytes[0]==0x78&&bytes[3]==0x12);
+    assert(tw_db_write_u64(&w,UINT64_C(0x0102030405060708)));
+    assert(w.size==12&&bytes[4]==8&&bytes[11]==1);
+    assert(tw_db_write_value(&w,8,(tw_db_value){TW_DB_NULL,{NULL,0}}));
+    assert(tw_db_write_value(&w,8,(tw_db_value){TW_DB_BLOB,{NULL,0}}));
+    assert(w.size==22&&bytes[12]==TW_DB_NULL&&bytes[17]==TW_DB_BLOB);
+    const uint8_t invalid[]={0xc0,0x80};
+    assert(!tw_db_write_text(&w,(tw_db_bytes){invalid,sizeof invalid}));
+    assert(!tw_db_write_value(&w,8,(tw_db_value){TW_DB_TEXT,{invalid,sizeof invalid}}));
+    uint8_t too_large[12]={0};
+    assert(!tw_db_write_bytes(&w,(tw_db_bytes){too_large,sizeof too_large}));
+    assert(!tw_db_write_value(&w,8,(tw_db_value){TW_DB_BLOB,{too_large,sizeof too_large}}));
+    assert(w.size==22&&bytes[22]==0xaa);
+    const uint8_t text[]={0xe4,0xb8,0xad};
+    assert(tw_db_write_value(&w,8,(tw_db_value){TW_DB_TEXT,{text,sizeof text}}));
+    tw_db_reader reader={bytes+12,w.size-12};
+    tw_db_value v;
+    assert(tw_db_read_value(&reader,8,&v)&&v.kind==TW_DB_NULL);
+    assert(tw_db_read_value(&reader,8,&v)&&v.kind==TW_DB_BLOB&&v.payload.size==0);
+    assert(tw_db_read_value(&reader,8,&v)&&v.kind==TW_DB_TEXT&&
+        v.payload.size==sizeof text&&!memcmp(v.payload.data,text,sizeof text)&&!reader.remaining);
+}
+int main(void) {
+    result_writer(); wire(); guest(); return 0; }

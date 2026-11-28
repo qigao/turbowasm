@@ -562,3 +562,48 @@ and SaltsCNet/bin (CMeta's static SDK has no bin requirement). This does not
 alter the loader, use PATH as a plugin search policy, copy DLLs or disable
 tests. The exact missing PE import is not reported by the released loader;
 the corrected closure still requires the actual Windows CTest result.
+
+## 13. M2b native SQLite queries and bounded result cursors (#442)
+
+The SQLite provider adds trusted named QUERY templates, FETCH and cursor
+CLOSE. A read-only alias grants QUERY only and still opens the native database
+with read_only mode. Host-installed QUERY SQL must be a single side-effect-free
+SELECT (no mutating functions, RETURNING or other state-changing statements);
+there is no guest SQL text and no string-based guest SQL authorization.
+Transaction and Redis grants remain rejected. Connection and cursor slots
+are separate, worker-owned and bounded. Each cursor retains one immutable
+TurboDB ORM materialized result, with native row, column and payload-byte
+limits. Native allocator overhead is separate from the preallocated slot
+and result-transfer budgets.
+
+The exact private result encoding is now:
+- EXECUTE: u64 affected rows (unchanged).
+- QUERY: u32 columns, u32 flags (bit 0 names present; all other bits zero),
+  u64 total rows, followed when flag is set by u32 length and counted UTF-8
+  column names in native order. In this ORM version an empty result provides
+  a column count but no materialized names; return flag=0 without inventing
+  labels. SQLite storage types are dynamic, so cell kinds are carried with
+  each row value, not inferred from the column declaration.
+- FETCH: u32 row count, u32 EOF (0/1), then rows of u32 column count followed
+  by existing canonical tagged values (u8 kind, u32 payload length, bytes).
+  All integer fields and binary64 bits are little-endian. Counted UTF-8
+  text, BLOB and NULL remain distinct, including empty payloads.
+
+Preflight every materialized row against the worker's precharged result
+capacity and max-value limit before publishing a cursor. Reject an
+unrepresentable/oversized result rather than returning an unusable handle.
+FETCH encodes as many complete rows as fit up to the requested count; it
+advances only after successful batch creation. Re-reading the terminal
+operation (including after a guest OOB trap) does not fetch again. An empty
+page at end is stable. The existing parent pins and same-slot discard
+ensure native result storage is released before its connection closes.
+The native ORM result is materialized, not an unbounded streaming SQL
+cursor. Native execution errors remain conservative; a projection failure
+after a successful trusted read-only SELECT is known no-effect.
+ 
+The existing interpreter/MIR native tests now cover actual SELECT through a
+read-only alias, seven dynamic typed columns (integer, binary, NULL, empty
+BLOB, empty TEXT, float, UTF-8), exact metadata, byte-bounded pagination,
+repeat EOF, output trap/re-read, parent/limit admission, stale cursor tokens,
+empty result metadata, oversize row rejection, and real untaken cursor
+disposal. Transaction execution is still M2c; the adapter is still private.
