@@ -212,7 +212,10 @@ turbowasm_status tw_db_admit_guest(const tw_db_policy *policy,
     uint8_t *scratch, size_t scratch_capacity, tw_db_request *out,
     tw_db_status *status, turbowasm_trap *trap) {
     *trap = TURBOWASM_TRAP_NONE;
-    if (!instance || turbowasm_host_call_instance(call) != instance) {
+    const turbowasm_instance *caller = turbowasm_host_call_instance(call);
+    /* The Runtime exposes a call-local facade, not the original C handle.
+       Compare the live opaque instance identity, not facade addresses. */
+    if (!instance || !instance->impl || !caller || caller->impl != instance->impl) {
         *status = TW_DB_DENIED;
         return TURBOWASM_OK;
     }

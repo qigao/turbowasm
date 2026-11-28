@@ -1,5 +1,8 @@
 {
-  "modules": ["conformance", "guest"],
+  "modules": [
+    "conformance",
+    "guest"
+  ],
   "forEach": [
     {
       "files": [
@@ -52,11 +55,19 @@
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "deps": ["turbowasm"]
+          "deps": [
+            "turbowasm"
+          ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
@@ -95,12 +106,22 @@
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "includeDirs": ["../src"],
-          "deps": ["turbowasm"]
+          "includeDirs": [
+            "../src"
+          ],
+          "deps": [
+            "turbowasm"
+          ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
@@ -120,24 +141,47 @@
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "includeDirs": ["../src"],
-          "deps": ["turbowasm_component", "saltsbase_tinytest"]
+          "includeDirs": [
+            "../src"
+          ],
+          "deps": [
+            "turbowasm_component",
+            "saltsbase_tinytest"
+          ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
-      "files": ["component_host_resources_test.c", "component_host_values_test.c"],
+      "files": [
+        "component_host_resources_test.c",
+        "component_host_values_test.c"
+      ],
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "deps": ["turbowasm_component", "saltsbase_tinytest"]
+          "deps": [
+            "turbowasm_component",
+            "saltsbase_tinytest"
+          ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
@@ -174,89 +218,175 @@
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "includeDirs": ["../src"],
-          "deps": ["turbowasm", "saltsbase_tinytest"]
-        },
-        "test": { "labels": ["native"] }
-      }
-    },
-    {
-      "files": ["wasi02_descriptor_test.c", "wasi02_socket_descriptor_test.c"],
-      "namePrefix": "turbowasm_",
-      "target": {
-        "kind": "executable",
-        "extends": ["assertions"],
-        "private": {
-          "includeDirs": ["../src"],
-          "deps": ["turbowasm_wasi02_core"]
-        },
-        "test": { "labels": ["native"] }
-      }
-    },
-    {
-      "files": ["wasi02_component_exec_test.c", "wasi02_provider_test.c", "wasi02_socket_u16_test.c"],
-      "namePrefix": "turbowasm_",
-      "target": {
-        "kind": "executable",
-        "extends": ["assertions"],
-        "private": {
-          "includeDirs": ["../src", "../include"],
-          "deps": ["turbowasm_wasi02_core", "turbowasm"]
-        },
-        "test": { "labels": ["native"] }
-      }
-    },
-    {
-      "files": ["wasi02_cnet_network_test.c", "wasi02_cnet_tcp_test.c"],
-      "namePrefix": "turbowasm_",
-      "target": {
-        "kind": "executable",
-        "extends": ["assertions"],
-        "private": {
-          "includeDirs": ["../src"],
-          "deps": ["turbowasm_wasi02_cnet", "saltsbase_tinytest"]
-        },
-        "test": { "labels": ["native"] }
-      }
-    },
-    {
-      "files": ["wasi02_cnet_external_progress_test.c", "wasi02_cnet_listener_progress_test.c"],
-      "namePrefix": "turbowasm_",
-      "target": {
-        "kind": "executable",
-        "extends": ["assertions"],
-        "private": {
-          "deps": ["turbowasm_wasi02_cnet", "saltsbase_tinytest"]
+          "includeDirs": [
+            "../src"
+          ],
+          "deps": [
+            "turbowasm",
+            "saltsbase_tinytest"
+          ]
         },
         "test": {
-          "timeout": 30,
-          "labels": ["native"]
+          "labels": [
+            "native"
+          ]
         }
       }
     },
     {
-      "files": ["wasi02_toolchain_fixture_test.c", "wasi02_toolchain_resume_test.c"],
+      "files": [
+        "wasi02_descriptor_test.c",
+        "wasi02_socket_descriptor_test.c"
+      ],
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "includeDirs": ["$root/wasm/tests/wasi02/fixtures/generated"],
-          "deps": ["turbowasm_wasi02"]
+          "includeDirs": [
+            "../src"
+          ],
+          "deps": [
+            "turbowasm_wasi02_core"
+          ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
-      "files": ["wasi02_stream_blocking_test.c", "wasi02_stream_output_blocking_test.c", "wasi02_stream_splice_test.c"],
+      "files": [
+        "wasi02_component_exec_test.c",
+        "wasi02_provider_test.c",
+        "wasi02_socket_u16_test.c"
+      ],
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "includeDirs": ["../src", "../include"],
+          "includeDirs": [
+            "../src",
+            "../include"
+          ],
+          "deps": [
+            "turbowasm_wasi02_core",
+            "turbowasm"
+          ]
+        },
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
+      }
+    },
+    {
+      "files": [
+        "wasi02_cnet_network_test.c",
+        "wasi02_cnet_tcp_test.c"
+      ],
+      "namePrefix": "turbowasm_",
+      "target": {
+        "kind": "executable",
+        "extends": [
+          "assertions"
+        ],
+        "private": {
+          "includeDirs": [
+            "../src"
+          ],
+          "deps": [
+            "turbowasm_wasi02_cnet",
+            "saltsbase_tinytest"
+          ]
+        },
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
+      }
+    },
+    {
+      "files": [
+        "wasi02_cnet_external_progress_test.c",
+        "wasi02_cnet_listener_progress_test.c"
+      ],
+      "namePrefix": "turbowasm_",
+      "target": {
+        "kind": "executable",
+        "extends": [
+          "assertions"
+        ],
+        "private": {
+          "deps": [
+            "turbowasm_wasi02_cnet",
+            "saltsbase_tinytest"
+          ]
+        },
+        "test": {
+          "timeout": 30,
+          "labels": [
+            "native"
+          ]
+        }
+      }
+    },
+    {
+      "files": [
+        "wasi02_toolchain_fixture_test.c",
+        "wasi02_toolchain_resume_test.c"
+      ],
+      "namePrefix": "turbowasm_",
+      "target": {
+        "kind": "executable",
+        "extends": [
+          "assertions"
+        ],
+        "private": {
+          "includeDirs": [
+            "$root/wasm/tests/wasi02/fixtures/generated"
+          ],
+          "deps": [
+            "turbowasm_wasi02"
+          ]
+        },
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
+      }
+    },
+    {
+      "files": [
+        "wasi02_stream_blocking_test.c",
+        "wasi02_stream_output_blocking_test.c",
+        "wasi02_stream_splice_test.c"
+      ],
+      "namePrefix": "turbowasm_",
+      "target": {
+        "kind": "executable",
+        "extends": [
+          "assertions"
+        ],
+        "private": {
+          "includeDirs": [
+            "../src",
+            "../include"
+          ],
           "deps": [
             "turbowasm_wasi02_streams_core",
             "turbowasm_wasi02_poll_core",
@@ -264,7 +394,11 @@
             "turbowasm_component"
           ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
@@ -277,37 +411,77 @@
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "includeDirs": ["../src", "../include"],
-          "deps": ["turbowasm_wasi02_fs_core", "turbowasm_wasi", "turbowasm_component"]
+          "includeDirs": [
+            "../src",
+            "../include"
+          ],
+          "deps": [
+            "turbowasm_wasi02_fs_core",
+            "turbowasm_wasi",
+            "turbowasm_component"
+          ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
-      "files": ["atomic_runtime_test.c", "shared_memory_instance_test.c", "store_test.c"],
+      "files": [
+        "atomic_runtime_test.c",
+        "shared_memory_instance_test.c",
+        "store_test.c"
+      ],
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "includeDirs": ["../src"],
-          "deps": ["turbowasm", "saltsbase_core"]
+          "includeDirs": [
+            "../src"
+          ],
+          "deps": [
+            "turbowasm",
+            "saltsbase_core"
+          ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
-      "files": ["host_interrupt_test.c", "host_memory_copy_test.c"],
+      "files": [
+        "host_interrupt_test.c",
+        "host_memory_copy_test.c"
+      ],
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "deps": ["turbowasm", "saltsbase_tinytest"]
+          "deps": [
+            "turbowasm",
+            "saltsbase_tinytest"
+          ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
@@ -327,11 +501,19 @@
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "deps": ["turbowasm_wasi"]
+          "deps": [
+            "turbowasm_wasi"
+          ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
@@ -345,11 +527,20 @@
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "deps": ["turbowasm_mir_backend", "turbowasm"]
+          "deps": [
+            "turbowasm_mir_backend",
+            "turbowasm"
+          ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
@@ -365,26 +556,47 @@
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "includeDirs": ["../src"],
-          "deps": ["turbowasm_mir_backend", "turbowasm"]
+          "includeDirs": [
+            "../src"
+          ],
+          "deps": [
+            "turbowasm_mir_backend",
+            "turbowasm"
+          ]
         },
-        "test": { "labels": ["native"] }
+        "test": {
+          "labels": [
+            "native"
+          ]
+        }
       }
     },
     {
-      "files": ["wasi_threads_group_test.c", "wasi_threads_test.c"],
+      "files": [
+        "wasi_threads_group_test.c",
+        "wasi_threads_test.c"
+      ],
       "namePrefix": "turbowasm_",
       "target": {
         "kind": "executable",
-        "extends": ["assertions"],
+        "extends": [
+          "assertions"
+        ],
         "private": {
-          "deps": ["turbowasm_wasi_threads", "saltsbase_core"]
+          "deps": [
+            "turbowasm_wasi_threads",
+            "saltsbase_core"
+          ]
         },
         "test": {
           "timeout": 20,
-          "labels": ["native"]
+          "labels": [
+            "native"
+          ]
         }
       }
     }
@@ -392,597 +604,1142 @@
   "targets": {
     "turbowasm_cflow_adapter_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_cflow"]
+        "deps": [
+          "turbowasm_cflow"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["cflow_adapter_test.c"]
+        "files": [
+          "cflow_adapter_test.c"
+        ]
       }
     },
     "turbowasm_component_public_hardening_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_component"]
+        "deps": [
+          "turbowasm_component"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_public_hardening_test.c"]
+        "files": [
+          "component_public_hardening_test.c"
+        ]
       }
     },
     "turbowasm_component_wasi_resources_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi02", "saltsbase_tinytest"]
+        "deps": [
+          "turbowasm_wasi02",
+          "saltsbase_tinytest"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_wasi_resources_test.c"]
+        "files": [
+          "component_wasi_resources_test.c"
+        ]
       }
     },
     "turbowasm_instance_start_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm", "saltsbase_tinytest"]
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm",
+          "saltsbase_tinytest"
+        ]
       },
       "test": {
         "timeout": 15,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["instance_start_test.c"]
+        "files": [
+          "instance_start_test.c"
+        ]
       }
     },
     "turbowasm_mir_atomic_lowering_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["atomic_lowering_test.c"]
+        "files": [
+          "atomic_lowering_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_async_call_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_async_call_test.c"]
+        "files": [
+          "component_async_call_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_async_exec_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_async_exec_test.c"]
+        "files": [
+          "component_async_exec_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_async_import_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_async_import_test.c"]
+        "files": [
+          "component_async_import_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_async_lower_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_async_lower_test.c"]
+        "files": [
+          "component_async_lower_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_async_options_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm_component", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm_component",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_async_options_test.c"]
+        "files": [
+          "component_async_options_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_async_payload_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_async_payload_test.c"]
+        "files": [
+          "component_async_payload_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_async_resource_import_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_async_resource_import_test.c"]
+        "files": [
+          "component_async_resource_import_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_endpoint_builtin_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_endpoint_builtin_test.c"]
+        "files": [
+          "component_endpoint_builtin_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_host_arguments_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm_component", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm_component",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_host_arguments_test.c"]
+        "files": [
+          "component_host_arguments_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_host_task_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm_component", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm_component",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_host_task_test.c"]
+        "files": [
+          "component_host_task_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_indirect_lower_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm_component", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm_component",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_indirect_lower_test.c"]
+        "files": [
+          "component_indirect_lower_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_local_lower_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm_component", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm_component",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_local_lower_test.c"]
+        "files": [
+          "component_local_lower_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_post_return_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm_component", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm_component",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_post_return_test.c"]
+        "files": [
+          "component_post_return_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_realloc_execution_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm_component", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm_component",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_realloc_execution_test.c"]
+        "files": [
+          "component_realloc_execution_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_resource_reentry_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm_component", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm_component",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_resource_reentry_test.c"]
+        "files": [
+          "component_resource_reentry_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_shutdown_host_wait_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm_component", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm_component",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_shutdown_host_wait_test.c"]
+        "files": [
+          "component_shutdown_host_wait_test.c"
+        ]
       }
     },
     "turbowasm_mir_component_task_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["component_task_test.c"]
+        "files": [
+          "component_task_test.c"
+        ]
       }
     },
     "turbowasm_mir_eh_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["eh_native_test.c"]
+        "files": [
+          "eh_native_test.c"
+        ]
       }
     },
     "turbowasm_mir_gc_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["gc_native_test.c"]
+        "files": [
+          "gc_native_test.c"
+        ]
       }
     },
     "turbowasm_mir_indirect_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["indirect_native_test.c"]
+        "files": [
+          "indirect_native_test.c"
+        ]
       }
     },
     "turbowasm_mir_memory64_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["memory64_execution_test.c"]
+        "files": [
+          "memory64_execution_test.c"
+        ]
       }
     },
     "turbowasm_mir_numeric_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["numeric_native_test.c"]
+        "files": [
+          "numeric_native_test.c"
+        ]
       }
     },
     "turbowasm_mir_reference_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["reference_native_test.c"]
+        "files": [
+          "reference_native_test.c"
+        ]
       }
     },
     "turbowasm_mir_resumable_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["resumable_native_test.c"]
+        "files": [
+          "resumable_native_test.c"
+        ]
       }
     },
     "turbowasm_mir_scalar_results_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["scalar_results_test.c"]
+        "files": [
+          "scalar_results_test.c"
+        ]
       }
     },
     "turbowasm_mir_scalar_tail_calls_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["scalar_tail_calls_test.c"]
+        "files": [
+          "scalar_tail_calls_test.c"
+        ]
       }
     },
     "turbowasm_mir_simd_native_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["simd_native_test.c"]
+        "files": [
+          "simd_native_test.c"
+        ]
       }
     },
     "turbowasm_mir_table_storage_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["table_storage_test.c"]
+        "files": [
+          "table_storage_test.c"
+        ]
       }
     },
     "turbowasm_mir_vector_calls_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_mir_backend", "turbowasm", "saltsbase_tinytest"],
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_mir_backend",
+          "turbowasm",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TURBOWASM_TEST_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["vector_calls_test.c"]
+        "files": [
+          "vector_calls_test.c"
+        ]
       }
     },
     "turbowasm_native_io_adapter_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_native_io"]
+        "deps": [
+          "turbowasm_native_io"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["native_io_adapter_test.c"]
+        "files": [
+          "native_io_adapter_test.c"
+        ]
       }
     },
     "turbowasm_native_io_deterministic_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm", "saltsbase_native_io"]
+        "deps": [
+          "turbowasm",
+          "saltsbase_native_io"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["native_io_deterministic_test.c"]
+        "files": [
+          "native_io_deterministic_test.c"
+        ]
       }
     },
     "turbowasm_wait_notify_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm", "saltsbase_core"]
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm",
+          "saltsbase_core"
+        ]
       },
       "test": {
         "timeout": 20,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wait_notify_test.c"]
+        "files": [
+          "wait_notify_test.c"
+        ]
       }
     },
     "turbowasm_wasi_adapter_plan_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_wasi"]
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_wasi"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_adapter_plan_test.c"]
+        "files": [
+          "wasi_adapter_plan_test.c"
+        ]
       }
     },
     "turbowasm_wasi_dispatch_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_wasi", "saltsbase_core", "saltsbase_tinytest"]
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_core",
+          "saltsbase_tinytest"
+        ]
       },
       "test": {
         "timeout": 30,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_dispatch_test.c"]
+        "files": [
+          "wasi_dispatch_test.c"
+        ]
       }
     },
     "turbowasm_wasi_fs_concurrency_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_wasi", "saltsbase_tinytest", "saltsbase_core"]
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_tinytest",
+          "saltsbase_core"
+        ]
       },
       "test": {
         "timeout": 30,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_fs_concurrency_test.c"]
+        "files": [
+          "wasi_fs_concurrency_test.c"
+        ]
       }
     },
     "turbowasm_wasi_fs_contract_fake_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi"]
+        "deps": [
+          "turbowasm_wasi"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_fs_contract.c", "wasi_fs_contract_fake_test.c"]
+        "files": [
+          "wasi_fs_contract.c",
+          "wasi_fs_contract_fake_test.c"
+        ]
       }
     },
     "turbowasm_wasi_fs_contract_host_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
+        "includeDirs": [
+          "../src"
+        ],
         "deps": [
           "turbowasm_wasi_host_fs",
           "turbowasm_wasi02_fs_core",
@@ -990,16 +1747,29 @@
           "turbowasm_component"
         ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_fs_contract.c", "wasi02_fs_contract.c", "wasi_fs_contract_host_test.c"]
+        "files": [
+          "wasi_fs_contract.c",
+          "wasi02_fs_contract.c",
+          "wasi_fs_contract_host_test.c"
+        ]
       }
     },
     "turbowasm_wasi_fs_contract_littlefs_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["", "../src"],
+        "includeDirs": [
+          "",
+          "../src"
+        ],
         "deps": [
           "turbowasm_wasi_littlefs",
           "turbowasm_wasi02_fs_core",
@@ -1010,194 +1780,347 @@
       "when": {
         "config": "littlefs"
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_fs_contract.c", "wasi02_fs_contract.c", "wasi_fs_contract_littlefs_test.c"]
+        "files": [
+          "wasi_fs_contract.c",
+          "wasi02_fs_contract.c",
+          "wasi_fs_contract_littlefs_test.c"
+        ]
       }
     },
     "turbowasm_wasi_fs_host_concurrency_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi_host_fs", "saltsbase_tinytest", "saltsbase_core"]
+        "deps": [
+          "turbowasm_wasi_host_fs",
+          "saltsbase_tinytest",
+          "saltsbase_core"
+        ]
       },
       "test": {
         "timeout": 60,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_fs_host_concurrency_test.c"]
+        "files": [
+          "wasi_fs_host_concurrency_test.c"
+        ]
       }
     },
     "turbowasm_wasi_fs_host_security_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi_host_fs"]
+        "deps": [
+          "turbowasm_wasi_host_fs"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_fs_host_security_test.c"]
+        "files": [
+          "wasi_fs_host_security_test.c"
+        ]
       }
     },
     "turbowasm_wasi_fs_memory_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi", "saltsbase_tinytest"]
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_tinytest"
+        ]
       },
       "test": {
         "timeout": 30,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_fs_memory_test.c"]
+        "files": [
+          "wasi_fs_memory_test.c"
+        ]
       }
     },
     "turbowasm_wasi_fs_rename_flags_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_wasi", "saltsbase_tinytest"]
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_tinytest"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_fs_rename_flags_test.c"]
+        "files": [
+          "wasi_fs_rename_flags_test.c"
+        ]
       }
     },
     "turbowasm_wasi_native_io_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi", "saltsbase_native_io"]
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_native_io"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_native_io_test.c"]
+        "files": [
+          "wasi_native_io_test.c"
+        ]
       }
     },
     "turbowasm_wasi_path_memory_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi", "saltsbase_tinytest"]
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_tinytest"
+        ]
       },
       "test": {
         "timeout": 60,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_path_memory_test.c"]
+        "files": [
+          "wasi_path_memory_test.c"
+        ]
       }
     },
     "turbowasm_wasi_preview1_cnet_mir_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi_cnet", "turbowasm_mir_backend", "saltsbase_tinytest"],
+        "deps": [
+          "turbowasm_wasi_cnet",
+          "turbowasm_mir_backend",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TW_P1_MIR": "1"
         }
       },
       "test": {
         "timeout": 30,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_preview1_cnet_test.c"]
+        "files": [
+          "wasi_preview1_cnet_test.c"
+        ]
       }
     },
     "turbowasm_wasi_preview1_cnet_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi_cnet", "saltsbase_tinytest"]
+        "deps": [
+          "turbowasm_wasi_cnet",
+          "saltsbase_tinytest"
+        ]
       },
       "test": {
         "timeout": 30,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_preview1_cnet_test.c"]
+        "files": [
+          "wasi_preview1_cnet_test.c"
+        ]
       }
     },
     "turbowasm_wasi_preview1_sockets_mir_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi", "turbowasm_mir_backend", "saltsbase_tinytest"],
+        "deps": [
+          "turbowasm_wasi",
+          "turbowasm_mir_backend",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TW_P1_MIR": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_preview1_sockets_test.c"]
+        "files": [
+          "wasi_preview1_sockets_test.c"
+        ]
       }
     },
     "turbowasm_wasi_preview1_sockets_shared_mir_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi", "turbowasm_mir_backend", "saltsbase_tinytest"],
+        "deps": [
+          "turbowasm_wasi",
+          "turbowasm_mir_backend",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TW_P1_MIR": "1",
           "TW_P1_SHARED": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_preview1_sockets_test.c"]
+        "files": [
+          "wasi_preview1_sockets_test.c"
+        ]
       }
     },
     "turbowasm_wasi_preview1_sockets_shared_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi", "saltsbase_tinytest"],
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_tinytest"
+        ],
         "defines": {
           "TW_P1_SHARED": "1"
         }
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_preview1_sockets_test.c"]
+        "files": [
+          "wasi_preview1_sockets_test.c"
+        ]
       }
     },
     "turbowasm_wasi_preview1_sockets_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi", "saltsbase_tinytest"]
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_tinytest"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_preview1_sockets_test.c"]
+        "files": [
+          "wasi_preview1_sockets_test.c"
+        ]
       }
     },
     "turbowasm_wasi_preview1_threaded_mir_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi", "saltsbase_tinytest", "saltsbase_core", "turbowasm_mir_backend"],
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_tinytest",
+          "saltsbase_core",
+          "turbowasm_mir_backend"
+        ],
         "defines": {
           "TW_P1_MIR": "1"
         }
       },
       "test": {
         "timeout": 30,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_preview1_threaded_test.c"]
+        "files": [
+          "wasi_preview1_threaded_test.c"
+        ]
       }
     },
     "turbowasm_wasi_preview1_threaded_shared_mir_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi", "saltsbase_tinytest", "saltsbase_core", "turbowasm_mir_backend"],
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_tinytest",
+          "saltsbase_core",
+          "turbowasm_mir_backend"
+        ],
         "defines": {
           "TW_P1_SHARED": "1",
           "TW_P1_MIR": "1"
@@ -1205,99 +2128,173 @@
       },
       "test": {
         "timeout": 30,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_preview1_threaded_test.c"]
+        "files": [
+          "wasi_preview1_threaded_test.c"
+        ]
       }
     },
     "turbowasm_wasi_preview1_threaded_shared_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi", "saltsbase_tinytest", "saltsbase_core"],
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_tinytest",
+          "saltsbase_core"
+        ],
         "defines": {
           "TW_P1_SHARED": "1"
         }
       },
       "test": {
         "timeout": 30,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_preview1_threaded_test.c"]
+        "files": [
+          "wasi_preview1_threaded_test.c"
+        ]
       }
     },
     "turbowasm_wasi_preview1_threaded_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi", "saltsbase_tinytest", "saltsbase_core"]
+        "deps": [
+          "turbowasm_wasi",
+          "saltsbase_tinytest",
+          "saltsbase_core"
+        ]
       },
       "test": {
         "timeout": 30,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_preview1_threaded_test.c"]
+        "files": [
+          "wasi_preview1_threaded_test.c"
+        ]
       }
     },
     "turbowasm_wasi_threads_header_cpp_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi_threads"]
+        "deps": [
+          "turbowasm_wasi_threads"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi_threads_header_cpp_test.cpp"]
+        "files": [
+          "wasi_threads_header_cpp_test.cpp"
+        ]
       }
     },
     "turbowasm_wasi_threads_proc_exit_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi_threads", "turbowasm_wasi", "saltsbase_core"]
+        "deps": [
+          "turbowasm_wasi_threads",
+          "turbowasm_wasi",
+          "saltsbase_core"
+        ]
       },
       "test": {
         "timeout": 20,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_threads_proc_exit_test.c"]
+        "files": [
+          "wasi_threads_proc_exit_test.c"
+        ]
       }
     },
     "turbowasm_wasi_threads_terminal_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi_threads", "saltsbase_core", "saltsbase_tinytest"]
+        "deps": [
+          "turbowasm_wasi_threads",
+          "saltsbase_core",
+          "saltsbase_tinytest"
+        ]
       },
       "test": {
         "timeout": 20,
-        "labels": ["native"]
+        "labels": [
+          "native"
+        ]
       },
       "sources": {
-        "files": ["wasi_threads_terminal_test.c"]
+        "files": [
+          "wasi_threads_terminal_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_cnet_control_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src", "../include"],
-        "deps": ["turbowasm_wasi02_cnet_core", "turbowasm", "salts_cnet"]
+        "includeDirs": [
+          "../src",
+          "../include"
+        ],
+        "deps": [
+          "turbowasm_wasi02_cnet_core",
+          "turbowasm",
+          "salts_cnet"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_cnet_control_test.c"]
+        "files": [
+          "wasi02_cnet_control_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_exec_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src", "../include"],
+        "includeDirs": [
+          "../src",
+          "../include"
+        ],
         "deps": [
           "turbowasm_wasi02_exec_core",
           "turbowasm_wasi02_core",
@@ -1307,28 +2304,52 @@
           "turbowasm_component"
         ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_exec_test.c"]
+        "files": [
+          "wasi02_exec_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_io_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_wasi02_io", "saltsbase_tinytest"]
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_wasi02_io",
+          "saltsbase_tinytest"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_io_test.c"]
+        "files": [
+          "wasi02_io_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_poll_native_io_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src", "../include"],
+        "includeDirs": [
+          "../src",
+          "../include"
+        ],
         "deps": [
           "turbowasm_wasi02_poll_native_io_core",
           "turbowasm_wasi02_poll_core",
@@ -1336,51 +2357,101 @@
           "turbowasm"
         ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_poll_native_io_test.c"]
+        "files": [
+          "wasi02_poll_native_io_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_poll_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src", "../include"],
-        "deps": ["turbowasm_wasi02_poll_core", "turbowasm_component"]
+        "includeDirs": [
+          "../src",
+          "../include"
+        ],
+        "deps": [
+          "turbowasm_wasi02_poll_core",
+          "turbowasm_component"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_poll_test.c"]
+        "files": [
+          "wasi02_poll_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_poll_wait_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src", "../include"],
-        "deps": ["turbowasm_wasi02_poll_core", "turbowasm", "turbowasm_component"]
+        "includeDirs": [
+          "../src",
+          "../include"
+        ],
+        "deps": [
+          "turbowasm_wasi02_poll_core",
+          "turbowasm",
+          "turbowasm_component"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_poll_wait_test.c"]
+        "files": [
+          "wasi02_poll_wait_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_public_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "deps": ["turbowasm_wasi02"]
+        "deps": [
+          "turbowasm_wasi02"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_public_test.c"]
+        "files": [
+          "wasi02_public_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_socket_component_bridge_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src", "../include"],
+        "includeDirs": [
+          "../src",
+          "../include"
+        ],
         "deps": [
           "turbowasm_wasi02_sockets_core",
           "turbowasm_wasi02_streams_core",
@@ -1390,16 +2461,27 @@
           "turbowasm"
         ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_socket_component_bridge_test.c"]
+        "files": [
+          "wasi02_socket_component_bridge_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_socket_native_io_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src", "../include"],
+        "includeDirs": [
+          "../src",
+          "../include"
+        ],
         "deps": [
           "turbowasm_wasi02_sockets_core",
           "turbowasm_wasi02_streams_core",
@@ -1410,16 +2492,27 @@
           "turbowasm"
         ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_socket_native_io_test.c"]
+        "files": [
+          "wasi02_socket_native_io_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_stdio_stream_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src", "../include"],
+        "includeDirs": [
+          "../src",
+          "../include"
+        ],
         "deps": [
           "turbowasm_wasi02_streams_core",
           "turbowasm_wasi02_core",
@@ -1427,28 +2520,53 @@
           "turbowasm_component"
         ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_stdio_stream_test.c"]
+        "files": [
+          "wasi02_stdio_stream_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_stream_allocation_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src"],
-        "deps": ["turbowasm_wasi02_streams_core", "turbowasm_component", "saltsbase_tinytest"]
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_wasi02_streams_core",
+          "turbowasm_component",
+          "saltsbase_tinytest"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_stream_allocation_test.c"]
+        "files": [
+          "wasi02_stream_allocation_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_stream_component_bridge_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src", "../include"],
+        "includeDirs": [
+          "../src",
+          "../include"
+        ],
         "deps": [
           "turbowasm_wasi02_streams_core",
           "turbowasm_wasi02_poll_core",
@@ -1456,28 +2574,54 @@
           "turbowasm_component"
         ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_stream_component_bridge_test.c"]
+        "files": [
+          "wasi02_stream_component_bridge_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_streams_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src", "../include"],
-        "deps": ["turbowasm_wasi02_streams_core", "turbowasm_wasi02_poll_core", "turbowasm_component"]
+        "includeDirs": [
+          "../src",
+          "../include"
+        ],
+        "deps": [
+          "turbowasm_wasi02_streams_core",
+          "turbowasm_wasi02_poll_core",
+          "turbowasm_component"
+        ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_streams_test.c"]
+        "files": [
+          "wasi02_streams_test.c"
+        ]
       }
     },
     "turbowasm_wasi02_tcp_state_test": {
       "kind": "executable",
-      "extends": ["assertions"],
+      "extends": [
+        "assertions"
+      ],
       "private": {
-        "includeDirs": ["../src", "../include"],
+        "includeDirs": [
+          "../src",
+          "../include"
+        ],
         "deps": [
           "turbowasm_wasi02_sockets_core",
           "turbowasm_wasi02_streams_core",
@@ -1485,9 +2629,69 @@
           "turbowasm"
         ]
       },
-      "test": { "labels": ["native"] },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
       "sources": {
-        "files": ["wasi02_tcp_state_test.c"]
+        "files": [
+          "wasi02_tcp_state_test.c"
+        ]
+      }
+    },
+    "turbowasm_database_admission_test": {
+      "kind": "executable",
+      "extends": [
+        "assertions"
+      ],
+      "private": {
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_database_core",
+          "turbowasm"
+        ]
+      },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
+      "sources": {
+        "files": [
+          "database_admission_test.c"
+        ]
+      }
+    },
+    "turbowasm_database_admission_mir_test": {
+      "kind": "executable",
+      "extends": [
+        "assertions"
+      ],
+      "private": {
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "turbowasm_database_core",
+          "turbowasm_mir_backend",
+          "turbowasm"
+        ],
+        "defines": {
+          "TW_DB_TEST_MIR": "1"
+        }
+      },
+      "test": {
+        "labels": [
+          "native"
+        ]
+      },
+      "sources": {
+        "files": [
+          "database_admission_test.c"
+        ]
       }
     }
   }

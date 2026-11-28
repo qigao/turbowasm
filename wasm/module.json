@@ -480,6 +480,22 @@
           "TURBOWASM_ENABLE_MIR_JIT": "1"
         }
       }
+    },
+    "turbowasm_database_core": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "src/database_wire.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "src"
+        ],
+        "deps": [
+          "turbowasm"
+        ]
+      }
     }
   }
 }
